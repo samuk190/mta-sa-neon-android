@@ -166,6 +166,30 @@ void ForgetRemote(uint32_t id);
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
 void RequestWander(uint32_t id, int direction);
 bool CopyRemotePose(uint32_t id, float& x, float& y, float& z);
+
+// Native task presentation — matches mta_neon CClientPed interface.
+// Locomotion mode: SNativeTaskLocomotionSync::eMode (NONE/WALK/RUN/SPRINT).
+void SetPedNativeTaskLocomotion(uint32_t id, unsigned int mode);
+// Weapon presentation: weapon type byte from SNativeTaskWeaponPresentationSync.
+void SetPedNativeTaskWeapon(uint32_t id, uint8_t weaponType);
+// Animation presentation: anim group + id from SNativeTaskAnimationPresentationSync.
+void SetPedNativeTaskAnimation(uint32_t id, uint16_t animGroup, uint16_t animId);
+// Physical takeover from PED_START_SYNC — seeds airborne/climb anchor state.
+void SetPedNativeTaskPhysicalTakeover(uint32_t id, unsigned int mode,
+    uint16_t animGroup, uint16_t animId, float progress);
+// Camera rotation from keysync/ped sync packets.
+void SetPedCameraRotation(uint32_t id, float rotation);
+// OnFire / IsInWater state bits from ucFlags & 0x20 / 0x40.
+void SetPedOnFire(uint32_t id, bool onFire);
+void SetPedInWater(uint32_t id, bool inWater);
+// Animation kill flag from ucFlags & 0x80 — clears synced anim state.
+void KillPedAnimation(uint32_t id);
+// Health/Armor lock semantics from CPedSync::Packet_PedStopSync.
+// LockPedHealthCurrent/LockPedArmorCurrent freeze at the ped's current value.
+void LockPedHealth(uint32_t id, float health);
+void LockPedArmor(uint32_t id, float armor);
+void LockPedHealthCurrent(uint32_t id);
+void LockPedArmorCurrent(uint32_t id);
 struct HostedPed {
     uint32_t id = 0;
     float x = 0, y = 0, z = 0, heading = 0;
