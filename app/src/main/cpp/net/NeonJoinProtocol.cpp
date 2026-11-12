@@ -1,6 +1,7 @@
 #include "NeonJoinProtocol.h"
 #include "../gtasa/GameEngine.h"
 #include "../shared/CombatSync.h"
+#include "../shared/ServerWorld.h"
 #include "../shared/VehicleSync.h"
 #include "../shared/entity/EntityVehicleModels.h"
 
@@ -147,6 +148,10 @@ void WriteFieldLsb(BitStreamWriter& w, uint32_t value, uint32_t bits) {
 enum class VehicleInOutPending : uint8_t { None, RequestIn, RequestOut };
 VehicleInOutPending g_inOutPending = VehicleInOutPending::None;
 uint32_t g_inOutVehicle = 0xFFFFFFFFu;
+// The vehicle the server has seated the local ped in: set when NOTIFY_IN is sent after REQUEST_IN_CONFIRMED, cleared
+// on NOTIFY_OUT, REQUEST_OUT_CONFIRMED, ATTEMPT_FAILED, jack and disconnect. Desktop CNetAPI::DoPulse sends vehicle
+// puresync only for GetOccupiedVehicle(), which is set the same way (CClientPed.cpp WarpIntoVehicle after notify).
+uint32_t g_confirmedVehicle = 0xFFFFFFFFu;
 
 } // anonymous namespace
 
@@ -181,6 +186,7 @@ struct NeonJoinClient::Impl {
     }
 
     void Fail(const std::string& reason) {
+        g_confirmedVehicle = 0xFFFFFFFFu;
         info.lastError = reason;
         JOIN_LOGE("NeonJoin: FAILED: %s", reason.c_str());
         state = JoinState::Failed;
@@ -311,8 +317,18 @@ struct NeonJoinClient::Impl {
         // In a mapped car the driver sends packet 33 instead (SendDriverPuresync); on foot, packet 32 below.
         WorldRPG::Game::LocalCarState car;
         if (WorldRPG::Game::CopyLocalCar(car)) {
-            SendDriverPuresync(car);
-            return;
+            // Only the car the server seated us in. GTA can place the ped in a car before the server confirms it
+            // (request pending, refused or jacked); the desktop sends the on-foot sync then.
+            if (car.vehicleId == g_confirmedVehicle) {
+                SendDriverPuresync(car);
+                return;
+            }
+            static int unconfirmedReports = 0;
+            if (unconfirmedReports < 4) {
+                ++unconfirmedReports;
+                JOIN_LOGI("NeonJoin: GTA car %u is not server-confirmed (confirmed %u); sending on-foot PURESYNC",
+                          car.vehicleId, g_confirmedVehicle);
+            }
         }
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
         WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
@@ -893,6 +909,8 @@ struct NeonJoinClient::Impl {
         info.voiceBitrate = bitrate;
         info.fakeLagCommand = fakelag;
         info.httpDownloadType = httpType;
+        // This join id is the local ped for the whole session. PacketHandler accepts a PLAYER_SPAWN only for it.
+        if (info.localPlayerId != 0xFFFFFFFFu) WorldRPG::ServerWorld::SetLocalPlayer(info.localPlayerId);
 
         JOIN_LOGI("NeonJoin: SERVER_JOINEDGAME id=%u root=%u name=[%s] http=%u port=%u",
                   info.localPlayerId, info.rootElementId, info.serverName.c_str(),
@@ -1036,13 +1054,21 @@ bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action) 
         JOIN_LOGI("VehInOut: reply for veh=%u differs from pending veh=%u", vehicleId, g_inOutVehicle);
     }
     g_inOutPending = VehicleInOutPending::None;
+    // NOTIFY_IN seats the local ped on the server; NOTIFY_OUT unseats it.
+    g_confirmedVehicle = action == 1 ? vehicleId : 0xFFFFFFFFu;
     JOIN_LOGI("VehInOut: sent %s ped=%u veh=%u", action == 1 ? "notify_in" : "notify_out", pedId, vehicleId);
     return true;
 }
 
 // VEHICLE_ATTEMPT_FAILED (action 9) and NOTIFY_*_RETURN for the local ped end the outstanding request.
+// NOTIFY_IN_RETURN also arrives for the local ped after our NOTIFY_IN, so this must not touch g_confirmedVehicle.
 void ClearVehicleInOutPending() {
     g_inOutPending = VehicleInOutPending::None;
+}
+
+// REQUEST_OUT_CONFIRMED, ATTEMPT_FAILED and REQUEST_JACK_CONFIRMED for the local ped: the server no longer has it seated.
+void ClearVehicleInOutConfirmed() {
+    g_confirmedVehicle = 0xFFFFFFFFu;
 }
 
 void NeonJoinClient::OnTransportFailure(const std::string& reason) {
@@ -1151,6 +1177,8 @@ bool NeonJoinClient::SendChat(const std::string& command) {
 void NeonJoinClient::Reset() {
     g_inOutPending = VehicleInOutPending::None;
     g_inOutVehicle = 0xFFFFFFFFu;
+    g_confirmedVehicle = 0xFFFFFFFFu;
+    WorldRPG::ServerWorld::SetLocalPlayer(0);
     pImpl_->net = nullptr;
     pImpl_->state = JoinState::Idle;
     pImpl_->info = NeonJoinInfo{};

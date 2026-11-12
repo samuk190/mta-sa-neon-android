@@ -28,6 +28,7 @@ void PostGameLine(int kind, const char* text);
 namespace WorldRPG::Net {
 bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action);
 void ClearVehicleInOutPending();
+void ClearVehicleInOutConfirmed();
 }
 
 namespace {
@@ -110,10 +111,12 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
     char line[96];
     std::snprintf(line, sizeof(line), "Spawn %.0f %.0f %.0f", x, y, z);
     PKT_LOGI("PlayerSpawn: id=%u %s", playerId, line);
+    // The join's SERVER_JOINEDGAME id is the local player. The first spawn is adopted only when no join id was
+    // recorded; once it is known, a spawn is ours only when its id matches.
     const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
     const bool mine = local == 0 || playerId == local;
     if (mine) {
-        WorldRPG::ServerWorld::SetLocalPlayer(playerId);
+        if (local == 0) WorldRPG::ServerWorld::SetLocalPlayer(playerId);
         WorldRPG::Game::ApplyServerSpawn(x, y, z);
         WorldRPG::JniBridge::PostGameLine(2, "100|");
         WorldRPG::JniBridge::PostGameLine(1, line);
@@ -707,13 +710,22 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
             WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 1);
             break;
         case 3:  // REQUEST_OUT_CONFIRMED: the server allows the exit, so send NOTIFY_OUT (4)
+            WorldRPG::Net::ClearVehicleInOutConfirmed();
             WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 4);
+            break;
+        case 7:  // REQUEST_JACK_CONFIRMED: jacking is not ported (no animation, no NOTIFY_JACK). Treat as not seated.
+            WorldRPG::Net::ClearVehicleInOutPending();
+            WorldRPG::Net::ClearVehicleInOutConfirmed();
+            PKT_LOGI("VehInOut: jack not ported; local ped veh=%u not treated as seated, no packet 33", vehicleId);
+            break;
+        case 9:  // ATTEMPT_FAILED: the server refused the request, so the ped is not seated
+            WorldRPG::Net::ClearVehicleInOutConfirmed();
+            WorldRPG::Net::ClearVehicleInOutPending();
             break;
         case 1:  // NOTIFY_IN_RETURN
         case 2:  // NOTIFY_IN_ABORT_RETURN
         case 4:  // NOTIFY_OUT_RETURN
         case 5:  // NOTIFY_OUT_ABORT_RETURN
-        case 9:  // ATTEMPT_FAILED
             WorldRPG::Net::ClearVehicleInOutPending();
             break;
         default:
