@@ -1,5 +1,7 @@
 # MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
 ---
@@ -224,6 +226,16 @@ Detailed architectural and protocol references are preserved in the `docs/` dire
 - [Network Packet Contract](docs/CONTRATO_TRANSPORTE_MTA.md)
 - [Sync Engine Specifications](docs/MTA_SYNC_ANDROID_PORT.md)
 - [Bootstrap Assets Breakdown](docs/BOOTSTRAP_ASSETS.md)
+
+---
+
+## Community & Support
+
+Join our community to discuss development, report findings, test builds, and collaborate:
+
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+
+👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)
 
 ---
 
