@@ -20,7 +20,8 @@ void PlaceRemotePlayerPed(void* ped, float x, float y, float z, float heading);
 bool InstallRemoteControlHook();
 bool RemoteControlHookActive();
 // Stick in PC CControllerState units (-128..128). Negative Y is forward.
-void SetRemoteStick(void* ped, int stickX, int stickY);
+// fire sets ButtonCircle (CControllerState offset 0x26) to 255, the desktop pressed value.
+void SetRemoteStick(void* ped, int stickX, int stickY, bool fire);
 void ClearRemoteStick(void* ped);
 
 }

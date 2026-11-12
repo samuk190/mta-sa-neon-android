@@ -742,7 +742,7 @@ static void ApplyRemotePeds() {
             // Plan step A: the stick drives CPlayerPed::ProcessControl. The per-tick
             // matrix lerp below would fight it, so only re-anchor when the body
             // drifts more than 8 m from the server position.
-            SetRemoteStick(body, ped.stickX, ped.stickY);
+            SetRemoteStick(body, ped.stickX, ped.stickY, ped.fire);
             float bx = 0, by = 0, bz = 0, bh = 0;
             if (ReadBodyPos(body, bx, by, bz, bh)) {
                 const float ex = ped.x - bx;
@@ -752,7 +752,11 @@ static void ApplyRemotePeds() {
                     PlaceRemotePlayerPed(body, ped.x, ped.y, ped.z, ped.heading);
             }
             live->second.shown = true;
-            PresentOnFoot(body, found->second, ped);
+            // The pad now presses ButtonCircle, so the game starts the fight task.
+            // Skip the separate punch from PresentOnFoot to avoid a second punch.
+            RemotePed quiet = ped;
+            quiet.fire = false;
+            PresentOnFoot(body, found->second, quiet);
             continue;
         }
         ClearRemoteStick(body);

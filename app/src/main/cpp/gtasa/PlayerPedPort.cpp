@@ -167,7 +167,11 @@ struct RemoteStick {
     void* ped = nullptr;
     short x = 0;
     short y = 0;
+    bool fire = false;
 };
+
+// CControllerState: ButtonCircle is the 14th short (0x26), pressed = 255.
+constexpr std::size_t kButtonCircleOffset = 0x26;
 
 RemoteStick g_sticks[kMaxRemoteSticks]{};
 using ProcessControlFn = void (*)(void*);
@@ -201,6 +205,8 @@ void RemotePlayerProcessControl(void* self) {
     std::memcpy(saved, pad, kPadBytes);
     std::memcpy(pad + 0, &entry->x, sizeof entry->x);
     std::memcpy(pad + 2, &entry->y, sizeof entry->y);
+    const short circle = entry->fire ? 255 : 0;
+    std::memcpy(pad + kButtonCircleOffset, &circle, sizeof circle);
     g_originalControl(self);
     std::memcpy(pad, saved, kPadBytes);
 }
@@ -239,7 +245,7 @@ bool RemoteControlHookActive() {
     return g_controlHook;
 }
 
-void SetRemoteStick(void* ped, int stickX, int stickY) {
+void SetRemoteStick(void* ped, int stickX, int stickY, bool fire) {
     if (!ped) return;
     RemoteStick* entry = FindStick(ped);
     if (!entry) {
@@ -254,6 +260,7 @@ void SetRemoteStick(void* ped, int stickX, int stickY) {
     entry->ped = ped;
     entry->x = static_cast<short>(std::clamp(stickX, -128, 128));
     entry->y = static_cast<short>(std::clamp(stickY, -128, 128));
+    entry->fire = fire;
 }
 
 void ClearRemoteStick(void* ped) {

@@ -31,6 +31,11 @@ P1A (Engine/Platform) and P1B (Network Transport) are independent parallel track
 
 ## 2. Historical Execution Log
 
+### Step A remainder (partial)
+- Fire press: keysync fire writes `ButtonCircle` (`0x26`, pressed = 255) in the controller hook. Built and joined on the S25. Not yet checked with a second player.
+- Duck: stays on the existing `PresentOnFoot` task path (`SetTaskDuckSecondary`). The desktop clears `ShockButtonL` so it doesn't fight the duck task; we don't write it.
+- Pad copy of the other buttons and enter/leave-car: not started.
+
 ### P3.2 Chat Layout (planned)
 - Requested 2026-11-12: the phone chat has spaces between lines and does not look like the MTA desktop chat. Compare against the desktop chat code in `mta_neon_source/Client` before changing the phone layout.
 - Implemented in `MtaChatView.java`: the per-line 2 dp gap is gone, lines step by the font height, and one background box sits behind the stack (desktop `CChat.cpp` behaviour). Screenshot on the S25 checked.
