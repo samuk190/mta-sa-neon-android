@@ -222,6 +222,11 @@ struct RemotePed {
     bool animationKilled = false;
     bool healthLocked = false;
     bool armorLocked = false;
+    // Last keysync stick (PC units, -128..128). Drives CPlayerPed::ProcessControl
+    // once the controller hook is installed. keysync is false for script peds.
+    int stickX = 0;
+    int stickY = 0;
+    bool keysync = false;
 };
 static std::mutex g_remoteMutex;
 static std::unordered_map<uint32_t, RemotePed> g_remotePeds;
@@ -637,6 +642,7 @@ static void ApplyRemotePeds() {
         for (uint32_t id : g_forget) {
             auto body = g_remoteBodies.find(id);
             if (body != g_remoteBodies.end()) {
+                ClearRemoteStick(body->second.ped);
                 DropBody(body->second.ped, false);
                 g_remoteBodies.erase(body);
             }
@@ -712,6 +718,25 @@ static void ApplyRemotePeds() {
             if (intel && api.clearTasks) api.clearTasks(intel, true, true);
             found->second.wanderDir = -1;
         }
+        const bool controlled = !ped.hosted && ped.keysync && RemoteControlHookActive();
+        if (controlled) {
+            // Plan step A: the stick drives CPlayerPed::ProcessControl. The per-tick
+            // matrix lerp below would fight it, so only re-anchor when the body
+            // drifts more than 8 m from the server position.
+            SetRemoteStick(body, ped.stickX, ped.stickY);
+            float bx = 0, by = 0, bz = 0, bh = 0;
+            if (ReadBodyPos(body, bx, by, bz, bh)) {
+                const float ex = ped.x - bx;
+                const float ey = ped.y - by;
+                const float ez = ped.z - bz;
+                if (ex * ex + ey * ey + ez * ez > 8.f * 8.f)
+                    PlaceRemotePlayerPed(body, ped.x, ped.y, ped.z, ped.heading);
+            }
+            live->second.shown = true;
+            PresentOnFoot(body, found->second, ped);
+            continue;
+        }
+        ClearRemoteStick(body);
         const float dx = ped.x - live->second.shownX;
         const float dy = ped.y - live->second.shownY;
         const float dz = ped.z - live->second.shownZ;
@@ -984,6 +1009,8 @@ bool BeginServerSession() {
             return false;
         }
         ENGINE_LOGI("Blocked CRunningScript::Process; main.scm will not run");
+        if (!InstallRemoteControlHook())
+            ENGINE_LOGE("Remote players keep the velocity fallback (no controller hook)");
         ENGINE_LOGI("Ped symbols add=%p ctor=%p heading=%p density=%p manage=%p",
             reinterpret_cast<void*>(g_addPed), reinterpret_cast<void*>(g_civilianCtor),
             reinterpret_cast<void*>(g_setHeading), static_cast<void*>(g_pedDensity), g_managePopulation);
@@ -1109,7 +1136,12 @@ void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int sti
     ped.heading = heading;
     ped.fire = fire;
     ped.duck = duck;
-    if (mag > 0.08f) {
+    ped.stickX = stickX;
+    ped.stickY = stickY;
+    ped.keysync = true;
+    // With the controller hook the game moves the ped from the stick, so the
+    // velocity fallback stays off.
+    if (!RemoteControlHookActive() && mag > 0.08f) {
         // Inverse of CClientPed: stick Y negative is forward along the camera.
         const float input = std::atan2(-static_cast<float>(stickX), -static_cast<float>(stickY));
         const float desired = input - camera;

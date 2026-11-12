@@ -8,7 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Native build compiles again (`shared/NativeTaskSync.h`, `shared/PacketHandler.cpp`)**: The native task sync structures from `d8296ba` did not build. Bit-fields were passed by address, the bit-stream wrapper has no `int8_t`, `ReadBit` or `WriteBit` overloads, and the structs were unqualified in `PacketHandler.cpp`. `detail::ReadBitsValue` / `WriteBitsValue` / `ReadFlag` / `WriteFlag` now carry the same bit widths. The struct names are qualified with `WorldRPG::Sync::`.
+- **Locomotion stick wrote 32 bits**: `Write(int8_t)` resolved to the 32-bit overload. Stick X/Y are now written as `uint8_t`, which keeps the 8-bit layout of the mta_neon packet.
+
 ### Added
+- **Remote Player Controller Switch (Step A, `PlayerPedPort.cpp`)**: Hooks `CPlayerPed::ProcessControl` once (`_ZN10CPlayerPed14ProcessControlEv`, through `Hook::MemoryPatcher`). For a remote player with a keysync stick, `CPad::GetPad(0)` (`_ZN4CPad6GetPadEi`, stride `0x158`) gets `LeftStickX` at `+0` and `LeftStickY` at `+2` for one call, then the whole pad block is restored. Offsets were read from the libGTASA 2.10 disassembly of `CPad::GetPedWalkLeftRight` and `CPad::GetPedWalkUpDown`. New API: `InstallRemoteControlHook`, `RemoteControlHookActive`, `SetRemoteStick`, `ClearRemoteStick`.
+- **Keysync Stick Stored Per Remote Player (`GameEngine.cpp`)**: `NoteRemoteAim` keeps `stickX`, `stickY` and `keysync` on `RemotePed`. The velocity fallback runs only when the controller hook is not active.
+- **Controlled Observer Path (`GameEngine.cpp` `ApplyRemotePeds`)**: A non-hosted player with keysync is driven by the game. The per-tick matrix lerp is skipped, and the body is re-anchored to the server position only when it drifts more than 8 m. `PresentOnFoot` still runs.
+
 - **Local Game Asset Workflow & `.env` Support**: Decoupled game assets from external Hugging Face cloud dependencies. Game assets are now configured via `.env` (`GAME_ASSETS_DIR`, `DEVICE_ASSETS_PATH`, `CDN_ROOT_URL`) and loaded from local device storage or the `./game_assets/` directory.
 - **Local Asset Verification in `NativeAssetBridge.kt`**: Added `findLocalAssetsFolder()` and `syncFromLocalFolder()` to detect local GTA San Andreas Mobile v2.10 files on Android external/internal storage, stage them atomically into generations, and activate without requiring internet downloads.
 - **Gradle Asset Pipeline**: Integrated `.env` property parsing in `app/build.gradle.kts` with `pushAssetsToDevice` Gradle task.

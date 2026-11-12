@@ -18,7 +18,7 @@ The [full architectural plan](PLANO_PORT_NEON_ANDROID.md) details audits, depend
 | **P1B.1 Native Transport** | P0.2 | Headless ARM64 harness, OPEN51 datagram, cipher handshake, and reliability layer. | Codec implemented; server handshake verified |
 | **P1B.2 Native Session** | P1B.1 | Protocol versioning, join data, and reconnect sequence against MTA Neon server. | In Progress |
 | **P2. Resources & Game Session** | P1A.4, P1B.2 | Root element, resource start/stop, HTTP asset cache, diagnostic Lua, and client-server events. | Pending |
-| **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (basic peds/movement working with bugs) |
+| **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (Step A: remote `CPlayerPed` created; controller hook written, on-device check pending; duck, enter/leave-car and steps B/C open) |
 | **P4. Lua, DX, GUI & Browser** | P2, P3 | RenderWare 2D DX draw calls, custom UI interactions, CEGUI/WebView bindings. | Pending |
 | **P5. Neon Parity Matrix** | P3, P4 | Complete API matrix, events, and elements matching MTA Neon desktop capabilities. | Pending |
 | **P6. Release Distribution** | P5 | Reproducible release builds, multi-device hardware validation, automated updates. | Pending |
@@ -28,6 +28,11 @@ P1A (Engine/Platform) and P1B (Network Transport) are independent parallel track
 ---
 
 ## 2. Historical Execution Log
+
+### Step A of P3 (controller switch): hook written, device check pending
+- `PlayerPedPort.cpp` hooks `CPlayerPed::ProcessControl` (`_ZN10CPlayerPed14ProcessControlEv`). For a remote player with keysync it sets `CPad::GetPad(0)` stick fields for one call, then restores the pad. The offsets (`GetPad` stride `0x158`, `LeftStickX` at `+0`, `LeftStickY` at `+2`) come from disassembling `CPad::GetPedWalkLeftRight` and `CPad::GetPedWalkUpDown` in the libGTASA 2.10 binary (sha1 `6dd7c360...`, same in all local copies).
+- `GameEngine.cpp`: keysync stores `stickX` / `stickY`. The velocity fallback runs only when the hook is missing. For a controlled player the per-tick lerp is skipped and the body is re-anchored only past 8 m.
+- Not done: camera-rotation float (`0xB6F178`) for the stick basis, duck via `CTaskSimpleDuck`, enter/leave-car tasks, and the walk-cycle check on the S25. Only `PlayerPedPort.cpp` was syntax-checked on the host; the Android build has not run.
 
 ### 2026-11-11: Local Asset & Environment Decoupling
 - Decoupled game assets from external Hugging Face cloud dependencies.

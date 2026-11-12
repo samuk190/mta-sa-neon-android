@@ -108,7 +108,7 @@ public final class EngineHostActivity extends GTASA {
         int port = getIntent().getIntExtra(GameActivity.EXTRA_SERVER_PORT, BuildConfig.DEFAULT_SERVER_PORT);
         try {
             // Same directory the :engine linker searches for DT_NEEDED.
-            System.loadLibrary("c++_shared");
+// libc++ is linked statically into WorldRPGNeon (c++_static); no shared runtime to preload.
             System.loadLibrary("WorldRPGNeon");
             Log.i(TAG, "MTA client library loaded");
         } catch (UnsatisfiedLinkError error) {

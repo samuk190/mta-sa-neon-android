@@ -11,6 +11,36 @@
 
 namespace WorldRPG::Sync {
 
+// Bit-level helpers. A bit-field has no address, and the bit-stream wrapper has
+// no int8 or bool overloads. Widths match the mta_neon wire layout.
+namespace detail {
+inline bool ReadBitsValue(Net::BitStreamReader& r, unsigned int& value, std::size_t bits)
+{
+    std::uint8_t raw = 0;
+    if (!r.ReadBits(&raw, bits))
+        return false;
+    value = raw;
+    return true;
+}
+inline void WriteBitsValue(Net::BitStreamWriter& w, unsigned int value, std::size_t bits)
+{
+    const std::uint8_t raw = static_cast<std::uint8_t>(value);
+    w.WriteBits(&raw, bits);
+}
+inline bool ReadFlag(Net::BitStreamReader& r, bool& flag)
+{
+    unsigned int raw = 0;
+    if (!ReadBitsValue(r, raw, 1))
+        return false;
+    flag = raw != 0;
+    return true;
+}
+inline void WriteFlag(Net::BitStreamWriter& w, bool flag)
+{
+    WriteBitsValue(w, flag ? 1u : 0u, 1);
+}
+}  // namespace detail
+
 /// PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE — matches mta_neon SyncStructures.h:1309
 constexpr std::uint8_t PED_SYNC_FLAG2_NATIVE_TASK_ANIMATION_LANE = 0x10;
 
@@ -41,17 +71,21 @@ struct SNativeTaskLocomotionSync
     bool Read(Net::BitStreamReader& bitStream)
     {
         data = {};
-        if (!bitStream.ReadBits(reinterpret_cast<uint8_t*>(&data.uiMode), BITCOUNT))
+        unsigned int mode = 0;
+        if (!detail::ReadBitsValue(bitStream, mode, BITCOUNT))
             return false;
+        data.uiMode = mode;
 
         if (data.uiMode == NONE)
             return true;
 
-        int8_t leftStickX = 0;
-        int8_t leftStickY = 0;
-        if (!bitStream.Read(leftStickX) || !bitStream.Read(leftStickY))
+        std::uint8_t rawX = 0;
+        std::uint8_t rawY = 0;
+        if (!bitStream.Read(rawX) || !bitStream.Read(rawY))
             return false;
 
+        const auto leftStickX = static_cast<std::int8_t>(rawX);
+        const auto leftStickY = static_cast<std::int8_t>(rawY);
         data.sLeftStickX = static_cast<short>(static_cast<float>(leftStickX) * 128.0f / 127.0f);
         data.sLeftStickY = static_cast<short>(static_cast<float>(leftStickY) * 128.0f / 127.0f);
         return true;
@@ -59,14 +93,14 @@ struct SNativeTaskLocomotionSync
 
     void Write(Net::BitStreamWriter& bitStream) const
     {
-        bitStream.WriteBits(reinterpret_cast<const uint8_t*>(&data.uiMode), BITCOUNT);
+        detail::WriteBitsValue(bitStream, data.uiMode, BITCOUNT);
         if (data.uiMode == NONE)
             return;
 
         const int8_t leftStickX = static_cast<int8_t>(static_cast<float>(data.sLeftStickX) * 127.0f / 128.0f);
         const int8_t leftStickY = static_cast<int8_t>(static_cast<float>(data.sLeftStickY) * 127.0f / 128.0f);
-        bitStream.Write(leftStickX);
-        bitStream.Write(leftStickY);
+        bitStream.Write(static_cast<std::uint8_t>(leftStickX));
+        bitStream.Write(static_cast<std::uint8_t>(leftStickY));
     }
 };
 
@@ -111,8 +145,10 @@ struct SNativeTaskWeaponPresentationSync
     bool Read(Net::BitStreamReader& bitStream)
     {
         data = {};
-        if (!bitStream.ReadBits(reinterpret_cast<uint8_t*>(&data.uiMode), BITCOUNT))
+        unsigned int mode = 0;
+        if (!detail::ReadBitsValue(bitStream, mode, BITCOUNT))
             return false;
+        data.uiMode = mode;
         if (data.uiMode == NONE)
             return true;
         if (data.uiMode != FIRE && data.uiMode != DRIVEBY)
@@ -133,7 +169,7 @@ struct SNativeTaskWeaponPresentationSync
         if (data.uiMode == DRIVEBY)
         {
             if (!bitStream.Read(data.fAbortRange) || !bitStream.Read(data.ucFrequencyPercentage) || !bitStream.Read(data.ucDriveByStyle) ||
-                !bitStream.ReadBit(data.bIsLeftHandDriveBy))
+                !detail::ReadFlag(bitStream, data.bIsLeftHandDriveBy))
             {
                 return false;
             }
@@ -146,7 +182,7 @@ struct SNativeTaskWeaponPresentationSync
 
     void Write(Net::BitStreamWriter& bitStream) const
     {
-        bitStream.WriteBits(reinterpret_cast<const uint8_t*>(&data.uiMode), BITCOUNT);
+        detail::WriteBitsValue(bitStream, data.uiMode, BITCOUNT);
         if (data.uiMode == NONE)
             return;
 
@@ -162,7 +198,7 @@ struct SNativeTaskWeaponPresentationSync
             bitStream.Write(data.fAbortRange);
             bitStream.Write(data.ucFrequencyPercentage);
             bitStream.Write(data.ucDriveByStyle);
-            bitStream.WriteBit(data.bIsLeftHandDriveBy);
+            detail::WriteFlag(bitStream, data.bIsLeftHandDriveBy);
         }
     }
 };
@@ -207,8 +243,10 @@ struct SNativeTaskAnimationPresentationSync
     bool Read(Net::BitStreamReader& bitStream)
     {
         data = {};
-        if (!bitStream.ReadBits(reinterpret_cast<uint8_t*>(&data.uiMode), BITCOUNT))
+        unsigned int mode = 0;
+        if (!detail::ReadBitsValue(bitStream, mode, BITCOUNT))
             return false;
+        data.uiMode = mode;
         if (data.uiMode == NONE)
             return true;
         if (!IsAnimationMode(data.uiMode) || !bitStream.Read(data.usAnimGroup) || !bitStream.Read(data.usAnimId) || !bitStream.Read(data.fProgress) ||
@@ -227,7 +265,7 @@ struct SNativeTaskAnimationPresentationSync
 
     void Write(Net::BitStreamWriter& bitStream) const
     {
-        bitStream.WriteBits(reinterpret_cast<const uint8_t*>(&data.uiMode), BITCOUNT);
+        detail::WriteBitsValue(bitStream, data.uiMode, BITCOUNT);
         if (data.uiMode == NONE)
             return;
 

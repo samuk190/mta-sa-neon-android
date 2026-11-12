@@ -193,6 +193,22 @@ Leave these on the desktop. They are SAO-specific:
 
 `flags2` locomotion and animation blocks inside `CPedSync::Packet_PedSync` are part of this PC client once the bitstream version allows them. They are ported with `Packet_PedSync` in step B. They are not a new protocol, and they are not required to finish step A.
 
+## 4b. Gaps found against the PC context switch (mta_neon)
+
+Checked against `mta_neon_source/Client/multiplayer_sa/multiplayer_keysync.cpp` (`SwitchContext`, `ReturnContextToLocalPlayer`) and `CClientPed::GetCameraRotation`. The earlier sections did not list these.
+
+| PC behaviour | Android status |
+| --- | --- |
+| Copies the remote pad (`CRemoteDataStorageSA::m_pad`, full `CPadSAInterface`) into the local pad slot, and writes the pad back into the remote storage on return | Not done. Only the stick is written, so punch, duck, horn and the other buttons do not carry over. Needs the whole remote pad kept per player. |
+| Writes the camera float at `VAR_CameraRotation` from `m_fCameraRotation` before the call, and restores the local value after | Not done. `SetPedCameraRotation` stores the value and nothing reads it. Without this, a remote player walks relative to the local camera. Resolve the Android address of that float (PC `0xB6F178`) before step A's walk test. |
+| `SetHornHistoryValue(ShockButtonL == 255)` | Not done. |
+| `SetLastTimeTouched(now)` on the remote pad, so the idle "impatient" actions do not fire on a remote ped | Not done. |
+| Sets the first-person weapon flag (`0x50BFF0`) when `RightShoulder1` is held with a first-person weapon | Not done. Only needed with a gun in hand. |
+| Points `0xB7CD98` back at the local player on return | Not done. Required once a remote player uses the context switch. |
+| Restores gravity, then calls `PostContextSwitch` and `OnPedContextChange` | Not done. |
+
+Step A's walk test is not a pass until the first two rows are handled. A stick without the camera float moves the body in the wrong direction.
+
 ## 5. Acceptance
 
 Each step matches PC when this one thing is true. The packet bytes stay the PC layout.

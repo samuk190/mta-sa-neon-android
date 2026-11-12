@@ -1,11 +1,14 @@
 #include "PlayerPedPort.h"
 #include "GameEngine.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 #ifdef __ANDROID__
 #include <dlfcn.h>
+#include "../hook/MemoryPatcher.h"
 #endif
 
 namespace WorldRPG::Game {
@@ -149,6 +152,112 @@ void* CreateRemotePlayerPed(int model, float x, float y, float z, float heading)
         ENGINE_LOGI("CPlayerPed(1, false) model %d at %.0f %.0f %.0f", skin, x, y, z);
     }
     return ped;
+}
+
+namespace {
+
+// CPad::GetPad(i) returns pads + i * 0x158 on libGTASA 2.10 (disassembled:
+// smaddl with stride 0x158). CControllerState NewState starts at offset 0, so
+// LeftStickX is the short at +0 and LeftStickY the short at +2 (CPad::GetPedWalkLeftRight
+// loads [pad] and CPad::GetPedWalkUpDown loads [pad, #2]).
+constexpr std::size_t kPadBytes = 0x158;
+constexpr int kMaxRemoteSticks = 64;
+
+struct RemoteStick {
+    void* ped = nullptr;
+    short x = 0;
+    short y = 0;
+};
+
+RemoteStick g_sticks[kMaxRemoteSticks]{};
+using ProcessControlFn = void (*)(void*);
+using GetPadFn = void* (*)(int);
+ProcessControlFn g_originalControl = nullptr;
+GetPadFn g_getPad = nullptr;
+bool g_controlHook = false;
+
+RemoteStick* FindStick(void* ped) {
+    for (auto& entry : g_sticks) {
+        if (entry.ped == ped) return &entry;
+    }
+    return nullptr;
+}
+
+// Replacement for CPlayerPed::ProcessControl. Only a remote ped with a stick set
+// swaps the pad. Everything else calls the original untouched.
+void RemotePlayerProcessControl(void* self) {
+    if (!g_originalControl) return;
+    RemoteStick* entry = FindStick(self);
+    if (!entry || !g_getPad) {
+        g_originalControl(self);
+        return;
+    }
+    auto* pad = static_cast<unsigned char*>(g_getPad(0));
+    if (!pad) {
+        g_originalControl(self);
+        return;
+    }
+    unsigned char saved[kPadBytes];
+    std::memcpy(saved, pad, kPadBytes);
+    std::memcpy(pad + 0, &entry->x, sizeof entry->x);
+    std::memcpy(pad + 2, &entry->y, sizeof entry->y);
+    g_originalControl(self);
+    std::memcpy(pad, saved, kPadBytes);
+}
+
+}  // namespace
+
+bool InstallRemoteControlHook() {
+#ifdef __ANDROID__
+    if (g_controlHook) return true;
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) return false;
+    void* target = dlsym(handle, "_ZN10CPlayerPed14ProcessControlEv");
+    g_getPad = reinterpret_cast<GetPadFn>(dlsym(handle, "_ZN4CPad6GetPadEi"));
+    if (!target || !g_getPad) {
+        ENGINE_LOGE("Remote control hook: missing ProcessControl=%p GetPad=%p",
+            target, reinterpret_cast<void*>(g_getPad));
+        return false;
+    }
+    static Hook::MemoryPatcher patcher;
+    const auto hooked = patcher.installHook(reinterpret_cast<uintptr_t>(target),
+        reinterpret_cast<uintptr_t>(&RemotePlayerProcessControl));
+    if (!hooked.success) {
+        ENGINE_LOGE("Remote control hook failed: %s", hooked.errorMessage.c_str());
+        return false;
+    }
+    g_originalControl = reinterpret_cast<ProcessControlFn>(hooked.trampolineAddress);
+    g_controlHook = true;
+    ENGINE_LOGI("Remote CPlayerPed controller hook installed");
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool RemoteControlHookActive() {
+    return g_controlHook;
+}
+
+void SetRemoteStick(void* ped, int stickX, int stickY) {
+    if (!ped) return;
+    RemoteStick* entry = FindStick(ped);
+    if (!entry) {
+        for (auto& slot : g_sticks) {
+            if (!slot.ped) {
+                entry = &slot;
+                break;
+            }
+        }
+    }
+    if (!entry) return;
+    entry->ped = ped;
+    entry->x = static_cast<short>(std::clamp(stickX, -128, 128));
+    entry->y = static_cast<short>(std::clamp(stickY, -128, 128));
+}
+
+void ClearRemoteStick(void* ped) {
+    if (RemoteStick* entry = FindStick(ped)) *entry = RemoteStick{};
 }
 
 }  // namespace WorldRPG::Game

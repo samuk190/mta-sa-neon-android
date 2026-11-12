@@ -252,15 +252,15 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
             break;
 
         // Native task blocks — read before spatial data per mta_neon wire order
-        SNativeTaskLocomotionSync nativeTaskLocomotion;
+        WorldRPG::Sync::SNativeTaskLocomotionSync nativeTaskLocomotion;
         if ((flags2 & 0x02) && !nativeTaskLocomotion.Read(reader))
             break;
 
-        SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
+        WorldRPG::Sync::SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
         if ((flags2 & 0x04) && !nativeTaskWeaponPresentation.Read(reader))
             break;
 
-        SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
+        WorldRPG::Sync::SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
         if ((flags2 & 0x08) && !nativeTaskAnimationPresentation.Read(reader))
             break;
 
@@ -480,7 +480,7 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
     if (!reader.Read(cameraRotation)) return false;
 
     // SNativeTaskAnimationPresentationSync physical takeover — seeds airborne/climb state
-    SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
+    WorldRPG::Sync::SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
     if (!nativeTaskPhysicalTakeover.Read(reader)) return false;
 
     WorldRPG::Game::NoteRemotePed(id, x, y, z, fRotation, vx, vy, vz);

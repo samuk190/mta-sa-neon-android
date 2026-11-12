@@ -186,7 +186,7 @@ class GameActivity : AppCompatActivity() {
         }
 
         try {
-            System.loadLibrary("c++_shared")
+// libc++ is linked statically into WorldRPGNeon (c++_static); no shared runtime to preload.
             System.loadLibrary("WorldRPGNeon")
         } catch (error: UnsatisfiedLinkError) {
             android.util.Log.e("GameActivity", "Falha ao carregar WorldRPGNeon", error)

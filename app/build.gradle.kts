@@ -48,9 +48,10 @@ android {
             cmake {
                 cppFlags += "-std=c++20"
                 arguments += listOf(
-                    // libWorldRPGNeon.so records DT_NEEDED libc++_shared.so.
-                    // The matching NDK runtime is copied into the APK below.
-                    "-DANDROID_STL=c++_shared",
+                    // Static STL: no libc++_shared.so in the APK. The NDK 25 copy of
+                    // that library has 4 KB LOAD segments, which the 16 KB audit rejects.
+                    // libGTASA.so does not link libc++, so no STL object crosses DSOs.
+                    "-DANDROID_STL=c++_static",
                     "-DANDROID_ARM_NEON=TRUE"
                 )
             }
@@ -107,32 +108,7 @@ android {
             // AGP 8.2 does not guarantee 16 KB ZIP offsets for stored libraries.
             // Extract compressed ELF files instead; their LOADs still need 16 KB alignment.
             useLegacyPackaging = true
-            // CMake's android_gradle_build.json reports runtimeFiles=[] for this
-            // STL, so AGP never copies libc++_shared.so. The NDK copy below and
-            // an externalNativeBuild output must not collide.
-            pickFirsts += "**/libc++_shared.so"
         }
-    }
-}
-
-// The :engine process dlopens libWorldRPGNeon.so from the APK native dir
-// (lib/arm64). That directory must also contain the NDK r25 libc++_shared.so
-// this module was linked with. AGP does not package it (empty runtimeFiles).
-val generatedNdkStl = layout.buildDirectory.dir("generated/ndkStlJni")
-val copyNdkLibcxxShared = tasks.register<Copy>("copyNdkLibcxxShared") {
-    val prebuiltRoot = android.ndkDirectory.resolve("toolchains/llvm/prebuilt")
-    val hostDir = prebuiltRoot.listFiles()?.singleOrNull { it.isDirectory }
-        ?: throw GradleException("NDK LLVM prebuilt host not found under $prebuiltRoot")
-    from(hostDir.resolve("sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"))
-    into(generatedNdkStl.map { it.dir("arm64-v8a") })
-}
-
-android.sourceSets.getByName("main").jniLibs.srcDir(generatedNdkStl)
-
-tasks.named("preBuild").configure { dependsOn(copyNdkLibcxxShared) }
-tasks.configureEach {
-    if (name.contains("JniLib") || name.contains("NativeLibs")) {
-        dependsOn(copyNdkLibcxxShared)
     }
 }
 
