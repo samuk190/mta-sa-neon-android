@@ -239,10 +239,22 @@ Join our community to discuss development, report findings, test builds, and col
 
 ---
 
+## Credits & Acknowledgments
+
+This project is built upon decades of collective community research, open-source netcode development, and GTA engine reverse engineering. Special thanks and credits to:
+
+- **[Multi Theft Auto (MTA)](https://multitheftauto.com)**: Huge credits and recognition to the **[Multi Theft Auto Team](https://github.com/multitheftauto/mtasa-blue)** for developing the premier open-source multiplayer modification for Grand Theft Auto: San Andreas. Their pioneering netcode architecture (`CNetAPI`, `CPlayerPedSA`, RakNet integration, synchronization algorithms, and element hierarchy) serves as the foundational blueprint for this client.
+- **[San Andreas Online (MTA Neon)](https://github.com/Dryxio/san-andreas-online)**: Credits to [Dryxio](https://github.com/Dryxio) and contributors for the lightweight C++ server rewrite, clean packet definitions, and modernized multiplayer backend.
+- **[The Lua Project](https://www.lua.org)**: For the embedded Lua 5.3 scripting engine powering client-side game logic and interfaces.
+- **[Xiph.Org Foundation](https://opus-codec.org)**: For the low-latency Opus audio codec powering spatial voice chat.
+- **Rockstar Games & War Drum Studios**: Original creators and mobile porters of Grand Theft Auto: San Andreas.
+
+---
+
 ## License & Attribution
 
-- Multi Theft Auto (MTA) is licensed under the GPLv3 / BSD licenses.
-- Lua 5.3 is licensed under the MIT License.
-- Opus audio codec is licensed under the BSD-3-Clause License.
-- Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
-- This open-source research project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
+- **Multi Theft Auto (MTA)**: Netcode concepts and algorithms derived from [Multi Theft Auto: Blue](https://github.com/multitheftauto/mtasa-blue) are subject to GPLv3 / BSD licensing.
+- **Lua 5.3**: Copyright © 1994–2020 Lua.org, PUC-Rio. Licensed under the [MIT License](https://www.lua.org/license.html).
+- **Opus Codec**: Copyright © 2001–2011 Xiph.Org Foundation, Skype Limited. Licensed under the [BSD-3-Clause License](https://opus-codec.org/license/).
+- **Rockstar Games**: Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
+- This open-source research and educational project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
