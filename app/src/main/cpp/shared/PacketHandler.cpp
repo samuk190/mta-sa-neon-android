@@ -253,14 +253,15 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     int applied = 0;
     PKT_LOGI("DIAG PED_SYNC body len=%zu bits=%zu", length, bits);
-    while (reader.GetRemainingBits() > 32 && applied < 16) {
+    // Reference Packet_PedSync: while (GetNumberOfUnreadBits() > 32). No entry cap.
+    while (reader.GetRemainingBits() > 32) {
         uint32_t id = 0;
         uint8_t ucSyncTimeContext = 0, ucFlags = 0, flags2 = 0;
         if (!ReadElementId(reader, id) || !reader.Read(ucSyncTimeContext) || !reader.Read(ucFlags) || !reader.Read(flags2))
             break;
         PKT_LOGI("DIAG PED_SYNC id=%u ctx=%u flags=0x%02x flags2=0x%02x bit=%zu", id, ucSyncTimeContext, ucFlags, flags2, reader.GetReadOffsetBits());
 
-        // Native task blocks — read before spatial data per mta_neon wire order
+        // Native task blocks - read before spatial data per mta_neon wire order
         // Blocks exist on the wire only when the negotiated bitstream carries them
         // (mta_neon: BitStream.Can(eBitStreamVersion::NativeTask...)). At 0x0030 they are skipped.
         const bool hasLocomotion = (flags2 & 0x02) &&
@@ -303,7 +304,7 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
         if (ucFlags & 0x08) { if (!reader.Read(fHealth)) break; }
         if (ucFlags & 0x10) { if (!reader.Read(fArmor)) break; }
 
-        // Camera rotation — SPedRotationSync uses 12-bit FloatAsBits(-PI, PI)
+        // Camera rotation - SPedRotationSync uses 12-bit FloatAsBits(-PI, PI)
         float cameraRotation = 0;
         if (flags2 & 0x01) {
             uint8_t camRaw[2] = {};
@@ -318,7 +319,7 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
         if (ucFlags & 0x20) { uint8_t bit = 0; if (!reader.ReadBits(&bit, 1)) break; bOnFire = (bit & 1u) != 0; }
         if (ucFlags & 0x40) { uint8_t bit = 0; if (!reader.ReadBits(&bit, 1)) break; bIsInWater = (bit & 1u) != 0; }
 
-        // Animation kill/cleanup flag — ucFlags & 0x80
+        // Animation kill/cleanup flag - ucFlags & 0x80
         // When set, the syncer signals that a synchronized animation ended or
         // was overridden. Mirror the cleanup locally so the remote ped does not
         // remain permanently excluded from native-task locomotion presentation.
