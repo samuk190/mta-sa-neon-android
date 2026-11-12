@@ -132,6 +132,20 @@ bool ReadSmallUInt(BitStreamReader& r, uint32_t bits, uint8_t& out) {
     return true;
 }
 
+// LSB-first field writer, the same bit order as the low() lambda in SendPedSync.
+void WriteFieldLsb(BitStreamWriter& w, uint32_t value, uint32_t bits) {
+    uint8_t bytes[4] = {};
+    for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (8 * i)) & 0xFF);
+    w.WriteBits(bytes, static_cast<size_t>(bits));
+}
+
+// Local player's outstanding VEHICLE_INOUT request (desktop CClientPed::m_VehicleInOutID).
+// Informational only: it does not gate new requests, because GTA has already moved the ped.
+// Net thread only: Pulse and the packet callback both run inside nativePulse.
+enum class VehicleInOutPending : uint8_t { None, RequestIn, RequestOut };
+VehicleInOutPending g_inOutPending = VehicleInOutPending::None;
+uint32_t g_inOutVehicle = 0xFFFFFFFFu;
+
 } // anonymous namespace
 
 const char* JoinStateName(JoinState state) {
@@ -535,6 +549,42 @@ struct NeonJoinClient::Impl {
         SendGamePacket(w, false);
     }
 
+    // VEHICLE_INOUT (game packet 58) request side for the local player. Desktop enter request:
+    // ped, vehicle, action(4), seat(4), isOnWater(1), door(3) (CClientPed.cpp:10061-10072).
+    // Desktop exit request: ped, vehicle, action(4), then a 2-bit door only for doors 2..5
+    // (CClientPed.cpp:10178-10188). The server reads an absent exit door as 0xFF
+    // (CVehicleInOutPacket::Read). Sent with SendUpe: priority HIGH, reliable ordered, as desktop does.
+    // Events come from WatchLocalVehicle (GameEngine.cpp), so GTA has already moved the ped when this runs.
+    void SendVehicleInOut() {
+        if (!net || !net->IsConnected() || info.localPlayerId == 0xFFFFFFFFu) return;
+        WorldRPG::Game::LocalVehicleEvent ev;
+        while (WorldRPG::Game::ConsumeLocalVehicleEvent(ev)) {
+            BitStreamWriter w;
+            w.Write(static_cast<uint8_t>(58));  // PACKET_ID_VEHICLE_INOUT (Shared/sdk/net/Packets.h:96)
+            WriteFieldLsb(w, info.localPlayerId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
+            WriteFieldLsb(w, ev.vehicleId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
+            if (ev.entered) {
+                WriteFieldLsb(w, 0, 4);  // action VEHICLE_REQUEST_IN = 0 (CClientGame.h:174)
+                WriteFieldLsb(w, 0, 4);  // seat 0
+                WriteFieldLsb(w, 0, 1);  // isOnWater false
+                WriteFieldLsb(w, 0, 3);  // door 0
+            } else {
+                WriteFieldLsb(w, 3, 4);  // action VEHICLE_REQUEST_OUT = 3 (CClientGame.h:177); no door bits
+            }
+            if (!SendUpe(w)) {
+                JOIN_LOGE("VehInOut: send %s failed veh=%u", ev.entered ? "request_in" : "request_out", ev.vehicleId);
+                continue;
+            }
+            if (g_inOutPending != VehicleInOutPending::None) {
+                JOIN_LOGI("VehInOut: new request while a previous one is pending (server replies in order)");
+            }
+            g_inOutPending = ev.entered ? VehicleInOutPending::RequestIn : VehicleInOutPending::RequestOut;
+            g_inOutVehicle = ev.vehicleId;
+            JOIN_LOGI("VehInOut: sent %s ped=%u veh=%u", ev.entered ? "request_in seat=0 door=0" : "request_out",
+                      info.localPlayerId, ev.vehicleId);
+        }
+    }
+
     bool SendUpe(BitStreamWriter& body) {
         if (!net) return false;
         return net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), body,
@@ -833,6 +883,7 @@ void NeonJoinClient::Pulse() {
             d.SendKeySync();
             d.SendPedSync();
             d.SendUnoccupiedVehicleSync();
+            d.SendVehicleInOut();
             if (!d.pendingChat.empty() && SendChatLine(*d.net, d.pendingChat)) d.pendingChat.clear();
             break;
         default:
@@ -845,6 +896,36 @@ bool SendGamePacket(BitStreamWriter& body, bool reliable) {
     return g_joinedNet->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), body,
         PacketPriority::MEDIUM,
         reliable ? PacketReliability::RELIABLE_ORDERED : PacketReliability::UNRELIABLE_SEQUENCED);
+}
+
+// VEHICLE_INOUT replies for the local ped, called by PacketHandler on the net thread (game packet 58).
+// action is a client NOTIFY value: 1 = VEHICLE_NOTIFY_IN, 4 = VEHICLE_NOTIFY_OUT (CClientGame.h:175, 178).
+// Desktop sends ped, vehicle, action(4) only (CClientPed.cpp:10319-10324 notify out, 10369-10389 notify in).
+bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action) {
+    if (action != 1 && action != 4) return false;
+    if (!g_joinedNet || !g_joinedNet->IsConnected() || pedId == 0xFFFFFFFFu) return false;
+    BitStreamWriter w;
+    w.Write(static_cast<uint8_t>(58));  // PACKET_ID_VEHICLE_INOUT
+    WriteFieldLsb(w, pedId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
+    WriteFieldLsb(w, vehicleId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
+    WriteFieldLsb(w, action, 4);
+    const bool sent = g_joinedNet->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                                              PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
+    if (!sent) {
+        JOIN_LOGE("VehInOut: send %s failed veh=%u", action == 1 ? "notify_in" : "notify_out", vehicleId);
+        return false;
+    }
+    if (vehicleId != g_inOutVehicle) {
+        JOIN_LOGI("VehInOut: reply for veh=%u differs from pending veh=%u", vehicleId, g_inOutVehicle);
+    }
+    g_inOutPending = VehicleInOutPending::None;
+    JOIN_LOGI("VehInOut: sent %s ped=%u veh=%u", action == 1 ? "notify_in" : "notify_out", pedId, vehicleId);
+    return true;
+}
+
+// VEHICLE_ATTEMPT_FAILED (action 9) and NOTIFY_*_RETURN for the local ped end the outstanding request.
+void ClearVehicleInOutPending() {
+    g_inOutPending = VehicleInOutPending::None;
 }
 
 void NeonJoinClient::OnTransportFailure(const std::string& reason) {
@@ -951,6 +1032,8 @@ bool NeonJoinClient::SendChat(const std::string& command) {
 }
 
 void NeonJoinClient::Reset() {
+    g_inOutPending = VehicleInOutPending::None;
+    g_inOutVehicle = 0xFFFFFFFFu;
     pImpl_->net = nullptr;
     pImpl_->state = JoinState::Idle;
     pImpl_->info = NeonJoinInfo{};

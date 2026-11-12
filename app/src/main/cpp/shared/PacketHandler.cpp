@@ -24,6 +24,12 @@ namespace WorldRPG::JniBridge {
 void PostGameLine(int kind, const char* text);
 }
 
+// Defined in net/NeonJoinProtocol.cpp: VEHICLE_INOUT replies for the local ped (net thread).
+namespace WorldRPG::Net {
+bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action);
+void ClearVehicleInOutPending();
+}
+
 namespace {
 constexpr uint32_t kElementIdBits = 17;
 
@@ -606,6 +612,80 @@ bool HandleUnoccupiedVehicleSync(const uint8_t* body, size_t length, size_t bits
     return applied > 0;
 }
 
+// Desktop CPacketHandler::Packet_Vehicle_InOut (mta_neon_source/Client/mods/deathmatch/logic/CPacketHandler.cpp:1804).
+// Server layout (Server/mods/deathmatch/logic/packets/CVehicleInOutPacket.cpp, Write): ElementID ped (17 bits),
+// ElementID vehicle (17), seat (4), action (4), then per action:
+//   0 REQUEST_IN_CONFIRMED (CPacketHandler.cpp:1858)  door (3)
+//   2 NOTIFY_IN_ABORT_RETURN (:1931)                  door (3), SDoorOpenRatioSync (not parsed)
+//   3 REQUEST_OUT_CONFIRMED (:1995)                   door (2), optional
+//   7 REQUEST_JACK_CONFIRMED (:2110)                  door (3)
+//   9 ATTEMPT_FAILED (:2254)                          reason (8), SPositionSync when reason 5 (not parsed)
+// Other actions carry jack or fell-off fields the local ped does not need, so they are logged only.
+// Only the local ped is acted on. Other peds are logged and not applied (remote seat placement is not ported).
+bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    uint32_t pedId = 0, vehicleId = 0;
+    uint8_t seat = 0, action = 0;
+    if (!ReadElementId(reader, pedId) || !ReadElementId(reader, vehicleId) ||
+        !reader.ReadBits(&seat, 4) || !reader.ReadBits(&action, 4)) {
+        PKT_LOGE("VehInOut: truncated header");
+        return false;
+    }
+    uint8_t door = 0;
+    uint8_t reason = 0;
+    switch (action) {
+        case 0:  // REQUEST_IN_CONFIRMED
+        case 2:  // NOTIFY_IN_ABORT_RETURN
+        case 7:  // REQUEST_JACK_CONFIRMED
+            if (!reader.ReadBits(&door, 3)) return false;
+            break;
+        case 3:  // REQUEST_OUT_CONFIRMED: the door is optional (CVehicleInOutPacket::Write writes it for doors < 4)
+            if (!reader.ReadBits(&door, 2)) door = 0xFF;
+            break;
+        case 9:  // ATTEMPT_FAILED
+            if (!reader.ReadBits(&reason, 8)) return false;
+            break;
+        default:
+            break;
+    }
+    static const char* const kNames[] = {
+        "request_in_confirmed", "notify_in_return", "notify_in_abort_return", "request_out_confirmed",
+        "notify_out_return", "notify_out_abort_return", "notify_fell_off_return", "request_jack_confirmed",
+        "notify_jack_return", "attempt_failed"};
+    const char* name = action < 10 ? kNames[action] : "unknown";
+    const bool mine = pedId != 0 && pedId == WorldRPG::ServerWorld::LocalPlayer();
+    if (!mine) {
+        PKT_LOGI("VehInOut: %s ped=%u veh=%u seat=%u door=%u reason=%u (other ped, not applied)", name, pedId,
+                 vehicleId, static_cast<unsigned>(seat), static_cast<unsigned>(door), static_cast<unsigned>(reason));
+        return true;
+    }
+    if (action == 9) {
+        PKT_LOGI("VehInOut: recv attempt_failed veh=%u reason=%u (request rejected by server)", vehicleId,
+                 static_cast<unsigned>(reason));
+    } else {
+        PKT_LOGI("VehInOut: recv %s veh=%u seat=%u door=%u", name, vehicleId, static_cast<unsigned>(seat),
+                 static_cast<unsigned>(door));
+    }
+    switch (action) {
+        case 0:  // REQUEST_IN_CONFIRMED: the server allows the entry, so send NOTIFY_IN (1)
+            WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 1);
+            break;
+        case 3:  // REQUEST_OUT_CONFIRMED: the server allows the exit, so send NOTIFY_OUT (4)
+            WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 4);
+            break;
+        case 1:  // NOTIFY_IN_RETURN
+        case 2:  // NOTIFY_IN_ABORT_RETURN
+        case 4:  // NOTIFY_OUT_RETURN
+        case 5:  // NOTIFY_OUT_ABORT_RETURN
+        case 9:  // ATTEMPT_FAILED
+            WorldRPG::Net::ClearVehicleInOutPending();
+            break;
+        default:
+            break;
+    }
+    return true;
+}
+
 // Packet 33 (CNetAPI.cpp 1306). The reference reads the body only when the local player has an
 // occupied vehicle, so the same gate is used here: no known occupancy, packet ignored.
 bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits) {
@@ -790,6 +870,7 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 55) return HandleVehicleStopSync(body, bodyLength, bodyBits);
         if (gameId == 33) return HandlePlayerVehiclePureSync(body, bodyLength, bodyBits);
         if (gameId == 56) return HandleUnoccupiedVehicleSync(body, bodyLength, bodyBits);
+        if (gameId == 58) return HandleVehicleInOut(body, bodyLength, bodyBits);
         if (gameId == 81) return WorldRPG::Script::ActiveVmOnServerEvent(body, bodyLength, bodyBits);
         if (gameId == 26) return HandlePlayerSpawn(body, bodyLength, bodyBits);
         if (gameId == 25) { WorldRPG::ServerWorld::OnPlayerList(body, bodyLength, bodyBits); return true; }

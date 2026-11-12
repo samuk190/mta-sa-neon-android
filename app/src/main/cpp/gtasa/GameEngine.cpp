@@ -257,6 +257,11 @@ static std::atomic<bool> g_remoteResetPending{false};
 static std::vector<HostedPed> g_hostedSnap;
 static std::vector<HostedCar> g_hostedCarSnap;
 static std::unordered_map<uint32_t, RemoteBody> g_remoteBodies;
+// Local player vehicle state and the queue for VEHICLE_INOUT. Both guarded by g_remoteMutex.
+static constexpr uint32_t kNoVehicle = 0xFFFFFFFFu;
+static uint32_t g_localVehicleId = kNoVehicle;
+static std::vector<LocalVehicleEvent> g_localVehicleEvents;
+static constexpr size_t kMaxLocalVehicleEvents = 16;
 
 // HasModelLoaded is not exported. HasVehicleUpgradeLoaded (0x395098) reads
 // ms_aInfoForModel[id] with stride 0x14 and treats the byte at +0x10 as loaded
@@ -412,6 +417,8 @@ struct TaskFns {
     void (*carDtor)(void*) = nullptr;
     // CCarCtrl::CreateCarForScript(int, CVector, unsigned char). Vec3 has the same layout as CVector (3 floats).
     void* (*createCarForScript)(int, Vec3, unsigned char) = nullptr;
+    // CVehicle* FindPlayerVehicle(int playerId, bool bIncludeRemote). playerId -1 is the local player.
+    void* (*findPlayerVehicle)(int, bool) = nullptr;
     void* wanderVtable = nullptr;
 };
 
@@ -446,6 +453,7 @@ static TaskFns& Tasks() {
     api.carDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN11CAutomobileD1Ev"));
     api.createCarForScript = reinterpret_cast<void* (*)(int, Vec3, unsigned char)>(
         dlsym(handle, "_ZN8CCarCtrl18CreateCarForScriptEi7CVectorh"));
+    api.findPlayerVehicle = reinterpret_cast<void* (*)(int, bool)>(dlsym(handle, "_Z17FindPlayerVehicleib"));
     api.wanderVtable = dlsym(handle, "_ZTV26CTaskComplexWanderStandard");
     return api;
 }
@@ -685,6 +693,43 @@ static float GroundedZ(float x, float y, float z) {
     return z;
 }
 
+// Desktop CClientPed::EnterVehicle (CClientPed.cpp:9886, request written at 10061) and ExitVehicle
+// (CClientPed.cpp:10096, request written at 10178) send REQUEST_IN / REQUEST_OUT only after the local ped
+// is allowed to act. On Android the native enter button
+// starts GTA's animation first, so the change is watched here instead. Each frame FindPlayerVehicle(-1, false)
+// returns the CVehicle the local ped is in; it is mapped to a server ElementID through g_remoteCars. A change
+// of mapped vehicle queues a leave for the old one and an enter for the new one. The network thread turns
+// those events into REQUEST_IN / REQUEST_OUT (NeonJoinProtocol.cpp, SendVehicleInOut).
+static void WatchLocalVehicle() {
+    TaskFns& api = Tasks();
+    if (!api.findPlayerVehicle) return;
+    void* vehicle = api.findPlayerVehicle(-1, false);
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    uint32_t current = kNoVehicle;
+    if (vehicle) {
+        for (const auto& [id, car] : g_remoteCars) {
+            if (car.body == vehicle) {
+                current = id;
+                break;
+            }
+        }
+    }
+    if (current == g_localVehicleId) return;
+    if (g_localVehicleId != kNoVehicle) {
+        g_localVehicleEvents.push_back(LocalVehicleEvent{g_localVehicleId, false});
+        ENGINE_LOGI("VehInOut: local ped left vehicle %u", g_localVehicleId);
+    }
+    if (current != kNoVehicle) {
+        g_localVehicleEvents.push_back(LocalVehicleEvent{current, true});
+        ENGINE_LOGI("VehInOut: local ped entered vehicle %u", current);
+    }
+    if (g_localVehicleEvents.size() > kMaxLocalVehicleEvents) {
+        ENGINE_LOGI("VehInOut: event queue full, dropping oldest");
+        g_localVehicleEvents.erase(g_localVehicleEvents.begin());
+    }
+    g_localVehicleId = current;
+}
+
 static void ApplyRemotePeds() {
     NoteGameFrame();
     if (g_remoteResetPending.exchange(false)) {
@@ -695,6 +740,12 @@ static void ApplyRemotePeds() {
         g_remoteBodies.clear();
         for (auto& entry : g_remoteCars) DropBody(entry.second.body, true, !entry.second.owned);
         g_remoteCars.clear();
+        {
+            // A new session starts on foot: drop the stale vehicle and any queued VEHICLE_INOUT events.
+            std::lock_guard<std::mutex> lock(g_remoteMutex);
+            g_localVehicleId = kNoVehicle;
+            g_localVehicleEvents.clear();
+        }
         ENGINE_LOGI("Remote world reset for reconnect");
     }
     {
@@ -1059,6 +1110,7 @@ static void ApplyRemotePeds() {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         g_hostedCarSnap.swap(hostedCars);
     }
+    WatchLocalVehicle();
 }
 
 extern "C" void WorldRPG_NoAmbientPeds() {}
@@ -1398,6 +1450,18 @@ int CopyHostedCars(HostedCar* out, int max) {
     for (int i = 0; i < count; ++i) out[i] = g_hostedCarSnap[static_cast<size_t>(i)];
     return count;
 }
+// VEHICLE_INOUT source queue (see WatchLocalVehicle). The network thread drains it from Pulse.
+bool ConsumeLocalVehicleEvent(LocalVehicleEvent& out) {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    if (g_localVehicleEvents.empty()) return false;
+    out = g_localVehicleEvents.front();
+    g_localVehicleEvents.erase(g_localVehicleEvents.begin());
+    return true;
+}
+uint32_t LocalVehicleId() {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    return g_localVehicleId;
+}
 
 #else
 bool BeginServerSession() { return false; }
@@ -1423,6 +1487,8 @@ void RequestWander(uint32_t, int) {}
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
 int CopyHostedPeds(HostedPed*, int) { return 0; }
 int CopyHostedCars(HostedCar*, int) { return 0; }
+bool ConsumeLocalVehicleEvent(LocalVehicleEvent&) { return false; }
+uint32_t LocalVehicleId() { return 0xFFFFFFFFu; }
 void SetPedNativeTaskLocomotion(uint32_t, unsigned int) {}
 void SetPedNativeTaskWeapon(uint32_t, uint8_t) {}
 void SetPedNativeTaskAnimation(uint32_t, uint16_t, uint16_t) {}

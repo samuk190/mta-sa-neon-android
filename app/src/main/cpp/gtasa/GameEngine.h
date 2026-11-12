@@ -216,5 +216,16 @@ struct HostedCar {
     float tx = 0, ty = 0, tz = 0;
 };
 int CopyHostedCars(HostedCar* out, int max);
+// Local player (CJ) enter/exit of a server vehicle, for VEHICLE_INOUT (packet 58). The game thread
+// detects the change in ApplyRemotePeds; the network thread drains it in NeonJoinClient::Pulse.
+// vehicleId is the server ElementID from g_remoteCars. entered=true is a board, false is a leave.
+struct LocalVehicleEvent {
+    uint32_t vehicleId = 0xFFFFFFFFu;
+    bool entered = false;
+};
+// Pops the oldest queued event. Returns false when the queue is empty.
+bool ConsumeLocalVehicleEvent(LocalVehicleEvent& out);
+// Server ElementID of the vehicle the local player is in, or 0xFFFFFFFF when on foot or in an unmapped car.
+uint32_t LocalVehicleId();
 
 } // namespace WorldRPG::Game
