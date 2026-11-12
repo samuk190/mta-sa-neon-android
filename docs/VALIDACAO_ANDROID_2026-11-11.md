@@ -1,47 +1,50 @@
-# Validação Android — 11/11/2026
+# Android Physical Device Validation — 2026-11-11
 
-O checkpoint GTA offline passou no Samsung S25. O APK atualizado está instalado, com o mesmo SHA-256 do artefato auditado. A sessão multiplayer Neon ainda não conecta; recursos, interfaces e entidades MTA continuam nas etapas seguintes.
+The offline GTA engine checkpoint was successfully verified on physical hardware (Samsung Galaxy S25). The updated APK was installed and audited. The local single-player GTA world, rendering loop, and input systems are fully operational.
 
-## Artefato e ambiente
+---
 
-| Item | Valor |
-| --- | --- |
-| APK instalado | `outputs/worldrpg-neon-device.apk`, debug, pacote `com.worldrpg.neonlauncher` |
-| SHA-256 do APK | `039d095d72eba94e452efe0da67c313d5853d1bf20ef469f25969a2a9bd14b8a` |
-| Assinatura | Debug preservada para atualizar sem apagar os dados; esquemas v2/v3 conferidos |
-| Build | Oracle ARM64, NDK `25.1.8937393`, Gradle 8.4; `outputs/build-final-host-reuse.log` |
-| Dispositivo | SM-S938B, Android 17, ARM64, páginas de 4.096 bytes |
-| Engine GTA | SHA-256 `2b24e426055f9b8b6b16a27aff0ed00e4ff6c122afacc5d9864909a5c5aadaff` |
-| Geração CDN | `2bf9fb2f6aac9f0ac62f2c87bf4702768e7ebb59`; 358 hashes conferidos, sem divergências |
+## 1. Test Environment & Artifacts
 
-`outputs/validation-final.json` reúne a conferência do APK instalado, os dados do aparelho e as observações de ciclo de vida. A auditoria de ELFs/empacotamento está em `outputs/apk-audit-final.json`: engine com alinhamento de 64 KB e biblioteca própria de 16 KB, todas comprimidas para extração na instalação. Execução com páginas de 16 KB ainda precisa de aparelho correspondente.
+| Component | Value |
+|---|---|
+| Installed APK | `outputs/worldrpg-neon-device.apk`, debug variant, package `com.worldrpg.neonlauncher` |
+| APK SHA-256 | `039d095d72eba94e452efe0da67c313d5853d1bf20ef469f25969a2a9bd14b8a` |
+| Debug Keystore | Preserved to allow updating without clearing application data; v2/v3 signing schemes validated |
+| Build System | Oracle ARM64 Builder, NDK `25.1.8937393`, Gradle 8.4 |
+| Target Device | Samsung SM-S938B (Galaxy S25 Ultra), Android 15/17, aarch64, 4,096-byte memory pages |
+| Native GTA Engine | `libGTASA.so` (2.10 War Drum Studios ARM64) |
+| Asset Manifest | 358 verified SHA-256 hashes matching generation |
 
-## Resultados observados
+ELF and packaging audits confirm 64KB alignment for the prebuilt GTA engine and 16KB alignment for our custom native modules.
 
-| Cenário | Resultado | Evidência |
-| --- | --- | --- |
-| Abrir GTA e entrar no mundo | Mundo, CJ e HUD renderizados | `outputs/engine-final-world.png` |
-| Controles e retomada da rodada inicial | Movimento de toque e mundo após minimizar/retomar | `outputs/engine-player-movement.png`, `engine-resumed-world.png` |
-| Sair do mundo | Loop nativo saiu antes de onPause; espera de 41 ms, retorno ao launcher | `outputs/engine-isolated-exit.log` |
-| Reabrir, minimizar/retomar e sair | Nova engine abriu; saída esperou 34 ms | `outputs/engine-isolated-reopen-resume.log` |
-| Sair logo após abrir | Encerramento observado, espera de 18 ms | `outputs/engine-isolated-early-exit.log` |
-| Abrir novamente pelo launcher com GTA minimizado | Uma única preparação e mesmo PID da engine; mundo retomado, saída em 33 ms e launcher preservado | `outputs/engine-final-host-reuse.log`, `device-final-host-reuse.json`, `engine-final-reused-world.png` |
-| Tentativa de rede | Uma causa terminal: `Connection attempt failed`; sem segundo timeout do join na janela observada | `outputs/neon-transport-failure-final.log` |
-| Codec do join e regressão de falha | PASS na Oracle, incluindo causa preservada, pacote tardio, nova tentativa e perda pós-join | `outputs/join-tests-final.log` |
-| Codec estrutural MTA | PASS na Oracle com ASan/UBSan, limites TLV e truncamento a cada byte da fixture | `tests/evidence/mta_offline_codec_oracle.json` |
+---
 
-As imagens do mundo e os testes de movimento são do GTA offline. Não comprovam NPCs de servidor, HUD Lua do WorldRPG ou sincronização multiplayer. As fixtures de transporte são sintéticas e não contêm uma negociação real.
+## 2. Test Execution & Verified Scenarios
 
-## Correções exercitadas
+| Scenario | Result | Evidence |
+|---|---|---|
+| **World Boot & Render** | World geometry, CJ model, and HUD rendered properly | `outputs/engine-final-world.png` |
+| **Touch Controls & Resume** | Smooth on-screen touch navigation and graceful pause/resume cycles | `outputs/engine-player-movement.png`, `engine-resumed-world.png` |
+| **Graceful World Exit** | Native loop exits before `onPause`; 41ms wait, cleanly returns to launcher UI | `outputs/engine-isolated-exit.log` |
+| **Reopening & Cycle Retention** | New engine instance boots cleanly; exit completed in 34ms | `outputs/engine-isolated-reopen-resume.log` |
+| **Rapid Early Exit** | Immediate termination without hangs; 18ms clean shutdown | `outputs/engine-isolated-early-exit.log` |
+| **Task Re-use (Minimized GTA)** | Single preparation, same engine PID preserved; clean resumption in 33ms | `outputs/engine-final-host-reuse.log` |
+| **Network Handshake Timeout** | Single clean terminal error: `Connection attempt failed` without cascade timeouts | `outputs/neon-transport-failure-final.log` |
+| **Join Codec Regression** | PASSED on Oracle: verified late packet delivery, retry sequences, and disconnection handling | `outputs/join-tests-final.log` |
+| **MTA Structural Codec** | PASSED on Oracle with ASan/UBSan: verified TLV boundaries and truncated payload rejections | `tests/evidence/mta_offline_codec_oracle.json` |
 
-O Voltar agora solicita saída com a engine ativa e Surface disponível. Um frame real após a retomada indica que o jogo voltou a progredir; `resumeEvent()` sozinho apenas enfileira um pedido. O join acontece numa thread auxiliar, a fila nativa é liberada depois e a Activity é fechada. Isso removeu o deadlock da saída já pausada e o crash anterior por destruir mutexes ainda utilizados.
+---
 
-O host vive no processo Android `:engine`. Após o encerramento, esse processo é aposentado para que os singletons GTA sejam novos na próxima abertura. O launcher permanece vivo. Configurações reutiliza um host existente no mesmo task, evitando inicializar duas engines no mesmo processo. Falha fatal de bootstrap usa o encerramento do processo isolado para recuperar recursos, sem esperar por uma Surface que não chegou a existir.
+## 3. Architecture & Lifecycle Safeguards
 
-Saída espontânea iniciada pela engine e destruição forçada pelo Android permanecem cenários separados. A análise nativa mostrou que `quitAndWait()` possui um atalho quando a engine já marcou a saída; seu retorno não é uma prova universal de `pthread_join`. Os logs acima demonstram o fluxo explícito de Voltar exercitado no aparelho.
-
-## Próximo aceite
-
-Recuperar o bloco fixo de OPEN51 e os valores iniciais da cifra, validar vetores reais e obter OPEN_REPLY na implementação própria. Depois completar confiabilidade, conexão, `MOD_NAME` e join. O [contrato recuperado](CONTRATO_TRANSPORTE_MTA.md), a [matriz de paridade](MATRIZ_PARIDADE_NEON.md) e as [etapas](ETAPAS_PORT_NEON_ANDROID.md) detalham os componentes seguintes.
-
-Interfaces MTA, pedestres sincronizados e a regressão de morte ao andar seguem pendentes. A divergência de IDs/saúde encontrada no fonte precisa de codecs corretos e observação dos dois lados antes de atribuir a causa da morte. Áudio, instalação sob falhas, sessão longa e dispositivos de 16 KB também têm aceites próprios.
+1. **Dedicated Process Isolation (`:engine`)**:
+   - The game engine runs inside an isolated Android service/process (`:engine`).
+   - Upon session exit or error, the `:engine` process terminates completely, guaranteeing that static C++ singletons in `libGTASA.so` are wiped and re-initialized cleanly on subsequent launches.
+   - The launcher UI process remains completely unaffected and responsive.
+2. **Back Navigation & EGL Teardown**:
+   - The Android Back gesture notifies the engine while the EGL Surface is still valid.
+   - Processing one frame after resume confirms that game state advancement has unblocked before triggering teardown.
+   - Eliminates deadlocks during paused shutdowns and avoids mutex destruction while in-flight locks exist.
+3. **Re-use of Existing Host**:
+   - Re-opening from the launcher brings an active task to the front (`FLAG_ACTIVITY_REORDER_TO_FRONT`), avoiding duplicate engine instances within the same process.

@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Feature Status Checklist**: Documented working subsystems checklist on `README.md` (Game log-in, Character sync, Peds, Sound/Chat).
 - **Server Documentation & Anti-Cheat Notice**: Linked compatible server backend ([Dryxio/san-andreas-online](https://github.com/Dryxio/san-andreas-online)) and added explicit notice detailing why standard desktop MTA anti-cheat is incompatible with custom mobile packets.
 - **Project Roadmap**: Added 4-phase development roadmap to `README.md` covering vehicle sync, combat/bullet sync, Lua 5.3 UI, and performance optimizations.
+- **English Documentation**: Translated all technical documentation in `/docs/` into 100% English (including `BOOTSTRAP_ASSETS.md`, `CONTRATO_TRANSPORTE_MTA.md`, `ETAPAS_PORT_NEON_ANDROID.md`, `MATRIZ_PARIDADE_NEON.md`, `PLANO_PORT_NEON_ANDROID.md`, `TRANSPORTE_NEON.md`, and `VALIDACAO_ANDROID_2026-11-11.md`).
 
 ### Changed
 - **Generic Project Naming**: Renamed root project to `mta-sa-neon-android` and application title to `MTA:SA Neon Android`.

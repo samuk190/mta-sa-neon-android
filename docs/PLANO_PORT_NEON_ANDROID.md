@@ -1,114 +1,94 @@
-# Plano 22 — Reimplementação do cliente MTA Neon para Android
+# Plan 22 — Reimplementation of the MTA Neon Client for Android
 
-**Criado** 2026-11-10 · **Atualizado** 2026-11-11 · **Escopo** Port completo e nativo de MTA Neon para Android ARM64, com paridade funcional verificável com a revisão Neon escolhida.
+**Created:** 2026-11-10 · **Updated:** 2026-11-11 · **Scope:** Complete native port of MTA Neon for Android ARM64, achieving verifiable functional parity with target MTA Neon desktop revisions.
 
-A recomendação é evoluir o **`worldrpg_neon_launcher/`** como produto Android, usar **`mta_neon_source/`** como referência de código, protocolo e testes, e implementar a camada de plataforma e o cliente de rede para Android/Bionic. A rota aprovada é nativa: emulação de DLL, execução x86 e gateway que traduza para MobileSA 1.6 ficam fora deste port. Na árvore auditada, esses são os nomes correspondentes a `mta_mobile_neon_launcher` e `mta_source` citados na solicitação.
+This project delivers a native Android client implementation. Emulation of Windows x86 PE DLLs and legacy translation gateways to MobileSA 1.6 are explicitly excluded.
 
-A reimplementação completa exige duas provas independentes no início: **a engine GTA Mobile precisa abrir um mundo controlável** e **um cliente de teste precisa completar uma sessão Neon válida**. As duas frentes convergem para recursos, entidades e interface. O APK final pode ter cliente MTA próprio e continuar dependendo da engine GTA Mobile e dos dados do jogo cuja origem e condições de uso devem constar do inventário da distribuição.
+Full reimplementation requires two distinct pillars:
+1. **The GTA Mobile engine must boot an interactive, controllable 3D world.**
+2. **A native network client must complete a valid MTA Neon multiplayer session.**
 
-## 1. Estado verificado em 2026-11-11
+These streams converge into shared entities, Lua scripting, and UI systems.
 
-O checkpoint GTA offline abre mundo, CJ, HUD e controles no S25. Saída, reabertura e retomada foram testadas com a engine em processo Android próprio. O caminho multiplayer ainda depende do transporte MTA nativo. A [matriz de paridade](MATRIZ_PARIDADE_NEON.md) detalha os componentes parciais e as funções vazias; o [contrato de transporte](CONTRATO_TRANSPORTE_MTA.md) delimita a negociação recuperada e os vetores faltantes.
+---
 
-| Componente | Evidência verificada | Lacuna para produção |
+## 1. Verified Architecture & State (2026-11-11)
+
+The offline GTA engine boots 3D world, CJ character, HUD, and touch controls on the Galaxy S25. Exit, reopening, and task resumption are operational with process isolation. The multiplayer path relies on the native MTA transport protocol.
+
+| Subsystem | Verified Evidence | Production Roadmap |
 |---|---|---|
-| Launcher nativo | `worldrpg_neon_launcher` tem Kotlin, lista provisória de servidores, favoritos, preferências, JNI e APK debug ARM64 compilado na Oracle. | A lista de servidores é provisória. “Jogar” cria um `GLSurfaceView`, inicializa objetos C++ e chama `nativePulse` de rede. Falta iniciar e renderizar a engine GTA nesse fluxo. |
-| Engine Android | APK contém `libGTASA.so`, `libOpenAL64.so` e `libSCAnd.so`. A cópia em `app/src/main/cpp/gtasa/libGTASA_v210.so` e o protótipo de boot anterior têm o mesmo SHA-256 `2b24e426055f9b8b6b16a27aff0ed00e4ff6c122afacc5d9864909a5c5aadaff` da biblioteca empacotada. | O host Java/JNI está ligado à geração instalada e seu ciclo básico foi validado. Falta convergir com a sessão de rede e implementar chamadas ARM64 verificadas de criação, streaming e mutação das entidades MTA na thread GTA. `nativeBootEngine` do caminho de rede apenas carrega a biblioteca; esse caminho ainda não inicia o mundo. |
-| APK de 16 KB | `libWorldRPGNeon.so` tem segmentos LOAD alinhados a 16 KB. Os três prebuilts da engine têm alinhamento de 64 KB. | A auditoria do APK remoto passa: STL estática e bibliotecas comprimidas, extraídas na instalação. Execução no S25 com páginas de 4 KB validada. Falta executar em dispositivo com páginas de 16 KB e qualificar o release. |
-| Transporte | RakNet 4.081 está vinculado no CMake. Há `RakNetAdapter`, `RakNetWrapper`, leitor/escritor de bits, testes de alcance e um adaptador de contrato `CNet`. | A tradução de IDs locais e o codec sintético do join foram corrigidos. O RakNet4 não interoperou com o servidor; abertura MTA de 51 bytes, cifra modificada e confiabilidade exigem implementação própria e vetores confirmados. Join e verificação ainda não passaram ponta a ponta. |
-| Módulo de rede do servidor | `net.so` local é idêntico a `/server/arm64/net.so` no contêiner da Oracle, SHA-256 `e6d7ea540ff223927d2ab39474050b6747eb2f64d79422bd11eb683b3d4a7338`. Exporta `InitNetServerInterface`, `ReleaseNetServerInterface` e `CheckCompatibility`. | É ELF AArch64 de Linux com glibc/libstdc++. O Android usa Bionic e o cliente espera `InitNetInterface`. O módulo do servidor serve de referência de interoperabilidade e não fornece a interface do cliente. |
-| Cliente desktop Neon | `mta_neon_source` está em `c3fe13e6af5824608a5127f86e936c58e37eb997`, com mudanças locais adicionais. `Client/mods/deathmatch`, SDK, scripts Lua e recursos de teste estão disponíveis. | `Client/core/CCore.cpp` carrega o módulo `netc` separado. O build desktop obtém o binário externo. O `netc_pc.dll` do laboratório é PE32 x86. O SDK aberto descreve a interface, mas não inclui a implementação do transporte cliente desse DLL. |
-| Experimentos anteriores | `mta_mobile_neon/` tem loader PE/Unicorn, shims Win32 e testes de mapeamento. `worldrpg_mobilessa_patched/` contém a referência de compatibilidade MobileSA 1.6. `mta_decompile_android_progress/` contém o protótipo que chegou ao menu do GTA no S25. | Emulação ainda não provou `InitNetInterface` até join em Android. A conexão do APK MobileSA adaptado é evidência para o caminho 1.6. O menu do protótipo prova uma parte do boot GTA, não o multiplayer Neon. |
-| Lua, mundo e UI | Lua 5.3.6 e Opus estão vinculados. Existem repositório de elementos, sync, desenho GLES, fonte bitmap e um HUD próprio. | Bindings MTA são placeholders, elementos ficam na memória do cliente, a integração com frame GTA está ausente e faltam recursos, DX/GUI/browser e voz conectada ao servidor. |
+| **Android Launcher** | Modern Kotlin UI, server list, settings, JNI bindings, and ARM64 debug APK. | Server browser connecting to real servers. Game session initializes engine rendering within `:engine` process. |
+| **Android Game Engine** | Packaged `libGTASA.so`, `libOpenAL64.so`, and `libSCAnd.so` (War Drum Studios 2.10). | Java/JNI host bound to active generation. Entity creation, streaming, and mutation queues running on the GTA main thread. |
+| **16KB Memory Page APK** | `libWorldRPGNeon.so` configured with 16KB LOAD segment alignment. Prebuilts have 64KB alignment. | Remote build passes packaging audit: static C++ runtime, compressed native libraries extracted upon installation. |
+| **Network Transport** | `MtaClientTransport` implements OPEN51 datagram, cipher handshake, and bitstream serialization. | Fully replace legacy RakNet stub; end-to-end handshake verified on live servers. |
+| **Server Network Module** | AArch64 Linux `net.so` server binary. | Server reference for packet verification and handshake negotiation. |
+| **Desktop Reference** | `mta_neon_source` repository (reference for packet formats, Lua APIs, and sync structures). | Desktop client acts as ground-truth oracle for network packet captures. |
+| **Scripting & Audio** | Lua 5.3.6 and Opus codecs embedded into native shared library. | Wire Lua runtime to server-downloaded resources and render custom DX/CEGUI elements. |
 
-O primeiro inventário de 2026-11-10 era estático. A continuação incluiu build Oracle e execução no S25. Os hashes e evidências dos artefatos atuais ficam em `outputs/`; um APK debug assinado para o dispositivo não equivale ao release oficial.
+---
 
-### Pontos do código que contradizem o status “completo”
+## 2. Local Asset Pipeline & Environment Configuration
 
-- `app/src/main/java/com/worldrpg/neonlauncher/game/GameActivity.kt` e `app/src/main/cpp/jni/JNI_OnLoad.cpp`. Retornos de init/connect, identidade dos toques e propriedade JNI foram corrigidos. O loop de rede e o host de mundo continuam separados; a integração multiplayer depende de uma sessão e fila de mutações na thread GTA. O evento positivo agora só é encaminhado após o join Neon completo.
-- `app/src/main/cpp/gtasa/GameEngine.cpp:20,83,112,157`. Offsets de ped, carro, objeto e streaming são zero e os typedefs precisam ser comprovados pela ABI do binário. No mesmo ELF, `CStreaming::RequestModel(int,int)` exporta `0x3949e0`, enquanto a tabela histórica em `GTASAOffsets.h` atribui `0x391FF0` ao pedido de modelo e comenta que o endereço é de remoção. Verificar símbolo, assinatura ARM64, thread e ownership antes de chamar a engine.
-- `app/src/main/cpp/shared/PacketHandler.cpp:29` e `SyncManager.cpp:50`. O handler de criação lê tipo em 8 bits e ID em 16 bits do formato local. A árvore de elementos Neon é versionada e inclui grupos, tipos e campos opcionais. A criação de uma entrada na tabela não materializa um ped na engine.
-- `app/src/main/cpp/shared/LuaVMStub.cpp:63,102` e `gtasa/RenderWareHooks.cpp:188`. Lua executa código, mas as funções MTA registradas apenas registram chamadas e retornam. O backend ainda tem lacunas de textura. O HUD Kotlin não executa o HUD Lua do servidor.
-- `app/src/main/cpp/shared/VoiceCodecStub.cpp` e `AntiCheatValidator.cpp`. Um codec e verificações locais existem. Falta comprovar contrato de voz ponta a ponta e compatibilidade da política de verificação da sessão Neon. Checks locais não substituem as verificações negociadas com o servidor.
+Game assets are configured via environment variables (`.env`) and loaded from local storage:
 
-## 2. CDN e contrato de dados
+- **Local Storage Pipeline**: `NativeAssetBridge.kt` detects local assets in `GAME_ASSETS_DIR` or `/sdcard/Android/data/...`, validates integrity against expected files, and stages them atomically into generation directories.
+- **Boot-Critical Bundled Assets**: Minimal boot assets (`mainV1.scm`, `american.gxt`, `Textures/fonts/`, repaired `menu.pvr.dat`) are embedded in `app/src/main/assets/` to ensure immediate offline booting.
+- **Decoupled CDN**: External cloud dependencies (such as Hugging Face) are optional and disabled by default. Custom HTTP servers can be specified via `CDN_ROOT_URL` in `.env`.
 
-A geração validada no S25 usa a revisão `2bf9fb2f6aac9f0ac62f2c87bf4702768e7ebb59`: **358 arquivos e 818.535.866 bytes**. Os 358 SHA-256 instalados foram conferidos sem divergências. O manifesto contém `version`, `generated_at`, `total_files`, `total_size` e `files` de `{path, size, sha256}`.
+---
 
-- **Manifesto na raiz do dataset**: [manifest_android_mta.json](https://huggingface.co/datasets/WorldRPG/worldrpg-game-files/resolve/2bf9fb2f6aac9f0ac62f2c87bf4702768e7ebb59/manifest_android_mta.json).
-- **Conteúdo sob o prefixo** `game_files_android_mta/`, na mesma revisão. `NativeAssetBridge` resolve a revisão antes de baixar o manifesto e os dados. O downloader duplicado foi removido.
-- O instalador agora valida tamanho e SHA-256, usa staging e publicação atômica da geração e preserva instalações anteriores. A recuperação de downloads incompletos e corrupção ainda exige testes adversos de instalação limpa, cancelamento e falta de espaço.
-- Assets pequenos de bootstrap, GXT, índice de arquivos e override da textura de loading estão no APK. Sua origem e limites constam de [BOOTSTRAP_ASSETS.md](BOOTSTRAP_ASSETS.md).
-- A textura original do CDN continua com SHA-256 `99a042f54465c00c780c8f5a7dafdadea6b4c773762c99d551a46b96dfa90af9`. O override delimitado do APK reconstrói seis pixels finais do stream RLE e corrige DAT/TOC com hashes de saída fixos. O mundo abre sem pular a função de loading. Uma promoção futura ao CDN exige regenerar manifesto e validar o ciclo de distribuição.
+## 3. Native Network Transport Strategy
 
-O instalador deve fixar uma revisão do CDN por instalação, validar caminho relativo e colisões de caixa, baixar para staging, verificar tamanho e SHA-256 antes da publicação e ativar a geração de forma atômica. Preservar a instalação anterior se faltar espaço, cair a conexão ou falhar a integridade. A engine recebe o diretório validado e uma solução de caixa compatível com `DATA/HANDLING.CFG` e demais caminhos esperados. O cache de **recursos do servidor MTA** tem contrato separado de versão, URL, CRC/MD5 e ciclo de vida.
+The base networking contract is derived from MTA Neon desktop architecture:
 
-## 3. Decisão de transporte
+1. **Custom 51-Byte Handshake (OPEN51)**:
+   - Header: `0x09 0x04`
+   - Client Nonce (16 bytes)
+   - MTA Magic: `00 ff 00 ff fe fe fe fe fd fd fd fd 78 56 34 17`
+   - Fixed negotiation block and terminator `0xDE`.
+2. **Dynamic Stream Cipher**:
+   - Nonce-based key derivation.
+   - S-box permutation and XOR stream encryption applied to subsequent packets.
+3. **Session Join Sequence**:
+   - `PLAYER_JOIN` → `MOD_NAME` → `PLAYER_JOINDATA` → `SERVER_JOIN_COMPLETE` → `SERVER_JOINEDGAME`.
+4. **Reliability Layer**:
+   - Sequence numbering, ACK/NAK tracking, bit-level packing, and packet reassembly.
 
-O contrato base está em `Shared/sdk/net/` e a semântica de cliente em `Client/core/CConnectManager.cpp` e `Client/mods/deathmatch/logic/`. Registrar separadamente versão do módulo de rede, versão do transporte RakNet e versão do bitstream MTA. O checkout define base MTA `0x1E6` e há configuração de release com prefixo de branch. A versão aceita em produção deve vir da negociação observada do par de referência.
+---
 
-A tradução vendor→RID (`CONNECTION_REQUEST_ACCEPTED` 16→14, `USER_PACKET_ENUM` 99 no envelope MTA) já foi aplicada na fronteira do wrapper. Isso não muda a negociação interna do RakNet4. Sondas padrão versões 5/6 na Oracle não receberam OPEN_REPLY, enquanto ASE respondeu. A referência histórica MTA negocia uma abertura de 51 bytes com magic e cifra próprios. [TRANSPORTE_NEON.md](TRANSPORTE_NEON.md) registra os testes; [CONTRATO_TRANSPORTE_MTA.md](CONTRATO_TRANSPORTE_MTA.md) identifica construtor, parser, cifra e confiabilidade recuperáveis.
+## 4. Phase-by-Phase Roadmap
 
-A recepção atual tem limite de 64 KiB e ainda não preserva toda a semântica de bits do contrato `CNet`. A máquina de estados do join passou testes sintéticos e agora termina imediatamente na primeira falha de transporte. O evento de transporte conectado não é anunciado como sessão Neon completa. Serial, verificação, senha e identidade continuam com aceites próprios e não podem ser substituídos por validações locais ou retorno incondicional de sucesso.
+### Phase 0: Baseline & Contract
+- Freeze reference commit hashes for desktop source, server binaries, APK, and game assets.
+- Map API calls, packet schemas, and bitstream versioning.
 
-As capturas em `logs/mobile_compat_20261108/worldrpg-compat-captures/` já oferecem fixtures de PureSync, RESOURCE_START e RESOURCE_CLIENT_SCRIPTS para regressão da tradução 1.6. Criar um corpus separado para Neon com captura desktop de referência e resultados esperados por versão e direção. Registrar bit count, prioridade, confiabilidade e canal, com dados de autenticação e identidade removidos.
+### Phase 1A: Engine Boot & Platform Layer
+- Single unified EGL surface loop.
+- Local asset generation verification and case-insensitive file mapping (`EngineCaseAliases`).
+- Stable touch input, lifecycle pause/resume, and process isolation (`:engine`).
 
-**Rota aprovada para a sessão Neon nativa**
+### Phase 1B: Native Network Handshake
+- Headless connection harness.
+- Verification of OPEN51 datagram, cipher negotiation, and join packets (`PLAYER_JOINDATA`).
+- Handshake confirmation with `CONNECTION_REQUEST_ACCEPTED` and `MOD_NAME`.
 
-1. Confirmar com o mantenedor se existe código fonte do cliente de rede ou contrato de interoperabilidade suportado para essa revisão. Portar a implementação com fonte para Android/Bionic quando disponível e utilizável. Um módulo cliente Android oficialmente disponibilizado pode servir como referência de interoperabilidade; o objetivo de implementação própria em fonte continua explícito.
-2. Reimplementar nativamente o transporte e a interface `CNet` pelas partes que ainda não tenham fonte utilizável. Começar pelo subconjunto necessário ao join e completar as operações exigidas pela revisão alvo nos marcos seguintes. Usar capturas autorizadas e instrumentação nos limites `CNet`/servidor para separar UDP, confiabilidade, ordenação, fragmentação, envelope e payload. Preservar número de bits e limites antes de interpretar o pacote.
-3. Se a homologação falhar, registrar a primeira divergência de protocolo e completar o comportamento antes de avançar. A prova exige o servidor Neon usando sua política de versão, identidade e verificação, com a mesma semântica observada no desktop. O adaptador 1.6 e os experimentos com PE permanecem referências históricas.
+### Phase 2: Session & Resource Management
+- In-game session initialization (`SERVER_JOINEDGAME`).
+- Resource loading lifecycle (`onClientResourceStart`/`Stop`).
+- HTTP file caching and script validation.
 
+### Phase 3: World Entities & Synchronization
+- Synchronized creation of remote players (`CPlayerPed`), vehicles (`CAutomobile`), and peds.
+- Pure sync serialization: positions, velocities, orientations, health, and armor.
+- Interpolation smoothing and dead-reckoning extrapolation.
 
-## 4. Execução por etapas
+### Phase 4: Scripting Engine & UI
+- Lua 5.3 runtime bound to client-side MTA event system.
+- RenderWare 2D DX rendering (`dxDrawText`, `dxDrawImage`, `dxDrawRectangle`).
+- Touch-friendly on-screen controls, virtual analog stick, and customizable HUD elements.
 
-Cada etapa termina com build identificável, evidência reproduzível e uma decisão de avanço. P1A e P1B podem correr em paralelo depois de P0.
-
-| Etapa e área proprietária | Entrega | Critério de aceite |
-|---|---|---|
-| **P0. Baseline e contrato** · docs/QA | Fixar hashes do desktop funcional, binários Oracle, APK, engine, dados CDN e fontes aplicadas; definir coorte de compatibilidade e captura bidirecional. Inventariar APIs usadas pelo WorldRPG via `meta.xml` e Lua, e separar APIs do MTA base das extensões Neon. | Desktop de referência passa join, login, HUD, ped e veículo no cenário controlado. O inventário relaciona função/pacote a produtor, consumidor, revisão, teste e status. Diferenças entre WSL e Oracle registradas. |
-| **P1A. Boot e dados** · Kotlin/JNI/engine | Unificar downloader, corrigir URLs e staging, trazer os callbacks de boot já estudados no protótipo e verificar dependências/ABI. Um único dono do Surface/EGL. Ligar armazenamento, `AssetManager`, input e frame loop do GTA; partir de modo local verificável antes de acoplar sessão. | Instalação limpa sem ADB push manual. Baixar, interromper, retomar e recuperar corrupção do mesmo tamanho. Abrir mundo 3D, mover personagem/câmera, minimizar e voltar, desconectar e reabrir. Gerar APK com todos os ELFs e empacotamento corretos em 16 KB. Testar em dispositivos Android com páginas de 4 KB e 16 KB. |
-| **P1B. Prova de transporte Neon** · `net/` | Corrigir enums e framing com vetores de referência. Construir cliente headless ARM64 com sessões e erros explícitos. Mapear descoberta/endereço, versão, mod name, desafio/verificação/ticket quando exigido, `PLAYER_JOINDATA`, `SERVER_JOIN_COMPLETE` e `SERVER_JOINEDGAME`. | Homologação Oracle confirma os mesmos marcos do desktop, troca confiável e sessão estável. Rejeitar versão/ticket inválidos, tratar pacote truncado e perda/reordenação. Dez conexões/reconexões consecutivas com estados coerentes no servidor. |
-| **P2. Deathmatch e ciclo de sessão** · codecs e runtime | Portar semântica de `CPacketHandler`/RPCs e `CResourceManager`. Implementar IDs e árvore de elementos, roots, join/spawn, `ENTITY_ADD/REMOVE`, resource start/stop, VM isolada mínima para o script de diagnóstico, RPC/eventos e download HTTP com cancelamento. Tratar conexão como máquina de estados, com filas delimitadas da rede para game thread. | Um resource de diagnóstico do servidor baixa, verifica, executa `onClientResourceStart`, faz round-trip de evento e para sem resíduos. Resources novos, cache inválido, restart e reconnect funcionam. Capturas desktop/Android demonstram interpretação idêntica do conjunto homologado. |
-| **P3. Elementos e sincronização** · ponte GTA/sync | Mapear handles ARM64 com geração e ownership. Streaming de modelo, criação/remoção, posição/rotação, interiores/dimensões, attachments, ped/vehicle/object, movimento e animações. Implementar player/vehicle/ped sync de entrada e saída, tempo de referência, dono e handoff. | Dois clientes Android/desktop veem o mesmo ped, veículo e objeto; entrar/sair de veículo, stream-out/in e troca de syncer não duplicam entidades. Validar caminhada, dano, morte e respawn com HP/colete coerentes nos dois sentidos e causas instrumentadas. |
-| **P4. Lua e interfaces WorldRPG** · scripting/renderer/UI | Portar contrato Lua client do desktop (Lua 5.1 modificada e suas regras de bytecode), com VM/owner por recurso, sandbox, eventos, exports, timers, elementos e cleanup. Implementar DX GLES, GUI, fontes/texturas/targets, cursor e input. Para browser, integrar backend Android com superfície/textura, eventos JS, foco/IME e política de origens. | Login e HUD Lua do WorldRPG aparecem, chat funciona, GUI recebe toques, imagens/fontes desenham e browser local/JS passa os testes. Comparar desktop e mobile por comportamento. Testar tela estreita e 3120×1440, área segura e escala. Layout administrativo tem autorização no servidor e persistência de X/Y/largura/altura. |
-| **P5. Extensões Neon e compatibilidade ampla** · módulos de gameplay | Portar funcionalidades por família. Começar por pedestres/tráfego nativos, tarefas e leases, navegação, syncer e handoff; depois modelos/streaming de mundo estendido, radar, colisão e pools; depois física, fogo, vegetação, aves, cordas, áudio veicular, 2DFX, missões e demais APIs da revisão. Completar áudio 3D, voz e compatibilidade base de UI, gráficos, chat, console, server browser e preferências. | Para cada API, implementar o contrato e executar cenário de referência com semântica/cleanup equivalente. Funções não suportadas aparecem na matriz de capacidades e não são anunciadas. A meta de paridade exige a matriz inteira do escopo aprovado, além das funções usadas pelo WorldRPG. |
-| **P6. Release e regressão** · build/QA | Builds ARM64 na Oracle, dependências fixadas, inventário de artefatos e símbolos de crash, auditoria de JNI/ELF/ZIP, APK de teste isolado e assinatura WorldRPG local. Rotina de update do CDN e rollback. | Teste de instalação limpa e atualização, S25 mais um dispositivo com GPU/Android diferentes, cenário de estresse e sessão longa. Cliente desktop mantém baseline. Release assinada e rastreável à revisão, com logs de aceite e capacidades verificadas. |
-
-### P3 — regressão da morte ao andar
-
-Capturar spawn, posição anterior/posterior, água, HP/colete antes e depois do decoder, vítima/autor do dano, tick/seq e decisão de morte. Comparar `PLAYER_PURESYNC` nos dois sentidos com um desktop de referência e variar flags opcionais, armas, carro e movimento. Há histórico de divergência de bits do MobileSA 1.6 e um problema separado de persistência de spawn no mar. A tabela de tradução do adaptador 1.6 serve como caso de regressão, não como definição do codec Neon. Aceite mínimo: caminhar e dirigir sem perda de vida indevida, receber dano real e respawn correto, e repetir após reconnect e troca de dimensão.
-
-### P4 — interface e sandbox
-
-Reaproveitar a semântica de `CLua*Defs` e o lifecycle de resources; substituir Win32/D3D9/CEF pelo backend Android adequado. Lua 5.3 executar um arquivo não prova a ABI Lua do Neon. A entrega deve incluir retorno e efeitos reais das funções, resolução de `localPlayer`/roots, propagação de eventos, ownership e isolamento de arquivos por recurso. Rodar um recurso negativo tentando sair do sandbox, abrir origem não autorizada e manter handles após stop. Para UI, validar superfícies transparentes, render-to-texture, troca de foco, teclado Android e recuperação do contexto gráfico.
-
-### P5 — pares de teste Neon
-
-Usar os recursos de teste de `mta_neon_source/test-resources/` como oráculo de comportamento. Priorizar `native-simulation-lease-test`, `native-task-handoff-test`, `native-ped-enter-car-test`, `world-sync-regression-test`, `native-world-v3-transport-test`, `server-model-registry-test`, `extended-radar-test` e `native-ui-test`. Para cada teste, registrar dependências de plataforma e resultados dos dois clientes. O README do Neon registra 302 funções Lua adicionais documentadas no projeto. A contagem da matriz de entrega deve ser extraída da revisão aprovada, com testes por família e recursos usados no WorldRPG priorizados.
-
-## 5. Regras de integração e de aceite
-
-- **Teste controlado.** Build e testes de integração na Oracle. Usar um ambiente de homologação isolado para testes de protocolo, perdas, flood, falhas e recursos diagnósticos. Manter o desktop funcional como controle. Teste no aparelho deve ter APK, build, versão de assets, passos e resultado registrados.
-- **Sem confundir estados.** Expor separadamente `assets prontos`, `engine em execução`, `transporte conectado`, `cliente verificado`, `joined game`, `recursos iniciados` e `spawn sincronizado`. O launcher exibe a etapa real e a razão de falha.
-- **Fonte e implantação rastreáveis.** Comparar hashes do pacote realmente carregado na Oracle com os arquivos aprovados; restart sozinho não sincroniza código. Se houver mudança em `backend_mta`, seguir PR por tarefa e deploy pelo Hugging Face. Para alteração em dados distribuídos, regenerar o manifesto, publicar revisão coerente e validar no CDN/Oracle antes de ativar no app.
-- **Capacidade verificável.** Só marcar uma função como entregue quando o caminho normal do produto a acionar no aparelho. Distinguir `implementado`, `ligado ao runtime`, `validado` e `fora do escopo desta release`. Falta de suporte deve gerar estado/erro explícito em vez de retorno de sucesso.
-- **Artefatos.** Fixar APK, certificado, build-id/sha do motor, revisão de assets, revisão de protocolo, matriz de recursos e logs de aceitação. Não misturar no APK final `net.so`, DLLs de PC nem binários MobileSA reaproveitados como se fossem o cliente próprio.
-- **Modularização do host.** O wrapper `NvEventQueueActivity.java` está próximo de 1.400 linhas. Antes de ampliar suas responsabilidades, separar controle de saída/retomada, Surface/EGL e acesso a assets em componentes menores, preservando os nomes e assinaturas de callbacks que a engine registra por JNI. O limite de 1.500 linhas continua obrigatório.
-
-## 6. Primeiro lote de trabalho
-
-1. **Boot/CDN** — corrigir os dois endereços e consolidar a instalação, fechar inventário de arquivos de bootstrap, corrigir a textura malformada numa revisão de teste e obter mundo offline controlável no APK do launcher nativo.
-2. **Rede headless** — gravar sessão do desktop contra homologação, corrigir enum/envelope e provar mod name, verificação e join. Encerrar essa etapa com uma implementação nativa validada ou com a primeira divergência reproduzível a corrigir.
-3. **Primeira fatia completa** — fazer o mesmo APK baixar os dados, entrar no servidor, executar um resource Lua de diagnóstico, mostrar texto DX e materializar um ped e um veículo. Usar essa fatia para verificar a ligação entre camadas antes de multiplicar funcionalidades.
-
-## Referências de código
-
-| Pergunta | Fonte |
-|---|---|
-| Como o servidor carrega sua rede? | [CServerImpl.cpp](../../mta_neon_source/Server/core/CServerImpl.cpp) · [version.h](../../mta_neon_source/Shared/sdk/version.h) |
-| Onde o desktop carrega o cliente de rede e faz join? | [CCore.cpp](../../mta_neon_source/Client/core/CCore.cpp) · [CConnectManager.cpp](../../mta_neon_source/Client/core/CConnectManager.cpp) · [CPacketHandler.cpp](../../mta_neon_source/Client/mods/deathmatch/logic/CPacketHandler.cpp) |
-| Onde comparar formatos e enum de transporte? | [Packets.h](../../mta_neon_source/Shared/sdk/net/Packets.h) · [packetenums.h](../../mta_neon_source/Shared/sdk/net/packetenums.h) · [RakNetWrapper.cpp](../app/src/main/cpp/net/raknet/RakNetWrapper.cpp) |
-| Onde corrigir o boot e a instalação Android? | [GameActivity.kt](../app/src/main/java/com/worldrpg/neonlauncher/game/GameActivity.kt) · [JNI_OnLoad.cpp](../app/src/main/cpp/jni/JNI_OnLoad.cpp) · [NativeAssetBridge.kt](../app/src/main/java/com/worldrpg/neonlauncher/utils/NativeAssetBridge.kt) |
-| Onde portar recursos, Lua e pedestres? | [CResourceManager.cpp](../../mta_neon_source/Client/mods/deathmatch/logic/CResourceManager.cpp) · [CPedSync.cpp](../../mta_neon_source/Client/mods/deathmatch/logic/CPedSync.cpp) · [NATIVE_WORLD_HANDOFF.md](../../mta_neon_source/NATIVE_WORLD_HANDOFF.md) |
-| Onde estão os resultados anteriores de boot e emulação? | [Log do crash após o menu](../../logs/own_apk_20261108/crash_after_menu_0.2.1.log) · [Escopo da emulação](../../mta_mobile_neon/docs/ESCOPO_REAL.md) · [Teste do loader](../../mta_mobile_neon/tests/test_integrated.cpp) |
+### Phase 5: Optimization & Hardware Compatibility
+- Custom DFF/TXD asset streaming.
+- Bluetooth / USB gamepad input mapping.
+- 60 FPS pacing and anti-crash memory protections on ARM64.

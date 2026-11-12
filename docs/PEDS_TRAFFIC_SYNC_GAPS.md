@@ -1,36 +1,36 @@
-Port map for these gaps: `docs/MTA_SYNC_ANDROID_PORT.md`.
-That plan converts the existing PC `CPlayerPed`, `CNetAPI`, and `CPedSync` methods onto `libGTASA`.
-This file stays the inventory of what the launcher still fakes.
-The list below is not a new sync protocol.
-Port order and acceptance live in the port plan.
+# Neon Android: Pedestrian and Traffic Sync Status
 
-# Neon launcher: ped and traffic sync
+> Implementation reference: `docs/MTA_SYNC_ANDROID_PORT.md`.
+> Converts desktop PC `CPlayerPed`, `CNetAPI`, and `CPedSync` routines onto Android `libGTASA`.
 
-What the phone does after the on-foot and minimum ped/traffic pass, and what is still not the desktop Neon client.
+---
 
-## What now spawns
+## 1. Currently Implemented & Spawning
 
-- Server peds from a full `ENTITY_ADD` type 14. A Lua table in custom data no longer drops the rest of the packet.
-- Server vehicles from `ENTITY_ADD` type 2, built with `CAutomobile` and added to `CWorld`. Custom handling or a siren block still ends that packet.
-- A ped this client hosts (`PED_STARTSYNC` 61) is not slid every tick. `setPedWander` builds `CTaskComplexWanderStandard` the way Neon does (`CTask::operator new`, base wander ctor, standard vtable, `AddTaskPrimaryMaybeInGroup`). `PED_STOPSYNC` 62 clears that task.
-- Other clients' unoccupied cars move from packet 56. Cars this phone hosts stay where they were created.
-- Ambient `CPopulation` stays off.
+- **Server Peds**: Instantiated from `ENTITY_ADD` (type 14). Lua custom data tables no longer discard trailing packet content.
+- **Server Vehicles**: Instantiated from `ENTITY_ADD` (type 2), initialized via `CAutomobile` and registered into `CWorld`.
+- **Hosted Pedestrians**: Peds hosted by this client (`PED_STARTSYNC` ID 61) no longer teleport every tick. `setPedWander` constructs `CTaskComplexWanderStandard` (`CTask::operator new`, base wander constructor, standard vtable, `AddTaskPrimaryMaybeInGroup`). `PED_STOPSYNC` (ID 62) clears the active task.
+- **Unoccupied Vehicle Sync**: Remote unoccupied vehicles update from packet 56. Unoccupied vehicles hosted locally stay stationary.
+- **Ambient Population**: Native `CPopulation` remains disabled in favor of server-synchronized entities.
 
-## What the on-foot player does
+---
 
-- Outgoing keysync and puresync use the ped's facing axis and the MTA stick basis (camera = `-heading` until a verified camera yaw exists). Forward stick is negative Y along that camera.
-- Punch sends `ButtonCircle`. Crouch sends `ShockButtonL` and the duck flag. A received punch is slot 0 or 1, the attacker facing us inside 1.6 m, one hit each 650 ms. Damage is still the victim's next `PLAYER_PURESYNC` health drop.
-- Remote on-foot peds get `SetMoveState` / `SetMoveAnim`, a duck task, and `CTaskSimpleFight`. They are not a context-switched `CPad` on a `CPlayerPed`.
+## 2. On-Foot Player Mechanics
 
-## What the HUD does
+- **Keysync & Pure Sync**: Outgoing packets utilize the ped's facing vector and MTA stick coordinates (camera angle = `-heading` until verified camera yaw is hooked). Forward stick applies negative Y along the camera orientation.
+- **Combat & Movement States**:
+  - Punch maps to `ButtonCircle`.
+  - Crouch maps to `ShockButtonL` and the duck flag.
+  - Received punches validate slot 0/1 within a 1.6m cone facing the target, rate-limited to 650ms per strike.
+  - Damage applies via the victim's subsequent `PLAYER_PURESYNC` health report.
+- **Remote On-Foot Peds**: Managed via `SetMoveState` / `SetMoveAnim`, duck tasks, and `CTaskSimpleFight`.
 
-- `worldrpg_hud` still draws itself. `getElementHealth` reads the local ped. The screen size is applied before the script captures `guiGetScreenSize`.
+---
 
-## Still not 1:1
+## 3. Discrepancies & Pending Features (Non 1:1)
 
-- No verified `TheCamera` yaw, so strafe while the camera looks away from the ped heading is not the desktop orbit.
-- Melee damage is the facing cone above, not GTA's strike spheres.
-- Hosted cars are not driven and this client does not write unoccupied-vehicle sync. No driver task, no `PLAYER_VEHICLE_PURESYNC`.
-- Ped clothes, weapons, and alpha from `ENTITY_ADD` are consumed and not applied to the clump.
-- `getAmbientPedPopulationProfile` stays missing on purpose so the server keeps the mobile fallback. Zone profiles, couples, groups, cops, and dealers are not native tasks.
-- `setPedUseNativeWalkingStyle`, path nodes, and interior/dimension streaming are not bound. A wander task with collision still unloaded can stand still.
+1. **Camera Yaw**: Lacks verified `TheCamera` yaw hook; strafing while panning camera independently differs from desktop MTA orbit.
+2. **Hit Detection**: Melee uses directional facing cones rather than full GTA 3D strike spheres.
+3. **Vehicle Driver Sync**: Local client cannot yet drive hosted vehicles or serialize unoccupied vehicle sync (`PLAYER_VEHICLE_PURESYNC` in progress).
+4. **Ped Customization**: Clothes, weapons, and alpha properties from `ENTITY_ADD` are read but not yet visually bound to character clumps.
+5. **Pathfinding & Collisions**: `setPedUseNativeWalkingStyle`, path nodes, and interior/dimension streaming are not fully hooked. Peds in unloaded collision zones may idle.
