@@ -166,6 +166,15 @@ void ForgetRemote(uint32_t id);
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
 void RequestWander(uint32_t id, int direction);
 bool CopyRemotePose(uint32_t id, float& x, float& y, float& z);
+// Stage S4 (defined in shared/entity/PedSyncState.cpp). SetPedWander starts the
+// hosted ped's wander task (RequestWander); ClearPedWander releases hosting,
+// which clears the task in ApplyRemotePeds (SetPedHost(false)).
+void SetPedWander(uint32_t id, int direction);
+void ClearPedWander(uint32_t id);
+// Stage S4: one observer pose (already interpolated) for the ped. Same
+// effect as NoteRemotePed; called by PedSyncState::SamplePose.
+void ApplyPedTarget(uint32_t id, float x, float y, float z, float heading,
+    float vx, float vy, float vz);
 
 // Native task presentation — matches mta_neon CClientPed interface.
 // Locomotion mode: SNativeTaskLocomotionSync::eMode (NONE/WALK/RUN/SPRINT).
