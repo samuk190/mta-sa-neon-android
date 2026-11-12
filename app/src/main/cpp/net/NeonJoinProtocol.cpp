@@ -1,5 +1,6 @@
 #include "NeonJoinProtocol.h"
 #include "../gtasa/GameEngine.h"
+#include "../shared/VehicleSync.h"
 
 #include <algorithm>
 #include <cmath>
@@ -7,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 #ifdef __ANDROID__
@@ -172,6 +174,12 @@ struct NeonJoinClient::Impl {
     uint32_t lastSyncMs = 0;
     uint32_t lastKeyMs = 0;
     uint32_t lastPedMs = 0;
+    uint32_t lastUnoccupiedMs = 0;
+    // Last synced values per hosted vehicle (desktop CDeathmatchVehicle::m_LastSyncedData).
+    struct UnoccupiedLastSynced {
+        WorldRPG::VehicleSync::Vec3 position, rotation, velocity, turnVelocity;
+    };
+    std::unordered_map<uint32_t, UnoccupiedLastSynced> lastUnoccupied;
     float lastKeyHeading = 0.f;
     std::string pendingChat;
 
@@ -429,6 +437,102 @@ struct NeonJoinClient::Impl {
         }
         net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                         PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED);
+    }
+
+    // CUnoccupiedVehicleSync::DoPulse, UpdateStates and WriteVehicleInformation
+    // (mta_neon_source/Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp, lines 57, 229, 270).
+    // Every 400 ms each hosted vehicle is compared with its last synced values, using the thresholds
+    // of WriteVehicleInformation: FLOAT_EPSILON for x/y position and velocity, 0.1 for z position and
+    // z velocity, MIN_ROTATION_DIFF 0.1 with a wrap at 360, and an exact compare for turn velocity. A
+    // vehicle is written only when a field changed (bSyncVehicle). All changed vehicles go in one
+    // packet 56, unreliable sequenced. A vehicle seen for the first time sends its full state.
+    // Engine-on, derailed, in-water, trailer and health are not sent (no verified Android source yet).
+    void SendUnoccupiedVehicleSync() {
+        if (!net || !net->IsConnected()) return;
+        const uint32_t now = NowMs();
+        if (now - lastUnoccupiedMs < 400) return;
+        lastUnoccupiedMs = now;
+
+        constexpr float kFloatEpsilon = 0.0001f;   // FLOAT_EPSILON (Shared/sdk/CVector.h 26)
+        constexpr float kZThreshold = 0.1f;        // z position and z velocity threshold
+        constexpr float kMinRotationDiff = 0.1f;   // MIN_ROTATION_DIFF (Client/.../CUnoccupiedVehicleSync.h 16)
+        constexpr int kMaxVehicles = 48;           // same cap as the hosted vehicle loop in ApplyRemotePeds
+
+        WorldRPG::Game::HostedCar cars[kMaxVehicles];
+        const int count = WorldRPG::Game::CopyHostedCars(cars, kMaxVehicles);
+
+        // GetSmallestWrapUnsigned(value, 360) (Shared/mods/deathmatch/logic/Utils.h 249).
+        auto smallestWrap = [](float value) {
+            float wrapped = value - 360.f * std::floor(value / 360.f);
+            if (wrapped > 180.f) wrapped = 360.f - wrapped;
+            return wrapped;
+        };
+        // Moving test used for the velocity rest transition (x/y with FLOAT_EPSILON, z with 0.1).
+        auto moving = [kFloatEpsilon, kZThreshold](const WorldRPG::VehicleSync::Vec3& v) {
+            return std::fabs(v.x) > kFloatEpsilon || std::fabs(v.y) > kFloatEpsilon || std::fabs(v.z) > kZThreshold;
+        };
+
+        std::vector<WorldRPG::VehicleSync::UnoccupiedUpdate> updates;
+        // Rebuilt on every pass, so a vehicle that is no longer hosted is forgotten.
+        std::unordered_map<uint32_t, UnoccupiedLastSynced> next;
+        for (int i = 0; i < count; ++i) {
+            const auto& car = cars[i];
+            const WorldRPG::VehicleSync::Vec3 position{car.x, car.y, car.z};
+            const WorldRPG::VehicleSync::Vec3 rotation{car.rotX, car.rotY, car.rotZ};
+            const WorldRPG::VehicleSync::Vec3 velocity{car.vx, car.vy, car.vz};
+            const WorldRPG::VehicleSync::Vec3 turnVelocity{car.tx, car.ty, car.tz};
+
+            const auto found = lastUnoccupied.find(car.id);
+            const bool firstSeen = found == lastUnoccupied.end();
+            UnoccupiedLastSynced last = firstSeen ? UnoccupiedLastSynced{} : found->second;
+
+            WorldRPG::VehicleSync::UnoccupiedUpdate update;
+            update.vehicleId = car.id;
+            update.timeContext = 0;
+
+            // Position (non-boat branch of WriteVehicleInformation).
+            if (firstSeen || std::fabs(last.position.x - position.x) > kFloatEpsilon ||
+                std::fabs(last.position.y - position.y) > kFloatEpsilon || std::fabs(last.position.z - position.z) > kZThreshold) {
+                update.syncPosition = true;
+                update.position = position;
+                last.position = position;
+            }
+
+            // Velocity. A vehicle coming to rest is sent too, so the server does not keep the last moving value.
+            if (firstSeen || moving(velocity) || moving(last.velocity)) {
+                update.syncVelocity = true;
+                update.velocity = velocity;
+                last.velocity = velocity;
+            }
+
+            // Rotation in degrees, wrapped at 360.
+            const bool rotationChanged = smallestWrap(last.rotation.x - rotation.x) > kMinRotationDiff ||
+                                         smallestWrap(last.rotation.y - rotation.y) > kMinRotationDiff ||
+                                         smallestWrap(last.rotation.z - rotation.z) > kMinRotationDiff;
+            if (firstSeen || rotationChanged) {
+                update.syncRotation = true;
+                update.rotation = rotation;
+                last.rotation = rotation;
+            }
+
+            // Turn velocity: exact compare.
+            if (firstSeen || last.turnVelocity.x != turnVelocity.x || last.turnVelocity.y != turnVelocity.y ||
+                last.turnVelocity.z != turnVelocity.z) {
+                update.syncTurnVelocity = true;
+                update.turnVelocity = turnVelocity;
+                last.turnVelocity = turnVelocity;
+            }
+
+            if (update.syncPosition || update.syncRotation || update.syncVelocity || update.syncTurnVelocity) updates.push_back(update);
+            next.emplace(car.id, last);
+        }
+        lastUnoccupied.swap(next);
+        if (updates.empty()) return;
+
+        BitStreamWriter w;
+        w.Write(static_cast<uint8_t>(56));  // PACKET_ID_UNOCCUPIED_VEHICLE_SYNC
+        for (const auto& update : updates) WorldRPG::VehicleSync::WriteUnoccupiedEntry(w, update);
+        SendGamePacket(w, false);
     }
 
     bool SendUpe(BitStreamWriter& body) {
@@ -728,6 +832,7 @@ void NeonJoinClient::Pulse() {
             d.SendPureSync();
             d.SendKeySync();
             d.SendPedSync();
+            d.SendUnoccupiedVehicleSync();
             if (!d.pendingChat.empty() && SendChatLine(*d.net, d.pendingChat)) d.pendingChat.clear();
             break;
         default:

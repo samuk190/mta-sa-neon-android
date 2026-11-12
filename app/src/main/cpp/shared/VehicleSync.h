@@ -151,6 +151,10 @@ struct OccupiedSync {
 // Reads one SUnoccupiedVehicleSync entry. False on a short read.
 bool ReadUnoccupiedEntry(WorldRPG::Net::BitStreamReader& reader, UnoccupiedUpdate& out);
 
+// Writes one SUnoccupiedVehicleSync entry (packet 56). Exact inverse of ReadUnoccupiedEntry.
+// Only the fields whose sync flag is set are written. Always returns true.
+bool WriteUnoccupiedEntry(WorldRPG::Net::BitStreamWriter& writer, const UnoccupiedUpdate& in);
+
 // Reads the packet 33 body that follows the player ElementID. `seat` must be the occupant seat
 // (the reference reads it from the local player, not from the wire). False on a short read.
 bool ReadOccupiedSync(WorldRPG::Net::BitStreamReader& reader, uint8_t seat, OccupiedSync& out);

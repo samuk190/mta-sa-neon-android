@@ -18,7 +18,7 @@ The [full architectural plan](PLANO_PORT_NEON_ANDROID.md) details audits, depend
 | **P1B.1 Native Transport** | P0.2 | Headless ARM64 harness, OPEN51 datagram, cipher handshake, and reliability layer. | Codec implemented; server handshake verified |
 | **P1B.2 Native Session** | P1B.1 | Protocol versioning, join data, and reconnect sequence against MTA Neon server. | In Progress |
 | **P2. Resources & Game Session** | P1A.4, P1B.2 | Root element, resource start/stop, HTTP asset cache, diagnostic Lua, and client-server events. | Pending |
-| **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (Step A: remote `CPlayerPed` created; controller hook written, on-device check pending; duck, enter/leave-car and steps B/C open) |
+| **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (server peds created on the S25 after the desktop `0x60D64D` group patch; pool vehicles and the unoccupied sync sender (packet 56) built, device run pending; driver puresync send, enter/exit/warp and bullet sync not started) |
 | **P3.1 Disconnect Recovery** | P1B.2, P3 | When the server drops the session, show a dialog with **Retry** and **Quit** (same flow as the MTA desktop client). Retry runs a fresh join (`PLAYER_JOIN` → `MOD_NAME` → `PLAYER_JOINDATA` → `SERVER_JOIN_COMPLETE`) and spawns the character in the world as on a first connection: remote peds, vehicles and the local player are rebuilt, nothing is kept from the old session. Quit returns to the server browser. Also handles `ForceReconnect` (server RPC). | Implemented and verified on the S25: `/disconnect` shows the dialog and Retry rejoins with a fresh spawn |
 | **P3.2 Chat Layout** | P2 | The chat does not match the MTA desktop client: lines are spaced too far apart and the layout differs. Match the desktop chat box (line height, padding, font, colour codes, and the line limit) so both clients show the same chat. Verify with a screenshot of the desktop and the phone side by side. | Implemented (line step = font height, one background box); side-by-side desktop screenshot pending |
 | **P4. Lua, DX, GUI & Browser** | P2, P3 | RenderWare 2D DX draw calls, custom UI interactions, CEGUI/WebView bindings. | Pending |
@@ -30,6 +30,12 @@ P1A (Engine/Platform) and P1B (Network Transport) are independent parallel track
 ---
 
 ## 2. Historical Execution Log
+
+### S2 peds and vehicles (2026-11-12)
+- Server peds: the CPedGroup crash was the 8-group pool running out. Ported the desktop patch at `0x60D64D` to the arm64 `CPlayerPed` constructor (`EnsurePlayerPedGroupPatch`). Verified on the S25: patch applied, 4 server peds created.
+- Next crash on the S25: SIGSEGV in `sortLODs` during render. Suspect: heap-built vehicles. Vehicles now come from `CCarCtrl::CreateCarForScript` like desktop `CPoolsSA::AddVehicle`. Not run yet: the phone went offline.
+- Unoccupied vehicle sync sender (desktop `CUnoccupiedVehicleSync::UpdateStates` / `WriteVehicleInformation`) ported. Not run yet.
+- Android emulator (API 34 x86_64 with ARM translation) tried as a fallback: libGTASA crashes 2 s after boot under translation, so the emulator can't stand in for the phone.
 
 ### Step A remainder (partial)
 - Fire press: keysync fire writes `ButtonCircle` (`0x26`, pressed = 255) in the controller hook. Built and joined on the S25. Not yet checked with a second player.

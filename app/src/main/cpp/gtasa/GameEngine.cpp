@@ -228,7 +228,7 @@ struct RemotePed {
     int stickX = 0;
     int stickY = 0;
     bool keysync = false;
-    // Server ped from the ENTITY_ADD actor list (kind 14). Its body is not created yet.
+    // Server ped from the ENTITY_ADD actor list (kind 14).
     bool serverPed = false;
 };
 static std::mutex g_remoteMutex;
@@ -255,6 +255,7 @@ static std::unordered_map<uint32_t, RemoteCar> g_remoteCars;
 static std::vector<uint32_t> g_forget;
 static std::atomic<bool> g_remoteResetPending{false};
 static std::vector<HostedPed> g_hostedSnap;
+static std::vector<HostedCar> g_hostedCarSnap;
 static std::unordered_map<uint32_t, RemoteBody> g_remoteBodies;
 
 // HasModelLoaded is not exported. HasVehicleUpgradeLoaded (0x395098) reads
@@ -409,6 +410,8 @@ struct TaskFns {
     void (*worldRemove)(void*) = nullptr;
     void (*carCtor)(void*, int, unsigned char, unsigned char) = nullptr;
     void (*carDtor)(void*) = nullptr;
+    // CCarCtrl::CreateCarForScript(int, CVector, unsigned char). Vec3 has the same layout as CVector (3 floats).
+    void* (*createCarForScript)(int, Vec3, unsigned char) = nullptr;
     void* wanderVtable = nullptr;
 };
 
@@ -441,6 +444,8 @@ static TaskFns& Tasks() {
     api.carCtor = reinterpret_cast<void (*)(void*, int, unsigned char, unsigned char)>(
         dlsym(handle, "_ZN11CAutomobileC1Eihh"));
     api.carDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN11CAutomobileD1Ev"));
+    api.createCarForScript = reinterpret_cast<void* (*)(int, Vec3, unsigned char)>(
+        dlsym(handle, "_ZN8CCarCtrl18CreateCarForScriptEi7CVectorh"));
     api.wanderVtable = dlsym(handle, "_ZTV26CTaskComplexWanderStandard");
     return api;
 }
@@ -540,10 +545,79 @@ static void WriteBodyPos(void* body, float x, float y, float z) {
     *reinterpret_cast<float*>(raw + 0x10) = z;
 }
 
-static void DropBody(void* body, bool car) {
+// Live values for packet 56, read on the game thread like the ped snapshot. Desktop
+// CUnoccupiedVehicleSync::WriteVehicleInformation uses CClientVehicle::GetPosition, GetRotationDegrees,
+// GetMoveSpeed and GetTurnSpeed. GetRotationDegrees (mta_neon_source/Client/mods/deathmatch/logic/
+// CClientVehicle.cpp 464) is 2*PI - ConvertMatrixToEulerAngles, wrapped to [0, 360). That equals the
+// negated x and y of CMatrix::GetRotation (Shared/sdk/CMatrix.h 236, "0 - ConvertToEulerAngles") modulo
+// 360. As in GetRotationMatrix (CMatrix.h 200), each matrix row is divided by its length, so scale is
+// ignored. Health is not read (the Android CVehicle health offset is not verified).
+static float WrapDegrees360(float value) {
+    return value - 360.f * std::floor(value / 360.f);
+}
+
+static bool SampleHostedCar(void* body, HostedCar& out) {
+    float x = 0, y = 0, z = 0, heading = 0;
+    if (!ReadBodyPos(body, x, y, z, heading)) return false;
+    auto* raw = static_cast<unsigned char*>(body);
+    auto* matrix = *reinterpret_cast<unsigned char**>(raw + 0x18);
+    // Rows: right (+0x00), forward (+0x10), up (+0x20). Position (+0x30) came from ReadBodyPos.
+    auto unitRow = [matrix](unsigned offset, float (&row)[3]) {
+        const auto* v = reinterpret_cast<const float*>(matrix + offset);
+        const float len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (!(len > 1e-6f) || !std::isfinite(len)) return false;
+        row[0] = v[0] / len;
+        row[1] = v[1] / len;
+        row[2] = v[2] / len;
+        return true;
+    };
+    float right[3] = {}, front[3] = {}, up[3] = {};
+    if (!unitRow(0x00, right) || !unitRow(0x10, front) || !unitRow(0x20, up)) return false;
+
+    // CMatrix::GetRotation (CMatrix.h 236): (-fRotX, -fRotY, fRotZ) in radians.
+    const float fRotY = std::atan2(right[2], std::sqrt(right[0] * right[0] + right[1] * right[1]));
+    const float fRotZ = std::atan2(right[1], right[0]);
+    const float fSinZ = -std::sin(fRotZ);
+    const float fCosZ = std::cos(fRotZ);
+    const float fRotX = std::atan2(up[0] * fSinZ + up[1] * fCosZ, front[0] * fSinZ + front[1] * fCosZ);
+    constexpr float kRadToDeg = 180.f / 3.14159265f;
+
+    out.x = x;
+    out.y = y;
+    out.z = z;
+    out.rotX = WrapDegrees360(-fRotX * kRadToDeg);
+    out.rotY = WrapDegrees360(-fRotY * kRadToDeg);
+    out.rotZ = WrapDegrees360(fRotZ * kRadToDeg);
+
+    // CPhysical move speed (+0x68) and turn speed (+0x74), world units per frame.
+    const auto* move = reinterpret_cast<const float*>(raw + 0x68);
+    const auto* turn = reinterpret_cast<const float*>(raw + 0x74);
+    out.vx = move[0];
+    out.vy = move[1];
+    out.vz = move[2];
+    out.tx = turn[0];
+    out.ty = turn[1];
+    out.tz = turn[2];
+
+    const float values[] = {out.x, out.y, out.z, out.rotX, out.rotY, out.rotZ, out.vx, out.vy, out.vz, out.tx, out.ty, out.tz};
+    for (float v : values) {
+        if (!std::isfinite(v)) return false;
+    }
+    return true;
+}
+
+static void DropBody(void* body, bool car, bool pooled = false) {
     TaskFns& api = Tasks();
     if (api.worldRemove && body) api.worldRemove(body);
-    if (car && api.carDtor && body) api.carDtor(body);
+    if (!car || !body) return;
+    if (pooled) {
+        // Pool-owned vehicle (CreateCarForScript): call the deleting destructor (Itanium ABI vtable slot 1)
+        // so the pool slot is released, like the desktop's delete.
+        auto** vtable = *reinterpret_cast<void***>(body);
+        reinterpret_cast<void (*)(void*)>(vtable[1])(body);
+    } else if (api.carDtor) {
+        api.carDtor(body);
+    }
 }
 
 static bool EnsureWorldModel(int model) {
@@ -619,7 +693,7 @@ static void ApplyRemotePeds() {
             DropBody(entry.second.ped, false);
         }
         g_remoteBodies.clear();
-        for (auto& entry : g_remoteCars) DropBody(entry.second.body, true);
+        for (auto& entry : g_remoteCars) DropBody(entry.second.body, true, !entry.second.owned);
         g_remoteCars.clear();
         ENGINE_LOGI("Remote world reset for reconnect");
     }
@@ -670,7 +744,7 @@ static void ApplyRemotePeds() {
             }
             auto car = g_remoteCars.find(id);
             if (car != g_remoteCars.end()) {
-                DropBody(car->second.body, true);
+                DropBody(car->second.body, true, !car->second.owned);
                 g_remoteCars.erase(car);
             }
             g_remotePeds.erase(id);
@@ -694,8 +768,6 @@ static void ApplyRemotePeds() {
         if (model <= 0 || model > 312) model = 7;
         void* body = nullptr;
         auto found = g_remoteBodies.find(id);
-        // Server peds get no body yet: creating one crashed the engine in CPedGroup (SIGSEGV 0x378).
-        if (ped.serverPed && found == g_remoteBodies.end()) continue;
         if (found == g_remoteBodies.end()) {
             if (g_remoteBodies.size() >= 48) continue;
             static int spawnedFrame = -1;
@@ -921,12 +993,19 @@ static void ApplyRemotePeds() {
         if (found == g_remoteCars.end()) continue;
         void* body = found->second.body;
         if (!body) {
-            if (!EnsureWorldModel(car.model) || !api.carCtor || !g_worldAdd || g_remoteCars.size() > 48) continue;
-            found->second.owned = std::make_unique<std::byte[]>(0x2000);
-            body = found->second.owned.get();
-            std::memset(body, 0, 0x2000);
-            api.carCtor(body, car.model, 2, 0);
-            g_worldAdd(body);
+            if (!EnsureWorldModel(car.model) || g_remoteCars.size() > 48) continue;
+            if (api.createCarForScript) {
+                // Desktop CPoolsSA::AddVehicle: CCarCtrl::CreateCarForScript(model, CVector(), 0) (pool-owned, added to the world).
+                body = api.createCarForScript(car.model, Vec3{car.x, car.y, car.z}, 0);
+                if (!body) continue;
+            } else {
+                if (!api.carCtor || !g_worldAdd) continue;
+                found->second.owned = std::make_unique<std::byte[]>(0x2000);
+                body = found->second.owned.get();
+                std::memset(body, 0, 0x2000);
+                api.carCtor(body, car.model, 2, 0);
+                g_worldAdd(body);
+            }
             found->second.body = body;
             found->second.shownX = car.x;
             found->second.shownY = car.y;
@@ -958,6 +1037,27 @@ static void ApplyRemotePeds() {
         found->second.shownH = car.heading;
         WriteBodyPos(body, found->second.shownX, found->second.shownY, found->second.shownZ);
         if (g_setHeading) g_setHeading(body, car.heading);
+    }
+
+    // Hosted vehicles for packet 56 (SendUnoccupiedVehicleSync). Sampled here on the game thread,
+    // then swapped in as one snapshot, the same way g_hostedSnap is built above.
+    std::vector<HostedCar> hostedCars;
+    for (const auto& car : cars) {
+        if (!car.hosted) continue;
+        void* body = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_remoteMutex);
+            auto found = g_remoteCars.find(car.id);
+            if (found != g_remoteCars.end() && found->second.hosted) body = found->second.body;
+        }
+        HostedCar sample;
+        if (!body || !SampleHostedCar(body, sample)) continue;
+        sample.id = car.id;
+        hostedCars.push_back(sample);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        g_hostedCarSnap.swap(hostedCars);
     }
 }
 
@@ -1291,6 +1391,13 @@ int CopyHostedPeds(HostedPed* out, int capacity) {
     for (int i = 0; i < count; ++i) out[i] = g_hostedSnap[static_cast<size_t>(i)];
     return count;
 }
+int CopyHostedCars(HostedCar* out, int max) {
+    if (!out || max <= 0) return 0;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    const int count = std::min(max, static_cast<int>(g_hostedCarSnap.size()));
+    for (int i = 0; i < count; ++i) out[i] = g_hostedCarSnap[static_cast<size_t>(i)];
+    return count;
+}
 
 #else
 bool BeginServerSession() { return false; }
@@ -1315,6 +1422,7 @@ void NoteRemoteVehicle(uint32_t, int, float, float, float, float) {}
 void RequestWander(uint32_t, int) {}
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
 int CopyHostedPeds(HostedPed*, int) { return 0; }
+int CopyHostedCars(HostedCar*, int) { return 0; }
 void SetPedNativeTaskLocomotion(uint32_t, unsigned int) {}
 void SetPedNativeTaskWeapon(uint32_t, uint8_t) {}
 void SetPedNativeTaskAnimation(uint32_t, uint16_t, uint16_t) {}

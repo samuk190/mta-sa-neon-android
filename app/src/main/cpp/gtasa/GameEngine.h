@@ -207,5 +207,14 @@ struct HostedPed {
     float vx = 0, vy = 0, vz = 0, health = 100;
 };
 int CopyHostedPeds(HostedPed* out, int capacity);
+// Hosted unoccupied vehicles (packet 56 source). Rotation is in degrees, wrapped to [0, 360).
+struct HostedCar {
+    uint32_t id = 0;
+    float x = 0, y = 0, z = 0;
+    float rotX = 0, rotY = 0, rotZ = 0;
+    float vx = 0, vy = 0, vz = 0;
+    float tx = 0, ty = 0, tz = 0;
+};
+int CopyHostedCars(HostedCar* out, int max);
 
 } // namespace WorldRPG::Game

@@ -290,6 +290,105 @@ bool ReadWeaponBlock(Reader& r, const VehicleFlags& flags, WeaponState& w) {
     return true;
 }
 
+// ---- Writers: exact inverses of the readers above (same field order, widths and bit layout). ----
+using Writer = WorldRPG::Net::BitStreamWriter;
+
+// Inverse of the reader's byte-array bit stream: the `bits` low bits of value, LSB-first bytes.
+void WriteBitsValue(Writer& w, uint32_t value, unsigned bits) {
+    uint8_t bytes[4] = {};
+    for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (8 * i)) & 0xFFu);
+    w.WriteBits(bytes, bits);
+}
+
+// Inverse of ReadFlag: one bit.
+void WriteFlag(Writer& w, bool on) {
+    uint8_t bit = on ? 1u : 0u;
+    w.WriteBits(&bit, 1);
+}
+
+// Inverse of ReadElementId: 17 bits, 0xFFFFFFFF is INVALID_ELEMENT_ID (all ones on the wire).
+void WriteElementId(Writer& w, uint32_t id) {
+    constexpr uint32_t kMask = (1u << 17) - 1u;
+    WriteBitsValue(w, id == 0xFFFFFFFFu ? kMask : (id & kMask), 17);
+}
+
+// Inverse of ReadFloatAsBits: raw = round((value - min) / (max - min) * (2^bits - 1)), clamped.
+void WriteFloatAsBits(Writer& w, unsigned bits, float minValue, float maxValue, float value) {
+    const double maxRaw = static_cast<double>((1ull << bits) - 1ull);
+    double alpha = 0.0;
+    if (maxValue != minValue) alpha = (static_cast<double>(value) - minValue) / (static_cast<double>(maxValue) - minValue);
+    if (!std::isfinite(alpha)) alpha = 0.0;
+    alpha = std::clamp(alpha, 0.0, 1.0);
+    WriteBitsValue(w, static_cast<uint32_t>(std::lround(alpha * maxRaw)), bits);
+}
+
+// Inverse of ReadVehicleHealth (SVehicleHealthSync): 12 bits, 0 - 2047.5.
+void WriteVehicleHealth(Writer& w, float health) {
+    WriteFloatAsBits(w, 12, 0.f, 2047.5f, health);
+}
+
+// Inverse of ReadFixed24: signed 24 bits, value * 1024.
+void WriteFixed24(Writer& w, float value) {
+    const double scaled = std::isfinite(value) ? static_cast<double>(value) * 1024.0 : 0.0;
+    const long fixed = std::lround(std::clamp(scaled, -8388608.0, 8388607.0));
+    WriteBitsValue(w, static_cast<uint32_t>(fixed) & 0xFFFFFFu, 24);
+}
+
+// Inverse of ReadPosition: two fixed24 components, then a float Z.
+void WriteVec3Position(Writer& w, const Vec3& in) {
+    WriteFixed24(w, in.x);
+    WriteFixed24(w, in.y);
+    w.Write(in.z);
+}
+
+// Inverse of ReadRotationDegrees: one uint16 per axis, 360 / 65536 degrees per step, wrapped to [0, 360).
+void WriteRotationAxis(Writer& w, float degrees) {
+    double d = std::isfinite(degrees) ? std::fmod(static_cast<double>(degrees), 360.0) : 0.0;
+    if (d < 0.0) d += 360.0;
+    const long raw = std::lround(d * 65536.0 / 360.0);
+    w.Write(static_cast<uint16_t>(static_cast<uint32_t>(raw) & 0xFFFFu));
+}
+
+void WriteVec3Rotation(Writer& w, const Vec3& in) {
+    WriteRotationAxis(w, in.x);
+    WriteRotationAxis(w, in.y);
+    WriteRotationAxis(w, in.z);
+}
+
+// Inverse of the 16-bit norm component used by ReadNormVector: (c + 1) * 32767.5 over [-1, 1].
+uint16_t QuantizeNormComponent(float c) {
+    const double scaled = std::isfinite(c) ? std::clamp(static_cast<double>(c), -1.0, 1.0) : 0.0;
+    const long raw = std::lround((scaled + 1.0) * 32767.5);
+    return static_cast<uint16_t>(std::clamp(raw, 0L, 65535L));
+}
+
+// Inverse of ReadNormVector: x sign flag, y zero flag and value, z zero flag and value.
+// x is not sent; the reader rebuilds its magnitude from the unit length.
+void WriteNormVector(Writer& w, const Vec3& in) {
+    WriteFlag(w, in.x < 0.0f);
+    const bool yZero = in.y == 0.0f;
+    WriteFlag(w, yZero);
+    if (!yZero) w.Write(QuantizeNormComponent(in.y));
+    const bool zZero = in.z == 0.0f;
+    WriteFlag(w, zZero);
+    if (!zZero) w.Write(QuantizeNormComponent(in.z));
+}
+
+// Inverse of ReadVelocity (SVelocitySync): moving flag, then module float and norm vector.
+// A zero vector is written as a single cleared flag, as in the reference.
+void WriteVelocity(Writer& w, const Vec3& in) {
+    const double length = std::sqrt(static_cast<double>(in.x) * in.x + static_cast<double>(in.y) * in.y +
+                                    static_cast<double>(in.z) * in.z);
+    if (!(length > 0.0) || !std::isfinite(length)) {
+        WriteFlag(w, false);
+        return;
+    }
+    WriteFlag(w, true);
+    w.Write(static_cast<float>(length));
+    const Vec3 dir{static_cast<float>(in.x / length), static_cast<float>(in.y / length), static_cast<float>(in.z / length)};
+    WriteNormVector(w, dir);
+}
+
 } // namespace
 
 bool ReadUnoccupiedEntry(Reader& r, UnoccupiedUpdate& out) {
@@ -319,6 +418,33 @@ bool ReadUnoccupiedEntry(Reader& r, UnoccupiedUpdate& out) {
     if (out.syncTurnVelocity) VS_TRY(ReadVelocity(r, out.turnVelocity));
     if (out.syncHealth) VS_TRY(ReadVehicleHealth(r, out.health));
     if (out.syncTrailer) VS_TRY(ReadElementId(r, out.trailer));
+    return true;
+}
+
+bool WriteUnoccupiedEntry(Writer& w, const UnoccupiedUpdate& in) {
+    WriteElementId(w, in.vehicleId);
+    w.Write(in.timeContext);
+
+    // Same bit layout as ReadUnoccupiedEntry: 9 flag bits, LSB first.
+    unsigned f = 0;
+    if (in.syncPosition) f |= 0x001u;
+    if (in.syncRotation) f |= 0x002u;
+    if (in.syncVelocity) f |= 0x004u;
+    if (in.syncTurnVelocity) f |= 0x008u;
+    if (in.syncHealth) f |= 0x010u;
+    if (in.syncTrailer) f |= 0x020u;
+    if (in.engineOn) f |= 0x040u;
+    if (in.derailed) f |= 0x080u;
+    if (in.inWater) f |= 0x100u;
+    const uint8_t flagRaw[2] = {static_cast<uint8_t>(f & 0xFFu), static_cast<uint8_t>((f >> 8) & 0x01u)};
+    w.WriteBits(flagRaw, 9);
+
+    if (in.syncPosition) WriteVec3Position(w, in.position);
+    if (in.syncRotation) WriteVec3Rotation(w, in.rotation);
+    if (in.syncVelocity) WriteVelocity(w, in.velocity);
+    if (in.syncTurnVelocity) WriteVelocity(w, in.turnVelocity);
+    if (in.syncHealth) WriteVehicleHealth(w, in.health);
+    if (in.syncTrailer) WriteElementId(w, in.trailer);
     return true;
 }
 
