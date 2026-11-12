@@ -35,6 +35,12 @@ Rule: when our code and the reference disagree, the reference wins. Port the rea
 5. Commit only on your stage branch (`staging-stage-N`). Do not push. Do not open PRs. Do not touch `main`.
 6. Report back: files changed, what the reference says for each case you ported (file and line), any width you were unsure of, and the host syntax-check result.
 
+## S1 result (2026-11-12, S25, build of `ecf58b3`)
+
+- Join `worldrpgbroficial.duckdns.org:22003`: three ENTITY_ADD packets, stored 4/4, 41/41 and 84/84.
+- No `ENTITY_ADD fail` lines and no "not implemented" stops. Element types seen: 0, 2, 4, 5. Headers have plausible ids and parents.
+- S1 acceptance met. Peds (type 14) did not appear in this join, so S2 is not checked yet.
+
 ## Stage map (README Steps mapped)
 
 | Stage | Scope | README step | Depends on | Acceptance on phone |
