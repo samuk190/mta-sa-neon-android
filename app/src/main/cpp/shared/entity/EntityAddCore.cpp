@@ -233,6 +233,7 @@ bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Vi
         case kTypeVehicle:
             return ReadEntityBodyVehicle(reader, common, visual);
         case kTypeObject:
+        case 18:  // WEAPON: the reference routes it through the object case
             return ReadEntityBodyObject(reader, common, visual);
         case kTypeMarker:
             return ReadEntityBodyMarker(reader, common, visual);
