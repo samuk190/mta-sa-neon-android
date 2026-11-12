@@ -2,6 +2,7 @@
 #include "PlayerPedPort.h"
 #include "GTASAOffsets.h"
 #include "../shared/ServerWorld.h"
+#include "../shared/entity/PedSyncState.h"
 
 namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
 #include "../hook/SymbolResolver.h"
@@ -591,6 +592,11 @@ static void ApplyRemotePeds() {
     {
         ServerWorld::ActorSpawn actors[96];
         const int count = ServerWorld::CopyActors(actors, 96);
+        // Observer interpolation (PedSyncState). Runs before g_remoteMutex is taken, because
+        // SamplePose pushes the pose through NoteRemotePed, which locks the same mutex.
+        for (int i = 0; i < count; ++i) {
+            if (actors[i].kind == 14) WorldRPG::Sync::PedSyncState::SamplePose(actors[i].id);
+        }
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         for (int i = 0; i < count; ++i) {
             const auto& actor = actors[i];
