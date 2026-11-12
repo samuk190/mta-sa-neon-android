@@ -537,9 +537,9 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
         nativeTaskPhysicalTakeover.data.usAnimGroup, nativeTaskPhysicalTakeover.data.usAnimId,
         nativeTaskPhysicalTakeover.data.fProgress);
     WorldRPG::Game::SetPedHost(id, true);
-    // Stage S4: become syncer and start the wander task (reference AddPed; wander is engine-side).
+    // Reference CPedSync::AddPed: become syncer (SetSyncing true). No wander task is started here;
+    // the ped keeps its own AI, exactly as the desktop client does.
     PedSyncState::BeginHosted(id, {x, y, z}, fRotation, {vx, vy, vz});
-    WorldRPG::Game::SetPedWander(id, 0);
     WorldRPG::ServerWorld::SetActorHost(id, true);
     PKT_LOGI("PedStartSync: id=%u at %.0f %.0f %.0f physMode=%u", id, x, y, z, nativeTaskPhysicalTakeover.data.uiMode);
     return true;

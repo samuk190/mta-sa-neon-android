@@ -77,7 +77,8 @@ void EndHosted(uint32_t id) {
     e.position = {};
     e.rotation = {};
     e.lastSpatialReceiveMs = 0;
-    Game::ClearPedWander(id);
+    // Reference CPedSync::RemovePed only clears the sync bookkeeping (SetSyncing false). It does not
+    // touch the ped's AI or tasks, so no wander task is cleared here.
 }
 
 bool IsHosted(uint32_t id) {
