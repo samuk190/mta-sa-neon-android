@@ -75,6 +75,13 @@ To set up and host your own compatible game server, clone and build the San Andr
 - [ ] **Lua event packets** (`LUA` 76 and 77, `triggerServerEvent` 81, seen): full bidirectional event dispatch with element arguments.
 - [~] **Chat echo** (`CHAT_ECHO` 43): mobile chat strip (drop ClientID and msgType) is on the server; the phone display path is not verified.
 
+- [ ] **Player lifecycle packets** (desktop handlers, not in the roadmap before): `PLAYER_LIST`, `PLAYER_JOIN`, `PLAYER_QUIT`, `PLAYER_SPAWN`, `PLAYER_WASTED`, `PLAYER_NETWORK_STATUS`, `PLAYER_TIMEOUT`, `PLAYER_NO_SOCKET`, `PLAYER_CHANGE_NICK`, `PLAYER_STATS`, `PLAYER_TRANSGRESSION`, `PLAYER_DIAGNOSTIC`, `PLAYER_WORLD_SPECIAL_PROPERTY`, `PLAYER_CLOTHES`, `PLAYER_RESOURCE_START`.
+- [ ] **Element custom data** (`CUSTOM_DATA`) and **element RPC** (`LUA_ELEMENT_RPC`, `RPC`): the phone parses custom data inside `ENTITY_ADD` but does not handle the live update packets.
+- [ ] **Lua events from the server** (`LUA_EVENT`, `LUA` 76 and 77, seen unhandled on device): full dispatch to `addEventHandler` with element arguments.
+- [ ] **Resource lifecycle** (`RESOURCE_START`, `RESOURCE_STOP`, `RESOURCE_CLIENT_SCRIPTS`, `PLAYER_RESOURCE_START`): load, start and stop client scripts when the server sends them.
+- [ ] **Latent transfers and progress** (`LATENT_TRANSFER`, `PACKET_PROGRESS`): large payloads and their progress reporting.
+- [ ] **Server control packets** (`UPDATE_INFO`, `SERVER_DISCONNECTED`, `CHAT_CLEAR`, `TEXT_ITEM`, `CONSOLE_ECHO`, `DEBUG_ECHO`, `DEBUG_EVENT`).
+- [ ] **Voice** (`VOICE_DATA`): decoded only by the desktop voice codec; not planned for the phone yet, listed for completeness.
 ### 1. Step A — Remote player as `CPlayerPed` & vehicle entry/exit/jack
 - [ ] **Native `CPlayerPed` instantiation** for remote players (`CPlayerPedSA`, `CPed::operator new`, `CPlayerPed(1, false)`, matrix copy).
 - [ ] **Remove civilian mid-air crash** (`CPopulation::AddPed` / `CCivilianPed` path, `CTaskComplexInAirAndLand`).
@@ -85,6 +92,8 @@ To set up and host your own compatible game server, clone and build the San Andr
 - [ ] **Warp seating on stream-in**: `CTaskSimpleCarSetPedInAsDriver` / `CTaskSimpleCarSetPedInAsPassenger`.
 - [~] **Ped occupancy from `ENTITY_ADD`** (type 14 vehicle and seat fields, S2): parsed, not bound to the vehicle.
 
+- [ ] **Ped task and death sync** (`PED_TASK`, `PED_WASTED`): server-driven ped tasks and wasted state for remote peds.
+- [ ] **Ped keysync for remote peds** (`PLAYER_KEYSYNC`, 31): the desktop uses it to drive the remote ped's controls; the phone only reads the buttons needed for melee.
 ### 2. Step B — Pedestrian host, wander sync and interpolation
 - [x] **`PED_STARTSYNC` (61) parse** at the 305-bit mobile layout (ped 182 at 1706, -1806, 14, observed).
 - [~] **Start-sync apply**: sets the ped as hosted and calls the wander hook (`SetPedWander` logs; the GTA wander task is not started).
@@ -108,6 +117,8 @@ To set up and host your own compatible game server, clone and build the San Andr
 - [ ] **Trailers, trains and aircraft look bits**: decoded, not applied.
 - [~] **Vehicle normal vectors**: MTA encoding (`ReadMtaNorm`) now used for vehicles as well as players.
 
+- [ ] **Unoccupied vehicle start and stop** (`UNOCCUPIED_VEHICLE_STARTSYNC`, `UNOCCUPIED_VEHICLE_STOPSYNC`): claim and release of an empty car's sync.
+- [ ] **Vehicle spawn, resync, damage, push and trailer packets** (`VEHICLE_SPAWN`, `VEHICLE_RESYNC`, `VEHICLE_DAMAGE_SYNC`, `VEHICLE_PUSH_SYNC`, `VEHICLE_TRAILER`).
 ### 4. Step D — Combat, bullet sync and damage
 - [~] **Player bullet sync** `PLAYER_BULLETSYNC` (98): decoder and duplicate filter match `CNetAPI.cpp:2318-2366`; tracers and discharge only log.
 - [~] **Weapon bullet sync** `WEAPON_BULLETSYNC` (100): decoder matches `CNetAPI.cpp:2368-2389`; no weapon-type gate, log-only.
@@ -118,6 +129,8 @@ To set up and host your own compatible game server, clone and build the San Andr
 - [ ] **`CTaskSimpleFight`** for remote melee.
 - [ ] **Keysync fields beyond buttons**: analog bytes, aim and camera (currently only the first button byte is used).
 
+- [ ] **Explosions, fire, projectiles and satchels** (`EXPLOSION`, `FIRE`, `PROJECTILE`, `DETONATE_SATCHELS`, `DESTROY_SATCHELS`, `PLAYER_WASTED`): server-driven combat effects and their GTA calls.
+- [ ] **Keysync fields beyond melee** (`PLAYER_KEYSYNC` 31): analog stick, aim and camera fields for remote players (currently only the first button byte is used).
 ### 5. Step E — Scripting engine, touch UI and optimization
 - [~] **Lua 5.3 client VM**: `addEventHandler`, `triggerServerEvent`, timers and about 60 ped natives defined; `getAmbientPedPopulationProfile` shim relies on them.
 - [ ] **DirectX / RenderWare 2D GUI**: DX primitives, radar blips and HUD overlays for remote entities.
@@ -125,6 +138,11 @@ To set up and host your own compatible game server, clone and build the San Andr
 - [ ] **Custom asset streaming**: server-side DFF/TXD download and RenderWare memory streaming.
 - [ ] **Engine optimization**: frame pacing, memory compaction and ARM64 anti-crash guardrails.
 - [ ] **16 KB ELF alignment** for `libc++_shared.so` (Samsung compatibility warning on install; repo audit fails).
+
+- [ ] **Object sync** (`OBJECT_SYNC`, `OBJECT_STARTSYNC`, `OBJECT_STOPSYNC`): world objects owned by a syncer, with their start and stop packets.
+- [ ] **Light sync** (`LIGHTSYNC`) and **camera sync** (`CAMERA_SYNC`): world lights and remote camera state.
+- [ ] **Pickups** (`PICKUP_HIDESHOW`, `PICKUP_HIT_CONFIRM`): show, hide and confirm pickup hits.
+- [ ] **Player statistics and clothes** (`PLAYER_STATS`, `PLAYER_CLOTHES`): stat and clothing updates for remote players.
 
 ### 6. Verification and hygiene
 - [ ] **Remove `DIAG` logging** from `staging` before any merge to `main` (kept for now; see `ServerWorld.cpp`, `PacketHandler.cpp`, `GameEngine.cpp`).
