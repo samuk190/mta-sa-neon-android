@@ -163,6 +163,8 @@ void NoteRemotePed(uint32_t id, float x, float y, float z, float heading,
     float vx = 0, float vy = 0, float vz = 0);
 void SetPedHost(uint32_t id, bool host);
 void ForgetRemote(uint32_t id);
+// P3.1: drop every remote body and car on the next game tick (reconnect).
+void RequestRemoteReset();
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
 void RequestWander(uint32_t id, int direction);
 bool CopyRemotePose(uint32_t id, float& x, float& y, float& z);

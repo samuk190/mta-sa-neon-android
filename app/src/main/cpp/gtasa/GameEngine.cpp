@@ -251,6 +251,7 @@ struct RemoteCar {
 };
 static std::unordered_map<uint32_t, RemoteCar> g_remoteCars;
 static std::vector<uint32_t> g_forget;
+static std::atomic<bool> g_remoteResetPending{false};
 static std::vector<HostedPed> g_hostedSnap;
 static std::unordered_map<uint32_t, RemoteBody> g_remoteBodies;
 
@@ -610,6 +611,16 @@ static float GroundedZ(float x, float y, float z) {
 
 static void ApplyRemotePeds() {
     NoteGameFrame();
+    if (g_remoteResetPending.exchange(false)) {
+        for (auto& entry : g_remoteBodies) {
+            ClearRemoteStick(entry.second.ped);
+            DropBody(entry.second.ped, false);
+        }
+        g_remoteBodies.clear();
+        for (auto& entry : g_remoteCars) DropBody(entry.second.body, true);
+        g_remoteCars.clear();
+        ENGINE_LOGI("Remote world reset for reconnect");
+    }
     {
         ServerWorld::ActorSpawn actors[96];
         const int count = ServerWorld::CopyActors(actors, 96);
@@ -1219,6 +1230,17 @@ void ForgetRemote(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     g_forget.push_back(id);
 }
+
+// Reconnect (P3.1): the network thread clears the record set; the game thread
+// drops the bodies in ApplyRemotePeds on its next tick.
+void RequestRemoteReset() {
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        g_remotePeds.clear();
+        g_forget.clear();
+    }
+    g_remoteResetPending = true;
+}
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading) {
     if (id == 0 || id == 0xFFFFFFFFu || !PlausiblePosition(x, y, z)) return;
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -1279,6 +1301,7 @@ void CopyOnFoot(float, float, float, OnFootKeys& keys) { keys = {}; }
 void NoteRemotePed(uint32_t, float, float, float, float, float, float, float) {}
 void SetPedHost(uint32_t, bool) {}
 void ForgetRemote(uint32_t) {}
+void RequestRemoteReset() {}
 void NoteRemoteVehicle(uint32_t, int, float, float, float, float) {}
 void RequestWander(uint32_t, int) {}
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }

@@ -715,6 +715,12 @@ void NeonJoinClient::Pulse() {
             }
             break;
         case JoinState::Complete:
+            if (!d.net->IsRakNetConnected()) {
+                // The transport dropped after the join. Surface it so the launcher
+                // can offer Retry / Quit (P3.1).
+                d.Fail("Connection lost");
+                break;
+            }
             d.SendPureSync();
             d.SendKeySync();
             d.SendPedSync();

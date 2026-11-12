@@ -118,6 +118,9 @@ struct NeonEngineState {
 std::mutex g_stateMutex;
 std::unique_ptr<NeonEngineState> g_state;
 std::atomic<bool> g_enterServer{false};
+// True after the first nativeConnect. A later call is a reconnect (P3.1): stop
+// the old RakNet session and reset the remote world before joining again.
+bool g_sessionOpened = false;
 
 bool isOwner(JNIEnv* env, jobject activity) {
     return g_state && g_gameActivityRef && env->IsSameObject(activity, g_gameActivityRef);
@@ -287,6 +290,10 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
 
     std::string normalizedNick = WorldRPG::Net::NormalizeAscii(nickStr);
     env->ReleaseStringUTFChars(nickname, nickStr);
+    if (g_sessionOpened) {
+        g_state->network->StopNetwork();
+        WorldRPG::Game::RequestRemoteReset();
+    }
     const bool started = ipStr[0] != '\0' && !normalizedNick.empty() &&
         g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
     env->ReleaseStringUTFChars(ip, ipStr);
@@ -299,6 +306,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
         return JNI_FALSE;
     }
     g_enterServer = true;
+    g_sessionOpened = true;
     return JNI_TRUE;
 }
 

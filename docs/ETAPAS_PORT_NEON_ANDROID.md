@@ -19,7 +19,8 @@ The [full architectural plan](PLANO_PORT_NEON_ANDROID.md) details audits, depend
 | **P1B.2 Native Session** | P1B.1 | Protocol versioning, join data, and reconnect sequence against MTA Neon server. | In Progress |
 | **P2. Resources & Game Session** | P1A.4, P1B.2 | Root element, resource start/stop, HTTP asset cache, diagnostic Lua, and client-server events. | Pending |
 | **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (Step A: remote `CPlayerPed` created; controller hook written, on-device check pending; duck, enter/leave-car and steps B/C open) |
-| **P3.1 Disconnect Recovery** | P1B.2, P3 | When the server drops the session, show a dialog with **Retry** and **Quit** (same flow as the MTA desktop client). Retry runs a fresh join (`PLAYER_JOIN` → `MOD_NAME` → `PLAYER_JOINDATA` → `SERVER_JOIN_COMPLETE`) and spawns the character in the world as on a first connection: remote peds, vehicles and the local player are rebuilt, nothing is kept from the old session. Quit returns to the server browser. Also handles `ForceReconnect` (server RPC). | Pending |
+| **P3.1 Disconnect Recovery** | P1B.2, P3 | When the server drops the session, show a dialog with **Retry** and **Quit** (same flow as the MTA desktop client). Retry runs a fresh join (`PLAYER_JOIN` → `MOD_NAME` → `PLAYER_JOINDATA` → `SERVER_JOIN_COMPLETE`) and spawns the character in the world as on a first connection: remote peds, vehicles and the local player are rebuilt, nothing is kept from the old session. Quit returns to the server browser. Also handles `ForceReconnect` (server RPC). | Implemented; device drop test pending |
+| **P3.2 Chat Layout** | P2 | The chat does not match the MTA desktop client: lines are spaced too far apart and the layout differs. Match the desktop chat box (line height, padding, font, colour codes, and the line limit) so both clients show the same chat. Verify with a screenshot of the desktop and the phone side by side. | Pending |
 | **P4. Lua, DX, GUI & Browser** | P2, P3 | RenderWare 2D DX draw calls, custom UI interactions, CEGUI/WebView bindings. | Pending |
 | **P5. Neon Parity Matrix** | P3, P4 | Complete API matrix, events, and elements matching MTA Neon desktop capabilities. | Pending |
 | **P6. Release Distribution** | P5 | Reproducible release builds, multi-device hardware validation, automated updates. | Pending |
@@ -30,9 +31,14 @@ P1A (Engine/Platform) and P1B (Network Transport) are independent parallel track
 
 ## 2. Historical Execution Log
 
+### P3.2 Chat Layout (planned)
+- Requested 2026-11-12: the phone chat has spaces between lines and does not look like the MTA desktop chat. Compare against the desktop chat code in `mta_neon_source/Client` before changing the phone layout.
+- Not started.
+
 ### P3.1 Disconnect Recovery (planned)
 - Requested 2026-11-12: after a server drop, show Retry / Quit like MTA desktop. Retry re-joins and re-spawns the character as a first connection. Source of the desktop behavior: `CPacketHandler` (`Disconnected:` reasons, join flow) and `CInputRPCs::ForceReconnect` in `mta_neon_source/Client/mods/deathmatch/logic/`.
-- Not started. Depends on the Step A/B/C session state being reset on leave.
+- Implemented: `NeonJoinProtocol` fails a `Complete` session with "Connection lost" when RakNet drops. `GameActivity` shows Retry / Quit after a drop that followed a join. `nativeConnect` stops the old network and calls `RequestRemoteReset()`, which drops every remote body and car on the game thread. Join verified on the S25 after the change.
+- Not verified: the drop itself. Testing it means turning Wi-Fi off on the phone, which also carries the ADB link (Tailscale over `wlan0`).
 
 ### Step A of P3 (controller switch): hook written, device check pending
 - `PlayerPedPort.cpp` hooks `CPlayerPed::ProcessControl` (`_ZN10CPlayerPed14ProcessControlEv`). For a remote player with keysync it sets `CPad::GetPad(0)` stick fields for one call, then restores the pad. The offsets (`GetPad` stride `0x158`, `LeftStickX` at `+0`, `LeftStickY` at `+2`) come from disassembling `CPad::GetPedWalkLeftRight` and `CPad::GetPedWalkUpDown` in the libGTASA 2.10 binary (sha1 `6dd7c360...`, same in all local copies).

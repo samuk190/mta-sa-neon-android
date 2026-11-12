@@ -1,5 +1,6 @@
 package com.worldrpg.neonlauncher.game
 
+import android.app.AlertDialog
 import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.view.MotionEvent
@@ -39,6 +40,8 @@ class GameActivity : AppCompatActivity() {
     private var serverPort: Int = BuildConfig.DEFAULT_SERVER_PORT
     private var nativeInitialized = false // GL thread only
     @Volatile private var closing = false
+    // True once the session reached Connected. A drop after that offers Retry / Quit (P3.1).
+    private var joinedOnce = false
     private var surfaceConfigured = false
     private val activePointers = mutableSetOf<Int>()
     private val chatLines = ArrayDeque<String>()
@@ -151,7 +154,12 @@ class GameActivity : AppCompatActivity() {
             if (closing) return@runOnUiThread
             android.util.Log.i("GameActivity", "NativeConnectionState: connected=$connected msg=$message")
             if (connected) {
+                joinedOnce = true
                 connectionManager.setConnected(serverIp, serverPort)
+            } else if (joinedOnce) {
+                joinedOnce = false
+                connectionManager.setDisconnected()
+                showConnectionLostDialog()
             } else {
                 val errorMsg = message ?: "Desconectado"
                 val genericClose = errorMsg.equals("Disconnected by server", ignoreCase = true) ||
@@ -166,6 +174,27 @@ class GameActivity : AppCompatActivity() {
                     connectionManager.setError(errorMsg)
                 }
             }
+        }
+    }
+
+    // P3.1: same flow as the MTA desktop client. Retry re-joins the server and the
+    // character is spawned again as on a first connection; Quit leaves the game.
+    private fun showConnectionLostDialog() {
+        if (closing || isFinishing) return
+        AlertDialog.Builder(this)
+            .setTitle("Conexao perdida")
+            .setMessage("O servidor encerrou a sessao. Deseja entrar novamente?")
+            .setCancelable(false)
+            .setPositiveButton("Tentar novamente") { _, _ -> retryConnection() }
+            .setNegativeButton("Sair") { _, _ -> finish() }
+            .show()
+    }
+
+    private fun retryConnection() {
+        connectionManager.setConnecting(serverIp, serverPort)
+        if (!nativeConnect(serverIp, serverPort, prefsManager.username)) {
+            connectionManager.setError("Falha ao reconectar.")
+            showConnectionLostDialog()
         }
     }
 
