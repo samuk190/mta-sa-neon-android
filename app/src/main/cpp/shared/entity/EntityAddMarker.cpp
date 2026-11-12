@@ -3,6 +3,8 @@
 
 #include "EntityAddTypes.h"
 
+#include <cstring>
+
 namespace WorldRPG::Entity {
 
 namespace {
@@ -24,7 +26,13 @@ bool ReadEntityBodyMarker(Net::BitStreamReader& reader, const EntityCommon& comm
     visual.markerType = markerType & 7;
 
     // Float size, then SColorSync: 4 bytes R, G, B, A (32 bits).
-    if (!reader.Read(visual.size)) ENTITY_BODY_FAIL();
+    // DIAG: read the raw 32 bits first so the device log shows the exact bytes and bit offset.
+    uint8_t rawSize[4] = {};
+    const size_t sizeBit = reader.GetReadOffsetBits();
+    if (!reader.ReadBits(rawSize, 32)) ENTITY_BODY_FAIL();
+    std::memcpy(&visual.size, rawSize, 4);
+    DIAG("ENTITY_ADD marker raw size id=%u bit=%zu bytes=%02x%02x%02x%02x pos=%.2f,%.2f,%.2f mtype_bits_ok", common.id, sizeBit,
+         rawSize[0], rawSize[1], rawSize[2], rawSize[3], static_cast<double>(x), static_cast<double>(y), static_cast<double>(z));
     uint8_t color[4] = {};
     if (!reader.ReadBits(color, 32)) ENTITY_BODY_FAIL();
     visual.r = color[0];
