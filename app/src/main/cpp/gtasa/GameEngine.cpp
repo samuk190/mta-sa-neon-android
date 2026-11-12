@@ -2,6 +2,7 @@
 #include "PlayerPedPort.h"
 #include "GTASAOffsets.h"
 #include "../shared/ServerWorld.h"
+#include "../shared/entity/PedSyncState.h"
 
 namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
 #include "../hook/SymbolResolver.h"
@@ -612,11 +613,18 @@ static void ApplyRemotePeds() {
     {
         ServerWorld::ActorSpawn actors[96];
         const int count = ServerWorld::CopyActors(actors, 96);
+        // Observer interpolation (PedSyncState). Runs before g_remoteMutex is taken, because
+        // SamplePose pushes the pose through NoteRemotePed, which locks the same mutex.
+        for (int i = 0; i < count; ++i) {
+            if (actors[i].kind == 14) WorldRPG::Sync::PedSyncState::SamplePose(actors[i].id);
+        }
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         for (int i = 0; i < count; ++i) {
             const auto& actor = actors[i];
             if (actor.kind == 14) {
+                const bool firstSeen = g_remotePeds.find(actor.id) == g_remotePeds.end();
                 auto& ped = g_remotePeds[actor.id];
+                if (firstSeen) ENGINE_LOGI("DIAG ped actor id=%u model=%d hosted=%d pos=%.1f,%.1f,%.1f", actor.id, actor.model, actor.hosted ? 1 : 0, actor.x, actor.y, actor.z);
                 ped.hosted = actor.hosted;
                 if (!ped.dirty && !ped.shown && actor.model >= 0) {
                     ped.x = actor.x;
@@ -1251,116 +1259,6 @@ int CopyHostedPeds(HostedPed* out, int capacity) {
     const int count = std::min(capacity, static_cast<int>(g_hostedSnap.size()));
     for (int i = 0; i < count; ++i) out[i] = g_hostedSnap[static_cast<size_t>(i)];
     return count;
-}
-
-// ---------------------------------------------------------------------------
-// Native task presentation — matches mta_neon CClientPed interface.
-// These store state in RemotePed for ApplyRemotePeds to apply on game thread.
-// ---------------------------------------------------------------------------
-
-void SetPedNativeTaskLocomotion(uint32_t id, unsigned int mode) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.nativeTaskLocomotionMode = mode;
-}
-
-void SetPedNativeTaskWeapon(uint32_t id, uint8_t weaponType) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.nativeTaskWeaponType = weaponType;
-}
-
-void SetPedNativeTaskAnimation(uint32_t id, uint16_t animGroup, uint16_t animId) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) {
-        it->second.nativeTaskAnimGroup = animGroup;
-        it->second.nativeTaskAnimId = animId;
-    }
-}
-
-void SetPedNativeTaskPhysicalTakeover(uint32_t id, unsigned int mode,
-                                      uint16_t animGroup, uint16_t animId, float progress) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) {
-        it->second.physicalTakeoverMode = mode;
-        it->second.physicalTakeoverAnimGroup = animGroup;
-        it->second.physicalTakeoverAnimId = animId;
-        it->second.physicalTakeoverProgress = progress;
-        it->second.physicalTakeoverPending = (mode != 0);
-    }
-}
-
-void SetPedCameraRotation(uint32_t id, float rotation) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.cameraRotation = rotation;
-}
-
-void SetPedOnFire(uint32_t id, bool onFire) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.fire = onFire;
-}
-
-void SetPedInWater(uint32_t id, bool inWater) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.inWater = inWater;
-}
-
-void KillPedAnimation(uint32_t id) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) {
-        it->second.animationKilled = true;
-        it->second.nativeTaskAnimGroup = 0;
-        it->second.nativeTaskAnimId = 0;
-        it->second.nativeTaskLocomotionMode = 0;
-    }
-}
-
-void LockPedHealth(uint32_t id, float health) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) {
-        it->second.health = health;
-        it->second.healthLocked = true;
-    }
-}
-
-void LockPedArmor(uint32_t id, float armor) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) {
-        it->second.armor = armor;
-        it->second.armorLocked = true;
-    }
-}
-
-void LockPedHealthCurrent(uint32_t id) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.healthLocked = true;
-}
-
-void LockPedArmorCurrent(uint32_t id) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto it = g_remotePeds.find(id);
-    if (it != g_remotePeds.end()) it->second.armorLocked = true;
 }
 
 #else

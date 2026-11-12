@@ -9,14 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
-- **Native build compiles again (`shared/NativeTaskSync.h`, `shared/PacketHandler.cpp`)**: The native task sync structures from `d8296ba` did not build. Bit-fields were passed by address, the bit-stream wrapper has no `int8_t`, `ReadBit` or `WriteBit` overloads, and the structs were unqualified in `PacketHandler.cpp`. `detail::ReadBitsValue` / `WriteBitsValue` / `ReadFlag` / `WriteFlag` now carry the same bit widths. The struct names are qualified with `WorldRPG::Sync::`.
-- **Locomotion stick wrote 32 bits**: `Write(int8_t)` resolved to the 32-bit overload. Stick X/Y are now written as `uint8_t`, which keeps the 8-bit layout of the mta_neon packet.
+- **Native build (`shared/NativeTaskSync.h`)**: locomotion stick X/Y is written as `uint8_t`. `Write(int8_t)` resolved to the 32-bit overload, which broke the 8-bit mta_neon layout.
+- **APK packaging**: `ANDROID_STL=c++_static` replaces the `c++_shared` runtime. The NDK 25 `libc++_shared.so` has 4 KB LOAD segments, which the 16 KB audit rejects. The `copyNdkLibcxxShared` task and the `System.loadLibrary("c++_shared")` preloads are removed from `app/build.gradle.kts`, `EngineHostActivity.java` and `GameActivity.kt`.
 
 ### Added
-- **Remote Player Controller Switch (Step A, `PlayerPedPort.cpp`)**: Hooks `CPlayerPed::ProcessControl` once (`_ZN10CPlayerPed14ProcessControlEv`, through `Hook::MemoryPatcher`). For a remote player with a keysync stick, `CPad::GetPad(0)` (`_ZN4CPad6GetPadEi`, stride `0x158`) gets `LeftStickX` at `+0` and `LeftStickY` at `+2` for one call, then the whole pad block is restored. Offsets were read from the libGTASA 2.10 disassembly of `CPad::GetPedWalkLeftRight` and `CPad::GetPedWalkUpDown`. New API: `InstallRemoteControlHook`, `RemoteControlHookActive`, `SetRemoteStick`, `ClearRemoteStick`.
-- **Keysync Stick Stored Per Remote Player (`GameEngine.cpp`)**: `NoteRemoteAim` keeps `stickX`, `stickY` and `keysync` on `RemotePed`. The velocity fallback runs only when the controller hook is not active.
-- **Controlled Observer Path (`GameEngine.cpp` `ApplyRemotePeds`)**: A non-hosted player with keysync is driven by the game. The per-tick matrix lerp is skipped, and the body is re-anchored to the server position only when it drifts more than 8 m. `PresentOnFoot` still runs.
+- **Remote player controller switch (`gtasa/PlayerPedPort.cpp`)**: hooks `CPlayerPed::ProcessControl` (`_ZN10CPlayerPed14ProcessControlEv`) through `Hook::MemoryPatcher`. For a remote player with a keysync stick, `CPad::GetPad(0)` (`_ZN4CPad6GetPadEi`, stride `0x158`) gets `LeftStickX` at `+0` and `LeftStickY` at `+2` for one call. The whole pad is restored afterwards. Offsets come from the libGTASA 2.10 disassembly of `CPad::GetPedWalkLeftRight` / `GetPedWalkUpDown`. API: `InstallRemoteControlHook`, `RemoteControlHookActive`, `SetRemoteStick`, `ClearRemoteStick`.
+- **Controlled observer path (`gtasa/GameEngine.cpp` `ApplyRemotePeds`)**: a non-hosted player with keysync is driven by the game. The per-tick matrix lerp is skipped, and the body is re-anchored only past 8 m. `PresentOnFoot` still runs. The velocity fallback runs only when the hook is missing.
 
+### Documented
+- `docs/MTA_SYNC_ANDROID_PORT.md` section 4b: gaps against the PC `SwitchContext` (camera float `VAR_CameraRotation`, full pad copy, horn history, impatient-action timer, first-person flag, `0xB7CD98`).
+- `docs/ETAPAS_PORT_NEON_ANDROID.md`: Step A status and the open items.
+
+### Added
+- **Native Task Presentation in PED_SYNC** (`shared/NativeTaskSync.h`, `shared/PacketHandler.cpp`): Ported `SNativeTaskLocomotionSync`, `SNativeTaskWeaponPresentationSync` and `SNativeTaskAnimationPresentationSync` from mta_neon `SyncStructures.h`, read in the same order as `CPedSync::Packet_PedSync` (native-task blocks before position). Camera rotation, OnFire/InWater bits, animation kill flag (`ucFlags & 0x80`) and health/armor locks are decoded in `HandlePedSync`.
+- **Remote ped native task state** (`gtasa/PedNativeTaskState.cpp`, `gtasa/GameEngine.h`): Implemented the `SetPedNativeTask*`, `SetPedCameraRotation`, `SetPedOnFire`, `SetPedInWater`, `KillPedAnimation` and `LockPedHealth`/`LockPedArmor` (+ `*Current`) functions as a per-ped state store. This layer has no GTA native calls yet; applying it to peds is a follow-up.
 - **Local Game Asset Workflow & `.env` Support**: Decoupled game assets from external Hugging Face cloud dependencies. Game assets are now configured via `.env` (`GAME_ASSETS_DIR`, `DEVICE_ASSETS_PATH`, `CDN_ROOT_URL`) and loaded from local device storage or the `./game_assets/` directory.
 - **Local Asset Verification in `NativeAssetBridge.kt`**: Added `findLocalAssetsFolder()` and `syncFromLocalFolder()` to detect local GTA San Andreas Mobile v2.10 files on Android external/internal storage, stage them atomically into generations, and activate without requiring internet downloads.
 - **Gradle Asset Pipeline**: Integrated `.env` property parsing in `app/build.gradle.kts` with `pushAssetsToDevice` Gradle task.
@@ -25,6 +31,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Feature Status Checklist**: Documented working subsystems checklist on `README.md` (Game log-in, Character sync, Peds, Sound/Chat).
 - **Server Documentation & Anti-Cheat Notice**: Linked compatible server backend ([Dryxio/san-andreas-online](https://github.com/Dryxio/san-andreas-online)) and added explicit notice detailing why standard desktop MTA anti-cheat is incompatible with custom mobile packets.
 - **Project Roadmap**: Added 4-phase development roadmap to `README.md` covering vehicle sync, combat/bullet sync, Lua 5.3 UI, and performance optimizations.
+- **Discord Community Link & Badge**: Added official Discord community badge and join link (`https://discord.gg/DKrpU3e4pF`) to `README.md` for multiplayer testing and development collaboration.
+- **Multi Theft Auto & Community Credits**: Added dedicated Credits & Acknowledgments section in `README.md` linking the official Multi Theft Auto project ([multitheftauto.com](https://multitheftauto.com)), the MTA Team repository ([multitheftauto/mtasa-blue](https://github.com/multitheftauto/mtasa-blue)), San Andreas Online ([Dryxio/san-andreas-online](https://github.com/Dryxio/san-andreas-online)), Lua, and Opus.
 - **English Documentation**: Translated all technical documentation in `/docs/` into 100% English (including `BOOTSTRAP_ASSETS.md`, `CONTRATO_TRANSPORTE_MTA.md`, `ETAPAS_PORT_NEON_ANDROID.md`, `MATRIZ_PARIDADE_NEON.md`, `PLANO_PORT_NEON_ANDROID.md`, `TRANSPORTE_NEON.md`, `VALIDACAO_ANDROID_2026-11-11.md`, and `MTA_SYNC_ANDROID_PORT.md`).
 - **PC Client Sync Porting Roadmap**: Expanded the roadmap in `README.md` with detailed 5-step PC-to-Android sync porting specifications from `docs/MTA_SYNC_ANDROID_PORT.md`:
   - *Step A*: Instantiate remote player as `CPlayerPed` (`CPed::operator new`, `CPlayerPed(1, false)`), eliminate civilian mid-air crash in `CTaskComplexInAirAndLand`, and wire native vehicle entry/exit/jacking tasks (`CTaskComplexEnterCarAsDriver`, `CTaskComplexEnterCarAsPassenger`, `CTaskComplexLeaveCar`).
@@ -34,6 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - *Step E*: Client Lua 5.3 runtime, DirectX / 2D GUI, and touch control calibration.
 
 ### Changed
+- **Bitstream gating for native-task blocks** (`shared/NativeTaskSync.h`, `shared/PacketHandler.cpp`): Blocks are read only when the negotiated bitstream carries them (`kBitStreamNativeTaskLocomotion` = 0x003C, `kBitStreamNativeTaskPresentation` = 0x003D, mirroring `eBitStreamVersion`). `kEffectivePedSyncBitStream` = 0x0030 matches `NeonJoinProtocol`, so the current server stream is parsed as before.
 - **Generic Project Naming**: Renamed root project to `mta-sa-neon-android` and application title to `MTA:SA Neon Android`.
 - **`AssetManager` Decoupling**: Removed hardcoded Hugging Face CDN URL in `AssetManager.cpp` and `AssetManager.h`, defaulting to local/configurable base URLs.
 - **Configurable Launcher UI & Server Settings**: Added `.env` environment variables (`LAUNCHER_TITLE`, `LAUNCHER_PLAY_BUTTON_TEXT`, `DEFAULT_SERVER_NAME`, `DEFAULT_SERVER_IP`, `DEFAULT_SERVER_PORT`, `DEFAULT_PLAYER_NICK`) to configure the launcher toolbar title, pause screen header, play button text, and fallback server settings dynamically via `app/build.gradle.kts` `BuildConfig` and `resValue`.

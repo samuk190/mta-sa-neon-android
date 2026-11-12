@@ -1,10 +1,17 @@
 #include "PacketHandler.h"
 #include "SyncTypes.h"
 #include "NativeTaskSync.h"
+#include "entity/PedSyncState.h"
 #include "PerformanceProfiler.h"
 #include "LuaVMStub.h"
 #include "../gtasa/GameEngine.h"
+#include "../gtasa/RemoteVehicle.h"
+#include "VehicleSync.h"
 #include "ServerWorld.h"
+#include "CombatSync.h"
+#include "../gtasa/RemoteCombat.h"
+
+namespace PedSyncState = WorldRPG::Sync::PedSyncState;
 
 #include <algorithm>
 #include <cmath>
@@ -222,6 +229,14 @@ bool HandlePlayerPureSync(const uint8_t* body, size_t length, size_t bits) {
     (void)latency;
     if (id != WorldRPG::ServerWorld::LocalPlayer())
         WorldRPG::Game::NoteRemotePed(id, x, y, z, heading, vx, vy, vz);
+    // Victim health (SPlayerHealthSync, 8 bits, 0..255), read after velocity as in
+    // CNetAPI::ReadPlayerPuresync. A failed read keeps the position update.
+    uint8_t health = 0;
+    if (reader.Read(health)) {
+        WorldRPG::Combat::RegisterVictimHealth(id, health, WorldRPG::ServerWorld::LocalPlayer());
+    } else {
+        PKT_LOGI("DIAG PURESYNC health read failed id=%u bit=%zu", id, reader.GetReadOffsetBits());
+    }
     static int reports = 0;
     if (reports < 4) {
         ++reports;
@@ -239,35 +254,65 @@ bool ReadFixed24(WorldRPG::Net::BitStreamReader& reader, float& out) {
     return true;
 }
 
+using WorldRPG::Sync::SNativeTaskLocomotionSync;
+using WorldRPG::Sync::SNativeTaskWeaponPresentationSync;
+using WorldRPG::Sync::SNativeTaskAnimationPresentationSync;
+using WorldRPG::Sync::kEffectivePedSyncBitStream;
+using WorldRPG::Sync::kBitStreamNativeTaskLocomotion;
+using WorldRPG::Sync::kBitStreamNativeTaskPresentation;
+
 // CPedSync::Packet_PedSync — matches mta_neon Client/mods/deathmatch/logic/CPedSync.cpp:289
 // Full ped sync with native task locomotion, weapon presentation, animation
 // presentation, camera rotation, onfire/inwater bits, and animation kill flag.
 bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     int applied = 0;
-    while (reader.GetRemainingBits() > 32 && applied < 16) {
+    PKT_LOGI("DIAG PED_SYNC body len=%zu bits=%zu", length, bits);
+    // Reference Packet_PedSync: while (GetNumberOfUnreadBits() > 32). No entry cap.
+    while (reader.GetRemainingBits() > 32) {
         uint32_t id = 0;
         uint8_t ucSyncTimeContext = 0, ucFlags = 0, flags2 = 0;
-        if (!ReadElementId(reader, id) || !reader.Read(ucSyncTimeContext) || !reader.Read(ucFlags) || !reader.Read(flags2))
+        if (!ReadElementId(reader, id) || !reader.Read(ucSyncTimeContext) || !reader.Read(ucFlags) || !reader.Read(flags2)) {
+            PKT_LOGI("DIAG PED_SYNC short header bit=%zu", reader.GetReadOffsetBits());
             break;
+        }
+        PKT_LOGI("DIAG PED_SYNC id=%u ctx=%u flags=0x%02x flags2=0x%02x bit=%zu", id, ucSyncTimeContext, ucFlags, flags2, reader.GetReadOffsetBits());
 
-        // Native task blocks — read before spatial data per mta_neon wire order
-        WorldRPG::Sync::SNativeTaskLocomotionSync nativeTaskLocomotion;
-        if ((flags2 & 0x02) && !nativeTaskLocomotion.Read(reader))
-            break;
+        // Native task blocks - read before spatial data per mta_neon wire order
+        // Blocks exist on the wire only when the negotiated bitstream carries them
+        // (mta_neon: BitStream.Can(eBitStreamVersion::NativeTask...)). At 0x0030 they are skipped.
+        const bool hasLocomotion = (flags2 & 0x02) &&
+            kEffectivePedSyncBitStream >= kBitStreamNativeTaskLocomotion;
+        const bool hasWeapon = (flags2 & 0x04) &&
+            kEffectivePedSyncBitStream >= kBitStreamNativeTaskPresentation;
+        const bool hasAnimation = (flags2 & 0x08) &&
+            kEffectivePedSyncBitStream >= kBitStreamNativeTaskPresentation;
 
-        WorldRPG::Sync::SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
-        if ((flags2 & 0x04) && !nativeTaskWeaponPresentation.Read(reader))
+        SNativeTaskLocomotionSync nativeTaskLocomotion;
+        if (hasLocomotion && !nativeTaskLocomotion.Read(reader)) {
+            PKT_LOGI("DIAG PED_SYNC id=%u bad locomotion bit=%zu", id, reader.GetReadOffsetBits());
             break;
+        }
 
-        WorldRPG::Sync::SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
-        if ((flags2 & 0x08) && !nativeTaskAnimationPresentation.Read(reader))
+        SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
+        if (hasWeapon && !nativeTaskWeaponPresentation.Read(reader)) {
+            PKT_LOGI("DIAG PED_SYNC id=%u bad weapon bit=%zu", id, reader.GetReadOffsetBits());
             break;
+        }
+
+        SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
+        if (hasAnimation && !nativeTaskAnimationPresentation.Read(reader)) {
+            PKT_LOGI("DIAG PED_SYNC id=%u bad animation bit=%zu", id, reader.GetReadOffsetBits());
+            break;
+        }
 
         float x = 0, y = 0, z = 0, heading = 0;
         bool hasPosition = false;
         if (ucFlags & 0x01) {
-            if (!ReadFixed24(reader, x) || !ReadFixed24(reader, y) || !reader.Read(z)) break;
+            if (!ReadFixed24(reader, x) || !ReadFixed24(reader, y) || !reader.Read(z)) {
+                PKT_LOGI("DIAG PED_SYNC id=%u bad position bit=%zu", id, reader.GetReadOffsetBits());
+                break;
+            }
             hasPosition = true;
         }
         if (ucFlags & 0x02) {
@@ -279,13 +324,16 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
         }
         float vx = 0, vy = 0, vz = 0;
         if (ucFlags & 0x04) {
-            if (!ReadMtaVelocity(reader, vx, vy, vz)) break;
+            if (!ReadMtaVelocity(reader, vx, vy, vz)) {
+                PKT_LOGI("DIAG PED_SYNC id=%u bad velocity bit=%zu", id, reader.GetReadOffsetBits());
+                break;
+            }
         }
         float fHealth = 0, fArmor = 0;
         if (ucFlags & 0x08) { if (!reader.Read(fHealth)) break; }
         if (ucFlags & 0x10) { if (!reader.Read(fArmor)) break; }
 
-        // Camera rotation — SPedRotationSync uses 12-bit FloatAsBits(-PI, PI)
+        // Camera rotation - SPedRotationSync uses 12-bit FloatAsBits(-PI, PI)
         float cameraRotation = 0;
         if (flags2 & 0x01) {
             uint8_t camRaw[2] = {};
@@ -300,7 +348,7 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
         if (ucFlags & 0x20) { uint8_t bit = 0; if (!reader.ReadBits(&bit, 1)) break; bOnFire = (bit & 1u) != 0; }
         if (ucFlags & 0x40) { uint8_t bit = 0; if (!reader.ReadBits(&bit, 1)) break; bIsInWater = (bit & 1u) != 0; }
 
-        // Animation kill/cleanup flag — ucFlags & 0x80
+        // Animation kill/cleanup flag - ucFlags & 0x80
         // When set, the syncer signals that a synchronized animation ended or
         // was overridden. Mirror the cleanup locally so the remote ped does not
         // remain permanently excluded from native-task locomotion presentation.
@@ -308,10 +356,21 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
 
         if (hasPosition || (ucFlags & 0x02)) {
             WorldRPG::Game::NoteRemotePed(id, x, y, z, heading, vx, vy, vz);
+            // Stage S4: observed peds interpolate to the target (reference SetTargetPosition /
+            // SetTargetRotation with the spatial receive interval). Hosted peds keep local authority.
+            if (ucFlags & 0x07) {
+                const uint64_t rate = PedSyncState::SpatialSyncRateMs(id, true);
+                if (!PedSyncState::IsHosted(id)) {
+                    if (hasPosition)
+                        PedSyncState::SetObserverPosition(id, {x, y, z}, {vx, vy, vz}, rate);
+                    if (ucFlags & 0x02)
+                        PedSyncState::SetObserverRotation(id, heading, rate);
+                }
+            }
             // Apply native task states to remote ped
-            if (flags2 & 0x02) WorldRPG::Game::SetPedNativeTaskLocomotion(id, nativeTaskLocomotion.data.uiMode);
-            if (flags2 & 0x04) WorldRPG::Game::SetPedNativeTaskWeapon(id, nativeTaskWeaponPresentation.data.ucWeaponType);
-            if (flags2 & 0x08) WorldRPG::Game::SetPedNativeTaskAnimation(id, nativeTaskAnimationPresentation.data.usAnimGroup, nativeTaskAnimationPresentation.data.usAnimId);
+            if (hasLocomotion) WorldRPG::Game::SetPedNativeTaskLocomotion(id, nativeTaskLocomotion.data.uiMode);
+            if (hasWeapon) WorldRPG::Game::SetPedNativeTaskWeapon(id, nativeTaskWeaponPresentation.data.ucWeaponType);
+            if (hasAnimation) WorldRPG::Game::SetPedNativeTaskAnimation(id, nativeTaskAnimationPresentation.data.usAnimGroup, nativeTaskAnimationPresentation.data.usAnimId);
             if (flags2 & 0x01) WorldRPG::Game::SetPedCameraRotation(id, cameraRotation);
             WorldRPG::Game::SetPedOnFire(id, bOnFire);
             WorldRPG::Game::SetPedInWater(id, bIsInWater);
@@ -340,30 +399,6 @@ bool SlotHasAmmo(unsigned slot) {
     return slot != 0 && slot != 1 && slot != 10 && slot != 11 && slot != 12;
 }
 
-float BulletDamage(uint8_t weapon) {
-    switch (weapon) {
-        case 24: return 46.f;
-        case 25: case 26: case 27: return 30.f;
-        case 30: case 31: return 30.f;
-        case 33: return 75.f;
-        case 34: return 125.f;
-        case 38: return 46.f;
-        default: return 20.f;
-    }
-}
-
-float SegmentDistance(float px, float py, float pz, float ax, float ay, float az, float bx, float by, float bz) {
-    const float abx = bx - ax, aby = by - ay, abz = bz - az;
-    const float apx = px - ax, apy = py - ay, apz = pz - az;
-    const float ab2 = abx * abx + aby * aby + abz * abz;
-    float t = ab2 > 0.0001f ? (apx * abx + apy * aby + apz * abz) / ab2 : 0.f;
-    t = std::clamp(t, 0.f, 1.f);
-    const float dx = ax + abx * t - px;
-    const float dy = ay + aby * t - py;
-    const float dz = az + abz * t - pz;
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
 // Relayed CKeysyncPacket::Write. The client read is CNetAPI::ReadKeysync.
 bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
@@ -371,6 +406,8 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
     if (!ReadElementId(reader, id) || id == WorldRPG::ServerWorld::LocalPlayer()) return false;
     uint8_t keys = 0;
     if (!reader.Read(keys)) return false;
+    // First byte is the button bitfield: bit 0x10 = ButtonCircle, 0x02 = RightShoulder1.
+    const uint8_t buttons = keys;
     bool analog = false;
     if (!ReadFlag(reader, analog) || (analog && !reader.Read(keys))) return false;
     if (!ReadFlag(reader, analog) || (analog && !reader.Read(keys))) return false;
@@ -396,8 +433,9 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
         slot = slotByte & 0x0Fu;
         if (slot <= 1) {
             punch = true;
-            if (WorldRPG::Game::RemoteFacingLocal(id, heading, 1.6f))
-                WorldRPG::Game::NoteDamage(id, 8.f, 0);
+            // ButtonCircle with a melee slot: the remote ped runs CTaskSimpleFight.
+            // No fixed damage is applied here. Hit damage comes from the engine fight task.
+            if ((buttons & 0x10u) != 0) WorldRPG::Combat::StartRemoteMelee(id, heading);
         }
     }
     WorldRPG::Game::NoteRemoteAim(id, heading, camera, sx, sy, punch, ducked);
@@ -417,37 +455,23 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
 // Relayed CBulletsyncPacket::Write. Damage is applied by the victim, then reported in pure sync.
 bool HandleBulletSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
-    uint32_t shooter = 0;
-    uint8_t weapon = 0, order = 0;
-    float sx = 0, sy = 0, sz = 0, ex = 0, ey = 0, ez = 0;
-    if (!ReadElementId(reader, shooter) || !reader.Read(weapon)) return false;
-    if (!reader.Read(sx) || !reader.Read(sy) || !reader.Read(sz)) return false;
-    if (!reader.Read(ex) || !reader.Read(ey) || !reader.Read(ez)) return false;
-    if (!reader.Read(order)) return false;
-    bool hit = false;
-    if (!ReadFlag(reader, hit)) return false;
-    float damage = 0;
-    uint8_t zone = 0;
-    uint32_t victim = 0xFFFFFFFFu;
-    if (hit) {
-        if (!reader.Read(damage) || !reader.Read(zone) || !ReadElementId(reader, victim)) return false;
-    }
-    WorldRPG::Game::NoteRemoteWeapon(shooter, weapon);
+    WorldRPG::Combat::SBulletSync bullet;
+    if (!WorldRPG::Combat::ReadPlayerBulletSync(reader, bullet)) return true;
     const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
-    float px = 0, py = 0, pz = 0, ph = 0;
-    WorldRPG::Game::CopyPose(px, py, pz, ph);
-    const float gap = SegmentDistance(px, py, pz, sx, sy, sz, ex, ey, ez);
-    const bool aimedAtUs = victim == local || (victim == 0xFFFFFFFFu && gap < 1.4f);
-    if (aimedAtUs && shooter != local) {
-        if (damage <= 0.f) damage = BulletDamage(weapon);
-        WorldRPG::Game::NoteDamage(shooter, damage, weapon);
-        static int reports = 0;
-        if (reports < 6) {
-            ++reports;
-            PKT_LOGI("BulletSync: weapon %u from %u damage %.0f gap %.1f", weapon, shooter, damage, gap);
-        }
-    }
-    (void)order; (void)zone; (void)ph;
+    if (bullet.shooter == local) return true;
+    if (!WorldRPG::Combat::AcceptPlayerBulletSync(bullet)) return true;
+    WorldRPG::Game::NoteRemoteWeapon(bullet.shooter, bullet.weapon);
+    WorldRPG::Combat::ShowRemoteTracer(bullet.shooter, bullet.weapon, bullet.start, bullet.end);
+    WorldRPG::Combat::ApplyBulletDamage(bullet, local);
+    return true;
+}
+
+// WEAPON_BULLETSYNC (100). Client read: CNetAPI::ReadWeaponBulletsync.
+bool HandleWeaponBulletSync(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    WorldRPG::Combat::SWeaponBulletSync shot;
+    if (!WorldRPG::Combat::ReadWeaponBulletSync(reader, shot)) return true;
+    WorldRPG::Combat::ShowRemoteWeaponFire(shot.weaponElement, shot.start, shot.end);
     return true;
 }
 
@@ -457,31 +481,55 @@ bool HandleBulletSync(const uint8_t* body, size_t length, size_t bits) {
 bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t id = 0;
-    if (!ReadElementId(reader, id)) return false;
+    if (!ReadElementId(reader, id)) {
+        PKT_LOGI("DIAG PED_STARTSYNC bad id bit=%zu", reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Position (raw floats per mta_neon Packet_PedStartSync)
     float x = 0, y = 0, z = 0;
-    if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z)) return false;
+    if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad position bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Rotation (raw float)
     float fRotation = 0;
-    if (!reader.Read(fRotation)) return false;
+    if (!reader.Read(fRotation)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad rotation bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Velocity (raw floats)
     float vx = 0, vy = 0, vz = 0;
-    if (!reader.Read(vx) || !reader.Read(vy) || !reader.Read(vz)) return false;
+    if (!reader.Read(vx) || !reader.Read(vy) || !reader.Read(vz)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad velocity bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Health and armor (raw floats)
     float fHealth = 0, fArmor = 0;
-    if (!reader.Read(fHealth) || !reader.Read(fArmor)) return false;
+    if (!reader.Read(fHealth) || !reader.Read(fArmor)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad health/armor bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
+    // Reference sets health/armor after UnlockHealth/UnlockArmor. No engine hook for that yet.
+    (void)fHealth; (void)fArmor;
 
-    // Camera rotation (raw float)
+    // Camera rotation and physical takeover exist only from 0x0031 (device evidence 2026-11-12:
+    // the server sends PED STARTSYNC at 305 bits to the 0x0030 peer, which ends after health/armor).
     float cameraRotation = 0;
-    if (!reader.Read(cameraRotation)) return false;
-
-    // SNativeTaskAnimationPresentationSync physical takeover — seeds airborne/climb state
-    WorldRPG::Sync::SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
-    if (!nativeTaskPhysicalTakeover.Read(reader)) return false;
+    SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
+    if (kEffectivePedSyncBitStream >= 0x0031) {
+        if (!reader.Read(cameraRotation)) {
+            PKT_LOGI("DIAG PED_STARTSYNC id=%u bad camera bit=%zu", id, reader.GetReadOffsetBits());
+            return false;
+        }
+        if (!nativeTaskPhysicalTakeover.Read(reader)) {
+            PKT_LOGI("DIAG PED_STARTSYNC id=%u bad physical takeover bit=%zu", id, reader.GetReadOffsetBits());
+            return false;
+        }
+    }
 
     WorldRPG::Game::NoteRemotePed(id, x, y, z, fRotation, vx, vy, vz);
     WorldRPG::Game::SetPedCameraRotation(id, cameraRotation);
@@ -489,6 +537,9 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
         nativeTaskPhysicalTakeover.data.usAnimGroup, nativeTaskPhysicalTakeover.data.usAnimId,
         nativeTaskPhysicalTakeover.data.fProgress);
     WorldRPG::Game::SetPedHost(id, true);
+    // Reference CPedSync::AddPed: become syncer (SetSyncing true). No wander task is started here;
+    // the ped keeps its own AI, exactly as the desktop client does.
+    PedSyncState::BeginHosted(id, {x, y, z}, fRotation, {vx, vy, vz});
     WorldRPG::ServerWorld::SetActorHost(id, true);
     PKT_LOGI("PedStartSync: id=%u at %.0f %.0f %.0f physMode=%u", id, x, y, z, nativeTaskPhysicalTakeover.data.uiMode);
     return true;
@@ -499,7 +550,10 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
 bool HandlePedStopSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t id = 0;
-    if (!ReadElementId(reader, id)) return false;
+    if (!ReadElementId(reader, id)) {
+        PKT_LOGI("DIAG PED_STOPSYNC bad id bit=%zu", reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Lock health and armor at current values before releasing sync ownership.
     // The mta_neon client calls pPed->LockHealth(pPed->GetHealth()) and
@@ -507,7 +561,8 @@ bool HandlePedStopSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Game::LockPedHealthCurrent(id);
     WorldRPG::Game::LockPedArmorCurrent(id);
 
-    WorldRPG::Game::SetPedHost(id, false);
+    // Stage S4: release ownership and clear the wander task (reference RemovePed).
+    PedSyncState::EndHosted(id);
     WorldRPG::ServerWorld::SetActorHost(id, false);
     PKT_LOGI("PedStopSync: id=%u locked and released", id);
     return true;
@@ -539,50 +594,40 @@ bool HandleVehicleStopSync(const uint8_t* body, size_t length, size_t bits) {
 }
 
 bool HandleUnoccupiedVehicleSync(const uint8_t* body, size_t length, size_t bits) {
+    // Packet 56 (CUnoccupiedVehicleSync.cpp 178): entries until fewer than 8 bits remain.
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     int applied = 0;
-    while (reader.GetRemainingBits() > 32 && applied < 16) {
-        uint32_t id = 0;
-        uint8_t context = 0;
-        uint8_t flagRaw[2] = {};
-        if (!ReadElementId(reader, id) || !reader.Read(context) || !reader.ReadBits(flagRaw, 9)) break;
-        const unsigned flags = flagRaw[0] | (flagRaw[1] << 8);
-        float x = 0, y = 0, z = 0, heading = 0;
-        bool hasPosition = false;
-        if (flags & 0x01) {
-            if (!ReadFixed24(reader, x) || !ReadFixed24(reader, y) || !reader.Read(z)) break;
-            hasPosition = true;
-        }
-        if (flags & 0x02) {
-            uint8_t rot[6] = {};
-            if (!reader.ReadBits(rot, 48)) break;
-            const unsigned rz = rot[4] | (rot[5] << 8);
-            constexpr float pi = 3.14159265f;
-            heading = (static_cast<float>(rz) * (360.f / 65536.f)) * pi / 180.f;
-        }
-        if (flags & 0x04) {
-            float vx = 0, vy = 0, vz = 0;
-            if (!ReadMtaVelocity(reader, vx, vy, vz)) break;
-        }
-        if (flags & 0x08) {
-            float vx = 0, vy = 0, vz = 0;
-            if (!ReadMtaVelocity(reader, vx, vy, vz)) break;
-        }
-        if (flags & 0x10) {
-            uint8_t health[2] = {};
-            if (!reader.ReadBits(health, 12)) break;
-        }
-        if (flags & 0x20) {
-            uint32_t trailer = 0;
-            if (!ReadElementId(reader, trailer)) break;
-        }
-        if (hasPosition && !WorldRPG::ServerWorld::ActorHosted(id)) {
-            WorldRPG::Game::NoteRemoteVehicle(id, 0, x, y, z, heading);
-            ++applied;
-        }
-        (void)context;
+    while (reader.GetRemainingBits() >= 8) {
+        WorldRPG::VehicleSync::UnoccupiedUpdate update;
+        if (!WorldRPG::VehicleSync::ReadUnoccupiedEntry(reader, update)) break;
+        WorldRPG::RemoteVehicle::ApplyUnoccupied(update);
+        ++applied;
     }
     return applied > 0;
+}
+
+// Packet 33 (CNetAPI.cpp 1306). The reference reads the body only when the local player has an
+// occupied vehicle, so the same gate is used here: no known occupancy, packet ignored.
+bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    uint32_t playerId = 0;
+    if (!ReadElementId(reader, playerId)) {
+        DIAG("PLAYER_VEHICLE_PURESYNC fail line=%d player id", __LINE__);
+        return false;
+    }
+    uint32_t vehicleId = 0;
+    uint8_t seat = 0;
+    if (!WorldRPG::RemoteVehicle::FindOccupant(playerId, vehicleId, seat)) {
+        DIAG("PLAYER_VEHICLE_PURESYNC player=%u: no occupied vehicle known, body ignored", playerId);
+        return true;
+    }
+    WorldRPG::VehicleSync::OccupiedSync sync;
+    if (!WorldRPG::VehicleSync::ReadOccupiedSync(reader, seat, sync)) {
+        DIAG("PLAYER_VEHICLE_PURESYNC fail player=%u veh=%u seat=%u", playerId, vehicleId, static_cast<unsigned>(seat));
+        return false;
+    }
+    WorldRPG::RemoteVehicle::ApplyOccupied(playerId, vehicleId, seat, sync);
+    return true;
 }
 
 bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
@@ -737,11 +782,13 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 31) return HandleKeySync(body, bodyLength, bodyBits);
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
         if (gameId == 98) return HandleBulletSync(body, bodyLength, bodyBits);
+        if (gameId == 100) return HandleWeaponBulletSync(body, bodyLength, bodyBits);
         if (gameId == 63) return HandlePedSync(body, bodyLength, bodyBits);
         if (gameId == 61) return HandlePedStartSync(body, bodyLength, bodyBits);
         if (gameId == 62) return HandlePedStopSync(body, bodyLength, bodyBits);
         if (gameId == 54) return HandleVehicleStartSync(body, bodyLength, bodyBits);
         if (gameId == 55) return HandleVehicleStopSync(body, bodyLength, bodyBits);
+        if (gameId == 33) return HandlePlayerVehiclePureSync(body, bodyLength, bodyBits);
         if (gameId == 56) return HandleUnoccupiedVehicleSync(body, bodyLength, bodyBits);
         if (gameId == 81) return WorldRPG::Script::ActiveVmOnServerEvent(body, bodyLength, bodyBits);
         if (gameId == 26) return HandlePlayerSpawn(body, bodyLength, bodyBits);

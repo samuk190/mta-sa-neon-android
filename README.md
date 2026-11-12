@@ -1,5 +1,7 @@
 # MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
 ---
@@ -52,44 +54,101 @@ To set up and host your own compatible game server, clone and build the San Andr
 
 ## Project Roadmap: MTA Sync Porting Plan (PC to Android)
 
-> Implementation blueprint derived from [`docs/MTA_SYNC_ANDROID_PORT.md`](docs/MTA_SYNC_ANDROID_PORT.md).
-> Translates desktop MTA:SA (Neon / Blue) `CPlayerPedSA`, `CNetAPI`, and `CPedSync` routines directly onto mobile `libGTASA` following the PC client order without inventing new wire protocols.
+> Blueprint: [`docs/MTA_SYNC_ANDROID_PORT.md`](docs/MTA_SYNC_ANDROID_PORT.md) and the stage specs in [`docs/sync-port/`](docs/sync-port/MASTER_PLAN.md).
+> Reference for behavior, names and wire layouts: the desktop client `mta_neon_source` (`Client/mods/deathmatch/logic/CPacketHandler.cpp`, `CPedSync.cpp`, `CClientPed.cpp`, `CNetAPI.cpp`, `CUnoccupiedVehicleSync.cpp`) and `Shared/sdk/net/` (`Packets.h`, `SyncStructures.h`, `bitstream.h`).
+> Peer bitstream: the phone is pinned to `0x0030`. Items that only exist from `0x0031` or `0x003D` are marked. Verified on device means logged on a real phone against the live server.
 
-### 1. Step A — Remote Player as `CPlayerPed` & Vehicle Entry/Exit/Jack
-- [ ] **Native `CPlayerPed` Instantiation**: Remote players instantiate as true `CPlayerPed` via `CPed::operator new` and `CPlayerPed(1, false)` with direct matrix copy, exactly as MTA desktop constructs them (`CPlayerPedSA`).
-- [ ] **Eliminate Mid-Air Civilian Crash**: Remove civilian `CPopulation::AddPed` / `CCivilianPed`, preventing spawning in mid-air and eliminating the null-pointer crash in `CTaskComplexInAirAndLand::CreateFirstSubTask`.
-- [ ] **Native Vehicle Entry/Exit Tasks**:
-  - **Driver Entry**: Use native GTA task `CTaskComplexEnterCarAsDriver` (`_ZN28CTaskComplexEnterCarAsDriverC1EP8CVehicle`).
-  - **Carjack**: When the driver seat is occupied, `CTaskComplexEnterCarAsDriver` natively spawns the drag-out subtask, setting `m_bIsJackingVehicle` on packet 58 (`VEHICLE_INOUT`).
-  - **Passenger Entry**: Use native `CTaskComplexEnterCarAsPassenger` (`_ZN31CTaskComplexEnterCarAsPassengerC1EP8CVehicleib`).
-  - **Exit**: Use native `CTaskComplexLeaveCar` (`_ZN19CTaskComplexLeaveCarC1EP8CVehicleiibb`).
-  - **Warp Seating**: Instant warp on stream-in via `CTaskSimpleCarSetPedInAsDriver` / `CTaskSimpleCarSetPedInAsPassenger`.
+**Legend:** `[x]` verified on device. `[~]` implemented in code, not verified on device. `[ ]` not started or log-only.
 
-### 2. Step B — Pedestrian Host & Wander Sync (`CTaskComplexWanderStandard`)
-- [ ] **Host Wander Task**: The phone acting as ped host (`PED_STARTSYNC` ID 61) runs native `CTaskComplexWanderStandard` (`0x48E4F0`) added via `CPedIntelligence::AddTaskPrimaryMaybeInGroup`.
-- [ ] **Eliminate Tick Teleports**: The host does not teleport the ped every tick; the GTA engine simulates the task naturally, and the host publishes position deltas via outgoing `PED_SYNC` (ID 63).
-- [ ] **Observer Interpolation**: Remote clients observing the ped only interpolate incoming `PED_SYNC` updates (`SetTargetPosition`, `SetTargetRotation`).
-- [ ] **Sync Termination**: `PED_STOPSYNC` (ID 62) cleanly disengages the primary wander task.
+### 0. Session, join and world state (prerequisite)
+- [x] **Join handshake** (`NeonJoinProtocol`): RakNet connect, `MOD_NAME`, `PLAYER_JOINDATA`, `PLAYER_INGAME_NOTICE`, `SERVER_JOINEDGAME` (reference `CNetAPI`, join path).
+- [x] **Puresync out** (`PLAYER_PURESYNC` 32 sent by the phone).
+- [~] **Puresync in** (`PLAYER_PURESYNC` 32 from others): normal-vector encoding matches `ReadMtaNorm`; not re-checked against a second player on device.
+- [x] **Element list at join** (`ENTITY_ADD` 50, all join packets store fully: 4/4, 84/84, 41/41).
+- [~] **Element streaming after join**: `ENTITY_ADD` for elements created while connected. Not observed; server creates civilian peds for the account but none reach the phone (open).
+- [~] **Element removal**: `ENTITY_REMOVE` not handled on the phone; `ForgetRemote` not wired (open).
+- [~] **Element data** (`SET_ELEMENT_DATA` family): not verified on device.
+- [ ] **Sync settings** (`SYNC_SETTINGS` 99, seen as unhandled): read and apply server sync rates.
+- [ ] **Map info** (`MAP_INFO` 46, seen as unhandled): read and apply server map state.
+- [ ] **Server info** (`SERVER_INFO_SYNC` 106, seen as unhandled).
+- [ ] **Return sync** (`RETURN_SYNC` 36, the server's replies to our sync, 160 packets in one session, unhandled): decode and use for latency and acknowledgement.
+- [ ] **Lua event packets** (`LUA` 76 and 77, `triggerServerEvent` 81, seen): full bidirectional event dispatch with element arguments.
+- [~] **Chat echo** (`CHAT_ECHO` 43): mobile chat strip (drop ClientID and msgType) is on the server; the phone display path is not verified.
 
-### 3. Step C — Occupied & Unoccupied Vehicle Sync
-- [ ] **Occupied Vehicle Sync (`PLAYER_VEHICLE_PURESYNC` 33)**: 
-  - Driver (seat 0) drives the vehicle and updates target position, rotation, velocity, and turn speed via `CClientVehicle::SetTargetPosition`.
-  - Passengers sync controller state, weapon aiming, and player health.
-- [ ] **Unoccupied Vehicle Sync (`UNOCCUPIED_VEHICLE_SYNC` 56)**:
-  - Empty cars hosted by this phone write position and rotation deltas in outgoing packet 56.
-  - Remote empty cars update and interpolate position smoothly from incoming packet 56 without freezing.
+- [ ] **Player lifecycle packets** (desktop handlers, not in the roadmap before): `PLAYER_LIST`, `PLAYER_JOIN`, `PLAYER_QUIT`, `PLAYER_SPAWN`, `PLAYER_WASTED`, `PLAYER_NETWORK_STATUS`, `PLAYER_TIMEOUT`, `PLAYER_NO_SOCKET`, `PLAYER_CHANGE_NICK`, `PLAYER_STATS`, `PLAYER_TRANSGRESSION`, `PLAYER_DIAGNOSTIC`, `PLAYER_WORLD_SPECIAL_PROPERTY`, `PLAYER_CLOTHES`, `PLAYER_RESOURCE_START`.
+- [ ] **Element custom data** (`CUSTOM_DATA`) and **element RPC** (`LUA_ELEMENT_RPC`, `RPC`): the phone parses custom data inside `ENTITY_ADD` but does not handle the live update packets.
+- [ ] **Lua events from the server** (`LUA_EVENT`, `LUA` 76 and 77, seen unhandled on device): full dispatch to `addEventHandler` with element arguments.
+- [ ] **Resource lifecycle** (`RESOURCE_START`, `RESOURCE_STOP`, `RESOURCE_CLIENT_SCRIPTS`, `PLAYER_RESOURCE_START`): load, start and stop client scripts when the server sends them.
+- [ ] **Latent transfers and progress** (`LATENT_TRANSFER`, `PACKET_PROGRESS`): large payloads and their progress reporting.
+- [ ] **Server control packets** (`UPDATE_INFO`, `SERVER_DISCONNECTED`, `CHAT_CLEAR`, `TEXT_ITEM`, `CONSOLE_ECHO`, `DEBUG_ECHO`, `DEBUG_EVENT`).
+- [ ] **Voice** (`VOICE_DATA`): decoded only by the desktop voice codec; not planned for the phone yet, listed for completeness.
+### 1. Step A — Remote player as `CPlayerPed` & vehicle entry/exit/jack
+- [ ] **Native `CPlayerPed` instantiation** for remote players (`CPlayerPedSA`, `CPed::operator new`, `CPlayerPed(1, false)`, matrix copy).
+- [ ] **Remove civilian mid-air crash** (`CPopulation::AddPed` / `CCivilianPed` path, `CTaskComplexInAirAndLand`).
+- [ ] **Driver entry**: `CTaskComplexEnterCarAsDriver`.
+- [ ] **Carjack**: drag-out subtask when the driver seat is occupied; `VEHICLE_INOUT` 58.
+- [ ] **Passenger entry**: `CTaskComplexEnterCarAsPassenger`.
+- [ ] **Exit**: `CTaskComplexLeaveCar`.
+- [ ] **Warp seating on stream-in**: `CTaskSimpleCarSetPedInAsDriver` / `CTaskSimpleCarSetPedInAsPassenger`.
+- [~] **Ped occupancy from `ENTITY_ADD`** (type 14 vehicle and seat fields, S2): parsed, not bound to the vehicle.
 
-### 4. Step D — Combat, Bullet Sync & Hit Registration
-- [ ] **Bullet Sync (`PLAYER_BULLETSYNC` 98)**: Tracers and weapon discharge handled via native `DischargeWeapon`.
-- [ ] **Authoritative Damage Registration**: Victim's own `WritePlayerPuresync` reports health changes and damager IDs (`SPlayerHealthSync`). The shooter does not fabricate victim health.
-- [ ] **Melee Combat**: Combat strikes driven by native `CTaskSimpleFight` from `ButtonCircle` keysync.
+- [ ] **Ped task and death sync** (`PED_TASK`, `PED_WASTED`): server-driven ped tasks and wasted state for remote peds.
+- [ ] **Ped keysync for remote peds** (`PLAYER_KEYSYNC`, 31): the desktop uses it to drive the remote ped's controls; the phone only reads the buttons needed for melee.
+### 2. Step B — Pedestrian host, wander sync and interpolation
+- [x] **`PED_STARTSYNC` (61) parse** at the 305-bit mobile layout (ped 182 at 1706, -1806, 14, observed).
+- [~] **Start-sync apply**: sets the ped as hosted and calls the wander hook (`SetPedWander` logs; the GTA wander task is not started).
+- [ ] **Host wander task**: `CTaskComplexWanderStandard` (`0x48E4F0`) via `CPedIntelligence::AddTaskPrimaryMaybeInGroup`.
+- [ ] **Outgoing `PED_SYNC` (63) from the host**: publish position, rotation, velocity, health and camera deltas. Not observed (no `PED_SYNC` from the server for ped 182 either).
+- [ ] **Incoming `PED_SYNC` (63) for observed peds**: parse at 0x0030 and apply.
+- [~] **Observer interpolation** (`SetTargetPosition`, `SetTargetRotation`, `UpdateTargetPosition`, `GetOffsetRadians`): implemented in `PedInterpolator` and driven per frame from `ApplyRemotePeds`; not verified on device.
+- [ ] **Sync termination** (`PED_STOPSYNC` 62): decoded and wired; wander removal not observed on device.
+- [ ] **Sync time context** (`CanUpdateSync`): per-ped time context gate not ported.
+- [ ] **Spatial sync rate** (`CPedSync.cpp:408-421`): ported as a clamp; not verified on device.
+- [ ] **Ped natives used by the population client** (about 60 names, S-series Lua work): defined with desktop return types; defaults only, not engine-backed.
+- [ ] **Ped clothes, weapons, alpha and walking style** from `ENTITY_ADD` type 14: parsed, not applied.
 
-### 5. Step E — Scripting Engine, Touch UI & Optimization
-- [ ] **Lua 5.3 Client VM**: Complete client-side MTA event bindings (`addEventHandler`, `triggerServerEvent`).
-- [ ] **DirectX / RenderWare 2D GUI**: Render custom DX elements, radar blips, and HUD overlays.
-- [ ] **Touch Control Customization**: Virtual joystick sensitivity calibration and touch button mapping.
-- [ ] **Custom Asset Streaming**: Server-to-client dynamic DFF/TXD model downloading and RenderWare memory streaming.
-- [ ] **Engine Optimization**: 60 FPS frame pacing, memory compaction, and anti-crash guardrails on ARM64.
+### 3. Step C — Occupied and unoccupied vehicle sync
+- [~] **Vehicle `ENTITY_ADD` parse** (type 2) is implemented in S3; no vehicle element has reached the phone on device yet, so this is unverified.
+- [~] **Occupied vehicle sync** `PLAYER_VEHICLE_PURESYNC` (33): decoders match `CNetAPI.cpp:1306-1610`; occupancy is not bound, so packets are ignored (`SetOccupant` has no caller). Engine apply is log-only.
+- [~] **Unoccupied vehicle sync** `UNOCCUPIED_VEHICLE_SYNC` (56): decoder matches `CUnoccupiedVehicleSync.cpp:178-208`; engine apply is log-only (no `VehicleHandle` for remote cars).
+- [ ] **Driver drives the vehicle**: target position, rotation, velocity and turn speed through `CClientVehicle::SetTargetPosition` (interpolated).
+- [ ] **Passenger state**: controller, weapon aim and health from packet 33.
+- [ ] **Hosted empty cars** publish deltas in outgoing packet 56 (not started on the phone).
+- [ ] **Trailers, trains and aircraft look bits**: decoded, not applied.
+- [~] **Vehicle normal vectors**: MTA encoding (`ReadMtaNorm`) now used for vehicles as well as players.
+
+- [ ] **Unoccupied vehicle start and stop** (`UNOCCUPIED_VEHICLE_STARTSYNC`, `UNOCCUPIED_VEHICLE_STOPSYNC`): claim and release of an empty car's sync.
+- [ ] **Vehicle spawn, resync, damage, push and trailer packets** (`VEHICLE_SPAWN`, `VEHICLE_RESYNC`, `VEHICLE_DAMAGE_SYNC`, `VEHICLE_PUSH_SYNC`, `VEHICLE_TRAILER`).
+### 4. Step D — Combat, bullet sync and damage
+- [~] **Player bullet sync** `PLAYER_BULLETSYNC` (98): decoder and duplicate filter match `CNetAPI.cpp:2318-2366`; tracers and discharge only log.
+- [~] **Weapon bullet sync** `WEAPON_BULLETSYNC` (100): decoder matches `CNetAPI.cpp:2368-2389`; no weapon-type gate, log-only.
+- [ ] **`DischargeWeapon` and tracer rendering** through the engine.
+- [~] **Victim health from pure sync** (`SPlayerHealthSync`, 8 bits): read after velocity; the read order depends on the unverified puresync reader.
+- [ ] **Authoritative damage registration**: victim's health from its own puresync, never fabricated on the shooter (rule enforced in code, engine effect not applied).
+- [~] **Melee**: keysync `ButtonCircle` (0x10) detected; `StartRemoteMelee` logs only. The 8-damage fallback was removed; no replacement yet.
+- [ ] **`CTaskSimpleFight`** for remote melee.
+- [ ] **Keysync fields beyond buttons**: analog bytes, aim and camera (currently only the first button byte is used).
+
+- [ ] **Explosions, fire, projectiles and satchels** (`EXPLOSION`, `FIRE`, `PROJECTILE`, `DETONATE_SATCHELS`, `DESTROY_SATCHELS`, `PLAYER_WASTED`): server-driven combat effects and their GTA calls.
+- [ ] **Keysync fields beyond melee** (`PLAYER_KEYSYNC` 31): analog stick, aim and camera fields for remote players (currently only the first button byte is used).
+### 5. Step E — Scripting engine, touch UI and optimization
+- [~] **Lua 5.3 client VM**: `addEventHandler`, `triggerServerEvent`, timers and about 60 ped natives defined; `getAmbientPedPopulationProfile` shim relies on them.
+- [ ] **DirectX / RenderWare 2D GUI**: DX primitives, radar blips and HUD overlays for remote entities.
+- [ ] **Touch control customization**: virtual joystick sensitivity and touch button mapping.
+- [ ] **Custom asset streaming**: server-side DFF/TXD download and RenderWare memory streaming.
+- [ ] **Engine optimization**: frame pacing, memory compaction and ARM64 anti-crash guardrails.
+- [ ] **16 KB ELF alignment** for `libc++_shared.so` (Samsung compatibility warning on install; repo audit fails).
+
+- [ ] **Object sync** (`OBJECT_SYNC`, `OBJECT_STARTSYNC`, `OBJECT_STOPSYNC`): world objects owned by a syncer, with their start and stop packets.
+- [ ] **Light sync** (`LIGHTSYNC`) and **camera sync** (`CAMERA_SYNC`): world lights and remote camera state.
+- [ ] **Pickups** (`PICKUP_HIDESHOW`, `PICKUP_HIT_CONFIRM`): show, hide and confirm pickup hits.
+- [ ] **Player statistics and clothes** (`PLAYER_STATS`, `PLAYER_CLOTHES`): stat and clothing updates for remote players.
+
+### 6. Verification and hygiene
+- [ ] **Remove `DIAG` logging** from `staging` before any merge to `main` (kept for now; see `ServerWorld.cpp`, `PacketHandler.cpp`, `GameEngine.cpp`).
+- [ ] **Host syntax checks** for every changed file in CI or a pre-merge script (currently manual).
+- [ ] **Device acceptance per stage**: each stage's acceptance in `docs/sync-port/` run on a phone against the live server, with logs saved under `outputs/`.
+- [ ] **Two-player test**: remote player puresync, vehicle sync and ped ownership between two phones or a phone and a desktop client.
 
 
 ---
@@ -227,10 +286,32 @@ Detailed architectural and protocol references are preserved in the `docs/` dire
 
 ---
 
+## Community & Support
+
+Join our community to discuss development, report findings, test builds, and collaborate:
+
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+
+👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)
+
+---
+
+## Credits & Acknowledgments
+
+This project is built upon decades of collective community research, open-source netcode development, and GTA engine reverse engineering. Special thanks and credits to:
+
+- **[Multi Theft Auto (MTA)](https://multitheftauto.com)**: Huge credits and recognition to the **[Multi Theft Auto Team](https://github.com/multitheftauto/mtasa-blue)** for developing the premier open-source multiplayer modification for Grand Theft Auto: San Andreas. Their pioneering netcode architecture (`CNetAPI`, `CPlayerPedSA`, RakNet integration, synchronization algorithms, and element hierarchy) serves as the foundational blueprint for this client.
+- **[San Andreas Online (MTA Neon)](https://github.com/Dryxio/san-andreas-online)**: Credits to [Dryxio](https://github.com/Dryxio) and contributors for the lightweight C++ server rewrite, clean packet definitions, and modernized multiplayer backend.
+- **[The Lua Project](https://www.lua.org)**: For the embedded Lua 5.3 scripting engine powering client-side game logic and interfaces.
+- **[Xiph.Org Foundation](https://opus-codec.org)**: For the low-latency Opus audio codec powering spatial voice chat.
+- **Rockstar Games & War Drum Studios**: Original creators and mobile porters of Grand Theft Auto: San Andreas.
+
+---
+
 ## License & Attribution
 
-- Multi Theft Auto (MTA) is licensed under the GPLv3 / BSD licenses.
-- Lua 5.3 is licensed under the MIT License.
-- Opus audio codec is licensed under the BSD-3-Clause License.
-- Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
-- This open-source research project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
+- **Multi Theft Auto (MTA)**: Netcode concepts and algorithms derived from [Multi Theft Auto: Blue](https://github.com/multitheftauto/mtasa-blue) are subject to GPLv3 / BSD licensing.
+- **Lua 5.3**: Copyright © 1994–2020 Lua.org, PUC-Rio. Licensed under the [MIT License](https://www.lua.org/license.html).
+- **Opus Codec**: Copyright © 2001–2011 Xiph.Org Foundation, Skype Limited. Licensed under the [BSD-3-Clause License](https://opus-codec.org/license/).
+- **Rockstar Games**: Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
+- This open-source research and educational project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
