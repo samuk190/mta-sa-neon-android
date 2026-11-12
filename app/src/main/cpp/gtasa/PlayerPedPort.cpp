@@ -4,10 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 
 #ifdef __ANDROID__
 #include <dlfcn.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include "../hook/MemoryPatcher.h"
 #endif
 
@@ -87,6 +90,76 @@ PortFns& Fns() {
     return api;
 }
 
+// Desktop CMultiplayerSA.cpp, "ALLOW more than 8 players" (0x60D64D): the
+// group-creation block in CPlayerPed::CPlayerPed(int, bool) is skipped with
+// NOP + JMP. On libGTASA 2.10 arm64 the same branch is at ctor + 0x9c and is
+// `tbnz w20, #0` (bool true skips the block). Replacing it with an
+// unconditional `b` to the same target gives the desktop behaviour.
+// Applied lazily on the first remote ped, once per process.
+bool EnsurePlayerPedGroupPatch() {
+#ifdef __ANDROID__
+    static bool done = false;
+    static bool ok = false;
+    if (done) return ok;
+    done = true;
+
+    constexpr std::uint32_t kOriginalWord = 0x370005d4u;  // tbnz w20, #0, #+0xb8
+    constexpr std::uint32_t kPatchedWord = 0x1400002eu;   // b #+0xb8
+    constexpr std::uintptr_t kSiteOffset = 0x9c;
+
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) {
+        ENGINE_LOGE("CPlayerPed group patch: libGTASA.so not loaded");
+        return false;
+    }
+    void* ctor = dlsym(handle, "_ZN10CPlayerPedC2Eib");
+    if (!ctor) ctor = dlsym(handle, "_ZN10CPlayerPedC1Eib");
+    if (!ctor) {
+        ENGINE_LOGE("CPlayerPed group patch: constructor symbol not found");
+        return false;
+    }
+
+    auto* site = static_cast<unsigned char*>(ctor) + kSiteOffset;
+    std::uint32_t word = 0;
+    std::memcpy(&word, site, sizeof(word));
+    if (word == kPatchedWord) {
+        ok = true;
+        return true;
+    }
+    if (word != kOriginalWord) {
+        ENGINE_LOGE("CPlayerPed group patch: unexpected word 0x%08x at ctor+0x9c", word);
+        return false;
+    }
+
+    // The 4-byte word is 4-byte aligned, so it never straddles a page.
+    const long pageSizeLong = sysconf(_SC_PAGESIZE);
+    if (pageSizeLong <= 0) {
+        ENGINE_LOGE("CPlayerPed group patch: sysconf(_SC_PAGESIZE) failed");
+        return false;
+    }
+    const auto pageSize = static_cast<std::uintptr_t>(pageSizeLong);
+    const auto addr = reinterpret_cast<std::uintptr_t>(site);
+    void* page = reinterpret_cast<void*>(addr & ~(pageSize - 1));
+
+    if (mprotect(page, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        ENGINE_LOGE("CPlayerPed group patch: mprotect (RWX) failed");
+        return false;
+    }
+    std::memcpy(site, &kPatchedWord, sizeof(kPatchedWord));
+    if (mprotect(page, pageSize, PROT_READ | PROT_EXEC) != 0) {
+        ENGINE_LOGE("CPlayerPed group patch: mprotect (RX restore) failed");
+        return false;
+    }
+    __builtin___clear_cache(reinterpret_cast<char*>(site), reinterpret_cast<char*>(site) + 4);
+
+    ENGINE_LOGI("CPlayerPed group patch applied (desktop 0x60D64D)");
+    ok = true;
+    return true;
+#else
+    return true;
+#endif
+}
+
 int VisibleModel(int model) {
     // Model 0 is the shared CJ clump. Skin 7 is a complete body. RebuildPlayer
     // is never called, so the local player's clothes stay his.
@@ -129,6 +202,14 @@ void PlaceRemotePlayerPed(void* ped, float x, float y, float z, float heading) {
 void* CreateRemotePlayerPed(int model, float x, float y, float z, float heading) {
     auto& api = Fns();
     if (!api.pedNew || !api.playerCtor || !api.worldAdd) return nullptr;
+    if (!EnsurePlayerPedGroupPatch()) {
+        static bool reportedPatchFailure = false;
+        if (!reportedPatchFailure) {
+            reportedPatchFailure = true;
+            ENGINE_LOGE("CPlayerPed not created: group patch unavailable");
+        }
+        return nullptr;
+    }
     void* ped = api.pedNew(kPlayerPedNewSize);
     if (!ped) {
         static int reported = 0;
