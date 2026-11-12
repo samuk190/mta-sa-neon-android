@@ -1,6 +1,7 @@
 #include "ServerWorld.h"
 #include "../gtasa/GameEngine.h"
 #include "../net/raknet/RakNetWrapper.h"
+#include "entity/EntityAddTypes.h"
 
 #include <cmath>
 #include <cstring>
@@ -19,26 +20,7 @@
 
 namespace WorldRPG::ServerWorld {
 namespace {
-
-struct Visual {
-    int kind = 0; // 4 marker, 5 blip, 7 area, 14 ped, 1 player
-    int model = -1;
-    float x = 0, y = 0, z = 0, w = 0, h = 0, size = 1;
-    int icon = 0;
-    int r = 255, g = 255, b = 255, a = 255;
-    int markerType = 2;
-    float heading = 0;
-    bool hosted = false;
-    uint32_t attached = 0xFFFFFFFFu;
-    int blipHandle = -1;
-    bool blipLive = false;
-};
-
-struct Datum {
-    bool number = false;
-    double value = 0;
-    std::string text;
-};
+using namespace WorldRPG::Entity;
 
 std::mutex g_lock;
 uint32_t g_local = 0;
@@ -65,227 +47,16 @@ void ResolveBlips() {
 }
 #endif
 
-bool ReadFlag(Net::BitStreamReader& reader, bool& out) {
-    uint8_t bit = 0;
-    if (!reader.ReadBits(&bit, 1)) return false;
-    out = (bit & 1u) != 0;
-    return true;
-}
-
-bool ReadElementId(Net::BitStreamReader& reader, uint32_t& out) {
-    uint8_t bytes[4] = {};
-    if (!reader.ReadBits(bytes, 17)) return false;
-    uint32_t value = 0;
-    std::memcpy(&value, bytes, 4);
-    out = value == ((1u << 17) - 1) ? 0xFFFFFFFFu : value;
-    return true;
-}
-
-bool ReadCompressed(Net::BitStreamReader& reader, int bytes, uint32_t& out) {
-    out = 0;
-    if (bytes < 1 || bytes > 4) return false;
-    for (int i = bytes - 1; i > 0; --i) {
-        bool empty = false;
-        if (!ReadFlag(reader, empty)) return false;
-        if (!empty) {
-            uint8_t buf[4] = {};
-            if (!reader.ReadBits(buf, static_cast<size_t>((i + 1) * 8))) return false;
-            for (int b = 0; b <= i; ++b) out |= static_cast<uint32_t>(buf[b]) << (8 * b);
-            return true;
-        }
-    }
-    bool highNibbleEmpty = false;
-    if (!ReadFlag(reader, highNibbleEmpty)) return false;
-    if (!highNibbleEmpty) {
-        uint8_t low = 0;
-        if (!reader.Read(low)) return false;
-        out = low;
-        return true;
-    }
-    uint8_t nibble = 0;
-    if (!reader.ReadBits(&nibble, 4)) return false;
-    out = nibble & 0x0Fu;
-    return true;
-}
-
-bool ReadFixed24(Net::BitStreamReader& reader, float& out) {
-    uint8_t bytes[4] = {};
-    if (!reader.ReadBits(bytes, 24)) return false;
-    int32_t raw = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16);
-    if (raw & 0x800000) raw |= ~0xFFFFFF;
-    out = static_cast<float>(raw) / 1024.f;
-    return true;
-}
-
-bool ReadPosition(Net::BitStreamReader& reader, float& x, float& y, float& z) {
-    return ReadFixed24(reader, x) && ReadFixed24(reader, y) && reader.Read(z);
-}
-
-bool ReadPosition2(Net::BitStreamReader& reader, float& x, float& y) {
-    return ReadFixed24(reader, x) && ReadFixed24(reader, y);
-}
-
-bool SkipBytes(Net::BitStreamReader& reader, uint32_t count) {
-    if (count > 1024 * 1024) return false;
-    std::vector<uint8_t> dump(count);
-    return count == 0 || reader.ReadBits(dump.data(), count * 8);
-}
-
-bool SkipLuaBody(Net::BitStreamReader& reader, uint8_t kind, int depth);
-
-bool SkipLua(Net::BitStreamReader& reader, int depth) {
-    uint8_t kind = 0;
-    if (!reader.ReadBits(&kind, 4)) return false;
-    return SkipLuaBody(reader, kind & 0x0Fu, depth);
-}
-
-bool SkipLuaBody(Net::BitStreamReader& reader, uint8_t kind, int depth) {
-    if (depth > 12) return false;
-    if (kind == 0) return true;
-    if (kind == 1) {
-        bool value = false;
-        return ReadFlag(reader, value);
-    }
-    if (kind == 3) {
-        bool wide = false;
-        if (!ReadFlag(reader, wide)) return false;
-        if (wide) {
-            bool asDouble = false;
-            if (!ReadFlag(reader, asDouble)) return false;
-            if (asDouble) {
-                uint8_t bytes[8] = {};
-                return reader.ReadBits(bytes, 64);
-            }
-            float number = 0;
-            return reader.Read(number);
-        }
-        uint32_t integer = 0;
-        return ReadCompressed(reader, 4, integer);
-    }
-    if (kind == 4 || kind == 9) {
-        uint32_t length = 0;
-        const int width = kind == 4 ? 2 : 4;
-        if (!ReadCompressed(reader, width, length) || length > 1024 * 1024) return false;
-        return SkipBytes(reader, length);
-    }
-    if (kind == 5) {
-        uint32_t count = 0;
-        if (!ReadCompressed(reader, 4, count) || count > 4096) return false;
-        for (uint32_t i = 0; i < count; ++i) if (!SkipLua(reader, depth + 1)) return false;
-        return true;
-    }
-    if (kind == 2 || kind == 7) {
-        uint32_t id = 0;
-        return ReadElementId(reader, id);
-    }
-    if (kind == 10) {
-        uint32_t ref = 0;
-        return ReadCompressed(reader, 4, ref);
-    }
-    return false;
-}
-
-// Effective peer bitstream for entity/ped data. NeonJoinProtocol pins the peer to 0x0030,
-// so the server writes the 0x0030 layout even though MOD_NAME reports 0x3D.
-constexpr uint16_t kServerEntityBitStream = 0x0030;
-#define DIAG(...) SW_LOGI("DIAG " __VA_ARGS__)
-#define LUA_FAIL() do { DIAG("lua fail line=%d kind=%u bit=%zu", __LINE__, static_cast<unsigned>(kind), reader.GetReadOffsetBits()); return false; } while (0)
-#define CB_FAIL() do { DIAG("customblock fail line=%d count=%u bit=%zu", __LINE__, static_cast<unsigned>(count), reader.GetReadOffsetBits()); return false; } while (0)
-#define SN_FAIL() do { DIAG("skipname fail line=%d len=%u bit=%zu", __LINE__, static_cast<unsigned>(length), reader.GetReadOffsetBits()); return false; } while (0)
-#define ENTITY_FAIL() do { DIAG("ENTITY_ADD fail line=%d idx=%u/%u id=%u type=%u bit=%zu", __LINE__, index, count, static_cast<unsigned>(id), static_cast<unsigned>(type), reader.GetReadOffsetBits()); return; } while (0)
-
-bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out) {
-    uint8_t kind = 0;
-    if (!reader.ReadBits(&kind, 4)) LUA_FAIL();
-    kind &= 0x0Fu;
-    DIAG("lua value kind=%u bit=%zu", static_cast<unsigned>(kind), reader.GetReadOffsetBits());
-    if (kind == 0) {
-        out.number = false;
-        out.text.clear();
-        return true;
-    }
-    if (kind == 1) {
-        bool value = false;
-        if (!ReadFlag(reader, value)) LUA_FAIL();
-        out.number = true;
-        out.value = value ? 1 : 0;
-        return true;
-    }
-    if (kind == 3) {
-        bool wide = false;
-        if (!ReadFlag(reader, wide)) LUA_FAIL();
-        if (wide) {
-            bool asDouble = false;
-            if (!ReadFlag(reader, asDouble)) LUA_FAIL();
-            if (asDouble) {
-                uint8_t bytes[8] = {};
-                if (!reader.ReadBits(bytes, 64)) LUA_FAIL();
-                double number = 0;
-                std::memcpy(&number, bytes, 8);
-                out.number = true;
-                out.value = number;
-                return true;
-            }
-            float number = 0;
-            if (!reader.Read(number)) LUA_FAIL();
-            out.number = true;
-            out.value = number;
-            return true;
-        }
-        uint32_t integer = 0;
-        if (!ReadCompressed(reader, 4, integer)) LUA_FAIL();
-        out.number = true;
-        out.value = static_cast<int32_t>(integer);
-        return true;
-    }
-    if (kind == 4) {
-        uint32_t length = 0;
-        if (!ReadCompressed(reader, 2, length) || length > 65535) LUA_FAIL();
-        if (length > 512) {
-            out.number = false;
-            out.text.clear();
-            return SkipBytes(reader, length);
-        }
-        std::vector<uint8_t> bytes(length);
-        if (length && !reader.ReadBits(bytes.data(), length * 8)) LUA_FAIL();
-        out.number = false;
-        out.text.assign(bytes.begin(), bytes.end());
-        return true;
-    }
-    // The type nibble is already consumed. Skipping must not read it again.
-    out.number = false;
-    out.text.clear();
-    DIAG("lua skip-body kind=%u bit=%zu", static_cast<unsigned>(kind), reader.GetReadOffsetBits());
-    return SkipLuaBody(reader, kind, 0);
-}
-
-bool ReadCustomBlock(Net::BitStreamReader& reader, uint32_t id) {
-    uint32_t count = 0;
-    if (!ReadCompressed(reader, 2, count) || count > 64) CB_FAIL();
-    DIAG("customblock id=%u count=%u bit=%zu", id, static_cast<unsigned>(count), reader.GetReadOffsetBits());
-    for (uint32_t i = 0; i < count; ++i) {
-        uint8_t nameLength = 0;
-        if (!reader.Read(nameLength)) CB_FAIL();
-        std::vector<uint8_t> name(nameLength);
-        if (nameLength && !reader.ReadBits(name.data(), nameLength * 8)) CB_FAIL();
-        DIAG("customblock item %u/%u len=%u name=%.*s bit=%zu", i, static_cast<unsigned>(count), nameLength, static_cast<int>(name.size()), reinterpret_cast<const char*>(name.data()), reader.GetReadOffsetBits());
-        Datum value;
-        if (!ReadLuaValue(reader, value)) CB_FAIL();
-        if (id != 0 && id != 0xFFFFFFFFu) {
-            std::string key(name.begin(), name.end());
-            g_data[id][key] = value;
-        }
-    }
-    return true;
-}
-
-bool SkipName(Net::BitStreamReader& reader) {
+[[maybe_unused]] bool SkipName(Net::BitStreamReader& reader) {
     uint32_t length = 0;
-    if (!ReadCompressed(reader, 2, length) || length > 256) SN_FAIL();
+    if (!ReadCompressed(reader, 2, length) || length > 256) {
+        DIAG("skipname fail len=%u bit=%zu", static_cast<unsigned>(length), reader.GetReadOffsetBits());
+        return false;
+    }
     return SkipBytes(reader, length);
 }
 
-bool ReadAngle16(Net::BitStreamReader& reader, float& out) {
+[[maybe_unused]] bool ReadAngle16(Net::BitStreamReader& reader, float& out) {
     uint8_t raw[2] = {};
     if (!reader.ReadBits(raw, 16)) return false;
     const unsigned value = raw[0] | (raw[1] << 8);
@@ -294,7 +65,7 @@ bool ReadAngle16(Net::BitStreamReader& reader, float& out) {
     return true;
 }
 
-bool ReadDoorRatio(Net::BitStreamReader& reader) {
+[[maybe_unused]] bool ReadDoorRatio(Net::BitStreamReader& reader) {
     bool wide = false;
     if (!ReadFlag(reader, wide)) return false;
     if (!wide) {
@@ -305,7 +76,7 @@ bool ReadDoorRatio(Net::BitStreamReader& reader) {
     return reader.ReadBits(bits, 10);
 }
 
-bool VehicleHasDoors(int model) {
+[[maybe_unused]] bool VehicleHasDoors(int model) {
     if (model < 400 || model > 611) return false;
     static const int noDamage[] = {
         430, 446, 448, 449, 452, 453, 454, 461, 462, 463, 468, 472, 473, 481, 484,
@@ -319,7 +90,7 @@ bool VehicleHasDoors(int model) {
     return true;
 }
 
-bool ReadPedTail(Net::BitStreamReader& reader, Visual& visual) {
+[[maybe_unused]] bool ReadPedTail(Net::BitStreamReader& reader, Visual& visual) {
     if (!ReadAngle16(reader, visual.heading)) return false;
     uint8_t health = 0, armor = 0;
     if (!reader.Read(health) || !reader.Read(armor)) return false;
@@ -367,7 +138,7 @@ bool ReadPedTail(Net::BitStreamReader& reader, Visual& visual) {
            ReadFlag(reader, restore) && reader.Read(elapsed) && reader.Read(speed);
 }
 
-bool ReadVehicleTail(Net::BitStreamReader& reader, Visual& visual) {
+[[maybe_unused]] bool ReadVehicleTail(Net::BitStreamReader& reader, Visual& visual) {
     uint8_t rot[6] = {};
     if (!reader.ReadBits(rot, 48)) return false;
     const unsigned rz = rot[4] | (rot[5] << 8);
@@ -550,112 +321,25 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     std::lock_guard<std::mutex> lock(g_lock);
     int stored = 0;
     for (uint32_t index = 0; index < count; ++index) {
-        uint32_t id = 0, parent = 0;
-        uint8_t type = 0, interior = 0;
-        uint32_t dimension = 0;
-        bool attached = false, collisions = false, callProp = false;
-        if (!ReadElementId(reader, id) || !reader.Read(type) || !ReadElementId(reader, parent) ||
-            !reader.Read(interior) || !ReadCompressed(reader, 2, dimension) || !ReadFlag(reader, attached))
-            ENTITY_FAIL();
-        DIAG("ENTITY_ADD idx=%u/%u id=%u type=%u parent=%u interior=%u dim=%u attached=%d bit=%zu", index, static_cast<unsigned>(count), id, static_cast<unsigned>(type), parent, static_cast<unsigned>(interior), dimension, attached ? 1 : 0, reader.GetReadOffsetBits());
-        if (attached) {
-            uint32_t target = 0;
-            float ax = 0, ay = 0, az = 0;
-            if (!ReadElementId(reader, target) || !ReadPosition(reader, ax, ay, az)) ENTITY_FAIL();
-            uint8_t angles[6] = {};
-            if (!reader.ReadBits(angles, 48)) ENTITY_FAIL();
-            (void)ax; (void)ay; (void)az;
-        }
-        if (!ReadFlag(reader, collisions)) ENTITY_FAIL();
-        // CPacketHandler::Packet_EntityAdd reads the call-propagation bit only when the peer has
-        // ExtendedWorldPositions (0x31+). Below that the server omits it.
-        if (kServerEntityBitStream >= 0x0031 && !ReadFlag(reader, callProp)) ENTITY_FAIL();
-        (void)collisions; (void)callProp; (void)interior; (void)dimension; (void)parent;
-        if (!ReadCustomBlock(reader, id) || !SkipName(reader)) ENTITY_FAIL();
-        DIAG("ENTITY_ADD custom+name ok id=%u type=%u bit=%zu", id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
-        Visual visual;
-        visual.kind = type;
-        if (type == 0) {
-            // DUMMY (type 0): CPacketHandler::Packet_EntityAdd has no DUMMY case, so nothing is read
-            // after the common block. The name was already consumed by the common block.
-            Remember(id, visual);
-        } else if (type == 1) {
-            // Players are described by PLAYER_LIST.
-        } else if (type == 4) {
-            uint8_t markerType = 0;
-            if (!ReadPosition(reader, visual.x, visual.y, visual.z) || !reader.ReadBits(&markerType, 3)) ENTITY_FAIL();
-            visual.markerType = markerType & 7;
-            if (!reader.Read(visual.size)) ENTITY_FAIL();
-            uint8_t color[4] = {};
-            if (!reader.ReadBits(color, 32)) ENTITY_FAIL();
-            visual.r = color[0]; visual.g = color[1]; visual.b = color[2]; visual.a = color[3];
-            if (visual.markerType == 0 || visual.markerType == 1) {
-                bool hasTarget = false;
-                if (!ReadFlag(reader, hasTarget)) ENTITY_FAIL();
-                if (hasTarget) {
-                    float tx = 0, ty = 0, tz = 0;
-                    if (!ReadPosition(reader, tx, ty, tz)) ENTITY_FAIL();
-                    if (visual.markerType == 0) {
-                        uint8_t arrow[4] = {};
-                        float arrowSize = 0;
-                        if (!reader.ReadBits(arrow, 32) || !reader.Read(arrowSize)) ENTITY_FAIL();
-                    }
-                }
-            }
-            bool ignore = false;
-            if (!ReadFlag(reader, ignore)) ENTITY_FAIL();
-            Remember(id, visual);
-            ++stored;
-        } else if (type == 5) {
-            uint32_t ordering = 0, distance = 0;
-            uint8_t icon = 0, iconSize = 0;
-            if (!ReadPosition(reader, visual.x, visual.y, visual.z) || !ReadCompressed(reader, 2, ordering)) ENTITY_FAIL();
-            uint8_t rawDistance[2] = {};
-            if (!reader.ReadBits(rawDistance, 14)) ENTITY_FAIL();
-            distance = rawDistance[0] | ((rawDistance[1] & 0x3Fu) << 8);
-            if (!reader.ReadBits(&icon, 6) || !reader.ReadBits(&iconSize, 5)) ENTITY_FAIL();
-            visual.icon = icon & 0x3Fu;
-            visual.size = static_cast<float>(iconSize & 0x1Fu);
-            uint8_t color[4] = {};
-            if (!reader.ReadBits(color, 32)) ENTITY_FAIL();
-            visual.r = color[0]; visual.g = color[1]; visual.b = color[2]; visual.a = color[3];
-            (void)ordering; (void)distance;
-            if (attached) visual.attached = parent;
-            Remember(id, visual);
-            ++stored;
-        } else if (type == 7) {
-            if (!ReadPosition2(reader, visual.x, visual.y) || !ReadPosition2(reader, visual.w, visual.h)) ENTITY_FAIL();
-            uint8_t color[4] = {};
-            bool flashing = false;
-            if (!reader.ReadBits(color, 32) || !ReadFlag(reader, flashing)) ENTITY_FAIL();
-            visual.r = color[0]; visual.g = color[1]; visual.b = color[2]; visual.a = color[3];
-            Remember(id, visual);
-            ++stored;
-        } else if (type == 14) {
-            uint32_t model = 0;
-            if (!ReadPosition(reader, visual.x, visual.y, visual.z) || !ReadCompressed(reader, 2, model)) ENTITY_FAIL();
-            visual.model = static_cast<int>(model);
-            if (!ReadPedTail(reader, visual)) ENTITY_FAIL();
-            Remember(id, visual);
-            ++stored;
-        } else if (type == 2) {
-            if (!ReadPosition(reader, visual.x, visual.y, visual.z)) ENTITY_FAIL();
-            if (!ReadVehicleTail(reader, visual)) {
-                if (visual.model > 0) {
-                    Remember(id, visual);
-                    ++stored;
-                }
-                SW_LOGI("ENTITY_ADD vehicle %u stopped after the common block", id);
-                break;
-            }
-            Remember(id, visual);
-            ++stored;
-        } else {
-            SW_LOGI("ENTITY_ADD stopped at type %u id %u", type, id);
+        EntityCommon common;
+        if (!ReadEntityCommon(reader, common)) {
+            DIAG("ENTITY_ADD stop idx=%u/%u common header failed bit=%zu", index, static_cast<unsigned>(count), reader.GetReadOffsetBits());
             break;
         }
+        DIAG("ENTITY_ADD idx=%u/%u id=%u type=%u bit=%zu", index, static_cast<unsigned>(count), common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
+        if (common.id != 0 && common.id != 0xFFFFFFFFu) {
+            for (const auto& [key, value] : common.customData) g_data[common.id][key] = value;
+        }
+        Visual visual;
+        visual.kind = common.type;
+        if (!ReadEntityBody(reader, common, visual)) {
+            DIAG("ENTITY_ADD fail idx=%u/%u id=%u type=%u bit=%zu", index, static_cast<unsigned>(count), common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
+            break;
+        }
+        if (common.type != kTypePlayer) Remember(common.id, visual);
+        ++stored;
     }
-    if (stored > 0) SW_LOGI("ENTITY_ADD stored %d visual element(s)", stored);
+    DIAG("ENTITY_ADD stored %d/%u", stored, static_cast<unsigned>(count));
 }
 
 void OnEntityRemove(const uint8_t* body, size_t length, size_t bits) {
