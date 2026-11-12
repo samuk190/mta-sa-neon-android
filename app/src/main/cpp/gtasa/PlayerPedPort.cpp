@@ -322,6 +322,86 @@ bool InstallRemoteControlHook() {
 #endif
 }
 
+namespace {
+
+// Local bullet sync source. Desktop CWeaponSA::Fire (CWeaponSA.cpp 77-85) feeds FireInstantHit, and
+// CMultiplayerSA shotsync (multiplayer_shotsync.cpp 1571-1600) reports the start/end to CClientGame::BulletFire.
+// CWeapon::Fire is a member function: x0 is this (the weapon). libGTASA 2.10 arm64 (CWeapon::Fire at 0x700c64):
+// `mov x19, x0` then `ldr w0, [x19]` loads m_eWeaponType at offset 0 (same as CWeaponSAInterface, whose first
+// member is m_eWeaponType). The arguments are x1 owner, x2 vecOrigin, x3 vecEffectPos, x4 target, x5 vecTarget,
+// x6 vecAlt.
+using WeaponFireFn = bool (*)(void*, void*, void*, void*, void*, void*, void*);
+using FindPlayerPedFn = void* (*)(int);
+WeaponFireFn g_originalFire = nullptr;
+FindPlayerPedFn g_findPlayerPed = nullptr;
+bool g_bulletFireHook = false;
+
+// Desktop CClientWeaponManager::HasWeaponBulletSync and the server's CWeaponStatManager::HasWeaponBulletSync: 22..34.
+constexpr int kFirstBulletSyncWeapon = 22;
+constexpr int kLastBulletSyncWeapon = 34;
+
+bool LocalBulletFireHook(void* self, void* owner, void* vecOrigin, void* vecEffectPos, void* targetEntity,
+    void* vecTarget, void* vecAlt) {
+    // The original runs first. Its return value is passed through. The desktop does not gate on it either.
+    const bool result = g_originalFire
+        ? g_originalFire(self, owner, vecOrigin, vecEffectPos, targetEntity, vecTarget, vecAlt)
+        : false;
+    if (!self || !owner || !g_findPlayerPed || owner != g_findPlayerPed(-1)) return result;
+    const int weapon = *static_cast<const int*>(self);
+    if (weapon < kFirstBulletSyncWeapon || weapon > kLastBulletSyncWeapon) return result;
+
+    const auto* origin = static_cast<const float*>(vecOrigin);
+    const auto* muzzle = static_cast<const float*>(vecEffectPos);
+    const auto* end = static_cast<const float*>(vecTarget);
+    if (!end) return result;
+    // Desktop shotsync (multiplayer_shotsync.cpp 1582-1583): the 2D length from the aimed start to the end
+    // is checked against 0.0001. When it is degenerate, the muzzle position is the start.
+    const float* start = origin;
+    if (origin && muzzle) {
+        const float dx = end[0] - origin[0];
+        const float dy = end[1] - origin[1];
+        if (dx * dx + dy * dy < 0.0001f) start = muzzle;
+    }
+    NoteLocalShot(weapon, start, end);
+
+    static int reported = 0;
+    if (reported < 4) {
+        ++reported;
+        ENGINE_LOGI("Local bullet shot weapon %d end %.0f %.0f %.0f", weapon, end[0], end[1], end[2]);
+    }
+    return result;
+}
+
+}  // namespace
+
+bool InstallLocalBulletFireHook() {
+#ifdef __ANDROID__
+    if (g_bulletFireHook) return true;
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) return false;
+    void* target = dlsym(handle, "_ZN7CWeapon4FireEP7CEntityP7CVectorS3_S1_S3_S3_");
+    g_findPlayerPed = reinterpret_cast<FindPlayerPedFn>(dlsym(handle, "_Z13FindPlayerPedi"));
+    if (!target || !g_findPlayerPed) {
+        ENGINE_LOGE("Local bullet fire hook: missing CWeapon::Fire=%p FindPlayerPed=%p",
+            target, reinterpret_cast<void*>(g_findPlayerPed));
+        return false;
+    }
+    static Hook::MemoryPatcher patcher;
+    const auto hooked = patcher.installHook(reinterpret_cast<uintptr_t>(target),
+        reinterpret_cast<uintptr_t>(&LocalBulletFireHook));
+    if (!hooked.success) {
+        ENGINE_LOGE("Local bullet fire hook failed: %s", hooked.errorMessage.c_str());
+        return false;
+    }
+    g_originalFire = reinterpret_cast<WeaponFireFn>(hooked.trampolineAddress);
+    g_bulletFireHook = true;
+    ENGINE_LOGI("Local CWeapon::Fire hook installed (PLAYER_BULLETSYNC source)");
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool RemoteControlHookActive() {
     return g_controlHook;
 }

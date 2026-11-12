@@ -265,6 +265,9 @@ static LocalCarState g_localCar;
 static bool g_localCarValid = false;
 static std::vector<LocalVehicleEvent> g_localVehicleEvents;
 static constexpr size_t kMaxLocalVehicleEvents = 16;
+// Local bullet-weapon shots (NoteLocalShot / ConsumeLocalShot). Guarded by g_remoteMutex.
+static std::vector<LocalShot> g_localShots;
+static constexpr size_t kMaxLocalShots = 32;
 
 // HasModelLoaded is not exported. HasVehicleUpgradeLoaded (0x395098) reads
 // ms_aInfoForModel[id] with stride 0x14 and treats the byte at +0x10 as loaded
@@ -1219,6 +1222,8 @@ bool BeginServerSession() {
         ENGINE_LOGI("Blocked CRunningScript::Process; main.scm will not run");
         if (!InstallRemoteControlHook())
             ENGINE_LOGE("Remote players keep the velocity fallback (no controller hook)");
+        if (!InstallLocalBulletFireHook())
+            ENGINE_LOGE("Local bullet sync (PLAYER_BULLETSYNC) disabled: CWeapon::Fire hook missing");
         ENGINE_LOGI("Ped symbols add=%p ctor=%p heading=%p density=%p manage=%p",
             reinterpret_cast<void*>(g_addPed), reinterpret_cast<void*>(g_civilianCtor),
             reinterpret_cast<void*>(g_setHeading), static_cast<void*>(g_pedDensity), g_managePopulation);
@@ -1496,6 +1501,34 @@ bool CopyLocalCar(LocalCarState& out) {
     out = g_localCar;
     return true;
 }
+// Desktop has no queue: CClientGame::PostWeaponFire sends at once. The queue only bridges the game thread
+// (CWeapon::Fire hook) and the network thread (SendBulletSync). At the cap the oldest shot is dropped.
+void NoteLocalShot(int weapon, const float* start, const float* end) {
+    if (!end) return;
+    LocalShot shot;
+    shot.weapon = weapon;
+    if (start) {
+        shot.sx = start[0];
+        shot.sy = start[1];
+        shot.sz = start[2];
+    } else {
+        float heading = 0.f;
+        CopyPose(shot.sx, shot.sy, shot.sz, heading);
+    }
+    shot.ex = end[0];
+    shot.ey = end[1];
+    shot.ez = end[2];
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    if (g_localShots.size() >= kMaxLocalShots) g_localShots.erase(g_localShots.begin());
+    g_localShots.push_back(shot);
+}
+bool ConsumeLocalShot(LocalShot& out) {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    if (g_localShots.empty()) return false;
+    out = g_localShots.front();
+    g_localShots.erase(g_localShots.begin());
+    return true;
+}
 
 #else
 bool BeginServerSession() { return false; }
@@ -1525,6 +1558,11 @@ bool ConsumeLocalVehicleEvent(LocalVehicleEvent&) { return false; }
 uint32_t LocalVehicleId() { return 0xFFFFFFFFu; }
 bool CopyLocalCar(LocalCarState& out) {
     out = LocalCarState{};
+    return false;
+}
+void NoteLocalShot(int, const float*, const float*) {}
+bool ConsumeLocalShot(LocalShot& out) {
+    out = LocalShot{};
     return false;
 }
 void SetPedNativeTaskLocomotion(uint32_t, unsigned int) {}

@@ -251,6 +251,38 @@ struct NeonJoinClient::Impl {
         }
     }
 
+    // PLAYER_BULLETSYNC (packet 98). Desktop CNetAPI::SendBulletSyncFire (CNetAPI.cpp 2391-2414), called from
+    // CClientGame::PostWeaponFire (CClientGame.cpp 6024-6026). One reliable packet per shot queued by the CWeapon::Fire
+    // hook (PlayerPedPort.cpp InstallLocalBulletFireHook). Body after the id: weapon u8, start 3 floats, end 3 floats,
+    // order u8, hit bit. Only the no-damage form is sent (CNetAPI.cpp 2409-2412); hit reports are not ported yet.
+    uint8_t bulletOrder = 0;  // desktop m_ucBulletSyncOrderCounter (CNetAPI.cpp 2398)
+    void SendBulletSync() {
+        if (!net || !net->IsConnected()) return;
+        WorldRPG::Game::LocalShot shot;
+        while (WorldRPG::Game::ConsumeLocalShot(shot)) {
+            BitStreamWriter w;
+            w.Write(static_cast<uint8_t>(98));           // PLAYER_BULLETSYNC
+            w.Write(static_cast<uint8_t>(shot.weapon));  // stream->Write(char weapon)
+            w.Write(shot.sx);                            // start CVector (raw floats, CNetAPI.cpp 2396)
+            w.Write(shot.sy);
+            w.Write(shot.sz);
+            w.Write(shot.ex);                            // end CVector (CNetAPI.cpp 2397)
+            w.Write(shot.ey);
+            w.Write(shot.ez);
+            w.Write(bulletOrder++);                      // order counter (CNetAPI.cpp 2398)
+            WriteBit(w, false);                          // no damage (CNetAPI.cpp 2409-2412)
+            if (net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                                PacketPriority::MEDIUM, PacketReliability::RELIABLE)) {
+                static int reports = 0;
+                if (reports < 4) {
+                    ++reports;
+                    JOIN_LOGI("NeonJoin: sending PLAYER_BULLETSYNC weapon %d from %.0f %.0f %.0f to %.0f %.0f %.0f",
+                              shot.weapon, shot.sx, shot.sy, shot.sz, shot.ex, shot.ey, shot.ez);
+                }
+            }
+        }
+    }
+
     // Bitstream 0x0030, the version the join hook stores for this client:
     // no extended positions and no native-task block. Time context 0 is
     // accepted by CanUpdateSync. Without this packet the server never
@@ -944,6 +976,7 @@ void NeonJoinClient::Pulse() {
             d.SendPedSync();
             d.SendUnoccupiedVehicleSync();
             d.SendVehicleInOut();
+            d.SendBulletSync();
             if (!d.pendingChat.empty() && SendChatLine(*d.net, d.pendingChat)) d.pendingChat.clear();
             break;
         default:

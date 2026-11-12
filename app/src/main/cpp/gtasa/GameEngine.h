@@ -242,4 +242,17 @@ struct LocalCarState {
 // False when the local ped is not in a mapped vehicle (always false off Android).
 bool CopyLocalCar(LocalCarState& out);
 
+// Local bullet-weapon shot from CWeapon::Fire (PlayerPedPort.cpp LocalBulletFireHook). Desktop source:
+// CClientGame::BulletFire (CClientGame.cpp 6242-6257) sets the start/end vectors that PostWeaponFire (6024-6026)
+// sends as PLAYER_BULLETSYNC (98). weapon is the eWeaponType id, start/end are world coordinates.
+struct LocalShot {
+    int weapon = 0;
+    float sx = 0, sy = 0, sz = 0;
+    float ex = 0, ey = 0, ez = 0;
+};
+// Queues one shot. start null means the live ped position (CopyPose). end null is ignored. Game thread.
+void NoteLocalShot(int weapon, const float* start, const float* end);
+// Pops the oldest queued shot. Returns false when the queue is empty. Network thread.
+bool ConsumeLocalShot(LocalShot& out);
+
 } // namespace WorldRPG::Game

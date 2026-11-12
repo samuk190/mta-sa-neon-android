@@ -24,4 +24,9 @@ bool RemoteControlHookActive();
 void SetRemoteStick(void* ped, int stickX, int stickY, bool fire);
 void ClearRemoteStick(void* ped);
 
+// Hooks CWeapon::Fire once (desktop CWeaponSA::Fire / CMultiplayerSA shotsync). For the local ped with a
+// bullet-weapon id (22..34) the shot is queued with NoteLocalShot after the original runs. Returns false when
+// the symbol, FindPlayerPed or the hook is missing; no bullet sync is sent then.
+bool InstallLocalBulletFireHook();
+
 }
