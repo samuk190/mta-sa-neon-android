@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Native Task Presentation in PED_SYNC** (`shared/NativeTaskSync.h`, `shared/PacketHandler.cpp`): Ported `SNativeTaskLocomotionSync`, `SNativeTaskWeaponPresentationSync` and `SNativeTaskAnimationPresentationSync` from mta_neon `SyncStructures.h`, read in the same order as `CPedSync::Packet_PedSync` (native-task blocks before position). Camera rotation, OnFire/InWater bits, animation kill flag (`ucFlags & 0x80`) and health/armor locks are decoded in `HandlePedSync`.
+- **Remote ped native task state** (`gtasa/PedNativeTaskState.cpp`, `gtasa/GameEngine.h`): Implemented the `SetPedNativeTask*`, `SetPedCameraRotation`, `SetPedOnFire`, `SetPedInWater`, `KillPedAnimation` and `LockPedHealth`/`LockPedArmor` (+ `*Current`) functions as a per-ped state store. This layer has no GTA native calls yet; applying it to peds is a follow-up.
 - **Local Game Asset Workflow & `.env` Support**: Decoupled game assets from external Hugging Face cloud dependencies. Game assets are now configured via `.env` (`GAME_ASSETS_DIR`, `DEVICE_ASSETS_PATH`, `CDN_ROOT_URL`) and loaded from local device storage or the `./game_assets/` directory.
 - **Local Asset Verification in `NativeAssetBridge.kt`**: Added `findLocalAssetsFolder()` and `syncFromLocalFolder()` to detect local GTA San Andreas Mobile v2.10 files on Android external/internal storage, stage them atomically into generations, and activate without requiring internet downloads.
 - **Gradle Asset Pipeline**: Integrated `.env` property parsing in `app/build.gradle.kts` with `pushAssetsToDevice` Gradle task.
@@ -28,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - *Step E*: Client Lua 5.3 runtime, DirectX / 2D GUI, and touch control calibration.
 
 ### Changed
+- **Bitstream gating for native-task blocks** (`shared/NativeTaskSync.h`, `shared/PacketHandler.cpp`): Blocks are read only when the negotiated bitstream carries them (`kBitStreamNativeTaskLocomotion` = 0x003C, `kBitStreamNativeTaskPresentation` = 0x003D, mirroring `eBitStreamVersion`). `kEffectivePedSyncBitStream` = 0x0030 matches `NeonJoinProtocol`, so the current server stream is parsed as before.
 - **Generic Project Naming**: Renamed root project to `mta-sa-neon-android` and application title to `MTA:SA Neon Android`.
 - **`AssetManager` Decoupling**: Removed hardcoded Hugging Face CDN URL in `AssetManager.cpp` and `AssetManager.h`, defaulting to local/configurable base URLs.
 - **Configurable Launcher UI & Server Settings**: Added `.env` environment variables (`LAUNCHER_TITLE`, `LAUNCHER_PLAY_BUTTON_TEXT`, `DEFAULT_SERVER_NAME`, `DEFAULT_SERVER_IP`, `DEFAULT_SERVER_PORT`, `DEFAULT_PLAYER_NICK`) to configure the launcher toolbar title, pause screen header, play button text, and fallback server settings dynamically via `app/build.gradle.kts` `BuildConfig` and `resValue`.
