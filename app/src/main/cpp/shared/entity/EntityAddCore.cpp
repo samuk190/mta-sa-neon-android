@@ -209,8 +209,11 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
         return false;
     }
 
-    // Sync time context: one byte, only for 0x31+ peers. Not read at 0x0030.
-    if (kServerEntityBitStream >= 0x0031) {
+    // Sync time context: one byte after the name. Read unconditionally. Device evidence (2026-11-12):
+    // the server writes it at the 0x0030 peer version too. Without it the DUMMY type name starts
+    // 8 bits early and the MARKER fields misalign. The reference gates it on ExtendedWorldPositions,
+    // so this is a deliberate deviation based on the bytes on the wire.
+    {
         uint8_t syncTimeContext = 0;
         if (!reader.Read(syncTimeContext)) {
             DIAG("ENTITY_ADD fail line=%d stage=synctime id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
