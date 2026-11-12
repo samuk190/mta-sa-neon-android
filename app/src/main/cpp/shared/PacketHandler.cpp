@@ -516,18 +516,19 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
     // Reference sets health/armor after UnlockHealth/UnlockArmor. No engine hook for that yet.
     (void)fHealth; (void)fArmor;
 
-    // Camera rotation (raw float)
+    // Camera rotation and physical takeover exist only from 0x0031 (device evidence 2026-11-12:
+    // the server sends PED STARTSYNC at 305 bits to the 0x0030 peer, which ends after health/armor).
     float cameraRotation = 0;
-    if (!reader.Read(cameraRotation)) {
-        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad camera bit=%zu", id, reader.GetReadOffsetBits());
-        return false;
-    }
-
-    // SNativeTaskAnimationPresentationSync physical takeover — seeds airborne/climb state
     SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
-    if (!nativeTaskPhysicalTakeover.Read(reader)) {
-        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad physical takeover bit=%zu", id, reader.GetReadOffsetBits());
-        return false;
+    if (kEffectivePedSyncBitStream >= 0x0031) {
+        if (!reader.Read(cameraRotation)) {
+            PKT_LOGI("DIAG PED_STARTSYNC id=%u bad camera bit=%zu", id, reader.GetReadOffsetBits());
+            return false;
+        }
+        if (!nativeTaskPhysicalTakeover.Read(reader)) {
+            PKT_LOGI("DIAG PED_STARTSYNC id=%u bad physical takeover bit=%zu", id, reader.GetReadOffsetBits());
+            return false;
+        }
     }
 
     WorldRPG::Game::NoteRemotePed(id, x, y, z, fRotation, vx, vy, vz);
