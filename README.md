@@ -50,30 +50,46 @@ To set up and host your own compatible game server, clone and build the San Andr
 
 ---
 
-## Project Roadmap
+## Project Roadmap: MTA Sync Porting Plan (PC to Android)
 
-### Phase 1: Core Networking & Baseline Sync (Current Status)
-- [x] Native connection handshake (OPEN51 datagram) and cipher negotiation
-- [x] Basic game log-in and world initialization
-- [x] Player pure sync, keysync, and remote `CPlayerPed` entity creation *(with bugs)*
-- [x] Environment peds and basic traffic spawning *(with bugs)*
-- [x] Real-time text chat and Opus audio codec integration
-- [ ] Fix animation popping and rotation jitter during remote player sync
+> Implementation blueprint derived from [`docs/MTA_SYNC_ANDROID_PORT.md`](docs/MTA_SYNC_ANDROID_PORT.md).
+> Translates desktop MTA:SA (Neon / Blue) `CPlayerPedSA`, `CNetAPI`, and `CPedSync` routines directly onto mobile `libGTASA` following the PC client order without inventing new wire protocols.
 
-### Phase 2: Complete Vehicle & Combat Sync
-- [ ] **Vehicle Sync:** Synchronize driver & passenger entry/exit (`VEHICLE_INOUT`), tire deformation, health, velocity, and damage models
-- [ ] **Combat & Weapons:** Weapon firing, bullet sync (`PLAYER_BULLETSYNC`), damage application, melee hit registration, and reloading animations
-- [ ] **Ped Sync Refinement:** Improved wander task sequencing, collision prediction, and pathfinding
+### 1. Step A — Remote Player as `CPlayerPed` & Vehicle Entry/Exit/Jack
+- [ ] **Native `CPlayerPed` Instantiation**: Remote players instantiate as true `CPlayerPed` via `CPed::operator new` and `CPlayerPed(1, false)` with direct matrix copy, exactly as MTA desktop constructs them (`CPlayerPedSA`).
+- [ ] **Eliminate Mid-Air Civilian Crash**: Remove civilian `CPopulation::AddPed` / `CCivilianPed`, preventing spawning in mid-air and eliminating the null-pointer crash in `CTaskComplexInAirAndLand::CreateFirstSubTask`.
+- [ ] **Native Vehicle Entry/Exit Tasks**:
+  - **Driver Entry**: Use native GTA task `CTaskComplexEnterCarAsDriver` (`_ZN28CTaskComplexEnterCarAsDriverC1EP8CVehicle`).
+  - **Carjack**: When the driver seat is occupied, `CTaskComplexEnterCarAsDriver` natively spawns the drag-out subtask, setting `m_bIsJackingVehicle` on packet 58 (`VEHICLE_INOUT`).
+  - **Passenger Entry**: Use native `CTaskComplexEnterCarAsPassenger` (`_ZN31CTaskComplexEnterCarAsPassengerC1EP8CVehicleib`).
+  - **Exit**: Use native `CTaskComplexLeaveCar` (`_ZN19CTaskComplexLeaveCarC1EP8CVehicleiibb`).
+  - **Warp Seating**: Instant warp on stream-in via `CTaskSimpleCarSetPedInAsDriver` / `CTaskSimpleCarSetPedInAsPassenger`.
 
-### Phase 3: Scripting Engine & Touch UI
-- [ ] **Lua 5.3 Client VM:** Complete client-side MTA event bindings (`addEventHandler`, `triggerServerEvent`)
-- [ ] **DirectX / RenderWare 2D GUI:** Support for custom screen elements, HUDs, and radar overlays
-- [ ] **Touch Control Customization:** On-screen customizable touch controls, virtual joystick sensitivity calibration, and button mapping
+### 2. Step B — Pedestrian Host & Wander Sync (`CTaskComplexWanderStandard`)
+- [ ] **Host Wander Task**: The phone acting as ped host (`PED_STARTSYNC` ID 61) runs native `CTaskComplexWanderStandard` (`0x48E4F0`) added via `CPedIntelligence::AddTaskPrimaryMaybeInGroup`.
+- [ ] **Eliminate Tick Teleports**: The host does not teleport the ped every tick; the GTA engine simulates the task naturally, and the host publishes position deltas via outgoing `PED_SYNC` (ID 63).
+- [ ] **Observer Interpolation**: Remote clients observing the ped only interpolate incoming `PED_SYNC` updates (`SetTargetPosition`, `SetTargetRotation`).
+- [ ] **Sync Termination**: `PED_STOPSYNC` (ID 62) cleanly disengages the primary wander task.
 
-### Phase 4: Stability, Modding & Optimization
-- [ ] **Custom Asset Streaming:** Server-to-client dynamic DFF/TXD model downloading and RenderWare memory streaming
-- [ ] **Hardware Gamepad Support:** Native Bluetooth and USB OTG controller support
-- [ ] **Engine Optimization:** 60 FPS frame pacing, memory compaction, and anti-crash guardrails for Android ARM64
+### 3. Step C — Occupied & Unoccupied Vehicle Sync
+- [ ] **Occupied Vehicle Sync (`PLAYER_VEHICLE_PURESYNC` 33)**: 
+  - Driver (seat 0) drives the vehicle and updates target position, rotation, velocity, and turn speed via `CClientVehicle::SetTargetPosition`.
+  - Passengers sync controller state, weapon aiming, and player health.
+- [ ] **Unoccupied Vehicle Sync (`UNOCCUPIED_VEHICLE_SYNC` 56)**:
+  - Empty cars hosted by this phone write position and rotation deltas in outgoing packet 56.
+  - Remote empty cars update and interpolate position smoothly from incoming packet 56 without freezing.
+
+### 4. Step D — Combat, Bullet Sync & Hit Registration
+- [ ] **Bullet Sync (`PLAYER_BULLETSYNC` 98)**: Tracers and weapon discharge handled via native `DischargeWeapon`.
+- [ ] **Authoritative Damage Registration**: Victim's own `WritePlayerPuresync` reports health changes and damager IDs (`SPlayerHealthSync`). The shooter does not fabricate victim health.
+- [ ] **Melee Combat**: Combat strikes driven by native `CTaskSimpleFight` from `ButtonCircle` keysync.
+
+### 5. Step E — Scripting Engine, Touch UI & Optimization
+- [ ] **Lua 5.3 Client VM**: Complete client-side MTA event bindings (`addEventHandler`, `triggerServerEvent`).
+- [ ] **DirectX / RenderWare 2D GUI**: Render custom DX elements, radar blips, and HUD overlays.
+- [ ] **Touch Control Customization**: Virtual joystick sensitivity calibration and touch button mapping.
+- [ ] **Custom Asset Streaming**: Server-to-client dynamic DFF/TXD model downloading and RenderWare memory streaming.
+- [ ] **Engine Optimization**: 60 FPS frame pacing, memory compaction, and anti-crash guardrails on ARM64.
 
 
 ---

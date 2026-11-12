@@ -17,7 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Feature Status Checklist**: Documented working subsystems checklist on `README.md` (Game log-in, Character sync, Peds, Sound/Chat).
 - **Server Documentation & Anti-Cheat Notice**: Linked compatible server backend ([Dryxio/san-andreas-online](https://github.com/Dryxio/san-andreas-online)) and added explicit notice detailing why standard desktop MTA anti-cheat is incompatible with custom mobile packets.
 - **Project Roadmap**: Added 4-phase development roadmap to `README.md` covering vehicle sync, combat/bullet sync, Lua 5.3 UI, and performance optimizations.
-- **English Documentation**: Translated all technical documentation in `/docs/` into 100% English (including `BOOTSTRAP_ASSETS.md`, `CONTRATO_TRANSPORTE_MTA.md`, `ETAPAS_PORT_NEON_ANDROID.md`, `MATRIZ_PARIDADE_NEON.md`, `PLANO_PORT_NEON_ANDROID.md`, `TRANSPORTE_NEON.md`, and `VALIDACAO_ANDROID_2026-11-11.md`).
+- **English Documentation**: Translated all technical documentation in `/docs/` into 100% English (including `BOOTSTRAP_ASSETS.md`, `CONTRATO_TRANSPORTE_MTA.md`, `ETAPAS_PORT_NEON_ANDROID.md`, `MATRIZ_PARIDADE_NEON.md`, `PLANO_PORT_NEON_ANDROID.md`, `TRANSPORTE_NEON.md`, `VALIDACAO_ANDROID_2026-11-11.md`, and `MTA_SYNC_ANDROID_PORT.md`).
+- **PC Client Sync Porting Roadmap**: Expanded the roadmap in `README.md` with detailed 5-step PC-to-Android sync porting specifications from `docs/MTA_SYNC_ANDROID_PORT.md`:
+  - *Step A*: Instantiate remote player as `CPlayerPed` (`CPed::operator new`, `CPlayerPed(1, false)`), eliminate civilian mid-air crash in `CTaskComplexInAirAndLand`, and wire native vehicle entry/exit/jacking tasks (`CTaskComplexEnterCarAsDriver`, `CTaskComplexEnterCarAsPassenger`, `CTaskComplexLeaveCar`).
+  - *Step B*: Host ped wandering via native `CTaskComplexWanderStandard` without tick teleports, publish `PED_SYNC`, and interpolate on observing clients.
+  - *Step C*: Full vehicle sync: driver & passenger handling via `PLAYER_VEHICLE_PURESYNC` (33) and unhosted/empty vehicle simulation via `UNOCCUPIED_VEHICLE_SYNC` (56).
+  - *Step D*: Combat and bullet sync via `PLAYER_BULLETSYNC` (98) with authoritative victim health reporting (`SPlayerHealthSync`).
+  - *Step E*: Client Lua 5.3 runtime, DirectX / 2D GUI, and touch control calibration.
 
 ### Changed
 - **Generic Project Naming**: Renamed root project to `mta-sa-neon-android` and application title to `MTA:SA Neon Android`.
