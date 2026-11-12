@@ -115,15 +115,21 @@ public final class MtaChatView extends View {
         for (int i = all.length - 1; i >= 0 && n < MAX_LINES; i--) {
             if (now - all[i].born < LIFE_MS + FADE_MS) recent[n++] = all[i];
         }
+        // Desktop CChat (Client/core/CChat.cpp): one background box behind the
+        // whole stack, and each line steps down by exactly the font height.
+        int shown = 0;
+        for (int i = n - 1; i >= 0; i--) {
+            if (fadeAlpha(recent[i], now) >= 8) shown++;
+        }
+        if (shown > 0) {
+            bar.setAlpha(160);
+            canvas.drawRect(0, 0, width, shown * lineHeight, bar);
+        }
         float y = 0f;
         for (int i = n - 1; i >= 0; i--) {
             Line line = recent[i];
-            long age = now - line.born;
-            int alpha = 255;
-            if (age > LIFE_MS) alpha = (int) (255 * (1f - (age - LIFE_MS) / (float) FADE_MS));
+            int alpha = fadeAlpha(line, now);
             if (alpha < 8) continue;
-            bar.setAlpha(Math.min(160, alpha));
-            canvas.drawRect(0, y, width, y + lineHeight, bar);
             paint.setAlpha(alpha);
             StaticLayout layout = StaticLayout.Builder.obtain(line.text, 0, line.text.length(), paint,
                     Math.max(1, width - dp(16))).setMaxLines(1).build();
@@ -131,8 +137,14 @@ public final class MtaChatView extends View {
             canvas.translate(dp(8), y + (lineHeight - layout.getHeight()) / 2f);
             layout.draw(canvas);
             canvas.restore();
-            y += lineHeight + dp(2);
+            y += lineHeight;
         }
+    }
+
+    private int fadeAlpha(Line line, long now) {
+        long age = now - line.born;
+        if (age <= LIFE_MS) return 255;
+        return (int) (255 * (1f - (age - LIFE_MS) / (float) FADE_MS));
     }
 
     private int dp(int value) {
