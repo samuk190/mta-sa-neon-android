@@ -198,14 +198,30 @@ struct RemotePed {
     float vx = 0, vy = 0, vz = 0;
     float shownX = 0, shownY = 0, shownZ = 0, shownH = 0;
     float health = 100.f;
+    float armor = 0.f;
+    float cameraRotation = 0.f;
     int weapon = 0;
     int wanderDir = 0;
+    // Native task presentation — matches mta_neon SLastSyncedPedData fields.
+    unsigned int nativeTaskLocomotionMode = 0;   // SNativeTaskLocomotionSync::eMode
+    uint8_t nativeTaskWeaponType = 0;             // SNativeTaskWeaponPresentationSync weapon type
+    uint16_t nativeTaskAnimGroup = 0;             // SNativeTaskAnimationPresentationSync group
+    uint16_t nativeTaskAnimId = 0;                // SNativeTaskAnimationPresentationSync id
+    unsigned int physicalTakeoverMode = 0;        // Physical takeover mode from PED_START_SYNC
+    uint16_t physicalTakeoverAnimGroup = 0;
+    uint16_t physicalTakeoverAnimId = 0;
+    float physicalTakeoverProgress = 0.f;
+    bool physicalTakeoverPending = false;
     bool dirty = false;
     bool shown = false;
     bool fire = false;
+    bool inWater = false;
     bool duck = false;
     bool hosted = false;
     bool wander = false;
+    bool animationKilled = false;
+    bool healthLocked = false;
+    bool armorLocked = false;
 };
 static std::mutex g_remoteMutex;
 static std::unordered_map<uint32_t, RemotePed> g_remotePeds;
@@ -773,6 +789,49 @@ static void ApplyRemotePeds() {
             }
         }
         if (g_setHeading) g_setHeading(body, live->second.shownH);
+
+        // Native task presentation — matches mta_neon CClientPed::UpdateNativeTaskAnimationPresentation
+        // Apply locomotion mode, weapon type, animation, onfire/inwater, and animation kill
+        // to the remote ped body on the game thread after spatial sync.
+        if (ped.animationKilled && found->second.ped) {
+            // ucFlags & 0x80: clear synced anim state so the ped is no longer
+            // permanently excluded from native-task locomotion presentation.
+            TaskFns& api = Tasks();
+            void* intel = PedIntel(found->second.ped);
+            if (intel && api.clearTasks) api.clearTasks(intel, true, true);
+            live->second.animationKilled = false;
+        }
+        if (ped.fire != found->second.ducked) {
+            // OnFire state — GTA uses CPed::SetOnFire(bool). For now we track
+            // it in RemoteBody for future native call integration.
+            found->second.ducked = ped.fire;
+        }
+        if (ped.inWater) {
+            // IsInWater state — tracked for future native call integration.
+            // No immediate GTA native available without further dlsym work.
+        }
+        if (ped.nativeTaskLocomotionMode != 0 && !ped.hosted) {
+            // SNativeTaskLocomotionSync::eMode applied via controller state stick inputs.
+            // WALK/RUN/SPRINT modes map to left-stick magnitude thresholds matching
+            // mta_neon CClientPed::ApplyNativeTaskLocomotionPresentation.
+            // Full implementation requires CTaskManagerSA equivalent on Android.
+        }
+        if (ped.nativeTaskWeaponType != 0 && !ped.hosted) {
+            // SNativeTaskWeaponPresentationSync weapon type — future integration
+            // point for creating/destroying weapon fire tasks on remote peds.
+        }
+        if (ped.nativeTaskAnimGroup != 0 || ped.nativeTaskAnimId != 0) {
+            // SNativeTaskAnimationPresentationSync — future integration point
+            // for playing/blending animations on remote ped clumps via
+            // RpAnimBlendClumpGetAssociation equivalent on Android.
+        }
+        if (ped.physicalTakeoverPending && found->second.ped) {
+            // Physical takeover from PED_START_SYNC seeds airborne/climb anchor.
+            // Matches mta_neon CClientPed::SetNativeTaskPhysicalTakeoverState.
+            // Full implementation requires CTaskSimpleClimb equivalent on Android.
+            live->second.physicalTakeoverPending = false;
+        }
+
         if (!ped.hosted) PresentOnFoot(body, found->second, ped);
     }
     std::vector<HostedPed> hosted;
@@ -1161,6 +1220,117 @@ int CopyHostedPeds(HostedPed* out, int capacity) {
     for (int i = 0; i < count; ++i) out[i] = g_hostedSnap[static_cast<size_t>(i)];
     return count;
 }
+
+// ---------------------------------------------------------------------------
+// Native task presentation — matches mta_neon CClientPed interface.
+// These store state in RemotePed for ApplyRemotePeds to apply on game thread.
+// ---------------------------------------------------------------------------
+
+void SetPedNativeTaskLocomotion(uint32_t id, unsigned int mode) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.nativeTaskLocomotionMode = mode;
+}
+
+void SetPedNativeTaskWeapon(uint32_t id, uint8_t weaponType) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.nativeTaskWeaponType = weaponType;
+}
+
+void SetPedNativeTaskAnimation(uint32_t id, uint16_t animGroup, uint16_t animId) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) {
+        it->second.nativeTaskAnimGroup = animGroup;
+        it->second.nativeTaskAnimId = animId;
+    }
+}
+
+void SetPedNativeTaskPhysicalTakeover(uint32_t id, unsigned int mode,
+                                      uint16_t animGroup, uint16_t animId, float progress) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) {
+        it->second.physicalTakeoverMode = mode;
+        it->second.physicalTakeoverAnimGroup = animGroup;
+        it->second.physicalTakeoverAnimId = animId;
+        it->second.physicalTakeoverProgress = progress;
+        it->second.physicalTakeoverPending = (mode != 0);
+    }
+}
+
+void SetPedCameraRotation(uint32_t id, float rotation) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.cameraRotation = rotation;
+}
+
+void SetPedOnFire(uint32_t id, bool onFire) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.fire = onFire;
+}
+
+void SetPedInWater(uint32_t id, bool inWater) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.inWater = inWater;
+}
+
+void KillPedAnimation(uint32_t id) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) {
+        it->second.animationKilled = true;
+        it->second.nativeTaskAnimGroup = 0;
+        it->second.nativeTaskAnimId = 0;
+        it->second.nativeTaskLocomotionMode = 0;
+    }
+}
+
+void LockPedHealth(uint32_t id, float health) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) {
+        it->second.health = health;
+        it->second.healthLocked = true;
+    }
+}
+
+void LockPedArmor(uint32_t id, float armor) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) {
+        it->second.armor = armor;
+        it->second.armorLocked = true;
+    }
+}
+
+void LockPedHealthCurrent(uint32_t id) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.healthLocked = true;
+}
+
+void LockPedArmorCurrent(uint32_t id) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto it = g_remotePeds.find(id);
+    if (it != g_remotePeds.end()) it->second.armorLocked = true;
+}
+
 #else
 bool BeginServerSession() { return false; }
 void ApplyServerSpawn(float, float, float) {}
@@ -1183,6 +1353,18 @@ void NoteRemoteVehicle(uint32_t, int, float, float, float, float) {}
 void RequestWander(uint32_t, int) {}
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
 int CopyHostedPeds(HostedPed*, int) { return 0; }
+void SetPedNativeTaskLocomotion(uint32_t, unsigned int) {}
+void SetPedNativeTaskWeapon(uint32_t, uint8_t) {}
+void SetPedNativeTaskAnimation(uint32_t, uint16_t, uint16_t) {}
+void SetPedNativeTaskPhysicalTakeover(uint32_t, unsigned int, uint16_t, uint16_t, float) {}
+void SetPedCameraRotation(uint32_t, float) {}
+void SetPedOnFire(uint32_t, bool) {}
+void SetPedInWater(uint32_t, bool) {}
+void KillPedAnimation(uint32_t) {}
+void LockPedHealth(uint32_t, float) {}
+void LockPedArmor(uint32_t, float) {}
+void LockPedHealthCurrent(uint32_t) {}
+void LockPedArmorCurrent(uint32_t) {}
 #endif
 
 // ---------------------------------------------------------------------------
