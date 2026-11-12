@@ -1,0 +1,82 @@
+{
+  "recorded_utc": "2026-11-11T01:07:45.856701+00:00",
+  "host": "worldrpgbroficial.duckdns.org",
+  "resolved_ipv4": "146.235.24.222",
+  "timeout_seconds": 1.5,
+  "scope": "ASE and stock RakNet4 OPEN1 only; no MTA login or authentication",
+  "probes": [
+    {
+      "port": 22126,
+      "sent_bytes": 1,
+      "sent_prefix_hex": "73",
+      "sent_sha256": "043a718774c572bd8a25adbeb1bfcd5c0256ae11cecf9f9c3f925d0e52beaf89",
+      "outcome": "response",
+      "source_ip": "146.235.24.222",
+      "source_port": 22126,
+      "received_bytes": 183,
+      "received_prefix_hex": "45594531046d746106323230303326576f726c6420525047",
+      "kind": "ase_query",
+      "eye1_header": true
+    },
+    {
+      "port": 22003,
+      "sent_bytes": 1464,
+      "sent_prefix_hex": "0500ffff00fefefefefdfdfdfd1234567805",
+      "sent_sha256": "42bed878777490276cc4d6d5ce0aa9cd6fa7896aaa2c70ace1ca8c613993e530",
+      "outcome": "no_response_within_timeout",
+      "kind": "raknet4_open1",
+      "protocol": 5,
+      "ipv4_mtu": 1492
+    },
+    {
+      "port": 22003,
+      "sent_bytes": 1172,
+      "sent_prefix_hex": "0500ffff00fefefefefdfdfdfd1234567805",
+      "sent_sha256": "555941dc8041c58774b1e52762d3e6548dfa252971e8acf20558d59fea7e1a3e",
+      "outcome": "no_response_within_timeout",
+      "kind": "raknet4_open1",
+      "protocol": 5,
+      "ipv4_mtu": 1200
+    },
+    {
+      "port": 22003,
+      "sent_bytes": 548,
+      "sent_prefix_hex": "0500ffff00fefefefefdfdfdfd1234567805",
+      "sent_sha256": "a5118062f08f072f9afadbc3edc8d38c475fcc2c1c375610550d6bee345460f0",
+      "outcome": "no_response_within_timeout",
+      "kind": "raknet4_open1",
+      "protocol": 5,
+      "ipv4_mtu": 576
+    },
+    {
+      "port": 22003,
+      "sent_bytes": 1464,
+      "sent_prefix_hex": "0500ffff00fefefefefdfdfdfd1234567806",
+      "sent_sha256": "232c687b5f2085880ea728c29de74eb73ff983cc110b762793f2ae498f8eef28",
+      "outcome": "no_response_within_timeout",
+      "kind": "raknet4_open1",
+      "protocol": 6,
+      "ipv4_mtu": 1492
+    },
+    {
+      "port": 22003,
+      "sent_bytes": 1172,
+      "sent_prefix_hex": "0500ffff00fefefefefdfdfdfd1234567806",
+      "sent_sha256": "a4919ca073c3f4bee62c6366341d1efa0dda57f3bf36f994016603662c38ce22",
+      "outcome": "no_response_within_timeout",
+      "kind": "raknet4_open1",
+      "protocol": 6,
+      "ipv4_mtu": 1200
+    },
+    {
+      "port": 22003,
+      "sent_bytes": 548,
+      "sent_prefix_hex": "0500ffff00fefefefefdfdfdfd1234567806",
+      "sent_sha256": "663fd8d04b939dbf4156fa74a7ce10df310f89a29941e4992857e95a241441dd",
+      "outcome": "no_response_within_timeout",
+      "kind": "raknet4_open1",
+      "protocol": 6,
+      "ipv4_mtu": 576
+    }
+  ]
+}

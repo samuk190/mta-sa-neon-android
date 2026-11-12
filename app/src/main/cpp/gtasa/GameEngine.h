@@ -1,0 +1,176 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#define ENGINE_LOG_TAG "WorldRPGNeon"
+#define ENGINE_LOGI(...) __android_log_print(ANDROID_LOG_INFO, ENGINE_LOG_TAG, __VA_ARGS__)
+#define ENGINE_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, ENGINE_LOG_TAG, __VA_ARGS__)
+#else
+#include <cstdio>
+#define ENGINE_LOGI(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
+#define ENGINE_LOGE(...) do { fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
+#endif
+
+namespace WorldRPG::Game {
+
+using PedHandle = uint32_t;
+using VehicleHandle = uint32_t;
+using ObjectHandle = uint32_t;
+
+constexpr PedHandle INVALID_PED = 0xFFFFFFFF;
+constexpr VehicleHandle INVALID_VEHICLE = 0xFFFFFFFF;
+constexpr ObjectHandle INVALID_OBJECT = 0xFFFFFFFF;
+
+/// Version-specific function offsets for libGTASA.so
+/// These must be updated for each GTA SA Mobile version
+struct EngineOffsets {
+    // Ped functions
+    uintptr_t createPed;
+    uintptr_t deletePed;
+    uintptr_t setPedPosition;
+    uintptr_t getPedPosition;
+    uintptr_t setPedRotation;
+    uintptr_t setPedHealth;
+    uintptr_t getPedHealth;
+
+    // Vehicle functions
+    uintptr_t createVehicle;
+    uintptr_t deleteVehicle;
+    uintptr_t setVehiclePosition;
+    uintptr_t getVehiclePosition;
+    uintptr_t setVehicleRotation;
+    uintptr_t setVehicleVelocity;
+    uintptr_t setVehicleHealth;
+
+    // Object functions
+    uintptr_t createObject;
+    uintptr_t deleteObject;
+    uintptr_t setObjectPosition;
+    uintptr_t setObjectRotation;
+
+    // Model loading
+    uintptr_t requestModel;
+    uintptr_t loadAllModels;
+    uintptr_t hasModelLoaded;
+
+    // Player
+    uintptr_t getPlayerPed;
+    uintptr_t setPlayerControl;
+
+    // World
+    uintptr_t addEntityToWorld;
+    uintptr_t removeEntityFromWorld;
+
+    /// Initialize with default offsets for a specific game version
+    static EngineOffsets forVersion(const char* version);
+};
+
+/// Abstract interface wrapping GTA SA Mobile engine functions.
+/// All methods delegate to hooked engine functions via SymbolResolver.
+class GameEngine {
+public:
+    GameEngine();
+    ~GameEngine();
+
+    GameEngine(const GameEngine&) = delete;
+    GameEngine& operator=(const GameEngine&) = delete;
+
+    /// Initialize engine hooks. Must be called after libGTASA.so is loaded.
+    bool initialize(const EngineOffsets& offsets);
+
+    /// Check if engine is initialized and hooks are active
+    bool isReady() const;
+
+    /// Lifecycle gating driven by the Android Activity pause/resume.
+    /// While paused, engine frame work must not run.
+    void pause();
+    void resume();
+    bool isPaused() const;
+
+    // --- Ped operations ---
+    PedHandle spawnPed(int modelId, float x, float y, float z, float heading);
+    void deletePed(PedHandle handle);
+    void setPedPosition(PedHandle handle, float x, float y, float z);
+    void getPedPosition(PedHandle handle, float& x, float& y, float& z);
+    void setPedRotation(PedHandle handle, float rx, float ry, float rz);
+    void setPedHealth(PedHandle handle, float health);
+    float getPedHealth(PedHandle handle);
+
+    // --- Vehicle operations ---
+    VehicleHandle spawnVehicle(int modelId, float x, float y, float z, float heading);
+    void deleteVehicle(VehicleHandle handle);
+    void setVehiclePosition(VehicleHandle handle, float x, float y, float z);
+    void getVehiclePosition(VehicleHandle handle, float& x, float& y, float& z);
+    void setVehicleRotation(VehicleHandle handle, float rx, float ry, float rz);
+    void setVehicleVelocity(VehicleHandle handle, float vx, float vy, float vz);
+    void setVehicleHealth(VehicleHandle handle, float health);
+
+    // --- Object operations ---
+    ObjectHandle spawnObject(int modelId, float x, float y, float z);
+    void deleteObject(ObjectHandle handle);
+    void setObjectPosition(ObjectHandle handle, float x, float y, float z);
+    void setObjectRotation(ObjectHandle handle, float rx, float ry, float rz);
+
+    // --- Model loading ---
+    void requestModel(int modelId);
+    void loadModels();
+    bool hasModelLoaded(int modelId);
+
+    // --- Player ---
+    PedHandle getPlayerPed();
+    void setPlayerControl(bool enable);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> pImpl_;
+};
+
+// Leaves the GTA frontend and blocks main.scm. MTA's PC client replaces
+// CRunningScript::Process and never runs the story; MobileSA does the same
+// through that function. The menu flag only starts a new game, which is the
+// single-player path.
+bool BeginServerSession();
+void ApplyServerSpawn(float x, float y, float z);
+void CopySpawn(float& x, float& y, float& z);
+// Live pose sampled on the game thread. Heading is radians, -pi..pi.
+void CopyPose(float& x, float& y, float& z, float& heading);
+void CopyBody(float& x, float& y, float& z, float& heading,
+    float& vx, float& vy, float& vz, float& health);
+// Another player shot this ped. Health is reported in the next pure sync.
+void NoteDamage(uint32_t attacker, float amount, uint8_t weapon);
+bool ConsumeDamage(uint32_t& attacker, uint8_t& weapon);
+// Keysync between pure-sync samples. Camera rotation is the left-stick basis:
+// stick Y negative is forward along that camera, matching CNetAPI / CClientPed.
+void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int stickY, bool fire, bool duck);
+void NoteRemoteWeapon(uint32_t id, int weapon);
+// True when the remote ped is in front of itself and within melee reach of us.
+bool RemoteFacingLocal(uint32_t id, float facing, float reach);
+// Buttons the local ped is actually using, so outgoing keysync can set them.
+struct OnFootKeys {
+    bool fire = false;
+    bool duck = false;
+    int stickX = 0;
+    int stickY = 0;
+    float camera = 0;
+};
+void CopyOnFoot(float heading, float vx, float vy, OnFootKeys& keys);
+// A server ped from PACKET_ID_PED_SYNC or ENTITY_ADD. Applied on the game thread.
+void NoteRemotePed(uint32_t id, float x, float y, float z, float heading,
+    float vx = 0, float vy = 0, float vz = 0);
+void SetPedHost(uint32_t id, bool host);
+void ForgetRemote(uint32_t id);
+void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
+void RequestWander(uint32_t id, int direction);
+bool CopyRemotePose(uint32_t id, float& x, float& y, float& z);
+struct HostedPed {
+    uint32_t id = 0;
+    float x = 0, y = 0, z = 0, heading = 0;
+    float vx = 0, vy = 0, vz = 0, health = 100;
+};
+int CopyHostedPeds(HostedPed* out, int capacity);
+
+} // namespace WorldRPG::Game

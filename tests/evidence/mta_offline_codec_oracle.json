@@ -1,0 +1,37 @@
+{
+  "reported_utc": "2026-11-11T08:33:22.422078+00:00",
+  "execution": "Oracle ARM64; isolated temporary workspace, removed after execution",
+  "command": "bash tests/run_mta_offline_tests.sh",
+  "result": "PASS",
+  "exit_code": 0,
+  "compiler_options": [
+    "-std=c++20",
+    "-Wall",
+    "-Wextra",
+    "-Wpedantic",
+    "-Werror",
+    "-O1",
+    "-g",
+    "-fsanitize=address,undefined",
+    "-fno-omit-frame-pointer"
+  ],
+  "runtime_options": {
+    "ASAN_OPTIONS": "detect_leaks=1",
+    "UBSAN_OPTIONS": "halt_on_error=1"
+  },
+  "scope": "Synthetic structural fixtures only; no network, cipher, authentication or real-server interoperability",
+  "checks": [
+    "OPEN51 layout with explicit nonce and fixed block",
+    "TLV preservation including unknown and duplicate tags",
+    "Known-length boundaries",
+    "Header, magic and termination errors",
+    "Every truncated prefix of the synthetic reply"
+  ],
+  "sources_sha256": {
+    "app/src/main/cpp/net/mta/MtaOfflineCodec.h": "e9e45fdde92121b35228c561e2d10beb00d03254d3f658130056edff5d62208d",
+    "app/src/main/cpp/net/mta/MtaOfflineCodec.cpp": "bf5b8e8d2e5ae0b515ce5c484b2b0b69de0ad9b333d93d65292d2973a52947a2",
+    "tests/test_mta_offline.cpp": "914018f8bb3dd90158a7c85c4eedc7288c4e8270f8bba13ef5bdcf7542fc8885",
+    "tests/run_mta_offline_tests.sh": "a6ae798d64f404958f885820c974d050306fa3d64c2aa4959022f1fcc5132a2b"
+  },
+  "provenance": "Remote execution reported by the protocol implementation task; raw stdout retained in the conversation, not in this JSON"
+}

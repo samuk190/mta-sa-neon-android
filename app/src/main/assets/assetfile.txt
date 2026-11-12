@@ -1,0 +1,16 @@
+15
+Text/american.gxt
+Textures/fonts/JapaneseFont.met
+Textures/fonts/JapaneseFont.png
+Textures/fonts/RussianFont.met
+Textures/fonts/RussianFont.png
+assetfile.txt
+audio/android/NAV_DOWN.ogg
+audio/android/NAV_UP.ogg
+data/script/mainV1.scm
+data/script/scriptv1.img
+scache.txt
+scache_small.txt
+scache_small_low.txt
+texdb/menu/menu.pvr.dat
+texdb/menu/menu.pvr.toc

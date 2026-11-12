@@ -1,0 +1,4 @@
+#define HAVE_CONFIG_H 1
+#define OPUS_BUILD 1
+#define FIXED_POINT 1
+#define DISABLE_FLOAT_API 1

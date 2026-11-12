@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MTA:SA Neon Android</string>
+    <string name="connecting">Connecting to server...</string>
+    <string name="server_browser">Server Browser</string>
+    <string name="favorites">Favorites</string>
+    <string name="settings">Settings</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="refresh">Refresh</string>
+    <string name="no_servers">No servers found</string>
+    <string name="connection_failed">Connection failed</string>
+    <string name="downloading_assets">Downloading game assets...</string>
+</resources>
