@@ -1,4 +1,4 @@
-# MTA SA NEON ANDROID
+# MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 

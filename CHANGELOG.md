@@ -1,4 +1,4 @@
-# Changelog - MTA SA NEON ANDROID
+# Changelog - MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
 All notable changes to the MTA Neon Android client are documented in this file.
 
