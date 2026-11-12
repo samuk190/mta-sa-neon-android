@@ -227,5 +227,19 @@ struct LocalVehicleEvent {
 bool ConsumeLocalVehicleEvent(LocalVehicleEvent& out);
 // Server ElementID of the vehicle the local player is in, or 0xFFFFFFFF when on foot or in an unmapped car.
 uint32_t LocalVehicleId();
+// The local player's own car, for PLAYER_VEHICLE_PURESYNC (packet 33, driver). Sampled on the game thread in
+// WatchLocalVehicle with SampleHostedCar, so the units match HostedCar: rotation in degrees [0, 360), move and
+// turn speed per frame from the body. health is fixed at 1000: the Android CVehicle health offset is not verified.
+struct LocalCarState {
+    uint32_t vehicleId = 0xFFFFFFFFu;
+    int model = 0;
+    float x = 0, y = 0, z = 0;
+    float rotX = 0, rotY = 0, rotZ = 0;
+    float vx = 0, vy = 0, vz = 0;
+    float tx = 0, ty = 0, tz = 0;
+    float health = 1000.f;
+};
+// False when the local ped is not in a mapped vehicle (always false off Android).
+bool CopyLocalCar(LocalCarState& out);
 
 } // namespace WorldRPG::Game

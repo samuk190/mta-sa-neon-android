@@ -155,6 +155,35 @@ bool ReadUnoccupiedEntry(WorldRPG::Net::BitStreamReader& reader, UnoccupiedUpdat
 // Only the fields whose sync flag is set are written. Always returns true.
 bool WriteUnoccupiedEntry(WorldRPG::Net::BitStreamWriter& writer, const UnoccupiedUpdate& in);
 
+// Input for the driver form of PLAYER_VEHICLE_PURESYNC (packet 33, seat 0), client to server.
+// Fields without a phone source are written in their absent form (see WriteDriverPuresync).
+struct DriverPuresyncIn {
+    uint8_t timeContext = 0;
+    FullKeys keys;               // controller state; zero when no car-control source exists
+    int32_t model = 0;           // GTA model id (400-611)
+    Vec3 position;               // vehicle position
+    Vec3 rotation;               // vehicle rotation in degrees
+    Vec3 velocity;               // move speed, as sampled from the body
+    Vec3 turnVelocity;           // turn speed, as sampled from the body
+    float vehicleHealth = 0;     // 0 - 2047.5
+    float playerHealth = 0;      // 0 - 255 (0 - 200 game scale)
+    float playerArmor = 0;       // 0 - 127.5
+    float cameraRotZ = 0;        // camera heading, radians, -pi..pi
+    float cameraRotX = 0;        // camera pitch, radians, -pi..pi
+    VehicleFlags flags;          // flags.hasWeapon must be false (weapon block not ported)
+    bool lookLeft = false;       // aircraft only, used when flags.aircraft
+    bool lookRight = false;
+    bool hasDamage = false;      // one-shot damage block (desktop DamageSent)
+    uint32_t damagerId = 0xFFFFFFFFu;
+    uint8_t damageWeapon = 0;    // 6-bit weapon type
+};
+
+// Writes the driver body of packet 33 (desktop CNetAPI::WriteVehiclePuresync, seat 0), field by field in
+// the order the server reader CVehiclePuresyncPacket::Read consumes it. The caller writes the packet id
+// (33) first. Returns false without writing when the body cannot match the reader: train models (the
+// train block is not ported) and flags.hasWeapon (the weapon block is not ported).
+bool WriteDriverPuresync(WorldRPG::Net::BitStreamWriter& writer, const DriverPuresyncIn& in);
+
 // Reads the packet 33 body that follows the player ElementID. `seat` must be the occupant seat
 // (the reference reads it from the local player, not from the wire). False on a short read.
 bool ReadOccupiedSync(WorldRPG::Net::BitStreamReader& reader, uint8_t seat, OccupiedSync& out);

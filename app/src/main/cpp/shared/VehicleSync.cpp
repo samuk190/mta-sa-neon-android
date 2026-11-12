@@ -313,18 +313,22 @@ void WriteElementId(Writer& w, uint32_t id) {
 }
 
 // Inverse of ReadFloatAsBits: raw = round((value - min) / (max - min) * (2^bits - 1)), clamped.
-void WriteFloatAsBits(Writer& w, unsigned bits, float minValue, float maxValue, float value) {
+// preserveAboveMin mirrors SFloatAsBitsSync's m_bPreserveGreaterThanMin: a value above min never
+// rounds down to raw 0 (SyncStructures.h 120-177).
+void WriteFloatAsBits(Writer& w, unsigned bits, float minValue, float maxValue, float value, bool preserveAboveMin = false) {
     const double maxRaw = static_cast<double>((1ull << bits) - 1ull);
     double alpha = 0.0;
     if (maxValue != minValue) alpha = (static_cast<double>(value) - minValue) / (static_cast<double>(maxValue) - minValue);
     if (!std::isfinite(alpha)) alpha = 0.0;
     alpha = std::clamp(alpha, 0.0, 1.0);
-    WriteBitsValue(w, static_cast<uint32_t>(std::lround(alpha * maxRaw)), bits);
+    uint32_t raw = static_cast<uint32_t>(std::lround(alpha * maxRaw));
+    if (preserveAboveMin && raw == 0 && alpha > 0.0) raw = 1;
+    WriteBitsValue(w, raw, bits);
 }
 
-// Inverse of ReadVehicleHealth (SVehicleHealthSync): 12 bits, 0 - 2047.5.
+// Inverse of ReadVehicleHealth (SVehicleHealthSync): 12 bits, 0 - 2047.5, preserve > 0 (SyncStructures 201).
 void WriteVehicleHealth(Writer& w, float health) {
-    WriteFloatAsBits(w, 12, 0.f, 2047.5f, health);
+    WriteFloatAsBits(w, 12, 0.f, 2047.5f, health, true);
 }
 
 // Inverse of ReadFixed24: signed 24 bits, value * 1024.
@@ -389,6 +393,50 @@ void WriteVelocity(Writer& w, const Vec3& in) {
     WriteNormVector(w, dir);
 }
 
+// Inverse of ReadFullKeys (SFullKeysyncSync, SyncStructures.h 939 Write): 8 button bits, then each
+// analog byte only when it is 1..254 (flag + byte), then the two stick bytes.
+void WriteFullKeys(Writer& w, const FullKeys& k) {
+    uint8_t bits = 0;
+    if (k.leftShoulder1) bits |= 0x01;
+    if (k.rightShoulder1) bits |= 0x02;
+    if (k.buttonSquare) bits |= 0x04;
+    if (k.buttonCross) bits |= 0x08;
+    if (k.buttonCircle) bits |= 0x10;
+    if (k.buttonTriangle) bits |= 0x20;
+    if (k.shockButtonL) bits |= 0x40;
+    if (k.pedWalk) bits |= 0x80;
+    w.Write(bits);
+
+    const bool hasSquare = k.analogSquare >= 1 && k.analogSquare <= 254;
+    WriteFlag(w, hasSquare);
+    if (hasSquare) w.Write(k.analogSquare);
+
+    const bool hasCross = k.analogCross >= 1 && k.analogCross <= 254;
+    WriteFlag(w, hasCross);
+    if (hasCross) w.Write(k.analogCross);
+
+    // Stick: desktop stores -128..128 and writes (char)(value * 127 / 128), truncated toward zero.
+    auto stickByte = [](int16_t s) {
+        const int c = static_cast<int>(static_cast<float>(s) * 127.0f / 128.0f);
+        return static_cast<uint8_t>(static_cast<int8_t>(std::clamp(c, -128, 127)));
+    };
+    w.Write(stickByte(k.stickX));
+    w.Write(stickByte(k.stickY));
+}
+
+// Camera orientation, desktop CNetAPI::WriteCameraOrientation (CNetAPI.cpp 1023-1114). Vehicle packets
+// carry no SCameraRotationSync (the 12-bit field of the on-foot packet), only these fields: two 8-bit
+// angles, a relative/absolute flag, a 2-bit table index and three offsets. The camera position is not
+// sampled, so the offset is zero, quantised as the reader sees it (3-bit raw 4 = +0.57, the same value
+// NeonJoinProtocol writes for the on-foot camera).
+void WriteCameraOrientation(Writer& w, float rotZ, float rotX) {
+    WriteFloatAsBits(w, 8, -kPi, kPi, rotZ);
+    WriteFloatAsBits(w, 8, -kPi, kPi, rotX);
+    WriteFlag(w, false);                              // relative to the vehicle position
+    WriteBitsValue(w, 0, 2);                          // table entry 0: 3 bits, range +-4
+    for (int i = 0; i < 3; ++i) WriteFloatAsBits(w, 3, -4.0f, 4.0f, 0.0f);
+}
+
 } // namespace
 
 bool ReadUnoccupiedEntry(Reader& r, UnoccupiedUpdate& out) {
@@ -445,6 +493,100 @@ bool WriteUnoccupiedEntry(Writer& w, const UnoccupiedUpdate& in) {
     if (in.syncTurnVelocity) WriteVelocity(w, in.turnVelocity);
     if (in.syncHealth) WriteVehicleHealth(w, in.health);
     if (in.syncTrailer) WriteElementId(w, in.trailer);
+    return true;
+}
+
+// Client-to-server driver body of packet 33. Field order follows the desktop writer
+// (CNetAPI::WriteVehiclePuresync, CNetAPI.cpp 1615-1826) and the server reader
+// (Server/.../packets/CVehiclePuresyncPacket.cpp Read, 48-600). The server reader wins where they differ.
+bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
+    const uint32_t model = static_cast<uint32_t>(in.model);
+    // Refuse before writing anything: the reader would expect a train block or a weapon block here.
+    if (VM::IsTrainModel(model) || in.flags.hasWeapon) return false;
+
+    // Sync context and SFullKeysyncSync (CNetAPI 1618-1623; reader 68-80).
+    w.Write(in.timeContext);
+    WriteFullKeys(w, in.keys);
+
+    // Model id as a 32-bit int (CNetAPI 1632; reader 85).
+    w.Write(static_cast<int32_t>(in.model));
+
+    // SPositionSync(false): fixed24 x, fixed24 y, float z (CNetAPI 1639; reader 91-93).
+    WriteVec3Position(w, in.position);
+
+    // Camera orientation (CNetAPI 1657 WriteCameraOrientation; reader 118 ReadCameraOrientation).
+    WriteCameraOrientation(w, in.cameraRotZ, in.cameraRotX);
+
+    // SOccupiedSeatSync, 4 bits. The phone only drives seat 0 (CNetAPI 1660; reader 122-130).
+    WriteBitsValue(w, 0, 4);
+
+    // Driver block, desktop uses the seat==0 branch (CNetAPI 1664-1719; reader 134-154).
+    WriteVec3Rotation(w, in.rotation);       // SRotationDegreesSync(false)
+    WriteVelocity(w, in.velocity);           // SVelocitySync, move speed
+    WriteVelocity(w, in.turnVelocity);       // SVelocitySync, turn speed
+    WriteVehicleHealth(w, in.vehicleHealth); // SVehicleHealthSync, 12 bits (reader 154)
+
+    // Trailer chain (CNetAPI 1720-1723; reader 272). No trailer source: continuation bit clear.
+    WriteFlag(w, false);
+
+    // Damage block (CNetAPI 1724-1753; reader 387-400). One-shot: bit, ElementID, 6-bit weapon type,
+    // 3-bit body part. Body part raw 0 is torso, as the on-foot writer does.
+    WriteFlag(w, in.hasDamage);
+    if (in.hasDamage) {
+        WriteElementId(w, in.damagerId);
+        WriteBitsValue(w, in.damageWeapon & 0x3Fu, 6);
+        WriteBitsValue(w, 0, 3);
+    }
+
+    // Player health and armor (CNetAPI 1754-1766; reader 405-456). Health 0-255, armor 0-127.5.
+    WriteFloatAsBits(w, 8, 0.0f, 255.0f, in.playerHealth, true);
+    WriteFloatAsBits(w, 8, 0.0f, 127.5f, in.playerArmor, true);
+
+    // SVehiclePuresyncFlags, 11 bits, bit order as the reader (reader 507; SyncStructures.h 732).
+    const VehicleFlags& fl = in.flags;
+    unsigned flagBits = 0;
+    if (fl.wearingGoggles) flagBits |= 0x001u;
+    if (fl.gangDriveby) flagBits |= 0x002u;
+    if (fl.sirenOrAlarm) flagBits |= 0x004u;
+    if (fl.smokeTrail) flagBits |= 0x008u;
+    if (fl.landingGearDown) flagBits |= 0x010u;
+    if (fl.onGround) flagBits |= 0x020u;
+    if (fl.inWater) flagBits |= 0x040u;
+    if (fl.derailed) flagBits |= 0x080u;
+    if (fl.aircraft) flagBits |= 0x100u;
+    if (fl.hasWeapon) flagBits |= 0x200u;  // always false here, see the refusal above
+    if (fl.heliSearchLight) flagBits |= 0x400u;
+    WriteBitsValue(w, flagBits, 11);
+
+    // No weapon block: flags.hasWeapon is false (CNetAPI 1783; reader 515 is skipped).
+
+    // WriteFullVehicleSpecific (CNetAPI 2005, called at 1815; reader 555 and CVehiclePuresyncPacket::ReadVehicleSpecific 832).
+    // Each block is gated by the model, so the reader expects it whatever the phone knows.
+    if (VM::HasTurret(model)) {
+        // SVehicleTurretSync: two int16 angles. Turret angle is not sampled, so 0 (centred).
+        w.Write(static_cast<uint16_t>(0));
+        w.Write(static_cast<uint16_t>(0));
+    }
+    if (VM::HasAdjustableProperty(model)) {
+        // uint16 adjustable property. Not sampled, so 0.
+        w.Write(static_cast<uint16_t>(0));
+    }
+    if (VM::HasDoors(model)) {
+        // SDoorOpenRatioSync for doors 2..5. Not sampled, so 0 (closed): flag 0, flag 0 (SyncStructures 1424-1470).
+        for (int door = 0; door < 4; ++door) {
+            WriteFlag(w, false);
+            WriteFlag(w, false);
+        }
+    }
+
+    // Aircraft look-left / look-right bits (CNetAPI 1820-1823; reader 573-575). Only when flags.aircraft.
+    if (fl.aircraft) {
+        WriteFlag(w, in.lookLeft);
+        WriteFlag(w, in.lookRight);
+    }
+
+    // OnFire bit (CNetAPI 1826; reader 585). Not sampled on Android, so false.
+    WriteFlag(w, false);
     return true;
 }
 

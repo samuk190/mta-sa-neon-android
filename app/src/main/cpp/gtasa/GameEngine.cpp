@@ -260,6 +260,9 @@ static std::unordered_map<uint32_t, RemoteBody> g_remoteBodies;
 // Local player vehicle state and the queue for VEHICLE_INOUT. Both guarded by g_remoteMutex.
 static constexpr uint32_t kNoVehicle = 0xFFFFFFFFu;
 static uint32_t g_localVehicleId = kNoVehicle;
+// Live sample of that car for packet 33 (CopyLocalCar). Written in WatchLocalVehicle, under g_remoteMutex.
+static LocalCarState g_localCar;
+static bool g_localCarValid = false;
 static std::vector<LocalVehicleEvent> g_localVehicleEvents;
 static constexpr size_t kMaxLocalVehicleEvents = 16;
 
@@ -706,13 +709,38 @@ static void WatchLocalVehicle() {
     void* vehicle = api.findPlayerVehicle(-1, false);
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     uint32_t current = kNoVehicle;
+    int model = 0;
     if (vehicle) {
         for (const auto& [id, car] : g_remoteCars) {
             if (car.body == vehicle) {
                 current = id;
+                model = car.model;
                 break;
             }
         }
+    }
+    // Packet 33 source (CopyLocalCar). Sampled every frame while the ped is in a mapped standard car, before
+    // the unchanged-vehicle return below, so the snapshot stays current. SampleHostedCar does not take the mutex.
+    HostedCar sample;
+    const bool sampled = current != kNoVehicle && model >= 400 && model <= 611 && SampleHostedCar(vehicle, sample);
+    g_localCarValid = sampled;
+    if (sampled) {
+        LocalCarState& c = g_localCar;
+        c = LocalCarState{};
+        c.vehicleId = current;
+        c.model = model;
+        c.x = sample.x;
+        c.y = sample.y;
+        c.z = sample.z;
+        c.rotX = sample.rotX;
+        c.rotY = sample.rotY;
+        c.rotZ = sample.rotZ;
+        c.vx = sample.vx;
+        c.vy = sample.vy;
+        c.vz = sample.vz;
+        c.tx = sample.tx;
+        c.ty = sample.ty;
+        c.tz = sample.tz;
     }
     if (current == g_localVehicleId) return;
     if (g_localVehicleId != kNoVehicle) {
@@ -1462,6 +1490,12 @@ uint32_t LocalVehicleId() {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     return g_localVehicleId;
 }
+bool CopyLocalCar(LocalCarState& out) {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    if (!g_localCarValid) return false;
+    out = g_localCar;
+    return true;
+}
 
 #else
 bool BeginServerSession() { return false; }
@@ -1489,6 +1523,10 @@ int CopyHostedPeds(HostedPed*, int) { return 0; }
 int CopyHostedCars(HostedCar*, int) { return 0; }
 bool ConsumeLocalVehicleEvent(LocalVehicleEvent&) { return false; }
 uint32_t LocalVehicleId() { return 0xFFFFFFFFu; }
+bool CopyLocalCar(LocalCarState& out) {
+    out = LocalCarState{};
+    return false;
+}
 void SetPedNativeTaskLocomotion(uint32_t, unsigned int) {}
 void SetPedNativeTaskWeapon(uint32_t, uint8_t) {}
 void SetPedNativeTaskAnimation(uint32_t, uint16_t, uint16_t) {}

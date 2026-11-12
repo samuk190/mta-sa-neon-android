@@ -1,6 +1,7 @@
 #include "NeonJoinProtocol.h"
 #include "../gtasa/GameEngine.h"
 #include "../shared/VehicleSync.h"
+#include "../shared/entity/EntityVehicleModels.h"
 
 #include <algorithm>
 #include <cmath>
@@ -197,6 +198,59 @@ struct NeonJoinClient::Impl {
     float lastKeyHeading = 0.f;
     std::string pendingChat;
 
+    // PLAYER_VEHICLE_PURESYNC (packet 33), driver form. Desktop CNetAPI::DoPulse (279-380) sends
+    // WriteVehiclePuresync instead of WritePlayerPuresync while the local ped is in a car. Only seat 0 is
+    // ported. Keys are zero: CopyOnFoot derives its stick from walking speed, not from car controls, and no
+    // car-control source exists yet. Player health comes from the CopyBody sample (armor has no source, so 0,
+    // as on foot). The camera is assumed to look along the car heading, level pitch (no camera sample).
+    void SendDriverPuresync(const WorldRPG::Game::LocalCarState& car) {
+        // Train block is not ported. Return before ConsumeDamage so a pending hit is not lost.
+        if (WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(car.model))) return;
+
+        float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
+        WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+
+        // Car front at zero pitch and roll is (-sin rz, cos rz) (desktop CMatrix::SetRotation, CMatrix.h 253-275);
+        // the camera forward is (sin c, cos c), so c = -rz. Wrap to -pi..pi.
+        const float pi = 3.14159265f;
+        float camera = -car.rotZ * pi / 180.f;
+        while (camera > pi) camera -= 2.f * pi;
+        while (camera < -pi) camera += 2.f * pi;
+
+        WorldRPG::VehicleSync::DriverPuresyncIn in;
+        in.timeContext = 0;
+        in.model = car.model;
+        in.position = {car.x, car.y, car.z};
+        in.rotation = {car.rotX, car.rotY, car.rotZ};
+        in.velocity = {car.vx, car.vy, car.vz};
+        in.turnVelocity = {car.tx, car.ty, car.tz};
+        in.vehicleHealth = car.health;
+        in.playerHealth = health;
+        in.playerArmor = 0.f;
+        in.cameraRotZ = camera;
+        in.cameraRotX = 0.f;
+        uint32_t attacker = 0;
+        uint8_t weapon = 0;
+        if (WorldRPG::Game::ConsumeDamage(attacker, weapon)) {
+            in.hasDamage = true;
+            in.damagerId = attacker;
+            in.damageWeapon = weapon;
+        }
+
+        BitStreamWriter w;
+        w.Write(static_cast<uint8_t>(33));          // PLAYER_VEHICLE_PURESYNC
+        if (!WorldRPG::VehicleSync::WriteDriverPuresync(w, in)) return;
+        if (net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                            PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) {
+            static int reports = 0;
+            if (reports < 4) {
+                ++reports;
+                JOIN_LOGI("NeonJoin: sending PLAYER_VEHICLE_PURESYNC vehicle %u model %d at %.0f %.0f %.0f",
+                          car.vehicleId, car.model, car.x, car.y, car.z);
+            }
+        }
+    }
+
     // Bitstream 0x0030, the version the join hook stores for this client:
     // no extended positions and no native-task block. Time context 0 is
     // accepted by CanUpdateSync. Without this packet the server never
@@ -206,6 +260,12 @@ struct NeonJoinClient::Impl {
         const uint32_t now = NowMs();
         if (now - lastSyncMs < 100) return;
         lastSyncMs = now;
+        // In a mapped car the driver sends packet 33 instead (SendDriverPuresync); on foot, packet 32 below.
+        WorldRPG::Game::LocalCarState car;
+        if (WorldRPG::Game::CopyLocalCar(car)) {
+            SendDriverPuresync(car);
+            return;
+        }
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
         WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
         const float pi = 3.14159265f;
