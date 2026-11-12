@@ -33,6 +33,51 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 
 ---
 
+## Server Setup & Anti-Cheat Notice
+
+### Compatible Server Engine
+This mobile client is designed to connect to servers running the **MTA Neon** / **San Andreas Online** architecture:
+- **Server Repository:** [Dryxio/san-andreas-online](https://github.com/Dryxio/san-andreas-online)
+
+To set up and host your own compatible game server, clone and build the San Andreas Online server repository following its instructions.
+
+> [!WARNING]
+> **MTA Anti-Cheat Compatibility Notice**
+>
+> Standard Multi Theft Auto proprietary Anti-Cheat (`net.dll` / MTA AC server checks) **does NOT work** with this mobile client.
+>
+> Because this client uses a custom packet architecture, mobile-tailored bitstreams, and an ARM64-optimized native cipher for network transport, traditional desktop MTA anti-cheat modules will reject the connection. The server must be run using [San Andreas Online (MTA Neon)](https://github.com/Dryxio/san-andreas-online) or have standard anti-cheat verification modules disabled.
+
+---
+
+## Project Roadmap
+
+### Phase 1: Core Networking & Baseline Sync (Current Status)
+- [x] Native connection handshake (OPEN51 datagram) and cipher negotiation
+- [x] Basic game log-in and world initialization
+- [x] Player pure sync, keysync, and remote `CPlayerPed` entity creation *(with bugs)*
+- [x] Environment peds and basic traffic spawning *(with bugs)*
+- [x] Real-time text chat and Opus audio codec integration
+- [ ] Fix animation popping and rotation jitter during remote player sync
+
+### Phase 2: Complete Vehicle & Combat Sync
+- [ ] **Vehicle Sync:** Synchronize driver & passenger entry/exit (`VEHICLE_INOUT`), tire deformation, health, velocity, and damage models
+- [ ] **Combat & Weapons:** Weapon firing, bullet sync (`PLAYER_BULLETSYNC`), damage application, melee hit registration, and reloading animations
+- [ ] **Ped Sync Refinement:** Improved wander task sequencing, collision prediction, and pathfinding
+
+### Phase 3: Scripting Engine & Touch UI
+- [ ] **Lua 5.3 Client VM:** Complete client-side MTA event bindings (`addEventHandler`, `triggerServerEvent`)
+- [ ] **DirectX / RenderWare 2D GUI:** Support for custom screen elements, HUDs, and radar overlays
+- [ ] **Touch Control Customization:** On-screen customizable touch controls, virtual joystick sensitivity calibration, and button mapping
+
+### Phase 4: Stability, Modding & Optimization
+- [ ] **Custom Asset Streaming:** Server-to-client dynamic DFF/TXD model downloading and RenderWare memory streaming
+- [ ] **Hardware Gamepad Support:** Native Bluetooth and USB OTG controller support
+- [ ] **Engine Optimization:** 60 FPS frame pacing, memory compaction, and anti-crash guardrails for Android ARM64
+
+
+---
+
 ## Game Assets & Folder Location
 
 All game assets are configured locally via environment variables (`.env`) rather than downloading from external cloud repositories.
