@@ -1,10 +1,13 @@
 #include "PacketHandler.h"
 #include "SyncTypes.h"
 #include "NativeTaskSync.h"
+#include "entity/PedSyncState.h"
 #include "PerformanceProfiler.h"
 #include "LuaVMStub.h"
 #include "../gtasa/GameEngine.h"
 #include "ServerWorld.h"
+
+namespace PedSyncState = WorldRPG::Sync::PedSyncState;
 
 #include <algorithm>
 #include <cmath>
@@ -257,8 +260,10 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
     while (reader.GetRemainingBits() > 32) {
         uint32_t id = 0;
         uint8_t ucSyncTimeContext = 0, ucFlags = 0, flags2 = 0;
-        if (!ReadElementId(reader, id) || !reader.Read(ucSyncTimeContext) || !reader.Read(ucFlags) || !reader.Read(flags2))
+        if (!ReadElementId(reader, id) || !reader.Read(ucSyncTimeContext) || !reader.Read(ucFlags) || !reader.Read(flags2)) {
+            PKT_LOGI("DIAG PED_SYNC short header bit=%zu", reader.GetReadOffsetBits());
             break;
+        }
         PKT_LOGI("DIAG PED_SYNC id=%u ctx=%u flags=0x%02x flags2=0x%02x bit=%zu", id, ucSyncTimeContext, ucFlags, flags2, reader.GetReadOffsetBits());
 
         // Native task blocks - read before spatial data per mta_neon wire order
@@ -272,21 +277,30 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
             kEffectivePedSyncBitStream >= kBitStreamNativeTaskPresentation;
 
         SNativeTaskLocomotionSync nativeTaskLocomotion;
-        if (hasLocomotion && !nativeTaskLocomotion.Read(reader))
+        if (hasLocomotion && !nativeTaskLocomotion.Read(reader)) {
+            PKT_LOGI("DIAG PED_SYNC id=%u bad locomotion bit=%zu", id, reader.GetReadOffsetBits());
             break;
+        }
 
         SNativeTaskWeaponPresentationSync nativeTaskWeaponPresentation;
-        if (hasWeapon && !nativeTaskWeaponPresentation.Read(reader))
+        if (hasWeapon && !nativeTaskWeaponPresentation.Read(reader)) {
+            PKT_LOGI("DIAG PED_SYNC id=%u bad weapon bit=%zu", id, reader.GetReadOffsetBits());
             break;
+        }
 
         SNativeTaskAnimationPresentationSync nativeTaskAnimationPresentation;
-        if (hasAnimation && !nativeTaskAnimationPresentation.Read(reader))
+        if (hasAnimation && !nativeTaskAnimationPresentation.Read(reader)) {
+            PKT_LOGI("DIAG PED_SYNC id=%u bad animation bit=%zu", id, reader.GetReadOffsetBits());
             break;
+        }
 
         float x = 0, y = 0, z = 0, heading = 0;
         bool hasPosition = false;
         if (ucFlags & 0x01) {
-            if (!ReadFixed24(reader, x) || !ReadFixed24(reader, y) || !reader.Read(z)) break;
+            if (!ReadFixed24(reader, x) || !ReadFixed24(reader, y) || !reader.Read(z)) {
+                PKT_LOGI("DIAG PED_SYNC id=%u bad position bit=%zu", id, reader.GetReadOffsetBits());
+                break;
+            }
             hasPosition = true;
         }
         if (ucFlags & 0x02) {
@@ -298,7 +312,10 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
         }
         float vx = 0, vy = 0, vz = 0;
         if (ucFlags & 0x04) {
-            if (!ReadMtaVelocity(reader, vx, vy, vz)) break;
+            if (!ReadMtaVelocity(reader, vx, vy, vz)) {
+                PKT_LOGI("DIAG PED_SYNC id=%u bad velocity bit=%zu", id, reader.GetReadOffsetBits());
+                break;
+            }
         }
         float fHealth = 0, fArmor = 0;
         if (ucFlags & 0x08) { if (!reader.Read(fHealth)) break; }
@@ -327,6 +344,17 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
 
         if (hasPosition || (ucFlags & 0x02)) {
             WorldRPG::Game::NoteRemotePed(id, x, y, z, heading, vx, vy, vz);
+            // Stage S4: observed peds interpolate to the target (reference SetTargetPosition /
+            // SetTargetRotation with the spatial receive interval). Hosted peds keep local authority.
+            if (ucFlags & 0x07) {
+                const uint64_t rate = PedSyncState::SpatialSyncRateMs(id, true);
+                if (!PedSyncState::IsHosted(id)) {
+                    if (hasPosition)
+                        PedSyncState::SetObserverPosition(id, {x, y, z}, {vx, vy, vz}, rate);
+                    if (ucFlags & 0x02)
+                        PedSyncState::SetObserverRotation(id, heading, rate);
+                }
+            }
             // Apply native task states to remote ped
             if (hasLocomotion) WorldRPG::Game::SetPedNativeTaskLocomotion(id, nativeTaskLocomotion.data.uiMode);
             if (hasWeapon) WorldRPG::Game::SetPedNativeTaskWeapon(id, nativeTaskWeaponPresentation.data.ucWeaponType);
@@ -476,31 +504,54 @@ bool HandleBulletSync(const uint8_t* body, size_t length, size_t bits) {
 bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t id = 0;
-    if (!ReadElementId(reader, id)) return false;
+    if (!ReadElementId(reader, id)) {
+        PKT_LOGI("DIAG PED_STARTSYNC bad id bit=%zu", reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Position (raw floats per mta_neon Packet_PedStartSync)
     float x = 0, y = 0, z = 0;
-    if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z)) return false;
+    if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad position bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Rotation (raw float)
     float fRotation = 0;
-    if (!reader.Read(fRotation)) return false;
+    if (!reader.Read(fRotation)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad rotation bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Velocity (raw floats)
     float vx = 0, vy = 0, vz = 0;
-    if (!reader.Read(vx) || !reader.Read(vy) || !reader.Read(vz)) return false;
+    if (!reader.Read(vx) || !reader.Read(vy) || !reader.Read(vz)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad velocity bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Health and armor (raw floats)
     float fHealth = 0, fArmor = 0;
-    if (!reader.Read(fHealth) || !reader.Read(fArmor)) return false;
+    if (!reader.Read(fHealth) || !reader.Read(fArmor)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad health/armor bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
+    // Reference sets health/armor after UnlockHealth/UnlockArmor. No engine hook for that yet.
+    (void)fHealth; (void)fArmor;
 
     // Camera rotation (raw float)
     float cameraRotation = 0;
-    if (!reader.Read(cameraRotation)) return false;
+    if (!reader.Read(cameraRotation)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad camera bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     // SNativeTaskAnimationPresentationSync physical takeover — seeds airborne/climb state
     SNativeTaskAnimationPresentationSync nativeTaskPhysicalTakeover;
-    if (!nativeTaskPhysicalTakeover.Read(reader)) return false;
+    if (!nativeTaskPhysicalTakeover.Read(reader)) {
+        PKT_LOGI("DIAG PED_STARTSYNC id=%u bad physical takeover bit=%zu", id, reader.GetReadOffsetBits());
+        return false;
+    }
 
     WorldRPG::Game::NoteRemotePed(id, x, y, z, fRotation, vx, vy, vz);
     WorldRPG::Game::SetPedCameraRotation(id, cameraRotation);
@@ -508,6 +559,9 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
         nativeTaskPhysicalTakeover.data.usAnimGroup, nativeTaskPhysicalTakeover.data.usAnimId,
         nativeTaskPhysicalTakeover.data.fProgress);
     WorldRPG::Game::SetPedHost(id, true);
+    // Stage S4: become syncer and start the wander task (reference AddPed; wander is engine-side).
+    PedSyncState::BeginHosted(id, {x, y, z}, fRotation, {vx, vy, vz});
+    WorldRPG::Game::SetPedWander(id, 0);
     WorldRPG::ServerWorld::SetActorHost(id, true);
     PKT_LOGI("PedStartSync: id=%u at %.0f %.0f %.0f physMode=%u", id, x, y, z, nativeTaskPhysicalTakeover.data.uiMode);
     return true;
@@ -518,7 +572,10 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
 bool HandlePedStopSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t id = 0;
-    if (!ReadElementId(reader, id)) return false;
+    if (!ReadElementId(reader, id)) {
+        PKT_LOGI("DIAG PED_STOPSYNC bad id bit=%zu", reader.GetReadOffsetBits());
+        return false;
+    }
 
     // Lock health and armor at current values before releasing sync ownership.
     // The mta_neon client calls pPed->LockHealth(pPed->GetHealth()) and
@@ -526,7 +583,8 @@ bool HandlePedStopSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Game::LockPedHealthCurrent(id);
     WorldRPG::Game::LockPedArmorCurrent(id);
 
-    WorldRPG::Game::SetPedHost(id, false);
+    // Stage S4: release ownership and clear the wander task (reference RemovePed).
+    PedSyncState::EndHosted(id);
     WorldRPG::ServerWorld::SetActorHost(id, false);
     PKT_LOGI("PedStopSync: id=%u locked and released", id);
     return true;
