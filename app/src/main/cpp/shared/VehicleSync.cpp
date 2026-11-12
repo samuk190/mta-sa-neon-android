@@ -1,3 +1,4 @@
+#include <cmath>
 #include "VehicleSync.h"
 
 #include "entity/EntitySyncReaders.h"
@@ -31,19 +32,30 @@ constexpr float kPi = 3.14159265f;
         }                                                                               \
     } while (0)
 
-// RakNet BitStream::ReadFloat16(-1, 1): one uint16 mapped linearly onto [-1, 1].
-// BitStream.h 1907 ReadNormVector reads three of these; no sign or length prefix.
-float UnitFromUint16(uint16_t raw) {
-    const float v = -1.0f + (static_cast<float>(raw) / 65535.0f) * 2.0f;
-    return std::clamp(v, -1.0f, 1.0f);
-}
-
+// MTA NetBitStream::ReadNormVector encoding: x sign flag, y and z zero flags, then 16-bit
+// components for y and z (when not zero); x is rebuilt from the unit-length constraint.
+// Same encoding as ReadMtaNorm in PacketHandler.cpp, which the phone already uses for players.
 bool ReadNormVector(Reader& r, Vec3& out) {
-    uint16_t a = 0, b = 0, c = 0;
-    VS_TRY(r.Read(a) && r.Read(b) && r.Read(c));
-    out.x = UnitFromUint16(a);
-    out.y = UnitFromUint16(b);
-    out.z = UnitFromUint16(c);
+    bool xNeg = false, yZero = false, zZero = false;
+    VS_TRY(ReadFlag(r, xNeg) && ReadFlag(r, yZero));
+    float y = 0.0f, z = 0.0f;
+    if (!yZero) {
+        uint16_t raw = 0;
+        VS_TRY(r.Read(raw));
+        y = (static_cast<float>(raw) / 32767.5f) - 1.0f;
+    }
+    VS_TRY(ReadFlag(r, zZero));
+    if (!zZero) {
+        uint16_t raw = 0;
+        VS_TRY(r.Read(raw));
+        z = (static_cast<float>(raw) / 32767.5f) - 1.0f;
+    }
+    const float rest = 1.0f - y * y - z * z;
+    float x = rest > 0.0f ? std::sqrt(rest) : 0.0f;
+    if (xNeg) x = -x;
+    out.x = x;
+    out.y = y;
+    out.z = z;
     return true;
 }
 
