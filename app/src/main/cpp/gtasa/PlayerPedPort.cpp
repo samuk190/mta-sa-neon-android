@@ -444,6 +444,10 @@ struct SeatFns {
     void (*outCtor)(void*, void*, int, bool) = nullptr;
     void (*outProcess)(void*, void*) = nullptr;
     void (*outDtor)(void*) = nullptr;
+    // CTaskSimpleCarSetPedInAsPassenger(CVehicle*, int door, CTaskUtilityLineUpPedWithCar*) with a null utility, as CTasksSA passes.
+    void (*passengerCtor)(void*, void*, int, void*) = nullptr;
+    void (*passengerProcess)(void*, void*) = nullptr;
+    void (*passengerDtor)(void*) = nullptr;
 };
 
 SeatFns& SeatApi() {
@@ -463,11 +467,19 @@ SeatFns& SeatApi() {
         dlsym(handle, "_ZN23CTaskSimpleCarSetPedOut10ProcessPedEP4CPed"));
     api.outDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN23CTaskSimpleCarSetPedOutD1Ev"));
     api.driverDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriverD1Ev"));
-    api.complete = api.driverCtor && api.driverProcess && api.driverDtor && api.outCtor && api.outProcess && api.outDtor;
+    api.passengerCtor = reinterpret_cast<void (*)(void*, void*, int, void*)>(
+        dlsym(handle, "_ZN33CTaskSimpleCarSetPedInAsPassengerC1EP8CVehicleiP28CTaskUtilityLineUpPedWithCar"));
+    api.passengerProcess = reinterpret_cast<void (*)(void*, void*)>(
+        dlsym(handle, "_ZN33CTaskSimpleCarSetPedInAsPassenger10ProcessPedEP4CPed"));
+    api.passengerDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN33CTaskSimpleCarSetPedInAsPassengerD1Ev"));
+    api.complete = api.driverCtor && api.driverProcess && api.driverDtor && api.outCtor && api.outProcess && api.outDtor &&
+                   api.passengerCtor && api.passengerProcess && api.passengerDtor;
     if (!api.complete) {
-        ENGINE_LOGI("Remote seat tasks missing: driver=%p/%p out=%p/%p/%p", reinterpret_cast<void*>(api.driverCtor),
-            reinterpret_cast<void*>(api.driverProcess), reinterpret_cast<void*>(api.outCtor),
-            reinterpret_cast<void*>(api.outProcess), reinterpret_cast<void*>(api.outDtor));
+        ENGINE_LOGI("Remote seat tasks missing: driver=%p/%p out=%p/%p/%p passenger=%p/%p/%p",
+            reinterpret_cast<void*>(api.driverCtor), reinterpret_cast<void*>(api.driverProcess),
+            reinterpret_cast<void*>(api.outCtor), reinterpret_cast<void*>(api.outProcess),
+            reinterpret_cast<void*>(api.outDtor), reinterpret_cast<void*>(api.passengerCtor),
+            reinterpret_cast<void*>(api.passengerProcess), reinterpret_cast<void*>(api.passengerDtor));
     }
 #endif
     return api;
@@ -483,8 +495,74 @@ constexpr std::size_t kOutKnockedOffOffset = 0x1F;
 constexpr std::size_t kOutSwitchEngineOffset = 0x1C;
 // Desktop CClientPed::InternalRemoveFromVehicle builds the out task with door 1 (CClientPed.cpp 7474).
 constexpr int kDesktopOutDoor = 1;
-// Stack storage for one task. The game's own frames for these objects leave 0x38 to 0x40 bytes (0x61b044, 0x448ae8).
+// Stack storage for one task. SetPedInCarDirect (0x61b044) saves x23 at sp+0x40, so sp+0..0x3f is free for the task.
+// The passenger constructor writes up to +0x3a (strb at +58), the base CTaskSimple constructor writes +0..+0xf.
 constexpr std::size_t kSeatTaskBytes = 0x40;
+// Byte the game writes after the passenger task constructor, before ProcessPed. SetPedInCarDirect passenger branch
+// (0x61b0d4): C1 through 0x22fa10, then `orr w8, wzr, #1` and `strb w8, [sp, #0x38]` at 0x61b130-0x61b13c, then
+// ProcessPed through 0x227860, then D1 through 0x219950 at 0x61b254. Desktop CTaskSimpleCarSetPedInAsPassengerSA::
+// SetIsWarpingPedIntoCar (TaskCarAccessoriesSA.cpp 90) sets m_bWarpingInToCar, which is the same byte.
+constexpr std::size_t kPassengerWarpingOffset = 0x38;
+// Game door arguments (Client/sdk/game/TaskCar.h): DOOR_FRONT_LEFT 0, DOOR_FRONT_RIGHT 8, DOOR_REAR_RIGHT 9,
+// DOOR_REAR_LEFT 11. SetPedInCarDirect's passenger branch takes doors 8..11 (0x61b0ec: sub w8, w2, #8; cmp w8, #4).
+constexpr unsigned char kDoorFrontLeft = 0;
+constexpr unsigned char kDoorFrontRight = 8;
+constexpr unsigned char kDoorRearRight = 9;
+constexpr unsigned char kDoorRearLeft = 11;
+constexpr int kPassengerDoorMin = 8;
+constexpr int kPassengerDoorMax = 11;
+constexpr unsigned char kNoSeat = 0xFF;
+
+// Desktop CClientVehicleManager.cpp 19-32 (g_ucMaxPassengers): passenger count per standard model 400..611.
+// Index is model - 400. 0 and 255 mean no passenger seats.
+constexpr unsigned char kMaxPassengers[212] = {3, 1,   1,   1,   3,   3, 0,   1,  1, 3, 1, 1,   1, 3, 1, 1,  // 400->415
+                                                           3, 1,   3,   1,   3,   3, 1,   1,  1, 0, 3, 3,   3, 1, 0, 8,  // 416->431
+                                                           0, 1,   1,   255, 1,   8, 3,   1,  3, 0, 1, 1,   1, 3, 0, 1,  // 432->447
+                                                           0, 1,   255, 1,   0,   0, 0,   1,  1, 1, 3, 3,   1, 1, 1,     // 448->462
+                                                           1, 1,   1,   3,   3,   1, 1,   3,  1, 0, 0, 1,   1, 0, 1, 1,  // 463->478
+                                                           3, 1,   0,   3,   3,   0, 0,   0,  3, 1, 1, 3,   1, 3, 0, 1,  // 479->494
+                                                           1, 1,   3,   3,   1,   1, 1,   1,  1, 1, 1, 1,   3, 1, 0, 0,  // 495->510
+                                                           1, 0,   0,   1,   1,   3, 1,   1,  0, 0, 1, 1,   1, 1, 1, 1,  // 511->526
+                                                           1, 1,   3,   0,   0,   0, 1,   1,  1, 1, 1, 1,   0, 3, 1,     // 527->541
+                                                           1, 1,   1,   1,   3,   3, 1,   1,  3, 3, 1, 0,   1, 1, 1, 1,  // 542->557
+                                                           1, 1,   3,   3,   1,   1, 0,   1,  3, 3, 0, 255, 1, 0, 0,     // 558->572
+                                                           1, 0,   1,   1,   1,   1, 3,   3,  1, 3, 0, 255, 3, 1, 1, 1,  // 573->588
+                                                           1, 255, 255, 1,   1,   1, 0,   3,  3, 3, 1, 1,   1, 1, 1,     // 589->604
+                                                           3, 1,   255, 255, 255, 3, 255, 255};
+
+// Desktop CModelInfoSA::IsBike and IsQuadBike (CModelInfoSA.h FUNC_IsBikeModel 0x4c5b60, FUNC_IsQuadBikeModel 0x4c5bf0)
+// call the exported CModelInfo::IsBikeModel(int) and IsQuadBikeModel(int). Both index ms_aInfoForModel without a bounds
+// check, so they are called only for standard models 400..611.
+using ModelPredicateFn = bool (*)(int);
+struct BikeFns {
+    bool ready = false;
+    ModelPredicateFn isBike = nullptr;
+    ModelPredicateFn isQuadBike = nullptr;
+};
+
+BikeFns& BikeApi() {
+    static BikeFns api;
+    if (api.ready) return api;
+    api.ready = true;
+#ifdef __ANDROID__
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) return api;
+    api.isBike = reinterpret_cast<ModelPredicateFn>(dlsym(handle, "_ZN10CModelInfo11IsBikeModelEi"));
+    api.isQuadBike = reinterpret_cast<ModelPredicateFn>(dlsym(handle, "_ZN10CModelInfo15IsQuadBikeModelEi"));
+    if (!api.isBike || !api.isQuadBike) {
+        ENGINE_LOGI("Remote seat bike check missing: bike=%p quad=%p", reinterpret_cast<void*>(api.isBike),
+            reinterpret_cast<void*>(api.isQuadBike));
+    }
+#endif
+    return api;
+}
+
+// Desktop GetVehicleType returns BIKE or QUADBIKE. The caller has checked the model range.
+bool IsBikeOrQuadBike(int model) {
+    BikeFns& api = BikeApi();
+    if (api.isBike && api.isBike(model)) return true;
+    return api.isQuadBike && api.isQuadBike(model);
+}
 
 }  // namespace
 
@@ -494,7 +572,7 @@ bool SeatRemotePedInCar(void* ped, void* car) {
     if (!api.complete) return false;
     // Desktop InternalWarpIntoVehicle (CClientPed.cpp 7441): CreateTaskSimpleCarSetPedInAsDriver, SetIsWarpingPedIntoCar,
     // ProcessPed, Destroy. The destructor must run: the constructor registers a vehicle reference at task+0x20
-    // (CEntity::RegisterReference) and D2 clears it. Skipping it leaves the car pointing into this stack frame.
+    // (CEntity::RegisterReference) and D1 clears it. Skipping it leaves the car pointing into this stack frame.
     alignas(16) unsigned char task[kSeatTaskBytes] = {};
     api.driverCtor(task, car, nullptr);
     task[kDriverWarpingOffset] = 1;
@@ -516,6 +594,62 @@ bool UnseatRemotePedFromCar(void* ped, void* car) {
     task[kOutKnockedOffOffset] = 1;
     api.outProcess(task, ped);
     api.outDtor(task);
+    return true;
+}
+
+unsigned char PassengerGameDoor(int model, unsigned char seatIndex) {
+    // Desktop CClientVehicleManager::ConvertIndexToGameSeat (CClientVehicleManager.cpp 580-645). A model outside 400..611
+    // takes the 0xFF branch of GetMaxPassengerCount, which is the same as a model with no passenger seats.
+    const unsigned char maxPassengers = (model >= 400 && model <= 611) ? kMaxPassengers[model - 400] : 255;
+    switch (maxPassengers) {
+        case 0:
+        case 255:
+            return seatIndex == 0 ? kDoorFrontLeft : kNoSeat;
+        case 1: {
+            // Desktop bIsBike: BIKE or QUADBIKE. The bike's passenger sits in a rear door.
+            const bool bike = IsBikeOrQuadBike(model);
+            if (seatIndex == 0) return kDoorFrontLeft;
+            if (seatIndex == 1) return bike ? kDoorRearRight : kDoorFrontRight;
+            if (bike) {
+                if (seatIndex == 2) return kDoorRearLeft;
+                if (seatIndex == 3) return kDoorRearRight;
+            }
+            return kNoSeat;
+        }
+        case 3:
+            switch (seatIndex) {
+                case 0:
+                    return kDoorFrontLeft;
+                case 1:
+                    return kDoorFrontRight;
+                case 2:
+                    return kDoorRearLeft;
+                case 3:
+                    return kDoorRearRight;
+                default:
+                    return kNoSeat;
+            }
+        case 8:
+            if (seatIndex == 0) return kDoorFrontLeft;
+            if (seatIndex <= 8) return kDoorFrontRight;
+            return kNoSeat;
+        default:
+            return kNoSeat;
+    }
+}
+
+bool SeatRemotePedAsPassenger(void* ped, void* car, int gameDoor) {
+    if (!ped || !car) return false;
+    if (gameDoor < kPassengerDoorMin || gameDoor > kPassengerDoorMax) return false;
+    SeatFns& api = SeatApi();
+    if (!api.complete) return false;
+    // Desktop InternalWarpIntoVehicle passenger branch (CClientPed.cpp 3441-3462): CreateTaskSimpleCarSetPedInAsPassenger
+    // (vehicle, door), SetIsWarpingPedIntoCar, ProcessPed, Destroy. The destructor always runs, as in SeatRemotePedInCar.
+    alignas(16) unsigned char task[kSeatTaskBytes] = {};
+    api.passengerCtor(task, car, gameDoor, nullptr);
+    task[kPassengerWarpingOffset] = 1;
+    api.passengerProcess(task, ped);
+    api.passengerDtor(task);
     return true;
 }
 

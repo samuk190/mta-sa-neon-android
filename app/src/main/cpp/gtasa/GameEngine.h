@@ -167,7 +167,8 @@ void ForgetRemote(uint32_t id);
 void RequestRemoteReset();
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
 // VEHICLE_INOUT for another player (packet 58). Queued here and applied on the game thread in ApplyRemotePeds. A seated
-// ped is not moved by its on-foot pose until it is unseated. Only the driver seat (0) is applied.
+// ped is not moved by its on-foot pose until it is unseated. Seat 0 is the driver. Other seats use the passenger task
+// through the desktop seat table (PassengerGameDoor).
 void NoteRemoteSeat(uint32_t pedId, uint32_t vehicleId, uint8_t seat);
 void NoteRemoteUnseat(uint32_t pedId);
 // Driver block of PLAYER_VEHICLE_PURESYNC (packet 33): move speed and turn speed of a remote car. Applied once per packet

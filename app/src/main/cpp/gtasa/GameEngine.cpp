@@ -791,29 +791,43 @@ static bool ApplyRemoteSeat(uint32_t pedId, const RemoteSeatRequest& req) {
         UnseatApplied(pedId);
         return true;
     }
-    // Passenger seats are not placed (desktop CClientVehicleManager::ConvertIndexToGameSeat is not ported).
-    if (req.seat != 0) return true;
     auto seated = g_seatedPeds.find(pedId);
     if (seated != g_seatedPeds.end() && seated->second.vehicleId == req.vehicleId && seated->second.seat == req.seat) {
         return true;
     }
     void* body = nullptr;
     void* car = nullptr;
+    int model = 0;
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         auto b = g_remoteBodies.find(pedId);
         if (b != g_remoteBodies.end()) body = b->second.ped;
         auto c = g_remoteCars.find(req.vehicleId);
-        if (c != g_remoteCars.end()) car = c->second.body;
+        if (c != g_remoteCars.end()) {
+            car = c->second.body;
+            model = c->second.model;
+        }
     }
     if (!body || !car) return false;
     // Desktop WarpIntoVehicle (CClientPed.cpp 3383) calls RemoveFromVehicle before it seats the ped.
     if (seated != g_seatedPeds.end()) UnseatApplied(pedId);
-    if (!SeatRemotePedInCar(body, car)) return false;
+    // Driver seat 0 is the driver door. A passenger seat is mapped to its game door by the desktop table, and a seat
+    // the model does not have is dropped. The ped stays out of the car in that case.
+    unsigned char gameDoor = 0;
+    if (req.seat != 0) {
+        gameDoor = PassengerGameDoor(model, req.seat);
+        if (gameDoor == 0xFF) {
+            ENGINE_LOGI("VehInOut: ped %u seat %u has no seat on model %d", pedId, static_cast<unsigned>(req.seat), model);
+            return true;
+        }
+    }
+    const bool seatedOk = req.seat == 0 ? SeatRemotePedInCar(body, car)
+                                        : SeatRemotePedAsPassenger(body, car, static_cast<int>(gameDoor));
+    if (!seatedOk) return false;
     // The seated skip in ApplyRemotePeds returns before its ClearRemoteStick, so a stick set before the seat is cleared here.
     ClearRemoteStick(body);
     g_seatedPeds[pedId] = SeatedPed{req.vehicleId, req.seat};
-    ENGINE_LOGI("VehInOut: ped %u seated in vehicle %u", pedId, req.vehicleId);
+    ENGINE_LOGI("VehInOut: ped %u seated in vehicle %u seat %u", pedId, req.vehicleId, static_cast<unsigned>(req.seat));
     return true;
 }
 

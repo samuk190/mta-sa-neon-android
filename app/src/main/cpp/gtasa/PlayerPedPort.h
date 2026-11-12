@@ -30,9 +30,16 @@ void ClearRemoteStick(void* ped);
 bool InstallLocalBulletFireHook();
 
 // Driver seat for a remote ped (VEHICLE_INOUT, packet 58). Desktop CClientPed::InternalWarpIntoVehicle
-// (CClientPed.cpp 7441) and InternalRemoveFromVehicle (7464), driver seat only. Game thread only.
+// (CClientPed.cpp 7441) and InternalRemoveFromVehicle (7464). Game thread only.
 // Both return false when a libGTASA symbol is missing or an argument is null, and the caller keeps the request.
 bool SeatRemotePedInCar(void* ped, void* car);
 bool UnseatRemotePedFromCar(void* ped, void* car);
+// Passenger seat for a remote ped (VEHICLE_INOUT seat > 0). gameDoor is a PassengerGameDoor result (8, 9 or 11).
+// Desktop CClientPed::InternalWarpIntoVehicle passenger branch (CClientPed.cpp 3441-3462). Game thread only.
+// Returns false for a null argument, a door outside 8..11, or a missing libGTASA symbol.
+bool SeatRemotePedAsPassenger(void* ped, void* car, int gameDoor);
+// Desktop CClientVehicleManager::ConvertIndexToGameSeat (CClientVehicleManager.cpp 580-645): the packet seat index to
+// the game door of the vehicle's model. Returns 0xFF when that model has no such seat.
+unsigned char PassengerGameDoor(int model, unsigned char seatIndex);
 
 }

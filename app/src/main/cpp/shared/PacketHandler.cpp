@@ -640,13 +640,8 @@ void ApplyRemoteVehicleInOut(uint8_t action, uint32_t pedId, uint32_t vehicleId,
         case 1:  // NOTIFY_IN_RETURN: desktop WarpIntoVehicle (CPacketHandler.cpp 1901)
         case 5:  // NOTIFY_OUT_ABORT_RETURN: desktop WarpIntoVehicle back in (CPacketHandler.cpp 2070)
             WorldRPG::RemoteVehicle::SetOccupant(pedId, vehicleId, seat);
-            if (seat == 0) {
-                WorldRPG::Game::NoteRemoteSeat(pedId, vehicleId, seat);
-            } else {
-                // Passenger seats need the desktop ConvertIndexToGameSeat table, which is not ported.
-                DIAG("VehInOut: ped=%u seat=%u passenger not seated (ConvertIndexToGameSeat not ported)", pedId,
-                     static_cast<unsigned>(seat));
-            }
+            // Driver (seat 0) and passenger seats. GameEngine maps a passenger seat to its game door (PassengerGameDoor).
+            WorldRPG::Game::NoteRemoteSeat(pedId, vehicleId, seat);
             break;
         case 2:  // NOTIFY_IN_ABORT_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 1988)
         case 4:  // NOTIFY_OUT_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 2036)
