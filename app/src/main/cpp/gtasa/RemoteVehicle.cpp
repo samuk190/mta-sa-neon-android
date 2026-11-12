@@ -77,48 +77,70 @@ bool FindOccupant(uint32_t playerId, uint32_t& vehicleId, uint8_t& seat) {
     return true;
 }
 
+// CClientVehicle::SetTargetPosition / SetTargetRotation / SetMoveSpeed / SetTurnSpeed / SetHealth /
+// SetEngineOn / SetDerailed. The phone has no remote VehicleHandle yet, so each call records the
+// desktop state and logs it. Engine effects are the open gap listed in the roadmap.
+void SetTargetPosition(uint32_t vehicleId, const Vec3& pos, uint32_t rateMs, bool useVelocityZ, float velocityZ) {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        VehicleState* state = StateFor(vehicleId);
+        if (!state) return;
+        state->position = pos;
+        state->havePose = true;
+    }
+    DIAG("veh %u SetTargetPosition pos=%.1f %.1f %.1f rate=%u velZ=%s%.2f", vehicleId, pos.x, pos.y, pos.z, rateMs,
+         useVelocityZ ? "" : "unused:", velocityZ);
+}
+
+void SetTargetRotation(uint32_t vehicleId, const Vec3& rot, uint32_t rateMs) {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        VehicleState* state = StateFor(vehicleId);
+        if (!state) return;
+        state->rotation = rot;
+    }
+    DIAG("veh %u SetTargetRotation rot=%.1f %.1f %.1f rate=%u", vehicleId, rot.x, rot.y, rot.z, rateMs);
+}
+
+void SetMoveSpeed(uint32_t vehicleId, const Vec3& v) {
+    DIAG("veh %u SetMoveSpeed %.2f %.2f %.2f", vehicleId, v.x, v.y, v.z);
+}
+
+void SetTurnSpeed(uint32_t vehicleId, const Vec3& v) {
+    DIAG("veh %u SetTurnSpeed %.2f %.2f %.2f", vehicleId, v.x, v.y, v.z);
+}
+
+void SetHealth(uint32_t vehicleId, float health) {
+    DIAG("veh %u SetHealth %.1f", vehicleId, health);
+}
+
+void SetEngineOn(uint32_t vehicleId, bool on) {
+    DIAG("veh %u SetEngineOn %d", vehicleId, on ? 1 : 0);
+}
+
+void SetDerailed(uint32_t vehicleId, bool derailed) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    VehicleState* state = StateFor(vehicleId);
+    if (state) state->derailed = derailed;
+}
+
+// CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleSync (CUnoccupiedVehicleSync.cpp:178-208), in the
+// desktop order. Rate is CTickRateSettings iUnoccupiedVehicle (400 ms).
+// Gap: CClientVehicle::CanUpdateSync(timeContext) is not ported; the per-vehicle time context is not
+// tracked yet, so every update is applied.
 void ApplyUnoccupied(const VehicleSync::UnoccupiedUpdate& u) {
+    constexpr uint32_t kUnoccupiedRateMs = 400;
     if (u.vehicleId == 0 || u.vehicleId == 0xFFFFFFFFu) {
         DIAG("UNOCCUPIED_VEHICLE_SYNC invalid vehicle id=%u", u.vehicleId);
         return;
     }
-    if (WorldRPG::ServerWorld::ActorHosted(u.vehicleId)) return;
-
-    const bool train = IsTrainId(u.vehicleId);
-    bool derailed = false;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        VehicleState* state = StateFor(u.vehicleId);
-        if (!state) return;
-        if (u.syncPosition) {
-            state->position = u.position;
-            state->havePose = true;
-        }
-        if (u.syncRotation) state->rotation = u.rotation;
-        if (u.syncPosition || u.syncRotation) state->derailed = u.derailed;
-        derailed = state->derailed;
-    }
-
-    // Trains move on tracks; the reference only uses the target pose for trains when derailed.
-    const bool poseAllowed = !train || derailed;
-    if (poseAllowed && (u.syncPosition || u.syncRotation)) {
-        VehicleState snapshot;
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            snapshot = g_vehicles[u.vehicleId];
-        }
-        if (snapshot.havePose) {
-            WorldRPG::Game::NoteRemoteVehicle(u.vehicleId, 0, snapshot.position.x, snapshot.position.y, snapshot.position.z,
-                                              RadiansFromDegrees(snapshot.rotation.z));
-        }
-    }
-
-    if (u.syncVelocity || u.syncTurnVelocity || u.syncHealth) {
-        ApplyEngineMotion(u.vehicleId, u.velocity, u.turnVelocity, u.health);
-    }
-
-    DIAG("unoccupied veh id=%u pos=%.1f %.1f %.1f rotZ=%.1f%s%s", u.vehicleId, u.position.x, u.position.y, u.position.z, u.rotation.z,
-         u.syncPosition ? "" : " (no pos)", train ? " (train)" : "");
+    if (u.syncPosition) SetTargetPosition(u.vehicleId, u.position, kUnoccupiedRateMs, u.syncVelocity, u.velocity.z);
+    if (u.syncRotation) SetTargetRotation(u.vehicleId, u.rotation, kUnoccupiedRateMs);
+    if (u.syncVelocity) SetMoveSpeed(u.vehicleId, u.velocity);
+    if (u.syncTurnVelocity) SetTurnSpeed(u.vehicleId, u.turnVelocity);
+    if (u.syncHealth) SetHealth(u.vehicleId, u.health);
+    SetEngineOn(u.vehicleId, u.engineOn);
+    if (IsTrainId(u.vehicleId)) SetDerailed(u.vehicleId, u.derailed);
 }
 
 void ApplyOccupied(uint32_t playerId, uint32_t vehicleId, uint8_t seat, const VehicleSync::OccupiedSync& s) {

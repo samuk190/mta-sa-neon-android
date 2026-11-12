@@ -18,5 +18,6 @@ The reference is the desktop client source in `mta_neon_source` (Client/mods/dea
 | `CPedSync::Packet_PedStartSync` | CPedSync.cpp:211-266 | `HandlePedStartSync` | Converted: no wander task; syncing flag only. Health and armor apply still missing (no engine hook). |
 | `CPedSync::Packet_PedStopSync` | CPedSync.cpp:269-287 | `HandlePedStopSync` | Converted: lock current health and armor, release sync. No wander clear. |
 | `CPedSync::AddPed` / `RemovePed` | CPedSync.cpp:167-204 | `PedSyncState::BeginHosted` / `EndHosted` | Converted: bookkeeping only. |
+| `CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleSync` | CUnoccupiedVehicleSync.cpp:178-208 | `HandleUnoccupiedVehicleSync` / `RemoteVehicle::ApplyUnoccupied` | Converted: desktop order (target position, target rotation, move speed, turn speed, health, engine on, derailed for trains). Removed the invented hosted and derailed gates. Gap: `CanUpdateSync` time context. Engine effects log only. |
 
 Everything else in the roadmap is not yet converted. Do not mark a row done until its desktop function was read and compared line by line.
