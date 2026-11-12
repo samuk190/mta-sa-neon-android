@@ -4,6 +4,7 @@
 #include "../gtasa/RemoteCombat.h"
 #include "../net/raknet/RakNetWrapper.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -28,6 +29,7 @@ constexpr int kMaxDiagLines = 24;
 int g_bulletDiag = 0;
 int g_weaponDiag = 0;
 int g_healthDiag = 0;
+int g_settingsDiag = 0;
 
 // Same 17-bit ElementID mapping as PacketHandler.cpp ReadElementId.
 bool ReadElementId(WorldRPG::Net::BitStreamReader& reader, uint32_t& out) {
@@ -68,9 +70,43 @@ bool SameVector(const float a[3], const float b[3]) {
     return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
 }
 
+// Weapon ids 0..63 as one bit each. Ids above 63 are not representable and never report bullet sync.
+constexpr uint64_t WeaponBit(uint8_t weapon) {
+    return weapon < 64 ? (uint64_t{1} << weapon) : 0;
+}
+
+// Reference default (CClientWeaponManager::HasWeaponBulletSync range) until SYNC_SETTINGS arrives.
+constexpr uint64_t kDefaultBulletSyncWeapons = [] {
+    uint64_t mask = 0;
+    for (uint8_t weapon = 22; weapon <= 34; ++weapon) mask |= WeaponBit(weapon);
+    return mask;
+}();
+
+// Sender set from SYNC_SETTINGS. Written on the network thread, read on the game thread.
+std::atomic<uint64_t> g_bulletSyncWeapons{kDefaultBulletSyncWeapons};
+
 } // namespace
 
 bool WeaponUsesBulletSync(uint8_t weapon) {
+    return (g_bulletSyncWeapons.load(std::memory_order_relaxed) & WeaponBit(weapon)) != 0;
+}
+
+bool ReadSyncSettingsWeapons(WorldRPG::Net::BitStreamReader& reader) {
+    uint8_t count = 0;
+    if (!reader.Read(count)) return false;
+    uint64_t mask = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        uint8_t weapon = 0;
+        if (!reader.Read(weapon)) break; // desktop keeps the ids read so far
+        mask |= WeaponBit(weapon);
+    }
+    g_bulletSyncWeapons.store(mask, std::memory_order_relaxed);
+    if (g_settingsDiag++ < kMaxDiagLines)
+        COMBAT_LOGI("DIAG SYNC_SETTINGS bullet sync weapon mask=0x%llx count=%u", static_cast<unsigned long long>(mask), count);
+    return true;
+}
+
+bool ReceivesBulletSyncWeapon(uint8_t weapon) {
     return weapon >= 22 && weapon <= 34;
 }
 
@@ -81,7 +117,7 @@ bool ReadPlayerBulletSync(WorldRPG::Net::BitStreamReader& reader, SBulletSync& o
             COMBAT_LOGI("DIAG BULLET_SYNC header read failed shooter=%u bit=%zu", out.shooter, bitOffset);
         return false;
     }
-    if (!WeaponUsesBulletSync(out.weapon)) {
+    if (!ReceivesBulletSyncWeapon(out.weapon)) {
         if (g_bulletDiag++ < kMaxDiagLines)
             COMBAT_LOGI("DIAG BULLET_SYNC shooter=%u weapon=%u has no bullet sync (ignored) bit=%zu", out.shooter, out.weapon, bitOffset);
         return false;

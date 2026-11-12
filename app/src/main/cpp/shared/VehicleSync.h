@@ -159,7 +159,7 @@ bool WriteUnoccupiedEntry(WorldRPG::Net::BitStreamWriter& writer, const Unoccupi
 // Fields without a phone source are written in their absent form (see WriteDriverPuresync).
 struct DriverPuresyncIn {
     uint8_t timeContext = 0;
-    FullKeys keys;               // controller state; zero when no car-control source exists
+    FullKeys keys;               // driving keys from the local pad (steering, accelerate, brake, handbrake, horn)
     int32_t model = 0;           // GTA model id (400-611)
     Vec3 position;               // vehicle position
     Vec3 rotation;               // vehicle rotation in degrees

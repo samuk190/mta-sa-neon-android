@@ -472,6 +472,14 @@ bool HandleBulletSync(const uint8_t* body, size_t length, size_t bits) {
     return true;
 }
 
+// SYNC_SETTINGS (99). Client read: CPacketHandler::Packet_SyncSettings. Only the bullet weapon list is ported;
+// the rest of the packet (extrapolation and fix flags) is not read.
+bool HandleSyncSettings(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    WorldRPG::Combat::ReadSyncSettingsWeapons(reader);
+    return true;
+}
+
 // WEAPON_BULLETSYNC (100). Client read: CNetAPI::ReadWeaponBulletsync.
 bool HandleWeaponBulletSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
@@ -902,6 +910,7 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 31) return HandleKeySync(body, bodyLength, bodyBits);
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
         if (gameId == 98) return HandleBulletSync(body, bodyLength, bodyBits);
+        if (gameId == 99) return HandleSyncSettings(body, bodyLength, bodyBits);
         if (gameId == 100) return HandleWeaponBulletSync(body, bodyLength, bodyBits);
         if (gameId == 63) return HandlePedSync(body, bodyLength, bodyBits);
         if (gameId == 61) return HandlePedStartSync(body, bodyLength, bodyBits);

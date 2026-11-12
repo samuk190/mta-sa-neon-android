@@ -50,7 +50,17 @@ void ApplyBulletDamage(const SBulletSync& bullet, uint32_t localPlayer);
 // record is never written from this value.
 void RegisterVictimHealth(uint32_t id, uint8_t health, uint32_t localPlayer);
 
-// Reference CClientWeaponManager::HasWeaponBulletSync: weapon ids 22..34.
+// Sender gate (desktop CClientGame::GetWeaponTypeUsesBulletSync): true when the weapon is in the list from the
+// last SYNC_SETTINGS (99). Before any SYNC_SETTINGS arrives the default is weapon ids 22..34.
 bool WeaponUsesBulletSync(uint8_t weapon);
+
+// SYNC_SETTINGS (99), bullet weapon list. Reads uchar count, then count uchar weapon ids, and stores them as the
+// sender set (desktop CPacketHandler::Packet_SyncSettings, CPacketHandler.cpp 5839-5852). The rest of the packet
+// is not read. Returns false only when the count is missing; the set is then unchanged. Thread-safe.
+bool ReadSyncSettingsWeapons(WorldRPG::Net::BitStreamReader& reader);
+
+// Receive gate for PLAYER_BULLETSYNC (98) and WEAPON_BULLETSYNC (100). Reference CClientWeaponManager::HasWeaponBulletSync:
+// fixed weapon ids 22..34, independent of the SYNC_SETTINGS list.
+bool ReceivesBulletSyncWeapon(uint8_t weapon);
 
 } // namespace WorldRPG::Combat

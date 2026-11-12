@@ -1,5 +1,6 @@
 #include "NeonJoinProtocol.h"
 #include "../gtasa/GameEngine.h"
+#include "../shared/CombatSync.h"
 #include "../shared/VehicleSync.h"
 #include "../shared/entity/EntityVehicleModels.h"
 
@@ -193,6 +194,7 @@ struct NeonJoinClient::Impl {
     // Last synced values per hosted vehicle (desktop CDeathmatchVehicle::m_LastSyncedData).
     struct UnoccupiedLastSynced {
         WorldRPG::VehicleSync::Vec3 position, rotation, velocity, turnVelocity;
+        float health = 0.f;
     };
     std::unordered_map<uint32_t, UnoccupiedLastSynced> lastUnoccupied;
     float lastKeyHeading = 0.f;
@@ -200,9 +202,9 @@ struct NeonJoinClient::Impl {
 
     // PLAYER_VEHICLE_PURESYNC (packet 33), driver form. Desktop CNetAPI::DoPulse (279-380) sends
     // WriteVehiclePuresync instead of WritePlayerPuresync while the local ped is in a car. Only seat 0 is
-    // ported. Keys are zero: CopyOnFoot derives its stick from walking speed, not from car controls, and no
-    // car-control source exists yet. Player health comes from the CopyBody sample (armor has no source, so 0,
-    // as on foot). The camera is assumed to look along the car heading, level pitch (no camera sample).
+    // ported. Driving keys come from the local pad (CopyLocalCar, sampled in WatchLocalVehicle). Fire, action,
+    // enter/exit and walk keys stay zero: no source yet. Player health comes from the CopyBody sample (armor has no
+    // source, so 0, as on foot). The camera is assumed to look along the car heading, level pitch (no camera sample).
     void SendDriverPuresync(const WorldRPG::Game::LocalCarState& car) {
         // Train block is not ported. Return before ConsumeDamage so a pending hit is not lost.
         if (WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(car.model))) return;
@@ -229,6 +231,17 @@ struct NeonJoinClient::Impl {
         in.playerArmor = 0.f;
         in.cameraRotZ = camera;
         in.cameraRotX = 0.f;
+        // Driving keys from the local CControllerState (desktop CNetAPI::WriteFullKeysync, CNetAPI.cpp 1915-1934).
+        // WriteFullKeys writes an analog byte only for 1..254 and the bit from the same value, as on the desktop.
+        in.keys.stickX = car.steering;             // LeftStickX (-128..128)
+        in.keys.analogCross = car.accelerate;      // ButtonCross, accelerate
+        in.keys.buttonCross = car.accelerate != 0;
+        in.keys.analogSquare = car.brake;          // ButtonSquare, brake / reverse
+        in.keys.buttonSquare = car.brake != 0;
+        in.keys.rightShoulder1 = car.handBrake;    // RightShoulder1, handbrake
+        in.keys.shockButtonL = car.horn;           // ShockButtonL, horn
+        in.lookLeft = car.lookLeft;                // LeftShoulder2, written only when flags.aircraft
+        in.lookRight = car.lookRight;              // RightShoulder2, same
         uint32_t attacker = 0;
         uint8_t weapon = 0;
         if (WorldRPG::Game::ConsumeDamage(attacker, weapon)) {
@@ -260,6 +273,9 @@ struct NeonJoinClient::Impl {
         if (!net || !net->IsConnected()) return;
         WorldRPG::Game::LocalShot shot;
         while (WorldRPG::Game::ConsumeLocalShot(shot)) {
+            // Desktop CClientGame::PostWeaponFire (CClientGame.cpp 6024) sends only weapons in the SYNC_SETTINGS list.
+            if (shot.weapon < 0 || shot.weapon > 255 || !WorldRPG::Combat::WeaponUsesBulletSync(static_cast<uint8_t>(shot.weapon)))
+                continue;
             BitStreamWriter w;
             w.Write(static_cast<uint8_t>(98));           // PLAYER_BULLETSYNC
             w.Write(static_cast<uint8_t>(shot.weapon));  // stream->Write(char weapon)
@@ -629,7 +645,15 @@ struct NeonJoinClient::Impl {
                 last.turnVelocity = turnVelocity;
             }
 
-            if (update.syncPosition || update.syncRotation || update.syncVelocity || update.syncTurnVelocity) updates.push_back(update);
+            // Health: desktop WriteVehicleInformation (CUnoccupiedVehicleSync.cpp 360), changed by more than epsilon.
+            if (firstSeen || std::fabs(last.health - car.health) > kFloatEpsilon) {
+                update.syncHealth = true;
+                update.health = car.health;
+                last.health = car.health;
+            }
+
+            if (update.syncPosition || update.syncRotation || update.syncVelocity || update.syncTurnVelocity ||
+                update.syncHealth) updates.push_back(update);
             next.emplace(car.id, last);
         }
         lastUnoccupied.swap(next);

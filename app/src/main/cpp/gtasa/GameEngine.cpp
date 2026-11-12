@@ -429,6 +429,15 @@ struct TaskFns {
     void* (*createCarForScript)(int, Vec3, unsigned char) = nullptr;
     // CVehicle* FindPlayerVehicle(int playerId, bool bIncludeRemote). playerId -1 is the local player.
     void* (*findPlayerVehicle)(int, bool) = nullptr;
+    // CPad (libGTASA 2.10). GetPad(0) is the local pad; the getters are CPad members, so they take the pad.
+    void* (*getPad)(int) = nullptr;
+    int (*padSteering)(void*) = nullptr;       // CPad::GetSteeringLeftRight, -128..128
+    int (*padAccelerate)(void*) = nullptr;     // CPad::GetAccelerate, 0..255
+    int (*padBrake)(void*) = nullptr;          // CPad::GetBrake, 0..255
+    int (*padHandBrake)(void*) = nullptr;      // CPad::GetHandBrake, nonzero when pressed
+    bool (*padHorn)(void*, bool) = nullptr;    // CPad::GetHorn(bool), the bool is unused on libGTASA 2.10
+    bool (*padLookLeft)(void*, bool) = nullptr;   // CPad::GetLookLeft(bool), true includes the touch look widget
+    bool (*padLookRight)(void*, bool) = nullptr;  // CPad::GetLookRight(bool), same
     void* wanderVtable = nullptr;
 };
 
@@ -464,8 +473,31 @@ static TaskFns& Tasks() {
     api.createCarForScript = reinterpret_cast<void* (*)(int, Vec3, unsigned char)>(
         dlsym(handle, "_ZN8CCarCtrl18CreateCarForScriptEi7CVectorh"));
     api.findPlayerVehicle = reinterpret_cast<void* (*)(int, bool)>(dlsym(handle, "_Z17FindPlayerVehicleib"));
+    api.getPad = reinterpret_cast<void* (*)(int)>(dlsym(handle, "_ZN4CPad6GetPadEi"));
+    api.padSteering = reinterpret_cast<int (*)(void*)>(dlsym(handle, "_ZN4CPad20GetSteeringLeftRightEv"));
+    api.padAccelerate = reinterpret_cast<int (*)(void*)>(dlsym(handle, "_ZN4CPad13GetAccelerateEv"));
+    api.padBrake = reinterpret_cast<int (*)(void*)>(dlsym(handle, "_ZN4CPad8GetBrakeEv"));
+    api.padHandBrake = reinterpret_cast<int (*)(void*)>(dlsym(handle, "_ZN4CPad12GetHandBrakeEv"));
+    api.padHorn = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad7GetHornEb"));
+    api.padLookLeft = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad11GetLookLeftEb"));
+    api.padLookRight = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad12GetLookRightEb"));
     api.wanderVtable = dlsym(handle, "_ZTV26CTaskComplexWanderStandard");
     return api;
+}
+
+// Driver controls for LocalCarState, read from the local pad on the game thread. A missing getter or pad leaves
+// its field at zero. The pad is the same CPad::GetPad(0) that PlayerPedPort.cpp uses.
+static void SamplePadControls(const TaskFns& api, LocalCarState& c) {
+    if (!api.getPad) return;
+    void* pad = api.getPad(0);
+    if (!pad) return;
+    if (api.padSteering) c.steering = static_cast<int16_t>(std::clamp(api.padSteering(pad), -128, 128));
+    if (api.padAccelerate) c.accelerate = static_cast<uint8_t>(std::clamp(api.padAccelerate(pad), 0, 255));
+    if (api.padBrake) c.brake = static_cast<uint8_t>(std::clamp(api.padBrake(pad), 0, 255));
+    if (api.padHandBrake) c.handBrake = api.padHandBrake(pad) != 0;
+    if (api.padHorn) c.horn = api.padHorn(pad, false);
+    if (api.padLookLeft) c.lookLeft = api.padLookLeft(pad, true);
+    if (api.padLookRight) c.lookRight = api.padLookRight(pad, true);
 }
 
 static void* PedIntel(void* ped) {
@@ -569,7 +601,8 @@ static void WriteBodyPos(void* body, float x, float y, float z) {
 // CClientVehicle.cpp 464) is 2*PI - ConvertMatrixToEulerAngles, wrapped to [0, 360). That equals the
 // negated x and y of CMatrix::GetRotation (Shared/sdk/CMatrix.h 236, "0 - ConvertToEulerAngles") modulo
 // 360. As in GetRotationMatrix (CMatrix.h 200), each matrix row is divided by its length, so scale is
-// ignored. Health is not read (the Android CVehicle health offset is not verified).
+// ignored. Health is CVehicle::m_fHealth at +0x634: CVehicle::InflictDamage (0x6a7848) does
+// `health -= damage` on [this, #1588] and CAutomobile::BlowUpCar (0x67d3ac) stores 0 there.
 static float WrapDegrees360(float value) {
     return value - 360.f * std::floor(value / 360.f);
 }
@@ -616,8 +649,9 @@ static bool SampleHostedCar(void* body, HostedCar& out) {
     out.tx = turn[0];
     out.ty = turn[1];
     out.tz = turn[2];
+    out.health = *reinterpret_cast<const float*>(raw + 0x634);
 
-    const float values[] = {out.x, out.y, out.z, out.rotX, out.rotY, out.rotZ, out.vx, out.vy, out.vz, out.tx, out.ty, out.tz};
+    const float values[] = {out.health, out.x, out.y, out.z, out.rotX, out.rotY, out.rotZ, out.vx, out.vy, out.vz, out.tx, out.ty, out.tz};
     for (float v : values) {
         if (!std::isfinite(v)) return false;
     }
@@ -871,6 +905,8 @@ static void WatchLocalVehicle() {
         c.tx = sample.tx;
         c.ty = sample.ty;
         c.tz = sample.tz;
+        c.health = sample.health;
+        SamplePadControls(api, c);
     }
     if (current == g_localVehicleId) return;
     if (g_localVehicleId != kNoVehicle) {

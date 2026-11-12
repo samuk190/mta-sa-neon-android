@@ -221,6 +221,8 @@ struct HostedCar {
     float rotX = 0, rotY = 0, rotZ = 0;
     float vx = 0, vy = 0, vz = 0;
     float tx = 0, ty = 0, tz = 0;
+    // CVehicle::m_fHealth (+0x634 on libGTASA 2.10 arm64).
+    float health = 1000.f;
 };
 int CopyHostedCars(HostedCar* out, int max);
 // Local player (CJ) enter/exit of a server vehicle, for VEHICLE_INOUT (packet 58). The game thread
@@ -236,7 +238,7 @@ bool ConsumeLocalVehicleEvent(LocalVehicleEvent& out);
 uint32_t LocalVehicleId();
 // The local player's own car, for PLAYER_VEHICLE_PURESYNC (packet 33, driver). Sampled on the game thread in
 // WatchLocalVehicle with SampleHostedCar, so the units match HostedCar: rotation in degrees [0, 360), move and
-// turn speed per frame from the body. health is fixed at 1000: the Android CVehicle health offset is not verified.
+// turn speed per frame from the body. health is CVehicle::m_fHealth (+0x634).
 struct LocalCarState {
     uint32_t vehicleId = 0xFFFFFFFFu;
     int model = 0;
@@ -245,6 +247,18 @@ struct LocalCarState {
     float vx = 0, vy = 0, vz = 0;
     float tx = 0, ty = 0, tz = 0;
     float health = 1000.f;
+    // Driver controls from CPad (game thread, WatchLocalVehicle). Zero when a getter is missing.
+    // steering: CPad::GetSteeringLeftRight, -128..128 (desktop LeftStickX).
+    // accelerate / brake: CPad::GetAccelerate / GetBrake, 0..255 (desktop ButtonCross / ButtonSquare).
+    // handBrake: CPad::GetHandBrake != 0 (desktop RightShoulder1). horn: CPad::GetHorn (desktop ShockButtonL).
+    // lookLeft / lookRight: CPad::GetLookLeft(true) / GetLookRight(true) (desktop LeftShoulder2 / RightShoulder2).
+    int16_t steering = 0;
+    uint8_t accelerate = 0;
+    uint8_t brake = 0;
+    bool handBrake = false;
+    bool horn = false;
+    bool lookLeft = false;
+    bool lookRight = false;
 };
 // False when the local ped is not in a mapped vehicle (always false off Android).
 bool CopyLocalCar(LocalCarState& out);
