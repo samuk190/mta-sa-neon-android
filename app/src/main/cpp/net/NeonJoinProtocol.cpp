@@ -692,6 +692,10 @@ namespace {
 bool SendChatLine(RakNetWrapper& net, const std::string& command);
 }
 
+void NeonJoinClient::ForceConnectionLost() {
+    if (pImpl_->state == JoinState::Complete) pImpl_->Fail("Connection lost");
+}
+
 void NeonJoinClient::Pulse() {
     Impl& d = *pImpl_;
     g_joinedNet = d.state == JoinState::Complete ? d.net : nullptr;

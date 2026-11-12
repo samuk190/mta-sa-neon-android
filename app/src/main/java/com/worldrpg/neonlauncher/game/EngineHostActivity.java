@@ -54,6 +54,11 @@ public final class EngineHostActivity extends GTASA {
     };
     private View chatInputBar;
     private EditText chatInput;
+    private String connectIp = "";
+    private int connectPort = 0;
+    private String connectNick = "";
+    private boolean joinedOnce = false;
+    private DisconnectDialog disconnectDialog;
     private volatile boolean netRunning;
     private Thread netThread;
 
@@ -64,6 +69,7 @@ public final class EngineHostActivity extends GTASA {
     private native void nativeDestroy();
     private native void nativeSetScreenSize(int width, int height);
     private native boolean nativeSendChat(String text);
+    private native void nativeDropConnection();
     private native String nativeMapSnapshot();
 
     @Override
@@ -123,6 +129,9 @@ public final class EngineHostActivity extends GTASA {
         nativeSetScreenSize(metrics.widthPixels, metrics.heightPixels);
         String nick = new PreferencesManager(this).getUsername();
         if (nick == null || nick.isEmpty()) nick = BuildConfig.DEFAULT_PLAYER_NICK;
+        connectIp = ip;
+        connectPort = port;
+        connectNick = nick;
         if (!nativeConnect(ip, port, nick)) {
             Log.e(TAG, "MTA connect failed to start");
             return;
@@ -251,6 +260,12 @@ public final class EngineHostActivity extends GTASA {
         if (keyboard != null) keyboard.hideSoftInputFromWindow(chatInput.getWindowToken(), 0);
         if (typed.isEmpty()) return;
         String command = typed.startsWith("/") ? typed.substring(1).trim() : "say " + typed;
+        if (command.equalsIgnoreCase("disconnect")) {
+            // Test hook for the disconnect dialog: stops the transport so the join
+            // protocol reports "Connection lost" the same way a real drop does.
+            nativeDropConnection();
+            return;
+        }
         if (command.isEmpty() || !nativeSendChat(command)) {
             appendChat("#FF6666Message was not sent.");
         }
@@ -275,12 +290,38 @@ public final class EngineHostActivity extends GTASA {
     @SuppressWarnings("unused")
     public void onNativeConnectionStateChange(boolean connected, String message) {
         runOnUiThread(() -> {
-            if (connected) appendChat("#ACD5FEConnected to the server.");
-            else {
+            if (connected) {
+                joinedOnce = true;
+                appendChat("#ACD5FEConnected to the server.");
+            } else {
                 hideDownload();
-                appendChat("#FF6666" + (message == null || message.isEmpty() ? "Disconnected." : message));
+                String text = message == null || message.isEmpty() ? "Disconnected." : message;
+                appendChat("#FF6666" + text);
+                // Only a drop after a join offers Retry / Quit (P3.1).
+                if (joinedOnce) {
+                    joinedOnce = false;
+                    showDisconnectDialog(text);
+                }
             }
         });
+    }
+
+    private void showDisconnectDialog(String message) {
+        if (isFinishing() || disconnectDialog != null) return;
+        disconnectDialog = new DisconnectDialog(this, message, new DisconnectDialog.Actions() {
+            @Override public void onRetry() {
+                disconnectDialog = null;
+                if (!nativeConnect(connectIp, connectPort, connectNick)) {
+                    appendChat("#FF6666Falha ao reconectar.");
+                    showDisconnectDialog("Falha ao reconectar.");
+                }
+            }
+            @Override public void onQuit() {
+                disconnectDialog = null;
+                finish();
+            }
+        });
+        disconnectDialog.show();
     }
 
     @SuppressWarnings("unused")

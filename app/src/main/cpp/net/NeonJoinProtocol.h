@@ -158,6 +158,9 @@ public:
     void SetStateCallback(StateCallback callback);
 
     JoinState State() const;
+    /// /disconnect test hook: fails a Complete session with "Connection lost", the same
+    /// reason a real transport drop reports, so the launcher shows Retry / Quit.
+    void ForceConnectionLost();
     bool IsActive() const;
     const NeonJoinInfo& Info() const;
 

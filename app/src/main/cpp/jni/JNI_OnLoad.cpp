@@ -449,4 +449,16 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSendChat(JNIEnv* en
     return sent ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT void JNICALL
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIEnv* env, jobject thiz)
+{
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !g_state || !g_state->network) return;
+    // Report "Connection lost" through the join callback (P3.1), then stop the transport
+    // so a later Retry starts a clean session.
+    g_state->join->ForceConnectionLost();
+    g_state->network->StopNetwork();
+    JNI_LOGI("nativeDropConnection: transport stopped for /disconnect");
+}
+
 } // extern "C"

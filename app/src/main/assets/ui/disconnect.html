@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conexao perdida</title>
+<style>
+  html, body { margin: 0; height: 100%; background: rgba(0,0,0,0.6); font-family: Roboto, Arial, sans-serif; color: #fff; }
+  .panel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, 88vw);
+           background: #1f1f1f; border-radius: 10px; overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,0.6); }
+  .header { background: #1c5e20; padding: 18px 22px; font-size: 20px; font-weight: 700; letter-spacing: .3px; }
+  .body { padding: 20px 22px 8px; font-size: 16px; line-height: 1.45; color: #e6e6e6; }
+  .actions { display: flex; gap: 12px; padding: 16px 22px 22px; }
+  button { flex: 1; border: 0; border-radius: 6px; padding: 14px 10px; font-size: 16px; font-weight: 700;
+           letter-spacing: 1px; color: #1c1c1c; background: #ff6f00; }
+  button.secondary { background: #3a3a3a; color: #fff; }
+  button:active { opacity: .85; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="header">Conexao perdida</div>
+    <div class="body" id="msg">O servidor encerrou a sessao.</div>
+    <div class="actions">
+      <button onclick="Neon.retry()">TENTAR NOVAMENTE</button>
+      <button class="secondary" onclick="Neon.quit()">SAIR</button>
+    </div>
+  </div>
+  <script>
+    window.setMessage = function (text) { document.getElementById('msg').textContent = text; };
+  </script>
+</body>
+</html>
