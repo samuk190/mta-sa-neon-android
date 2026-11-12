@@ -317,6 +317,13 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     uint32_t count = 0;
     if (!ReadCompressed(reader, 4, count)) { DIAG("ENTITY_ADD count read failed bits=%zu", reader.GetReadOffsetBits()); return; }
     DIAG("ENTITY_ADD begin count=%u bodyBits=%zu bitsRead=%zu remaining=%zu", static_cast<unsigned>(count), bits, reader.GetReadOffsetBits(), reader.GetRemainingBits());
+    {
+        // Ground-truth dump: first 80 body bytes, lowest address first, for offline bit decoding.
+        char hex[80 * 2 + 1] = {};
+        const size_t dumpBytes = length < 80 ? length : 80;
+        for (size_t i = 0; i < dumpBytes; ++i) std::snprintf(hex + i * 2, 3, "%02x", static_cast<unsigned>(body[i]));
+        DIAG("ENTITY_ADD body hex count=%u bytes=%zu %s", static_cast<unsigned>(count), dumpBytes, hex);
+    }
     if (count == 0 || count > 512) { DIAG("ENTITY_ADD bad count=%u", static_cast<unsigned>(count)); return; }
     std::lock_guard<std::mutex> lock(g_lock);
     int stored = 0;
