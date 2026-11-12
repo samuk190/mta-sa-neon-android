@@ -252,11 +252,13 @@ using WorldRPG::Sync::kBitStreamNativeTaskPresentation;
 bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     int applied = 0;
+    PKT_LOGI("DIAG PED_SYNC body len=%zu bits=%zu", length, bits);
     while (reader.GetRemainingBits() > 32 && applied < 16) {
         uint32_t id = 0;
         uint8_t ucSyncTimeContext = 0, ucFlags = 0, flags2 = 0;
         if (!ReadElementId(reader, id) || !reader.Read(ucSyncTimeContext) || !reader.Read(ucFlags) || !reader.Read(flags2))
             break;
+        PKT_LOGI("DIAG PED_SYNC id=%u ctx=%u flags=0x%02x flags2=0x%02x bit=%zu", id, ucSyncTimeContext, ucFlags, flags2, reader.GetReadOffsetBits());
 
         // Native task blocks — read before spatial data per mta_neon wire order
         // Blocks exist on the wire only when the negotiated bitstream carries them

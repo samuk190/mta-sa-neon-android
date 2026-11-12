@@ -595,7 +595,9 @@ static void ApplyRemotePeds() {
         for (int i = 0; i < count; ++i) {
             const auto& actor = actors[i];
             if (actor.kind == 14) {
+                const bool firstSeen = g_remotePeds.find(actor.id) == g_remotePeds.end();
                 auto& ped = g_remotePeds[actor.id];
+                if (firstSeen) ENGINE_LOGI("DIAG ped actor id=%u model=%d hosted=%d pos=%.1f,%.1f,%.1f", actor.id, actor.model, actor.hosted ? 1 : 0, actor.x, actor.y, actor.z);
                 ped.hosted = actor.hosted;
                 if (!ped.dirty && !ped.shown && actor.model >= 0) {
                     ped.x = actor.x;
