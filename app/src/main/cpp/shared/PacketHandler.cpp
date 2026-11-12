@@ -8,6 +8,8 @@
 #include "../gtasa/RemoteVehicle.h"
 #include "VehicleSync.h"
 #include "ServerWorld.h"
+#include "CombatSync.h"
+#include "../gtasa/RemoteCombat.h"
 
 namespace PedSyncState = WorldRPG::Sync::PedSyncState;
 
@@ -227,6 +229,14 @@ bool HandlePlayerPureSync(const uint8_t* body, size_t length, size_t bits) {
     (void)latency;
     if (id != WorldRPG::ServerWorld::LocalPlayer())
         WorldRPG::Game::NoteRemotePed(id, x, y, z, heading, vx, vy, vz);
+    // Victim health (SPlayerHealthSync, 8 bits, 0..255), read after velocity as in
+    // CNetAPI::ReadPlayerPuresync. A failed read keeps the position update.
+    uint8_t health = 0;
+    if (reader.Read(health)) {
+        WorldRPG::Combat::RegisterVictimHealth(id, health, WorldRPG::ServerWorld::LocalPlayer());
+    } else {
+        PKT_LOGI("DIAG PURESYNC health read failed id=%u bit=%zu", id, reader.GetReadOffsetBits());
+    }
     static int reports = 0;
     if (reports < 4) {
         ++reports;
@@ -389,30 +399,6 @@ bool SlotHasAmmo(unsigned slot) {
     return slot != 0 && slot != 1 && slot != 10 && slot != 11 && slot != 12;
 }
 
-float BulletDamage(uint8_t weapon) {
-    switch (weapon) {
-        case 24: return 46.f;
-        case 25: case 26: case 27: return 30.f;
-        case 30: case 31: return 30.f;
-        case 33: return 75.f;
-        case 34: return 125.f;
-        case 38: return 46.f;
-        default: return 20.f;
-    }
-}
-
-float SegmentDistance(float px, float py, float pz, float ax, float ay, float az, float bx, float by, float bz) {
-    const float abx = bx - ax, aby = by - ay, abz = bz - az;
-    const float apx = px - ax, apy = py - ay, apz = pz - az;
-    const float ab2 = abx * abx + aby * aby + abz * abz;
-    float t = ab2 > 0.0001f ? (apx * abx + apy * aby + apz * abz) / ab2 : 0.f;
-    t = std::clamp(t, 0.f, 1.f);
-    const float dx = ax + abx * t - px;
-    const float dy = ay + aby * t - py;
-    const float dz = az + abz * t - pz;
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
 // Relayed CKeysyncPacket::Write. The client read is CNetAPI::ReadKeysync.
 bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
@@ -420,6 +406,8 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
     if (!ReadElementId(reader, id) || id == WorldRPG::ServerWorld::LocalPlayer()) return false;
     uint8_t keys = 0;
     if (!reader.Read(keys)) return false;
+    // First byte is the button bitfield: bit 0x10 = ButtonCircle, 0x02 = RightShoulder1.
+    const uint8_t buttons = keys;
     bool analog = false;
     if (!ReadFlag(reader, analog) || (analog && !reader.Read(keys))) return false;
     if (!ReadFlag(reader, analog) || (analog && !reader.Read(keys))) return false;
@@ -445,8 +433,9 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
         slot = slotByte & 0x0Fu;
         if (slot <= 1) {
             punch = true;
-            if (WorldRPG::Game::RemoteFacingLocal(id, heading, 1.6f))
-                WorldRPG::Game::NoteDamage(id, 8.f, 0);
+            // ButtonCircle with a melee slot: the remote ped runs CTaskSimpleFight.
+            // No fixed damage is applied here. Hit damage comes from the engine fight task.
+            if ((buttons & 0x10u) != 0) WorldRPG::Combat::StartRemoteMelee(id, heading);
         }
     }
     WorldRPG::Game::NoteRemoteAim(id, heading, camera, sx, sy, punch, ducked);
@@ -466,37 +455,23 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
 // Relayed CBulletsyncPacket::Write. Damage is applied by the victim, then reported in pure sync.
 bool HandleBulletSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
-    uint32_t shooter = 0;
-    uint8_t weapon = 0, order = 0;
-    float sx = 0, sy = 0, sz = 0, ex = 0, ey = 0, ez = 0;
-    if (!ReadElementId(reader, shooter) || !reader.Read(weapon)) return false;
-    if (!reader.Read(sx) || !reader.Read(sy) || !reader.Read(sz)) return false;
-    if (!reader.Read(ex) || !reader.Read(ey) || !reader.Read(ez)) return false;
-    if (!reader.Read(order)) return false;
-    bool hit = false;
-    if (!ReadFlag(reader, hit)) return false;
-    float damage = 0;
-    uint8_t zone = 0;
-    uint32_t victim = 0xFFFFFFFFu;
-    if (hit) {
-        if (!reader.Read(damage) || !reader.Read(zone) || !ReadElementId(reader, victim)) return false;
-    }
-    WorldRPG::Game::NoteRemoteWeapon(shooter, weapon);
+    WorldRPG::Combat::SBulletSync bullet;
+    if (!WorldRPG::Combat::ReadPlayerBulletSync(reader, bullet)) return true;
     const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
-    float px = 0, py = 0, pz = 0, ph = 0;
-    WorldRPG::Game::CopyPose(px, py, pz, ph);
-    const float gap = SegmentDistance(px, py, pz, sx, sy, sz, ex, ey, ez);
-    const bool aimedAtUs = victim == local || (victim == 0xFFFFFFFFu && gap < 1.4f);
-    if (aimedAtUs && shooter != local) {
-        if (damage <= 0.f) damage = BulletDamage(weapon);
-        WorldRPG::Game::NoteDamage(shooter, damage, weapon);
-        static int reports = 0;
-        if (reports < 6) {
-            ++reports;
-            PKT_LOGI("BulletSync: weapon %u from %u damage %.0f gap %.1f", weapon, shooter, damage, gap);
-        }
-    }
-    (void)order; (void)zone; (void)ph;
+    if (bullet.shooter == local) return true;
+    if (!WorldRPG::Combat::AcceptPlayerBulletSync(bullet)) return true;
+    WorldRPG::Game::NoteRemoteWeapon(bullet.shooter, bullet.weapon);
+    WorldRPG::Combat::ShowRemoteTracer(bullet.shooter, bullet.weapon, bullet.start, bullet.end);
+    WorldRPG::Combat::ApplyBulletDamage(bullet, local);
+    return true;
+}
+
+// WEAPON_BULLETSYNC (100). Client read: CNetAPI::ReadWeaponBulletsync.
+bool HandleWeaponBulletSync(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    WorldRPG::Combat::SWeaponBulletSync shot;
+    if (!WorldRPG::Combat::ReadWeaponBulletSync(reader, shot)) return true;
+    WorldRPG::Combat::ShowRemoteWeaponFire(shot.weaponElement, shot.start, shot.end);
     return true;
 }
 
@@ -806,6 +781,7 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 31) return HandleKeySync(body, bodyLength, bodyBits);
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
         if (gameId == 98) return HandleBulletSync(body, bodyLength, bodyBits);
+        if (gameId == 100) return HandleWeaponBulletSync(body, bodyLength, bodyBits);
         if (gameId == 63) return HandlePedSync(body, bodyLength, bodyBits);
         if (gameId == 61) return HandlePedStartSync(body, bodyLength, bodyBits);
         if (gameId == 62) return HandlePedStopSync(body, bodyLength, bodyBits);
