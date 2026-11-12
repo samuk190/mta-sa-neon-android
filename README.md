@@ -24,6 +24,15 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 
 ---
 
+## Current Status & Feature Checklist
+
+- [x] **Game Log-in** — Working (handshake, OPEN51 datagram, cipher negotiation, and session init)
+- [x] **Character Sync** — Working *(with bugs)* (remote `CPlayerPed` creation, pure sync, keysync, health updates)
+- [x] **Peds** — Working *(with bugs)* (`ENTITY_ADD`, `PED_SYNC`, wander tasks; pathfinding and collision tuning in progress)
+- [x] **Sound / Chat** — Working (Opus voice stream, text chat send/receive, and on-screen overlay)
+
+---
+
 ## Game Assets & Folder Location
 
 All game assets are configured locally via environment variables (`.env`) rather than downloading from external cloud repositories.

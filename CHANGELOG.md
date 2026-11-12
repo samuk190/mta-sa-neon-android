@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Gradle Asset Pipeline**: Integrated `.env` property parsing in `app/build.gradle.kts` with `pushAssetsToDevice` Gradle task.
 - **Automated Sync Tool (`tools/sync_local_assets.sh`)**: Added shell script that parses `.env`, validates essential GTA Mobile 2.10 files (`data/gta.dat`, `texdb/gta3.img`), detects `libGTASA.so`, and pushes assets to connected devices via ADB.
 - **Prerequisites Documentation**: Explicitly documented on `README.md` and `game_assets/README.md` that original GTA San Andreas Mobile v2.10 is required for proprietary data files and native libraries (`libGTASA.so`).
+- **Feature Status Checklist**: Documented working subsystems checklist on `README.md` (Game log-in, Character sync, Peds, Sound/Chat).
 
 ### Changed
 - **Generic Project Naming**: Renamed root project to `mta-sa-neon-android` and application title to `MTA:SA Neon Android`.
