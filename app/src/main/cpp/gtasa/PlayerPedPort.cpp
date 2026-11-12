@@ -428,4 +428,95 @@ void ClearRemoteStick(void* ped) {
     if (RemoteStick* entry = FindStick(ped)) *entry = RemoteStick{};
 }
 
+namespace {
+
+// The task entry points the desktop reaches through CTasksSA (TaskCarAccessoriesSA.cpp 20-146). The task
+// objects are built on the stack, as the game does in CCarEnterExit::SetPedInCarDirect (0x61b044) and
+// CEventKnockOffBike::SetPedOutCar (0x448ae8). Only exported symbols are used.
+struct SeatFns {
+    bool ready = false;
+    bool complete = false;
+    // CTaskSimpleCarSetPedInAsDriver(CVehicle*, CTaskUtilityLineUpPedWithCar*) with a null utility, as CTasksSA passes.
+    void (*driverCtor)(void*, void*, void*) = nullptr;
+    void (*driverProcess)(void*, void*) = nullptr;
+    void (*driverDtor)(void*) = nullptr;
+    // CTaskSimpleCarSetPedOut(CVehicle*, int door, bool switchOffEngine).
+    void (*outCtor)(void*, void*, int, bool) = nullptr;
+    void (*outProcess)(void*, void*) = nullptr;
+    void (*outDtor)(void*) = nullptr;
+};
+
+SeatFns& SeatApi() {
+    static SeatFns api;
+    if (api.ready) return api;
+    api.ready = true;
+#ifdef __ANDROID__
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) return api;
+    api.driverCtor = reinterpret_cast<void (*)(void*, void*, void*)>(
+        dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriverC1EP8CVehicleP28CTaskUtilityLineUpPedWithCar"));
+    api.driverProcess = reinterpret_cast<void (*)(void*, void*)>(
+        dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriver10ProcessPedEP4CPed"));
+    api.outCtor = reinterpret_cast<void (*)(void*, void*, int, bool)>(
+        dlsym(handle, "_ZN23CTaskSimpleCarSetPedOutC1EP8CVehicleib"));
+    api.outProcess = reinterpret_cast<void (*)(void*, void*)>(
+        dlsym(handle, "_ZN23CTaskSimpleCarSetPedOut10ProcessPedEP4CPed"));
+    api.outDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN23CTaskSimpleCarSetPedOutD1Ev"));
+    api.driverDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriverD1Ev"));
+    api.complete = api.driverCtor && api.driverProcess && api.driverDtor && api.outCtor && api.outProcess && api.outDtor;
+    if (!api.complete) {
+        ENGINE_LOGI("Remote seat tasks missing: driver=%p/%p out=%p/%p/%p", reinterpret_cast<void*>(api.driverCtor),
+            reinterpret_cast<void*>(api.driverProcess), reinterpret_cast<void*>(api.outCtor),
+            reinterpret_cast<void*>(api.outProcess), reinterpret_cast<void*>(api.outDtor));
+    }
+#endif
+    return api;
+}
+
+// Byte the game writes after the driver task constructor, before ProcessPed (SetPedInCarDirect 0x61b084:
+// strb w22 = 1 at [sp, #0x30]). The desktop SetIsWarpingPedIntoCar (TaskCarAccessoriesSA.cpp) sets the same flag.
+constexpr std::size_t kDriverWarpingOffset = 0x30;
+// Bytes the game writes after the out-task constructor, before ProcessPed (SetPedOutCar 0x448b80 and 0x448b84:
+// strb 1 at task+0x1F, strb 0 at task+0x1C). The desktop SetKnockedOffBike (TaskCarAccessoriesSA.cpp 142-146)
+// writes m_bKnockedOffBike = true, then m_bSwitchOffEngine = false, which is the same pair.
+constexpr std::size_t kOutKnockedOffOffset = 0x1F;
+constexpr std::size_t kOutSwitchEngineOffset = 0x1C;
+// Desktop CClientPed::InternalRemoveFromVehicle builds the out task with door 1 (CClientPed.cpp 7474).
+constexpr int kDesktopOutDoor = 1;
+// Stack storage for one task. The game's own frames for these objects leave 0x38 to 0x40 bytes (0x61b044, 0x448ae8).
+constexpr std::size_t kSeatTaskBytes = 0x40;
+
+}  // namespace
+
+bool SeatRemotePedInCar(void* ped, void* car) {
+    if (!ped || !car) return false;
+    SeatFns& api = SeatApi();
+    if (!api.complete) return false;
+    // Desktop InternalWarpIntoVehicle (CClientPed.cpp 7441): CreateTaskSimpleCarSetPedInAsDriver, SetIsWarpingPedIntoCar,
+    // ProcessPed, Destroy. The destructor must run: the constructor registers a vehicle reference at task+0x20
+    // (CEntity::RegisterReference) and D2 clears it. Skipping it leaves the car pointing into this stack frame.
+    alignas(16) unsigned char task[kSeatTaskBytes] = {};
+    api.driverCtor(task, car, nullptr);
+    task[kDriverWarpingOffset] = 1;
+    api.driverProcess(task, ped);
+    api.driverDtor(task);
+    return true;
+}
+
+bool UnseatRemotePedFromCar(void* ped, void* car) {
+    if (!ped || !car) return false;
+    SeatFns& api = SeatApi();
+    if (!api.complete) return false;
+    // Desktop InternalRemoveFromVehicle (CClientPed.cpp 7464): CreateTaskSimpleCarSetPedOut(vehicle, 1, false),
+    // SetKnockedOffBike, ProcessPed, Destroy. SetIsWarpingPedOutOfCar is not set: no verified offset for that flag, so
+    // the ped leaves with the knocked-off exit instead of an instant warp. See the report for the gap.
+    alignas(16) unsigned char task[kSeatTaskBytes] = {};
+    api.outCtor(task, car, kDesktopOutDoor, false);
+    task[kOutSwitchEngineOffset] = 0;
+    task[kOutKnockedOffOffset] = 1;
+    api.outProcess(task, ped);
+    api.outDtor(task);
+    return true;
+}
+
 }  // namespace WorldRPG::Game

@@ -166,6 +166,13 @@ void ForgetRemote(uint32_t id);
 // P3.1: drop every remote body and car on the next game tick (reconnect).
 void RequestRemoteReset();
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
+// VEHICLE_INOUT for another player (packet 58). Queued here and applied on the game thread in ApplyRemotePeds. A seated
+// ped is not moved by its on-foot pose until it is unseated. Only the driver seat (0) is applied.
+void NoteRemoteSeat(uint32_t pedId, uint32_t vehicleId, uint8_t seat);
+void NoteRemoteUnseat(uint32_t pedId);
+// Driver block of PLAYER_VEHICLE_PURESYNC (packet 33): move speed and turn speed of a remote car. Applied once per packet
+// on the game thread (desktop CNetAPI::ReadVehiclePuresync, CClientVehicle::SetMoveSpeed / SetTurnSpeed).
+void NoteRemoteVehicleMotion(uint32_t id, float mx, float my, float mz, float tx, float ty, float tz);
 void RequestWander(uint32_t id, int direction);
 bool CopyRemotePose(uint32_t id, float& x, float& y, float& z);
 // Stage S4 (defined in shared/entity/PedSyncState.cpp). SetPedWander starts the

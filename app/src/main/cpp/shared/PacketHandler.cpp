@@ -621,7 +621,39 @@ bool HandleUnoccupiedVehicleSync(const uint8_t* body, size_t length, size_t bits
 //   7 REQUEST_JACK_CONFIRMED (:2110)                  door (3)
 //   9 ATTEMPT_FAILED (:2254)                          reason (8), SPositionSync when reason 5 (not parsed)
 // Other actions carry jack or fell-off fields the local ped does not need, so they are logged only.
-// Only the local ped is acted on. Other peds are logged and not applied (remote seat placement is not ported).
+// Other players, the non-local branches of Packet_Vehicle_InOut (CPacketHandler.cpp 1858-2084). The seat is applied on the
+// game thread (GameEngine ApplyRemoteSeat). Occupancy is set here, which is what makes packet 33 for this ped readable
+// (CNetAPI.cpp 1306 reads it only for an occupied ped; the desktop sets it in CClientVehicle::SetPedOccupiedVehicle).
+void ApplyRemoteVehicleInOut(uint8_t action, uint32_t pedId, uint32_t vehicleId, uint8_t seat) {
+    if (pedId == 0 || pedId == 0xFFFFFFFFu) return;
+    switch (action) {
+        case 0:  // REQUEST_IN_CONFIRMED: desktop GetIntoVehicle (CPacketHandler.cpp 1886). The enter animation is not
+                 // played, so the seat is taken at once.
+        case 1:  // NOTIFY_IN_RETURN: desktop WarpIntoVehicle (CPacketHandler.cpp 1901)
+        case 5:  // NOTIFY_OUT_ABORT_RETURN: desktop WarpIntoVehicle back in (CPacketHandler.cpp 2070)
+            WorldRPG::RemoteVehicle::SetOccupant(pedId, vehicleId, seat);
+            if (seat == 0) {
+                WorldRPG::Game::NoteRemoteSeat(pedId, vehicleId, seat);
+            } else {
+                // Passenger seats need the desktop ConvertIndexToGameSeat table, which is not ported.
+                DIAG("VehInOut: ped=%u seat=%u passenger not seated (ConvertIndexToGameSeat not ported)", pedId,
+                     static_cast<unsigned>(seat));
+            }
+            break;
+        case 2:  // NOTIFY_IN_ABORT_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 1988)
+        case 4:  // NOTIFY_OUT_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 2036)
+        case 6:  // NOTIFY_FELL_OFF_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 2084)
+            WorldRPG::RemoteVehicle::ClearOccupant(pedId);
+            WorldRPG::Game::NoteRemoteUnseat(pedId);
+            break;
+        // 3 REQUEST_OUT_CONFIRMED keeps the seat until its return (desktop GetOutOfVehicle, CPacketHandler.cpp 2015).
+        // 7 and 8 are jacking, not ported. 9 ATTEMPT_FAILED has nothing to undo for a remote ped.
+        default:
+            break;
+    }
+}
+
+// Only the local ped is acted on here. Other peds go to ApplyRemoteVehicleInOut.
 bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t pedId = 0, vehicleId = 0;
@@ -655,8 +687,9 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
     const char* name = action < 10 ? kNames[action] : "unknown";
     const bool mine = pedId != 0 && pedId == WorldRPG::ServerWorld::LocalPlayer();
     if (!mine) {
-        PKT_LOGI("VehInOut: %s ped=%u veh=%u seat=%u door=%u reason=%u (other ped, not applied)", name, pedId,
-                 vehicleId, static_cast<unsigned>(seat), static_cast<unsigned>(door), static_cast<unsigned>(reason));
+        PKT_LOGI("VehInOut: %s ped=%u veh=%u seat=%u door=%u reason=%u", name, pedId, vehicleId,
+                 static_cast<unsigned>(seat), static_cast<unsigned>(door), static_cast<unsigned>(reason));
+        ApplyRemoteVehicleInOut(action, pedId, vehicleId, seat);
         return true;
     }
     if (action == 9) {
@@ -707,6 +740,13 @@ bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits
         return false;
     }
     WorldRPG::RemoteVehicle::ApplyOccupied(playerId, vehicleId, seat, sync);
+    // Driver move and turn speed: desktop CNetAPI::ReadVehiclePuresync sets them at CNetAPI.cpp 1420-1421 for the driver
+    // block. Hosted cars are skipped as in ApplyOccupied. Trains are also skipped here: the desktop sets speed for them
+    // too, but the phone has no train path yet (deviation).
+    if (seat == 0 && sync.hasDriverBlock && !sync.trainBlock && !WorldRPG::ServerWorld::ActorHosted(vehicleId)) {
+        WorldRPG::Game::NoteRemoteVehicleMotion(vehicleId, sync.velocity.x, sync.velocity.y, sync.velocity.z,
+                                                sync.turnVelocity.x, sync.turnVelocity.y, sync.turnVelocity.z);
+    }
     return true;
 }
 

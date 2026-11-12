@@ -29,4 +29,10 @@ void ClearRemoteStick(void* ped);
 // the symbol, FindPlayerPed or the hook is missing; no bullet sync is sent then.
 bool InstallLocalBulletFireHook();
 
+// Driver seat for a remote ped (VEHICLE_INOUT, packet 58). Desktop CClientPed::InternalWarpIntoVehicle
+// (CClientPed.cpp 7441) and InternalRemoveFromVehicle (7464), driver seat only. Game thread only.
+// Both return false when a libGTASA symbol is missing or an argument is null, and the caller keeps the request.
+bool SeatRemotePedInCar(void* ped, void* car);
+bool UnseatRemotePedFromCar(void* ped, void* car);
+
 }

@@ -250,6 +250,10 @@ struct RemoteCar {
     bool shown = false;
     bool hosted = false;
     bool dirty = false;
+    // Packet 33 driver block: move and turn speed, written to the body once per packet (motionPending, g_remoteMutex).
+    float moveX = 0, moveY = 0, moveZ = 0;
+    float turnX = 0, turnY = 0, turnZ = 0;
+    bool motionPending = false;
 };
 static std::unordered_map<uint32_t, RemoteCar> g_remoteCars;
 static std::vector<uint32_t> g_forget;
@@ -699,6 +703,129 @@ static float GroundedZ(float x, float y, float z) {
     return z;
 }
 
+// VEHICLE_INOUT seat requests for other players (NoteRemoteSeat / NoteRemoteUnseat). The network thread writes them under
+// g_remoteMutex. ApplyRemoteSeats runs on the game thread and removes a request once it is applied.
+struct RemoteSeatRequest {
+    uint32_t vehicleId = 0xFFFFFFFFu;
+    uint8_t seat = 0;
+    bool seated = false;
+    uint32_t serial = 0;
+    int ticks = 0;
+};
+static std::unordered_map<uint32_t, RemoteSeatRequest> g_seatRequests;
+static uint32_t g_seatSerial = 0;
+// About 10 s at 60 fps. A request whose ped or car body never appears is dropped after this.
+constexpr int kSeatRequestTicks = 600;
+// Game thread only: the car each remote ped is seated in by ApplyRemoteSeat.
+struct SeatedPed {
+    uint32_t vehicleId = 0xFFFFFFFFu;
+    uint8_t seat = 0;
+};
+static std::unordered_map<uint32_t, SeatedPed> g_seatedPeds;
+
+// Ends a seat this thread applied earlier. The caller holds g_remoteMutex. The car body must still exist; without it
+// the record is only forgotten. Reads g_remoteBodies and g_remoteCars directly.
+static void UnseatLocked(uint32_t pedId) {
+    auto seated = g_seatedPeds.find(pedId);
+    if (seated == g_seatedPeds.end()) return;
+    const uint32_t vehicleId = seated->second.vehicleId;
+    g_seatedPeds.erase(seated);
+    auto b = g_remoteBodies.find(pedId);
+    auto c = g_remoteCars.find(vehicleId);
+    if (b == g_remoteBodies.end() || !b->second.ped) return;
+    if (c == g_remoteCars.end() || !c->second.body) return;
+    UnseatRemotePedFromCar(b->second.ped, c->second.body);
+}
+
+static void UnseatApplied(uint32_t pedId) {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    UnseatLocked(pedId);
+}
+
+// Caller holds g_remoteMutex. Called before a car body is dropped: every ped seated in it leaves the seat first.
+static void UnseatPedsInCarLocked(uint32_t vehicleId) {
+    std::vector<uint32_t> peds;
+    for (const auto& [pedId, seated] : g_seatedPeds) {
+        if (seated.vehicleId == vehicleId) peds.push_back(pedId);
+    }
+    for (uint32_t pedId : peds) UnseatLocked(pedId);
+}
+
+// One request on the game thread. True when it is finished (applied, or nothing to do). False keeps it for the next tick.
+static bool ApplyRemoteSeat(uint32_t pedId, const RemoteSeatRequest& req) {
+    if (!req.seated) {
+        UnseatApplied(pedId);
+        return true;
+    }
+    // Passenger seats are not placed (desktop CClientVehicleManager::ConvertIndexToGameSeat is not ported).
+    if (req.seat != 0) return true;
+    auto seated = g_seatedPeds.find(pedId);
+    if (seated != g_seatedPeds.end() && seated->second.vehicleId == req.vehicleId && seated->second.seat == req.seat) {
+        return true;
+    }
+    void* body = nullptr;
+    void* car = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        auto b = g_remoteBodies.find(pedId);
+        if (b != g_remoteBodies.end()) body = b->second.ped;
+        auto c = g_remoteCars.find(req.vehicleId);
+        if (c != g_remoteCars.end()) car = c->second.body;
+    }
+    if (!body || !car) return false;
+    // Desktop WarpIntoVehicle (CClientPed.cpp 3383) calls RemoveFromVehicle before it seats the ped.
+    if (seated != g_seatedPeds.end()) UnseatApplied(pedId);
+    if (!SeatRemotePedInCar(body, car)) return false;
+    // The seated skip in ApplyRemotePeds returns before its ClearRemoteStick, so a stick set before the seat is cleared here.
+    ClearRemoteStick(body);
+    g_seatedPeds[pedId] = SeatedPed{req.vehicleId, req.seat};
+    ENGINE_LOGI("VehInOut: ped %u seated in vehicle %u", pedId, req.vehicleId);
+    return true;
+}
+
+static void ApplyRemoteSeats() {
+    std::vector<std::pair<uint32_t, RemoteSeatRequest>> work;
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        for (const auto& [pedId, req] : g_seatRequests) work.emplace_back(pedId, req);
+    }
+    for (const auto& [pedId, req] : work) {
+        const bool done = ApplyRemoteSeat(pedId, req);
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        auto it = g_seatRequests.find(pedId);
+        if (it == g_seatRequests.end() || it->second.serial != req.serial) continue;  // replaced while applying
+        if (done) {
+            g_seatRequests.erase(it);
+        } else if (++it->second.ticks >= kSeatRequestTicks) {
+            ENGINE_LOGI("VehInOut: seat request for ped %u dropped, body not ready", pedId);
+            g_seatRequests.erase(it);
+        }
+    }
+}
+
+// Packet 33 driver block: desktop CClientVehicle::SetMoveSpeed and SetTurnSpeed, called from CNetAPI::ReadVehiclePuresync
+// (CNetAPI.cpp 1420-1421). CPhysical::SetMoveSpeed is not exported, so the CPhysical fields are written at +0x68 (move)
+// and +0x74 (turn), the offsets PlaceRemotePlayerPed and SampleHostedCar already use.
+static void ApplyCarMotion(uint32_t vehicleId, void* body) {
+    float move[3] = {0, 0, 0};
+    float turn[3] = {0, 0, 0};
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        auto found = g_remoteCars.find(vehicleId);
+        if (found == g_remoteCars.end() || !found->second.motionPending) return;
+        found->second.motionPending = false;
+        move[0] = found->second.moveX;
+        move[1] = found->second.moveY;
+        move[2] = found->second.moveZ;
+        turn[0] = found->second.turnX;
+        turn[1] = found->second.turnY;
+        turn[2] = found->second.turnZ;
+    }
+    auto* raw = static_cast<unsigned char*>(body);
+    std::memcpy(raw + 0x68, move, sizeof move);
+    std::memcpy(raw + 0x74, turn, sizeof turn);
+}
+
 // Desktop CClientPed::EnterVehicle (CClientPed.cpp:9886, request written at 10061) and ExitVehicle
 // (CClientPed.cpp:10096, request written at 10178) send REQUEST_IN / REQUEST_OUT only after the local ped
 // is allowed to act. On Android the native enter button
@@ -764,6 +891,14 @@ static void WatchLocalVehicle() {
 static void ApplyRemotePeds() {
     NoteGameFrame();
     if (g_remoteResetPending.exchange(false)) {
+        // Leave every seat while the car bodies still exist, then drop the requests.
+        std::vector<uint32_t> seated;
+        for (const auto& entry : g_seatedPeds) seated.push_back(entry.first);
+        for (uint32_t pedId : seated) UnseatApplied(pedId);
+        {
+            std::lock_guard<std::mutex> lock(g_remoteMutex);
+            g_seatRequests.clear();
+        }
         for (auto& entry : g_remoteBodies) {
             ClearRemoteStick(entry.second.ped);
             DropBody(entry.second.ped, false);
@@ -818,6 +953,11 @@ static void ApplyRemotePeds() {
         }
         TaskFns& api = Tasks();
         for (uint32_t id : g_forget) {
+            // This loop holds g_remoteMutex, so the locked variants are used. A seated ped leaves its seat, and a
+            // forgotten car first unseats the peds inside it.
+            UnseatLocked(id);
+            UnseatPedsInCarLocked(id);
+            g_seatRequests.erase(id);
             auto body = g_remoteBodies.find(id);
             if (body != g_remoteBodies.end()) {
                 ClearRemoteStick(body->second.ped);
@@ -886,6 +1026,8 @@ static void ApplyRemotePeds() {
         body = found->second.ped;
         if (!body) continue;
         ArmRemote(body, found->second, ped.weapon);
+        // A seated ped is placed by the seat task (ApplyRemoteSeat), so the on-foot pose below must not move it.
+        if (g_seatedPeds.count(id)) continue;
         if (ped.hosted && ped.wander && found->second.wanderDir != ped.wanderDir) {
             StartWander(body, ped.wanderDir);
             found->second.wanderDir = ped.wanderDir;
@@ -1103,6 +1245,7 @@ static void ApplyRemotePeds() {
             }
             continue;
         }
+        if (!car.hosted) ApplyCarMotion(id, body);
         if (car.hosted) continue;
         const float dx = car.x - found->second.shownX;
         const float dy = car.y - found->second.shownY;
@@ -1141,6 +1284,8 @@ static void ApplyRemotePeds() {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         g_hostedCarSnap.swap(hostedCars);
     }
+    // After the car loop, so the car bodies that a seat needs exist for this tick.
+    ApplyRemoteSeats();
     WatchLocalVehicle();
 }
 
@@ -1446,6 +1591,43 @@ void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float 
     car.heading = heading;
     car.dirty = true;
 }
+// Desktop CPacketHandler::Packet_Vehicle_InOut seats or unseats the ped. The request is applied in ApplyRemoteSeats.
+void NoteRemoteSeat(uint32_t pedId, uint32_t vehicleId, uint8_t seat) {
+    if (pedId == 0 || pedId == 0xFFFFFFFFu || vehicleId == 0 || vehicleId == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    RemoteSeatRequest& req = g_seatRequests[pedId];
+    req.vehicleId = vehicleId;
+    req.seat = seat;
+    req.seated = true;
+    req.serial = ++g_seatSerial;
+    req.ticks = 0;
+}
+void NoteRemoteUnseat(uint32_t pedId) {
+    if (pedId == 0 || pedId == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    RemoteSeatRequest& req = g_seatRequests[pedId];
+    req.vehicleId = kNoVehicle;
+    req.seat = 0;
+    req.seated = false;
+    req.serial = ++g_seatSerial;
+    req.ticks = 0;
+}
+void NoteRemoteVehicleMotion(uint32_t id, float mx, float my, float mz, float tx, float ty, float tz) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    // Only a car that already has a pose (NoteRemoteVehicle from the same packet, or VEHICLE_START). Creating one here
+    // would let CopyRemotePose report a car at the origin.
+    auto found = g_remoteCars.find(id);
+    if (found == g_remoteCars.end()) return;
+    RemoteCar& car = found->second;
+    car.moveX = mx;
+    car.moveY = my;
+    car.moveZ = mz;
+    car.turnX = tx;
+    car.turnY = ty;
+    car.turnZ = tz;
+    car.motionPending = true;
+}
 void RequestWander(uint32_t id, int direction) {
     if (id == 0 || id == 0xFFFFFFFFu) return;
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -1550,6 +1732,9 @@ void SetPedHost(uint32_t, bool) {}
 void ForgetRemote(uint32_t) {}
 void RequestRemoteReset() {}
 void NoteRemoteVehicle(uint32_t, int, float, float, float, float) {}
+void NoteRemoteSeat(uint32_t, uint32_t, uint8_t) {}
+void NoteRemoteUnseat(uint32_t) {}
+void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}
 void RequestWander(uint32_t, int) {}
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
 int CopyHostedPeds(HostedPed*, int) { return 0; }
