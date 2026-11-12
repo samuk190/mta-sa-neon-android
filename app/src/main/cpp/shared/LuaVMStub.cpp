@@ -17,6 +17,7 @@ extern "C" {
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <vector>
 
 namespace WorldRPG::Script {
@@ -155,6 +156,39 @@ static int l_getElementData(lua_State* L) {
 
 static int l_nil(lua_State* L) { lua_pushnil(L); return 1; }
 static int l_num0(lua_State* L) { lua_pushinteger(L, 0); return 1; }
+
+// Desktop MTA getTime(): game-clock hour and minute. The phone does not read the GTA clock yet,
+// so this uses the device clock. Scripts only use it for coarse population time buckets.
+static int l_getTime(lua_State* L) {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+    localtime_r(&now, &local);
+    lua_pushinteger(L, local.tm_hour);
+    lua_pushinteger(L, local.tm_min);
+    return 2;
+}
+
+// Desktop MTA getElementVelocity(): x, y, z. Remote velocity is not exposed to Lua yet.
+static int l_getElementVelocity(lua_State* L) {
+    lua_pushnumber(L, 0.0);
+    lua_pushnumber(L, 0.0);
+    lua_pushnumber(L, 0.0);
+    return 3;
+}
+
+// Desktop MTA getElementRotation(): rx, ry, rz. Not tracked on the phone yet.
+static int l_getElementRotation(lua_State* L) {
+    lua_pushnumber(L, 0.0);
+    lua_pushnumber(L, 0.0);
+    lua_pushnumber(L, 0.0);
+    return 3;
+}
+
+// Desktop MTA getPlayerName(): local nick from the launcher settings. Fixed text for now.
+static int l_getPlayerName(lua_State* L) {
+    lua_pushstring(L, "Player");
+    return 1;
+}
 static int l_false(lua_State* L) { lua_pushboolean(L, 0); return 1; }
 static int l_true(lua_State* L) { lua_pushboolean(L, 1); return 1; }
 static int l_debug(lua_State* L) {
@@ -419,6 +453,18 @@ static void installDxBindings(lua_State* L) {
         {"getElementData", l_getElementData},
         {"getElementHealth", l_getElementHealth},
         {"getPedArmor", l_num0},
+        {"getTime", l_getTime},
+        {"getPedOccupiedVehicle", l_false},
+        {"getPedOccupiedVehicleSeat", l_false},
+        {"getPlayerWantedLevel", l_num0},
+        {"getElementModel", l_num0},
+        {"getElementVelocity", l_getElementVelocity},
+        {"getElementRotation", l_getElementRotation},
+        {"getPlayerName", l_getPlayerName},
+        {"bindKey", l_true},
+        {"unbindKey", l_true},
+        {"isTimer", l_false},
+        {"killTimer", l_true},
         {"getPlayerMoney", l_getPlayerMoney},
         {"triggerServerEvent", l_triggerServerEvent},
         {"addEvent", l_addEvent},
