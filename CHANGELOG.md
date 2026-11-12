@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Ped ENTITY_ADD parses on the phone (S2 part 1)**: server peds reach mobile peers through a new server path (`CGame::StreamPedsToMobile`), and the packet adapter now reads type 14 with `mea_ped`, matching the desktop reader (`CPacketHandler.cpp` case PED, line 3997). Every element packet stores in full (99/99, 84/84, 41/41, 1/1 per ped).
+- **Server ped bodies are not created yet (S2 part 2)**: creating a remote ped body crashed the engine (SIGSEGV in CPedGroup, via CPlayerPed::CPlayerPed). `RemotePed::serverPed` skips body creation for server peds until that crash is fixed. Players are unchanged.
 - **Native build (`shared/NativeTaskSync.h`)**: locomotion stick X/Y is written as `uint8_t`. `Write(int8_t)` resolved to the 32-bit overload, which broke the 8-bit mta_neon layout.
 - **APK packaging**: `ANDROID_STL=c++_static` replaces the `c++_shared` runtime. The NDK 25 `libc++_shared.so` has 4 KB LOAD segments, which the 16 KB audit rejects. The `copyNdkLibcxxShared` task and the `System.loadLibrary("c++_shared")` preloads are removed from `app/build.gradle.kts`, `EngineHostActivity.java` and `GameActivity.kt`.
 

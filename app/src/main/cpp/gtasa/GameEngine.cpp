@@ -228,6 +228,8 @@ struct RemotePed {
     int stickX = 0;
     int stickY = 0;
     bool keysync = false;
+    // Server ped from the ENTITY_ADD actor list (kind 14). Its body is not created yet.
+    bool serverPed = false;
 };
 static std::mutex g_remoteMutex;
 static std::unordered_map<uint32_t, RemotePed> g_remotePeds;
@@ -635,6 +637,7 @@ static void ApplyRemotePeds() {
             if (actor.kind == 14) {
                 const bool firstSeen = g_remotePeds.find(actor.id) == g_remotePeds.end();
                 auto& ped = g_remotePeds[actor.id];
+                ped.serverPed = true;
                 if (firstSeen) ENGINE_LOGI("DIAG ped actor id=%u model=%d hosted=%d pos=%.1f,%.1f,%.1f", actor.id, actor.model, actor.hosted ? 1 : 0, actor.x, actor.y, actor.z);
                 ped.hosted = actor.hosted;
                 if (!ped.dirty && !ped.shown && actor.model >= 0) {
@@ -691,6 +694,8 @@ static void ApplyRemotePeds() {
         if (model <= 0 || model > 312) model = 7;
         void* body = nullptr;
         auto found = g_remoteBodies.find(id);
+        // Server peds get no body yet: creating one crashed the engine in CPedGroup (SIGSEGV 0x378).
+        if (ped.serverPed && found == g_remoteBodies.end()) continue;
         if (found == g_remoteBodies.end()) {
             if (g_remoteBodies.size() >= 48) continue;
             static int spawnedFrame = -1;
