@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
 import androidx.viewpager2.adapter.FragmentStateAdapter
+import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.R
 import com.worldrpg.neonlauncher.databinding.ActivityMainBinding
 import com.worldrpg.neonlauncher.game.EngineHostActivity
@@ -19,6 +20,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        binding.toolbar.title = BuildConfig.LAUNCHER_TITLE
 
         setupViewPager()
         setupBottomNavigation()

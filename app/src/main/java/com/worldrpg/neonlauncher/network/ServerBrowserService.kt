@@ -1,5 +1,6 @@
 package com.worldrpg.neonlauncher.network
 
+import com.worldrpg.neonlauncher.BuildConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -18,7 +19,7 @@ class ServerBrowserService {
 
     /**
      * Fetches the server list as a Flow of states.
-     * Placeholder implementation returns mock data.
+     * Uses default server configured via .env / BuildConfig.
      */
     fun fetchServerList(): Flow<BrowserState> = flow {
         emit(BrowserState.Loading)
@@ -27,12 +28,12 @@ class ServerBrowserService {
             // Simulate network delay
             delay(800)
 
-            // Placeholder server list - replace with actual master server query
+            // Placeholder server list using configured defaults from .env
             val servers = listOf(
                 ServerInfo(
-                    name = "WorldRPG Brasil Oficial",
-                    ip = "worldrpgbroficial.duckdns.org",
-                    port = 22003,
+                    name = BuildConfig.DEFAULT_SERVER_NAME,
+                    ip = BuildConfig.DEFAULT_SERVER_IP,
+                    port = BuildConfig.DEFAULT_SERVER_PORT,
                     players = 42,
                     maxPlayers = 100,
                     ping = 85

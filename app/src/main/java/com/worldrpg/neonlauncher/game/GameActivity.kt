@@ -10,6 +10,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.databinding.ActivityGameBinding
 import com.worldrpg.neonlauncher.network.ConnectionManager
 import com.worldrpg.neonlauncher.utils.NativeAssetBridge
@@ -35,7 +36,7 @@ class GameActivity : AppCompatActivity() {
     private lateinit var adminCommandHandler: AdminCommandHandler
 
     private var serverIp: String = ""
-    private var serverPort: Int = 22003
+    private var serverPort: Int = BuildConfig.DEFAULT_SERVER_PORT
     private var nativeInitialized = false // GL thread only
     @Volatile private var closing = false
     private var surfaceConfigured = false
@@ -174,8 +175,8 @@ class GameActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         // Extract server parameters from intent
-        serverIp = intent.getStringExtra(EXTRA_SERVER_IP) ?: ""
-        serverPort = intent.getIntExtra(EXTRA_SERVER_PORT, 22003)
+        serverIp = intent.getStringExtra(EXTRA_SERVER_IP)?.takeIf { it.isNotBlank() } ?: BuildConfig.DEFAULT_SERVER_IP
+        serverPort = intent.getIntExtra(EXTRA_SERVER_PORT, BuildConfig.DEFAULT_SERVER_PORT)
 
         val assetPath = NativeAssetBridge(this).getReadyStoragePath()
         if (assetPath == null) {

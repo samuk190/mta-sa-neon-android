@@ -2,6 +2,7 @@ package com.worldrpg.neonlauncher.utils
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.worldrpg.neonlauncher.BuildConfig
 
 /**
  * Typed SharedPreferences wrapper for launcher settings.
@@ -70,7 +71,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_FAVORITES = "favorites"
         private const val KEY_ASSET_STORAGE_PATH = "asset_storage_path"
 
-        private const val DEFAULT_USERNAME = "Player"
+        private val DEFAULT_USERNAME = BuildConfig.DEFAULT_PLAYER_NICK
         private const val DEFAULT_GRAPHICS_QUALITY = 1 // Medium
         private const val DEFAULT_AUDIO_VOLUME = 80
         private const val DEFAULT_TOUCH_SENSITIVITY = 5

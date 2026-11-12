@@ -12,11 +12,15 @@ val envFile = rootProject.file(".env")
 if (envFile.exists()) {
     FileInputStream(envFile).use { envProperties.load(it) }
 }
+val launcherTitle = envProperties.getProperty("LAUNCHER_TITLE", "MTA:SA Neon Android")
+val launcherPlayButtonText = envProperties.getProperty("LAUNCHER_PLAY_BUTTON_TEXT", "Play")
+val defaultServerName = envProperties.getProperty("DEFAULT_SERVER_NAME", "MTA Neon Server")
+val defaultServerIp = envProperties.getProperty("DEFAULT_SERVER_IP", "127.0.0.1")
+val defaultServerPort = envProperties.getProperty("DEFAULT_SERVER_PORT", "22003")
+val defaultPlayerNick = envProperties.getProperty("DEFAULT_PLAYER_NICK", "Player")
 val gameAssetsDir = envProperties.getProperty("GAME_ASSETS_DIR", "./game_assets")
 val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets")
 val cdnRootUrl = envProperties.getProperty("CDN_ROOT_URL", "")
-val defaultServerIp = envProperties.getProperty("DEFAULT_SERVER_IP", "127.0.0.1")
-val defaultServerPort = envProperties.getProperty("DEFAULT_SERVER_PORT", "22003")
 
 android {
     namespace = "com.worldrpg.neonlauncher"
@@ -29,6 +33,9 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0-neon-alpha"
+
+        resValue("string", "app_name", launcherTitle)
+        resValue("string", "connect", launcherPlayButtonText)
 
         ndk {
             // Somente arm64-v8a: o libGTASA.so do GTA SA Mobile 2.10 (War Drum) e'
@@ -49,11 +56,15 @@ android {
             }
         }
 
+        buildConfigField("String", "LAUNCHER_TITLE", "\"${launcherTitle.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "LAUNCHER_PLAY_BUTTON_TEXT", "\"${launcherPlayButtonText.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "DEFAULT_SERVER_NAME", "\"${defaultServerName.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "DEFAULT_SERVER_IP", "\"${defaultServerIp}\"")
+        buildConfigField("int", "DEFAULT_SERVER_PORT", defaultServerPort)
+        buildConfigField("String", "DEFAULT_PLAYER_NICK", "\"${defaultPlayerNick.replace("\"", "\\\"")}\"")
         buildConfigField("String", "GAME_ASSETS_DIR", "\"${gameAssetsDir.replace("\\", "\\\\")}\"")
         buildConfigField("String", "DEVICE_ASSETS_PATH", "\"${deviceAssetsPath.replace("\\", "\\\\")}\"")
         buildConfigField("String", "CDN_ROOT_URL", "\"${cdnRootUrl.replace("\\", "\\\\")}\"")
-        buildConfigField("String", "DEFAULT_SERVER_IP", "\"${defaultServerIp}\"")
-        buildConfigField("int", "DEFAULT_SERVER_PORT", defaultServerPort)
     }
 
     buildTypes {

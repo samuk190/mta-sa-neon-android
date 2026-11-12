@@ -109,6 +109,16 @@ cp .env.example .env
 Edit `.env` to define your asset locations:
 
 ```env
+# Launcher UI Customization
+LAUNCHER_TITLE=MTA:SA Neon Android
+LAUNCHER_PLAY_BUTTON_TEXT=Play
+
+# Default Server Connection Settings
+DEFAULT_SERVER_NAME=MTA Neon Server
+DEFAULT_SERVER_IP=127.0.0.1
+DEFAULT_SERVER_PORT=22003
+DEFAULT_PLAYER_NICK=Player
+
 # Path to your local extracted GTA San Andreas Mobile 2.10 assets
 # You can use the repository's ./game_assets folder or specify an absolute path:
 GAME_ASSETS_DIR=./game_assets
@@ -118,11 +128,6 @@ DEVICE_ASSETS_PATH=/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_ass
 
 # Optional: Custom CDN or Local HTTP Server URL if serving assets over network
 CDN_ROOT_URL=
-
-# Default Server Connection Settings
-DEFAULT_SERVER_IP=127.0.0.1
-DEFAULT_SERVER_PORT=22003
-DEFAULT_PLAYER_NICK=MTA_Player
 ```
 
 ### 2. Assets Folder Structure

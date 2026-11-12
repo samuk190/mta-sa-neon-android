@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MTA:SA Neon Android</string>
+    <!-- Note: app_name and connect are generated dynamically from .env via build.gradle.kts resValue -->
     <string name="connecting">Connecting to server...</string>
     <string name="server_browser">Server Browser</string>
     <string name="favorites">Favorites</string>
     <string name="settings">Settings</string>
-    <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="refresh">Refresh</string>
     <string name="no_servers">No servers found</string>

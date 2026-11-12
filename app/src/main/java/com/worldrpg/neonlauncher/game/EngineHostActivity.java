@@ -20,6 +20,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import com.worldrpg.neonlauncher.BuildConfig;
 import com.worldrpg.neonlauncher.utils.PreferencesManager;
 import com.rockstargames.gtasa.GTASA;
 import com.worldrpg.engine.EngineCaseAliases;
@@ -102,8 +103,9 @@ public final class EngineHostActivity extends GTASA {
 
     private void startMtaSession() {
         String ip = getIntent().getStringExtra(GameActivity.EXTRA_SERVER_IP);
+        if (ip == null || ip.isEmpty()) ip = BuildConfig.DEFAULT_SERVER_IP;
         if (ip == null || ip.isEmpty() || netRunning) return;
-        int port = getIntent().getIntExtra(GameActivity.EXTRA_SERVER_PORT, 22003);
+        int port = getIntent().getIntExtra(GameActivity.EXTRA_SERVER_PORT, BuildConfig.DEFAULT_SERVER_PORT);
         try {
             // Same directory the :engine linker searches for DT_NEEDED.
             System.loadLibrary("c++_shared");
@@ -120,7 +122,7 @@ public final class EngineHostActivity extends GTASA {
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
         nativeSetScreenSize(metrics.widthPixels, metrics.heightPixels);
         String nick = new PreferencesManager(this).getUsername();
-        if (nick == null || nick.isEmpty()) nick = "Player";
+        if (nick == null || nick.isEmpty()) nick = BuildConfig.DEFAULT_PLAYER_NICK;
         if (!nativeConnect(ip, port, nick)) {
             Log.e(TAG, "MTA connect failed to start");
             return;
@@ -335,7 +337,7 @@ public final class EngineHostActivity extends GTASA {
         panel.setPadding(pad, pad, pad, pad);
 
         TextView title = new TextView(this);
-        title.setText("WorldRPG");
+        title.setText(BuildConfig.LAUNCHER_TITLE);
         title.setTextColor(Color.WHITE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
         title.setGravity(Gravity.CENTER);

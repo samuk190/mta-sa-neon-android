@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Generic Project Naming**: Renamed root project to `mta-sa-neon-android` and application title to `MTA:SA Neon Android`.
 - **`AssetManager` Decoupling**: Removed hardcoded Hugging Face CDN URL in `AssetManager.cpp` and `AssetManager.h`, defaulting to local/configurable base URLs.
+- **Configurable Launcher UI & Server Settings**: Added `.env` environment variables (`LAUNCHER_TITLE`, `LAUNCHER_PLAY_BUTTON_TEXT`, `DEFAULT_SERVER_NAME`, `DEFAULT_SERVER_IP`, `DEFAULT_SERVER_PORT`, `DEFAULT_PLAYER_NICK`) to configure the launcher toolbar title, pause screen header, play button text, and fallback server settings dynamically via `app/build.gradle.kts` `BuildConfig` and `resValue`.
+- **Decoupled Hardcoded Code Constants**: Replaced hardcoded server addresses and titles in `ServerBrowserService.kt`, `EngineHostActivity.java`, `GameActivity.kt`, and `PreferencesManager.kt` with dynamic `BuildConfig` constants.
 
 
 ### Documentado

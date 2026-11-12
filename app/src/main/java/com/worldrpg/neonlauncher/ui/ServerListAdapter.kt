@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.R
 import com.worldrpg.neonlauncher.databinding.ItemServerBinding
 import com.worldrpg.neonlauncher.network.ServerInfo
@@ -36,6 +37,7 @@ class ServerListAdapter(
             binding.tvServerAddress.text = "${server.ip}:${server.port}"
             binding.tvPlayerCount.text = server.getPlayerCountText()
             binding.tvPing.text = server.getPingText()
+            binding.btnConnect.text = BuildConfig.LAUNCHER_PLAY_BUTTON_TEXT
 
             // Update favorite star icon
             binding.btnFavorite.setImageResource(
