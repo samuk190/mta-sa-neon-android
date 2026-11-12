@@ -17,6 +17,7 @@ extern "C" {
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <ctime>
 #include <vector>
 
@@ -182,6 +183,32 @@ static int l_getElementRotation(lua_State* L) {
     lua_pushnumber(L, 0.0);
     lua_pushnumber(L, 0.0);
     return 3;
+}
+
+// Desktop MTA getDistanceBetweenPoints2D/3D(x1, y1, [z1], x2, y2, [z2]).
+static int l_getDistanceBetweenPoints3D(lua_State* L) {
+    const double x1 = luaL_checknumber(L, 1), y1 = luaL_checknumber(L, 2), z1 = luaL_checknumber(L, 3);
+    const double x2 = luaL_checknumber(L, 4), y2 = luaL_checknumber(L, 5), z2 = luaL_checknumber(L, 6);
+    lua_pushnumber(L, std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1) + (z2 - z1) * (z2 - z1)));
+    return 1;
+}
+static int l_getDistanceBetweenPoints2D(lua_State* L) {
+    const double x1 = luaL_checknumber(L, 1), y1 = luaL_checknumber(L, 2);
+    const double x2 = luaL_checknumber(L, 3), y2 = luaL_checknumber(L, 4);
+    lua_pushnumber(L, std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)));
+    return 1;
+}
+
+// Desktop MTA getPedMoveState(): "stand" until the engine exposes the ped's move state.
+static int l_getPedMoveState(lua_State* L) {
+    lua_pushstring(L, "stand");
+    return 1;
+}
+
+// Desktop MTA engineStreamingGetModelLoadState(): "loaded" means the model is resident. Assume loaded.
+static int l_engineStreamingGetModelLoadState(lua_State* L) {
+    lua_pushstring(L, "loaded");
+    return 1;
 }
 
 // Desktop MTA getPlayerName(): local nick from the launcher settings. Fixed text for now.
@@ -465,6 +492,62 @@ static void installDxBindings(lua_State* L) {
         {"unbindKey", l_true},
         {"isTimer", l_false},
         {"killTimer", l_true},
+        {"getDistanceBetweenPoints3D", l_getDistanceBetweenPoints3D},
+        {"getDistanceBetweenPoints2D", l_getDistanceBetweenPoints2D},
+        {"getPedMoveState", l_getPedMoveState},
+        {"engineStreamingGetModelLoadState", l_engineStreamingGetModelLoadState},
+        // Ped and element natives the ped-traffic client calls. Defaults until the engine exposes them.
+        {"getPedRotation", l_num0},
+        {"getPedAmmoInClip", l_num0},
+        {"getPedTotalAmmo", l_num0},
+        {"getPedWeapon", l_num0},
+        {"getPedWeaponSlot", l_num0},
+        {"getPedWeaponAccuracy", l_num0},
+        {"getPedWeaponShootingRate", l_num0},
+        {"getPedStat", l_num0},
+        {"getVehicleType", l_num0},
+        {"getGroundPosition", l_num0},
+        {"getPedTask", l_false},
+        {"getPedTarget", l_false},
+        {"getPedControlState", l_false},
+        {"getPedStayInSamePlace", l_false},
+        {"isElementFrozen", l_false},
+        {"isElementOnScreen", l_false},
+        {"isPedOnGround", l_true},
+        {"isAmbientPedSphereVisible", l_false},
+        {"isPedNativeCoupleActive", l_false},
+        {"isPedNativeCouplePresentationActive", l_false},
+        {"isPedNativeGroupActive", l_false},
+        {"isPedNativeAmbientCopWanderTask", l_false},
+        {"acquirePedNativeCouple", l_false},
+        {"acquirePedNativeCouplePresentation", l_false},
+        {"acquirePedNativeGroup", l_false},
+        {"releasePedNativeCouple", l_true},
+        {"releasePedNativeCouplePresentation", l_true},
+        {"releasePedNativeGroup", l_true},
+        {"validatePedNativeCouple", l_false},
+        {"updatePedNativeCouplePresentation", l_true},
+        {"addPedNativeDamageResponseEvent", l_true},
+        {"getPedNativeCoupleDiagnostic", l_false},
+        {"getPedNativeGroupDiagnostic", l_false},
+        {"removePedFromVehicle", l_true},
+        {"setElementDimension", l_true},
+        {"setElementInterior", l_true},
+        {"setPedControlState", l_true},
+        {"setPedJump", l_true},
+        {"setPedNavigateTo", l_true},
+        {"setPedRotation", l_true},
+        {"setPedStandStill", l_true},
+        {"setPedStayInSamePlace", l_true},
+        {"setPedWeaponSlot", l_true},
+        {"setPedWeaponAccuracy", l_true},
+        {"setPedWeaponShootingRate", l_true},
+        {"setCameraMatrix", l_true},
+        {"setAmbientPedPopulationZoneState", l_true},
+        {"resetAmbientPedPopulationModels", l_true},
+        {"resetAmbientPedPopulationZonesToBootstrap", l_true},
+        {"updateAmbientPedPopulationModels", l_true},
+        {"processLineOfSight", l_false},
         {"getPlayerMoney", l_getPlayerMoney},
         {"triggerServerEvent", l_triggerServerEvent},
         {"addEvent", l_addEvent},
