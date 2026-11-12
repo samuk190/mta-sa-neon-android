@@ -5,6 +5,8 @@
 #include "PerformanceProfiler.h"
 #include "LuaVMStub.h"
 #include "../gtasa/GameEngine.h"
+#include "../gtasa/RemoteVehicle.h"
+#include "VehicleSync.h"
 #include "ServerWorld.h"
 
 namespace PedSyncState = WorldRPG::Sync::PedSyncState;
@@ -616,50 +618,40 @@ bool HandleVehicleStopSync(const uint8_t* body, size_t length, size_t bits) {
 }
 
 bool HandleUnoccupiedVehicleSync(const uint8_t* body, size_t length, size_t bits) {
+    // Packet 56 (CUnoccupiedVehicleSync.cpp 178): entries until fewer than 8 bits remain.
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     int applied = 0;
-    while (reader.GetRemainingBits() > 32 && applied < 16) {
-        uint32_t id = 0;
-        uint8_t context = 0;
-        uint8_t flagRaw[2] = {};
-        if (!ReadElementId(reader, id) || !reader.Read(context) || !reader.ReadBits(flagRaw, 9)) break;
-        const unsigned flags = flagRaw[0] | (flagRaw[1] << 8);
-        float x = 0, y = 0, z = 0, heading = 0;
-        bool hasPosition = false;
-        if (flags & 0x01) {
-            if (!ReadFixed24(reader, x) || !ReadFixed24(reader, y) || !reader.Read(z)) break;
-            hasPosition = true;
-        }
-        if (flags & 0x02) {
-            uint8_t rot[6] = {};
-            if (!reader.ReadBits(rot, 48)) break;
-            const unsigned rz = rot[4] | (rot[5] << 8);
-            constexpr float pi = 3.14159265f;
-            heading = (static_cast<float>(rz) * (360.f / 65536.f)) * pi / 180.f;
-        }
-        if (flags & 0x04) {
-            float vx = 0, vy = 0, vz = 0;
-            if (!ReadMtaVelocity(reader, vx, vy, vz)) break;
-        }
-        if (flags & 0x08) {
-            float vx = 0, vy = 0, vz = 0;
-            if (!ReadMtaVelocity(reader, vx, vy, vz)) break;
-        }
-        if (flags & 0x10) {
-            uint8_t health[2] = {};
-            if (!reader.ReadBits(health, 12)) break;
-        }
-        if (flags & 0x20) {
-            uint32_t trailer = 0;
-            if (!ReadElementId(reader, trailer)) break;
-        }
-        if (hasPosition && !WorldRPG::ServerWorld::ActorHosted(id)) {
-            WorldRPG::Game::NoteRemoteVehicle(id, 0, x, y, z, heading);
-            ++applied;
-        }
-        (void)context;
+    while (reader.GetRemainingBits() >= 8) {
+        WorldRPG::VehicleSync::UnoccupiedUpdate update;
+        if (!WorldRPG::VehicleSync::ReadUnoccupiedEntry(reader, update)) break;
+        WorldRPG::RemoteVehicle::ApplyUnoccupied(update);
+        ++applied;
     }
     return applied > 0;
+}
+
+// Packet 33 (CNetAPI.cpp 1306). The reference reads the body only when the local player has an
+// occupied vehicle, so the same gate is used here: no known occupancy, packet ignored.
+bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    uint32_t playerId = 0;
+    if (!ReadElementId(reader, playerId)) {
+        DIAG("PLAYER_VEHICLE_PURESYNC fail line=%d player id", __LINE__);
+        return false;
+    }
+    uint32_t vehicleId = 0;
+    uint8_t seat = 0;
+    if (!WorldRPG::RemoteVehicle::FindOccupant(playerId, vehicleId, seat)) {
+        DIAG("PLAYER_VEHICLE_PURESYNC player=%u: no occupied vehicle known, body ignored", playerId);
+        return true;
+    }
+    WorldRPG::VehicleSync::OccupiedSync sync;
+    if (!WorldRPG::VehicleSync::ReadOccupiedSync(reader, seat, sync)) {
+        DIAG("PLAYER_VEHICLE_PURESYNC fail player=%u veh=%u seat=%u", playerId, vehicleId, static_cast<unsigned>(seat));
+        return false;
+    }
+    WorldRPG::RemoteVehicle::ApplyOccupied(playerId, vehicleId, seat, sync);
+    return true;
 }
 
 bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
@@ -819,6 +811,7 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 62) return HandlePedStopSync(body, bodyLength, bodyBits);
         if (gameId == 54) return HandleVehicleStartSync(body, bodyLength, bodyBits);
         if (gameId == 55) return HandleVehicleStopSync(body, bodyLength, bodyBits);
+        if (gameId == 33) return HandlePlayerVehiclePureSync(body, bodyLength, bodyBits);
         if (gameId == 56) return HandleUnoccupiedVehicleSync(body, bodyLength, bodyBits);
         if (gameId == 81) return WorldRPG::Script::ActiveVmOnServerEvent(body, bodyLength, bodyBits);
         if (gameId == 26) return HandlePlayerSpawn(body, bodyLength, bodyBits);
