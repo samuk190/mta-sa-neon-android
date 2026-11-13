@@ -35,6 +35,32 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 
 ---
 
+## Client Lua API Parity & Conversion Catalog
+
+A complete line-by-line conversion catalog comparing all 1,581 desktop MTA client Lua functions (`mta_neon_source`) against the Android client is maintained in [`docs/lua-functions/`](docs/lua-functions/README.md).
+
+### Parity Breakdown by Category
+
+| Category | Documentation File | Total | Implemented | Stub | Missing | Parity % |
+|---|---|---|---|---|---|---|
+| **Vehicles (CLuaVehicleDefs)** | [VEHICLES.md](docs/lua-functions/VEHICLES.md) | 165 | 0 | 23 | 142 | 0.0% |
+| **Peds & Players (CLuaPedDefs, CLuaPlayerDefs)** | [PEDS_AND_PLAYERS.md](docs/lua-functions/PEDS_AND_PLAYERS.md) | 206 | 8 | 82 | 116 | 3.9% |
+| **World, Objects & Environment** | [WORLD_AND_OBJECTS.md](docs/lua-functions/WORLD_AND_OBJECTS.md) | 227 | 2 | 15 | 210 | 0.9% |
+| **Element Tree & Data (CLuaElementDefs)** | [ELEMENTS.md](docs/lua-functions/ELEMENTS.md) | 81 | 10 | 24 | 47 | 12.3% |
+| **GUI & 2D/3D Drawing (DX & CEGUI)** | [GUI_AND_DX.md](docs/lua-functions/GUI_AND_DX.md) | 199 | 22 | 6 | 171 | 11.1% |
+| **Engine & Model Replacement (DFF, TXD, COL)** | [ENGINE_AND_MODELS.md](docs/lua-functions/ENGINE_AND_MODELS.md) | 125 | 1 | 15 | 109 | 0.8% |
+| **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](docs/lua-functions/AUDIO_AND_VOICE.md) | 57 | 0 | 8 | 49 | 0.0% |
+| **Camera & Viewport (CLuaCameraDefs)** | [CAMERA.md](docs/lua-functions/CAMERA.md) | 47 | 1 | 5 | 41 | 2.1% |
+| **Weapons & Projectiles (CLuaWeaponDefs, CLuaProjectileDefs)** | [WEAPONS_AND_COMBAT.md](docs/lua-functions/WEAPONS_AND_COMBAT.md) | 31 | 0 | 0 | 31 | 0.0% |
+| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](docs/lua-functions/CORE_AND_UTILITY.md) | 195 | 16 | 15 | 164 | 8.2% |
+| **Markers, Blips, ColShapes & Spatial** | [MARKERS_AND_SPATIAL.md](docs/lua-functions/MARKERS_AND_SPATIAL.md) | 145 | 0 | 3 | 142 | 0.0% |
+| **Web Browser & Compatibility (CEF / Discord)** | [BROWSER_AND_COMPATIBILITY.md](docs/lua-functions/BROWSER_AND_COMPATIBILITY.md) | 103 | 0 | 0 | 103 | 0.0% |
+| **TOTAL** | **All Categories** | **1581** | **60** | **196** | **1325** | **3.8%** |
+
+*Full machine-generated parity matrix: [`docs/PARITY_MATRIX.md`](docs/PARITY_MATRIX.md)*
+
+---
+
 ## Server Setup & Anti-Cheat Notice
 
 ### Compatible Server Engine
@@ -278,6 +304,8 @@ adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game
 
 Detailed architectural and protocol references are preserved in the `docs/` directory:
 
+- [Lua Functions Conversion Catalog](docs/lua-functions/README.md)
+- [Client Parity Matrix](docs/PARITY_MATRIX.md)
 - [Protocol Reference](docs/PROTOCOL_REFERENCE.md)
 - [Transport Engine & Handshake](docs/TRANSPORTE_NEON.md)
 - [Network Packet Contract](docs/CONTRATO_TRANSPORTE_MTA.md)

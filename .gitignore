@@ -54,6 +54,11 @@ captures/
 .env
 !.env.example
 
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
 # OS generated files
 .DS_Store
 .DS_Store?
