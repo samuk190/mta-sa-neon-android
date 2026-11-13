@@ -59,6 +59,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/ElementManager.cpp"
     "${NATIVE_DIR}/shared/PerformanceProfiler.cpp"
     "${NATIVE_DIR}/shared/LuaVMStub.cpp"
+    "${NATIVE_DIR}/gtasa/HudComponents.cpp"
     "${NATIVE_DIR}/gtasa/RemoteCombat.cpp"
     "${NATIVE_DIR}/gtasa/RemoteVehicle.cpp"
     "${NATIVE_DIR}/gtasa/PedInterpolator.cpp"

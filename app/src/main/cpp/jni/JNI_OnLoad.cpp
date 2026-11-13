@@ -370,7 +370,10 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
     if (WorldRPG::Script::ActiveVmPulseResources()) WorldRPG::JniBridge::PostGameLine(8, "");
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
     const std::string frame = WorldRPG::Script::ActiveVmPump();
-    if (frame.empty()) return;
+    // An empty frame is sent once, so the overlay clears what the scripts stopped drawing.
+    static bool lastFrameEmpty = true;
+    if (frame.empty() && lastFrameEmpty) return;
+    lastFrameEmpty = frame.empty();
     jstring jtext = env->NewStringUTF(frame.c_str());
     if (!jtext) return;
     env->CallVoidMethod(g_gameActivityRef, g_onDxFrameMethod, jtext);
@@ -384,6 +387,12 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeMapSnapshot(JNIEnv*
     WorldRPG::Game::CopyPose(x, y, z, heading);
     const std::string text = WorldRPG::ServerWorld::MapSnapshot(x, y, heading);
     return env->NewStringUTF(text.c_str());
+}
+
+JNIEXPORT void JNICALL
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeCursorEvent(
+    JNIEnv*, jobject, jint action, jfloat x, jfloat y) {
+    WorldRPG::Script::ActiveVmQueueCursor(action, x, y);
 }
 
 JNIEXPORT void JNICALL

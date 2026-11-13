@@ -38,6 +38,9 @@ android {
         resValue("string", "app_name", launcherTitle)
         resValue("string", "connect", launcherPlayButtonText)
 
+        // Restrict packaged resources to active locales and density
+        resourceConfigurations += listOf("en", "pt", "xxhdpi")
+
         ndk {
             // Somente arm64-v8a: o libGTASA.so do GTA SA Mobile 2.10 (War Drum) e'
             // exclusivamente aarch64. Incluir armeabi-v7a geraria APK com ABI

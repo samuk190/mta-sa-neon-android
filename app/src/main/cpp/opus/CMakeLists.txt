@@ -159,6 +159,8 @@ target_include_directories(opus PRIVATE
 # Required preprocessor definitions for Opus build
 target_compile_definitions(opus PRIVATE
  HAVE_CONFIG_H
+ HAVE_LRINT
+ HAVE_LRINTF
  OPUS_BUILD
  USE_ALLOCA
  FIXED_POINT
@@ -175,6 +177,8 @@ target_compile_options(opus PRIVATE
  -Wno-unused-function
  -Wno-unused-variable
  -Wno-implicit-function-declaration
+ "-Wno-#warnings"
+ "-Wno-#pragma-messages"
 )
 
 # Position independent code for static library linking into shared lib

@@ -68,6 +68,7 @@ public final class EngineHostActivity extends GTASA {
     private native void nativePulse();
     private native void nativeDestroy();
     private native void nativeSetScreenSize(int width, int height);
+    private native void nativeCursorEvent(int action, float x, float y);
     private native boolean nativeSendChat(String text);
     private native void nativeDropConnection();
     private native String nativeMapSnapshot();
@@ -199,6 +200,7 @@ public final class EngineHostActivity extends GTASA {
 
         dxOverlay = new MtaDxView(this);
         dxOverlay.setVisibility(View.GONE);
+        dxOverlay.setCursorListener(this::nativeCursorEvent);
         addContentView(dxOverlay, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 

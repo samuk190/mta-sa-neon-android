@@ -100,6 +100,9 @@ void ActiveVmResetSession();
 bool ActiveVmOnChat(const char* text, int red, int green, int blue);
 std::string ActiveVmPump();
 void ActiveVmSetScreen(int width, int height);
+// Touch on the DX overlay while the cursor is showing. Any thread. action: 0 down, 1 up, 2 move;
+// x and y are in the pixels guiGetScreenSize reports.
+void ActiveVmQueueCursor(int action, float x, float y);
 // Screen size scripts see (guiGetScreenSize), and the resource whose code is running.
 void ActiveVmScreenSize(int& width, int& height);
 const std::string& ActiveVmOwner();

@@ -51,9 +51,11 @@ else()
 endif()
 
 # Suppress warnings in vendored C code
-target_compile_options(lua53 PRIVATE -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers)
+target_compile_options(lua53 PRIVATE -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-string-plus-int)
 
 # Align to 16KB pages for Android 15+ compatibility
 if(ANDROID)
     set_target_properties(lua53 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
+
+set_target_properties(lua53 PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 8)

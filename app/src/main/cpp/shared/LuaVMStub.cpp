@@ -6,6 +6,7 @@
 #include "ResourcePackets.h"
 #include "ServerWorld.h"
 #include "../gtasa/GameEngine.h"
+#include "../gtasa/HudComponents.h"
 #include "../net/NeonJoinProtocol.h"
 #include "../net/raknet/RakNetWrapper.h"
 
@@ -25,6 +26,7 @@ extern "C" {
 #include <cmath>
 #include <ctime>
 #include <vector>
+#include <mutex>
 
 namespace WorldRPG::Script {
 
@@ -44,6 +46,13 @@ struct DxRuntime {
     std::string owner;  // resource whose code is running; tags the handlers and timers it registers
 };
 DxRuntime g_dx;
+
+// Touches from the Android UI thread, applied on the VM thread in pumpDx (desktop: CClientGame mouse
+// handling fires onClientClick only while the cursor is showing). action: 0 down, 1 up, 2 move.
+struct CursorEvent { int action = 0; float x = 0, y = 0; };
+static std::mutex g_cursorMutex;
+static std::vector<CursorEvent> g_cursorQueue;
+static float g_cursorX = 0.f, g_cursorY = 0.f;
 static LuaVMStub* g_active = nullptr;
 
 // Sets the running resource for the duration of a Lua call (a load or a callback).
@@ -161,6 +170,37 @@ static int l_tocolor(lua_State* L) {
     const int a = static_cast<int>(luaL_optinteger(L, 4, 255)) & 255;
     lua_pushinteger(L, (static_cast<unsigned>(a) << 24) | (static_cast<unsigned>(r) << 16) |
                         (static_cast<unsigned>(g) << 8) | static_cast<unsigned>(b));
+    return 1;
+}
+
+// Desktop getCursorPosition: relative x/y, then the world position. False while the cursor is hidden.
+static int l_getCursorPosition(lua_State* L) {
+    if (!GuiCursorShown()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    float px = 0, py = 0, pz = 0, heading = 0;
+    WorldRPG::Game::CopyPose(px, py, pz, heading);
+    lua_pushnumber(L, g_dx.screenW > 0 ? g_cursorX / g_dx.screenW : 0.0);
+    lua_pushnumber(L, g_dx.screenH > 0 ? g_cursorY / g_dx.screenH : 0.0);
+    lua_pushnumber(L, px);
+    lua_pushnumber(L, py);
+    lua_pushnumber(L, pz);
+    return 5;
+}
+
+// Desktop setPlayerHudComponentVisible(component, show) and its old name showPlayerHudComponent.
+static int l_setPlayerHudComponentVisible(lua_State* L) {
+    const char* component = luaL_optstring(L, 1, "");
+    const bool show = lua_toboolean(L, 2) != 0;
+    const bool ok = WorldRPG::Game::SetHudComponentVisible(component, show);
+    if (!ok) LUA_LOGE("setPlayerHudComponentVisible: component '%s' is not supported on this client", component);
+    lua_pushboolean(L, ok ? 1 : 0);
+    return 1;
+}
+
+static int l_isPlayerHudComponentVisible(lua_State* L) {
+    lua_pushboolean(L, WorldRPG::Game::IsHudComponentVisible(luaL_optstring(L, 1, "")) ? 1 : 0);
     return 1;
 }
 
@@ -483,6 +523,7 @@ static void installDxBindings(lua_State* L) {
         {"dxDrawText", l_dxDrawText},
         {"tocolor", l_tocolor},
         {"guiGetScreenSize", l_guiGetScreenSize},
+        {"getCursorPosition", l_getCursorPosition},
         {"getTickCount", l_getTickCount},
         {"setTimer", l_setTimer},
         {"getElementHealth", l_getElementHealth},
@@ -571,7 +612,9 @@ static void installDxBindings(lua_State* L) {
         {"isPedDead", l_false},
         {"setElementAlpha", l_true},
         {"isChatBoxInputActive", l_false},
-        {"setPlayerHudComponentVisible", l_true},
+        {"setPlayerHudComponentVisible", l_setPlayerHudComponentVisible},
+        {"showPlayerHudComponent", l_setPlayerHudComponentVisible},
+        {"isPlayerHudComponentVisible", l_isPlayerHudComponentVisible},
         {"outputDebugString", l_debug},
         {"addCommandHandler", l_true},
     };
@@ -1001,6 +1044,46 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
     return true;
 }
 
+// Fires onClientClick (and onClientCursorMove) for the queued touches. Signature as on desktop:
+// button, state, absoluteX, absoluteY, worldX, worldY, worldZ, clickedElement.
+static void PumpCursorEvents() {
+    std::vector<CursorEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(g_cursorMutex);
+        events.swap(g_cursorQueue);
+    }
+    if (events.empty() || !g_dx.L) return;
+    float px = 0, py = 0, pz = 0, heading = 0;
+    WorldRPG::Game::CopyPose(px, py, pz, heading);
+    for (const CursorEvent& ev : events) {
+        if (!GuiCursorShown()) break;  // a handler closed the panel; the rest of the gesture is not a click
+        g_cursorX = ev.x;
+        g_cursorY = ev.y;
+        lua_State* L = g_dx.L;
+        if (ev.action == 2) {
+            if (g_dx.handlers.find("onClientCursorMove") == g_dx.handlers.end()) continue;
+            lua_pushnumber(L, g_dx.screenW > 0 ? ev.x / g_dx.screenW : 0.0);
+            lua_pushnumber(L, g_dx.screenH > 0 ? ev.y / g_dx.screenH : 0.0);
+            lua_pushnumber(L, ev.x);
+            lua_pushnumber(L, ev.y);
+            lua_pushnumber(L, px);
+            lua_pushnumber(L, py);
+            lua_pushnumber(L, pz);
+            fireHandlers("onClientCursorMove", 7);
+            continue;
+        }
+        lua_pushstring(L, "left");
+        lua_pushstring(L, ev.action == 0 ? "down" : "up");
+        lua_pushnumber(L, ev.x);
+        lua_pushnumber(L, ev.y);
+        lua_pushnumber(L, px);
+        lua_pushnumber(L, py);
+        lua_pushnumber(L, pz);
+        lua_pushboolean(L, 0);
+        fireHandlers("onClientClick", 8);
+    }
+}
+
 std::string LuaVMStub::pumpDx() {
     if (!pImpl_->L) return {};
     const auto now = DxNow();
@@ -1020,10 +1103,12 @@ std::string LuaVMStub::pumpDx() {
     }
     g_dx.timers.erase(std::remove_if(g_dx.timers.begin(), g_dx.timers.end(),
         [](const DxRuntime::Timer& timer) { return timer.times == 0; }), g_dx.timers.end());
+    PumpCursorEvents();
     g_dx.frame.clear();
     if (!WorldRPG::Debug::Flag("nodx")) fireHandlers("onClientRender", 0);
     GuiAppendDraws(g_dx.frame);
-    std::string out = g_dx.frame;
+    // "C" line: the cursor is showing, so the Android overlay takes touches (MtaDxView).
+    std::string out = GuiCursorShown() ? "C\n" + g_dx.frame : g_dx.frame;
     if (out.size() > 24000) out.resize(24000);
     std::string clean;
     clean.reserve(out.size());
@@ -1294,6 +1379,8 @@ void ActiveVmResetSession() {
     if (!g_active) return;
     // A new session starts from a clean VM: no handlers, timers or globals from the old one.
     const int width = g_dx.screenW, height = g_dx.screenH;
+    // The old session's scripts may have hidden HUD components; the new one starts with all shown.
+    WorldRPG::Game::ResetHudComponents();
     g_active->shutdown();
     g_active->initialize();
     g_dx.screenW = width;
@@ -1311,6 +1398,10 @@ void ActiveVmScreenSize(int& width, int& height) {
 }
 const std::string& ActiveVmOwner() {
     return g_dx.owner;
+}
+void ActiveVmQueueCursor(int action, float x, float y) {
+    std::lock_guard<std::mutex> lock(g_cursorMutex);
+    if (g_cursorQueue.size() < 256) g_cursorQueue.push_back(CursorEvent{action, x, y});
 }
 void ActiveVmSetScreen(int width, int height) {
     if (g_active) g_active->setScreenSize(width, height);

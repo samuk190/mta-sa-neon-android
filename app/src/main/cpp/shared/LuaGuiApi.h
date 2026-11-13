@@ -27,6 +27,8 @@ bool GuiDestroy(uint32_t id);
 void GuiDropResource(const std::string& owner);
 // Drops every GUI element (new VM or session).
 void GuiReset();
+// True while a script has the cursor shown (showCursor). The phone then routes touches to onClientClick.
+bool GuiCursorShown();
 // Appends the R/T draw lines of the visible elements (Android MtaDxView format).
 void GuiAppendDraws(std::string& out);
 

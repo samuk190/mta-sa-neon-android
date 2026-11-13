@@ -382,10 +382,13 @@ void GuiDropResource(const std::string& owner) {
 }
 
 void GuiReset() {
+    g_cursorShown = false;
     g_elements.clear();
     g_cursorShown = false;
     g_inputEnabled = true;
 }
+
+bool GuiCursorShown() { return g_cursorShown; }
 
 void GuiAppendDraws(std::string& out) {
     for (const auto& [id, element] : g_elements) {

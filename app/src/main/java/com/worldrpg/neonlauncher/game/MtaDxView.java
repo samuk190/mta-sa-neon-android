@@ -21,8 +21,44 @@ public final class MtaDxView extends View {
         text.setShadowLayer(2f, 1f, 1f, 0xCC000000);
     }
 
+    /** Receives touches while a script has the cursor shown. action: 0 down, 1 up, 2 move. */
+    public interface CursorListener {
+        void onCursor(int action, float x, float y);
+    }
+
+    private CursorListener cursorListener;
+    private boolean cursorShown;
+
+    public void setCursorListener(CursorListener listener) {
+        cursorListener = listener;
+    }
+
+    // Desktop: with showCursor(true) the mouse drives the interface and the game gets no input.
+    // Here the overlay takes the touch and reports it at the coordinates the frame is drawn in.
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent event) {
+        if (!cursorShown || cursorListener == null) return false;
+        switch (event.getActionMasked()) {
+            case android.view.MotionEvent.ACTION_DOWN:
+                cursorListener.onCursor(0, event.getX(), event.getY());
+                break;
+            case android.view.MotionEvent.ACTION_MOVE:
+                cursorListener.onCursor(2, event.getX(), event.getY());
+                break;
+            case android.view.MotionEvent.ACTION_UP:
+            case android.view.MotionEvent.ACTION_CANCEL:
+                cursorListener.onCursor(1, event.getX(), event.getY());
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
+
     public void setFrame(String commands) {
         frame = commands == null ? "" : commands;
+        // A first line "C" means the cursor is showing (LuaVMStub::pumpDx).
+        cursorShown = frame.startsWith("C\n") || frame.equals("C");
         setVisibility(frame.isEmpty() ? GONE : VISIBLE);
         invalidate();
     }

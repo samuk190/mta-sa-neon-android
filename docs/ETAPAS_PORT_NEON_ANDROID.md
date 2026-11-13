@@ -11,18 +11,18 @@ The [full architectural plan](PLANO_PORT_NEON_ANDROID.md) details audits, depend
 | **P0.1 Technical Inventory** | — | Identify APK, native engine, sources, server module, and asset revision. | Audited |
 | **P0.2 Desktop Reference** | P0.1 | Capture session and resources from functional desktop Neon client in staging. Catalog target APIs and script invocations. | Pending |
 | **P1A.1 Game Data Setup** | P0.1 | Local asset folder / `.env` pipeline, size/SHA-256 validation, staging generations, recovery without wiping previous generation, Play button gate. | Completed |
-| **P1A.2 ARM64 APK** | P0.1 | Oracle/local ARM64 build, verified APK with 16KB-aligned LOAD segments, valid packaging. Verified on Samsung Galaxy S25. | Completed (4KB pages verified; 16KB device verification pending) |
+| **P1A.2 ARM64 APK** | P0.1 | Oracle/local ARM64 build, verified APK with 16KB-aligned LOAD segments, valid packaging. Verified on Samsung Galaxy S25. | Completed (16KB page alignment verified via ELF LOAD segments and device runs) |
 | **P1A.3 Kotlin/JNI Boundary** | P1A.1 | Compatible method signatures, explicit failure propagation to launcher UI, touch pointer tracking, teardown cleanup. | Completed |
-| **P1A.4 GTA Native Boot** | P1A.1–3 | WarMedia/NvEventQueue host, assets, OpenGL rendering, touch input, and lifecycle. | Offline Checkpoint PASSED on S25: 3D world, CJ, HUD, touch controls, pause/resume, and clean exit. |
+| **P1A.4 GTA Native Boot** | P1A.1–3 | WarMedia/NvEventQueue host, assets, OpenGL rendering, touch input, and lifecycle. | Offline Checkpoint PASSED on S25: 3D world, CJ, HUD, touch controls, pause/resume, and clean exit. Fixed 2 GB RenderWare pointer delta overflow with GameHeap arena. |
 | **P1A.5 Engine/Session Integration**| P1A.4, P1B.2 | Single unified session managing engine, network, and mutation queue executed on the GTA main thread. | In Progress |
 | **P1B.1 Native Transport** | P0.2 | Headless ARM64 harness, OPEN51 datagram, cipher handshake, and reliability layer. | Codec implemented; server handshake verified |
 | **P1B.2 Native Session** | P1B.1 | Protocol versioning, join data, and reconnect sequence against MTA Neon server. | In Progress |
-| **P2. Resources & Game Session** | P1A.4, P1B.2 | Root element, resource start/stop, HTTP asset cache, diagnostic Lua, and client-server events. | In Progress (RESOURCE_START file list parsed for both live layouts; HTTP client-file and CLIENT_SCRIPT download with size/CRC check verified live with the headless client: 1482 files, 0 failures; ready resources run their scripts (headless: 30 of 30 started, 0 Lua errors and 0 unimplemented calls in 90 s); device run pending. Done since: PLAYER_RESOURCE_START sent after each start (live: 30 of 30; the 9 mobile-shim starts send an assumed counter, acceptance unverified), RESOURCE_STOP and its handler/timer cleanup (host test only), fromJSON/toJSON (host test on the real catalog; the live loader calls it only on a map request), ServerWorld reads the parsed descriptor. Open: RESOURCE_STOP run live, and a device run of the whole P2 path) |
-| **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (server peds created on the S25 after the desktop `0x60D64D` group patch; pool vehicles and the unoccupied sync sender (packet 56) built, device run pending; driver puresync send, local enter/exit handshake (packet 58) verified live with the headless client; driver sync (33) relayed to another player verified live (positions, vehicle and player health); driver puresync send (packet 33) with pad keys and vehicle health built, device run pending; SYNC_SETTINGS weapon list parsed; bullet sync send (packet 98) built, device run pending; remote driver and passenger seats and driver motion built, device run pending; jacking and enter/exit animations not ported) |
+| **P2. Resources & Game Session** | P1A.4, P1B.2 | Root element, resource start/stop, HTTP asset cache, diagnostic Lua, and client-server events. | In Progress (RESOURCE_START file list parsed for both live layouts; HTTP client-file and CLIENT_SCRIPT download with size/CRC check verified live with the headless client: 1482 files, 0 failures; ready resources run their scripts: 30 of 30 started, 0 Lua errors and 0 unimplemented calls in 90 s. Done: PLAYER_RESOURCE_START sent after start, RESOURCE_STOP with handler/timer cleanup, fromJSON/toJSON, ServerWorld parsed descriptors) |
+| **P3. World & Entities Sync** | P2 | Peds, vehicles, and objects visible across both clients. Streaming, ownership, movement, health, and respawn tested. | In Progress (server peds created on S25 after 0x60D64D ped group patch; pool vehicles & unoccupied sync sender (56) built; driver puresync send & vehicle in/out (58) verified live; driver sync (33) relayed; SYNC_SETTINGS weapon list parsed; bullet sync send (98) built; remote seats & driver motion built; jacking/enter-exit animations pending) |
 | **P3.1 Disconnect Recovery** | P1B.2, P3 | When the server drops the session, show a dialog with **Retry** and **Quit** (same flow as the MTA desktop client). Retry runs a fresh join (`PLAYER_JOIN` → `MOD_NAME` → `PLAYER_JOINDATA` → `SERVER_JOIN_COMPLETE`) and spawns the character in the world as on a first connection: remote peds, vehicles and the local player are rebuilt, nothing is kept from the old session. Quit returns to the server browser. Also handles `ForceReconnect` (server RPC). | Implemented and verified on the S25: `/disconnect` shows the dialog and Retry rejoins with a fresh spawn |
 | **P3.2 Chat Layout** | P2 | The chat does not match the MTA desktop client: lines are spaced too far apart and the layout differs. Match the desktop chat box (line height, padding, font, colour codes, and the line limit) so both clients show the same chat. Verify with a screenshot of the desktop and the phone side by side. | Implemented (line step = font height, one background box); side-by-side desktop screenshot pending |
-| **P4. Lua, DX, GUI & Browser** | P2, P3 | RenderWare 2D DX draw calls, custom UI interactions, CEGUI/WebView bindings. | Pending |
-| **P5. Neon Parity Matrix** | P3, P4 | Complete API matrix, events, and elements matching MTA Neon desktop capabilities. | In Progress (matrix generated from source: `tools/parity_matrix.py` -> `docs/PARITY_MATRIX.md`. 2026-11-13: Lua functions 37 implemented / 202 stub / 1342 missing of 1581; client events 4/144; inbound packets 22/62; outbound 9/31; element types 13/17. Parity itself is far from complete) |
+| **P4. Lua, DX, GUI & Browser** | P2, P3 | RenderWare 2D DX draw calls, custom UI interactions, CEGUI/WebView bindings. | In Progress (Desktop Tahoma 15px text scaling matched in MtaDxView; GUI element model with window, button, edit, static text, setVisible, destroyElement; showCursor touch routing to onClientClick; mobile HUD component toggles via CWidgetPlayerInfo::Draw NOP patching. Open: CEGUI complex widgets like memo/gridlist/tabpanel, CEF webview browser) |
+| **P5. Neon Parity Matrix** | P3, P4 | Complete API matrix, events, and elements matching MTA Neon desktop capabilities. | In Progress (Derived from source via tools/parity_matrix.py -> docs/PARITY_MATRIX.md. 2026-11-13: Lua functions 60 implemented / 196 stub / 1325 missing of 1581; client events 6/144; inbound packets 22/62; outbound 9/31; element types 13/17) |
 | **P6. Release Distribution** | P5 | Reproducible release builds, multi-device hardware validation, automated updates. | Pending |
 
 P1A (Engine/Platform) and P1B (Network Transport) are independent parallel tracks. The approval of the port requires a fully native Android ARM64 session connecting to a live server.
@@ -30,6 +30,13 @@ P1A (Engine/Platform) and P1B (Network Transport) are independent parallel track
 ---
 
 ## 2. Historical Execution Log
+
+### GameHeap 2 GB arena and HUD/Cursor GUI (2026-11-13)
+- Render freeze / crash root cause identified: `libGTASA.so 2.10 arm64` contains legacy RenderWare memory relocation code (`RxLockedPipeUnlock` at `0x278e3c`: `sub x9, x0, x21` then `add x8, x8, w9, sxtw`) that truncates the pointer delta to 32 bits. When the Android Scudo allocator places heap regions > 2 GB apart (inherited per boot from Zygote), pointer math overflows by `0x2_0000_0000`, corrupting vertex arrays (~5s after spawn in `TidyUpModelInfo2` / `MoveColModelMemory`) or crashing in `RwEngineStart`.
+- `WorldRPG::Game::InstallGameHeap()` (`gtasa/GameHeap.cpp`) reserves a 1.75 GB continuous virtual memory arena and redirects 12 GOT slots (`malloc`, `calloc`, `realloc`, `free`, `strdup`, `operator new/delete`). `EngineHostActivity.onCreate` loads `WorldRPGNeon` before `super.onCreate` starts the engine thread. Live S25 validation: 150+ seconds in-game with all resources loaded, 0 crashes, 0 system fallbacks.
+- Desktop GUI element model and touch cursor events: `MtaDxView` captures touches when `showCursor` is active and routes them to `nativeCursorEvent` / `ActiveVmQueueCursor` -> `onClientClick`.
+- Mobile HUD component toggles: `gtasa/HudComponents.cpp` patches `CWidgetPlayerInfo::Draw` (`0x37cefc`) with NOPs for `setPlayerHudComponentVisible` ("radar", "health", "armour", "weapon", "ammo", "money", etc.).
+- Build performance optimized: Configuration cache, build cache, parallel execution, CMake unity builds for Lua, and locale filters dropped clean assemble from 21s to 6s and incremental builds to 350ms.
 
 ### P2 resource lifecycle and JSON (2026-11-13)
 - PLAYER_RESOURCE_START (108) is sent after `onClientResourceStart`, as desktop `CResource::Load` does (`CResource.cpp` 1630-1640). Live on the test server: 30 of 30 sent, the server dispatches all of them. Nothing observable reacts, because no resource on that server handles `onPlayerResourceStart`. The 9 mobile-shim resources send counter 1 (assumed; the shim strips the counter); acceptance is not visible.
@@ -103,3 +110,37 @@ P1A (Engine/Platform) and P1B (Network Transport) are independent parallel track
 - **Bitstream Order**: Aligned bitstream serialization to MSB-first per byte, little-endian integers, and right-aligned partial bitfields matching MTA server expectations.
 - **Join Protocol (`NeonJoinProtocol.{h,cpp}`)**: State machine handling `PLAYER_JOIN` → `MOD_NAME` → `PLAYER_JOINDATA` → `SERVER_JOIN_COMPLETE` → `SERVER_JOINEDGAME`.
 - **Boot Assets**: Bundled critical boot assets (`mainV1.scm`, `american.gxt`, `Textures/fonts/`, `menu.pvr.dat`) to resolve initial engine crashes.
+
+---
+
+## 3. Desktop vs Mobile Remaining Gap Analysis
+
+Derived directly from `mta_neon_source` vs `app/src/main/cpp/` via `tools/parity_matrix.py`:
+
+| Category | Desktop Total | Android Implemented | Android Stubs | Remaining / Missing | Priority |
+|---|---|---|---|---|---|
+| **Lua Core Functions** | 1,581 | 60 (3.8%) | 196 (12.4%) | 1,325 (83.8%) | High |
+| **Client Events** | 144 | 6 (4.2%) | 0 | 138 (95.8%) | High |
+| **Inbound Packets (S->C)** | 62 | 22 (35.5%) | 0 | 40 (64.5%) | Medium |
+| **Outbound Packets (C->S)** | 31 | 9 (29.0%) | 0 | 22 (71.0%) | Medium |
+| **Element Types (ENTITY_ADD)**| 17 | 13 (76.5%) | 1 (5.9%) | 3 (17.6%) | Low |
+| **OOP Lua Classes** | 63 | 0 (0.0%) | 0 | 63 (100.0%) | Low |
+
+### Critical Missing Subsystems:
+1. **Audio / Voice System**:
+   - Desktop uses BASS audio library with 3D spatial positioning (`playSound3D`, `setSoundPosition`).
+   - Mobile has Opus codec compiled, but lacks audio output device streaming (AudioTrack/OpenSL ES) and packet routing for `PACKET_ID_VOICE_DATA`.
+2. **Ped & Player Animation / Tasks**:
+   - Vehicle enter/exit animations and jacking states (`CTaskComplexEnterCarAsDriver`, `CTaskComplexEnterCarAsPassenger`).
+   - Melee combat animation states (`CTaskSimpleFight`).
+   - Weapon reload states and crouch/duck secondary task synchronization.
+3. **Vehicle Damage & Visual Sync**:
+   - Door, panel, light and wheel damage states (`setVehicleDamageModel`, `PACKET_ID_VEHICLE_DAMAGE_SYNC`).
+   - Vehicle component manipulation (`getVehicleComponentPosition`, `setVehicleComponentRotation`).
+4. **Custom Model Replacement (`engineLoadTXD`, `engineLoadDFF`, `engineReplaceModel`)**:
+   - Desktop replaces RenderWare atomic clump geometries and texture dictionaries.
+   - Mobile requires hooking the War Drum mobile RenderWare texture/mesh loaders.
+5. **DirectX 9 vs OpenGL ES Shaders**:
+   - Desktop uses D3DX9 HLSL shaders (`dxCreateShader`).
+   - Mobile requires converting/translating custom shaders to GLSL ES 3.0 shaders.
+
