@@ -204,6 +204,7 @@ public final class EngineHostActivity extends GTASA {
         chatParams.topMargin = Math.max(dp(12), (int) (metrics.heightPixels * 0.03f));
         addContentView(chatLog, chatParams);
         chatLog.bringToFront();
+        chatLog.setOnClickListener(v -> openChatInput());
         Button chatButton = new Button(this);
         chatButton.setText("Chat");
         chatButton.setTextColor(Color.WHITE);

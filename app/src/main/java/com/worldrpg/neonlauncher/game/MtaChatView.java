@@ -176,7 +176,6 @@ public final class MtaChatView extends View {
                 return true;
 
             case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
                 if (getParent() != null) {
                     getParent().requestDisallowInterceptTouchEvent(false);
                 }
@@ -187,15 +186,28 @@ public final class MtaChatView extends View {
                         postDelayed(scrollResetRunnable, SCROLL_RESET_DELAY_MS);
                     }
                 } else {
-                    // Quick tap while scrolled up resets immediately to bottom
-                    if (scrollOffset > 0) {
-                        scrollOffset = 0;
-                        invalidate();
-                    }
+                    performClick();
+                }
+                return true;
+
+            case MotionEvent.ACTION_CANCEL:
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                isDragging = false;
+                if (scrollOffset > 0) {
+                    removeCallbacks(scrollResetRunnable);
+                    postDelayed(scrollResetRunnable, SCROLL_RESET_DELAY_MS);
                 }
                 return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        return true;
     }
 
     static CharSequence colorize(String raw) {
