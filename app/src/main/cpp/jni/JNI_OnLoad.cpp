@@ -367,7 +367,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
     g_state->network->DoPulse();
     g_state->join->Pulse();
     // Client scripts of resources that became ready run here, on the VM thread.
-    if (WorldRPG::Script::ActiveVmPulseResources()) WorldRPG::JniBridge::PostGameLine(8, "");
+    WorldRPG::Script::ActiveVmPulseResources();
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
     const std::string frame = WorldRPG::Script::ActiveVmPump();
     // An empty frame is sent once, so the overlay clears what the scripts stopped drawing.

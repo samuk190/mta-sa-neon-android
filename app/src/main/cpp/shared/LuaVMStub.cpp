@@ -76,6 +76,19 @@ static std::uint64_t DxNow() {
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
+static bool g_eventCancelled = false;
+
+static int l_cancelEvent(lua_State* L) {
+    bool cancel = lua_isboolean(L, 1) ? lua_toboolean(L, 1) : true;
+    g_eventCancelled = cancel;
+    return 0;
+}
+
+static int l_wasEventCancelled(lua_State* L) {
+    lua_pushboolean(L, g_eventCancelled ? 1 : 0);
+    return 1;
+}
+
 static void fireHandlers(const char* name, int nargs) {
     if (!g_dx.L) return;
     auto found = g_dx.handlers.find(name);
@@ -83,6 +96,7 @@ static void fireHandlers(const char* name, int nargs) {
         lua_pop(g_dx.L, nargs);
         return;
     }
+    g_eventCancelled = false;
     // Args are already on the stack. Copy them for every handler. Iterate over a copy
     // of the list, and skip handlers removed by an earlier handler of the same event.
     const std::vector<int> refs = found->second;
@@ -517,6 +531,8 @@ static int l_getLocalPlayer(lua_State* L) {
 static void installDxBindings(lua_State* L) {
     g_dx.L = L;
     const struct { const char* name; lua_CFunction fn; } binds[] = {
+        {"cancelEvent", l_cancelEvent},
+        {"wasEventCancelled", l_wasEventCancelled},
         {"addEventHandler", l_addEventHandler},
         {"removeEventHandler", l_removeEventHandler},
         {"dxDrawRectangle", l_dxDrawRectangle},
@@ -1020,14 +1036,15 @@ static void FlushPendingChat(lua_State* L) {
 }
 
 bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
-    if (!text) return false;
+    if (!text) return true;
     if (!g_dx.chatHooked || !pImpl_->L) {
-        g_dx.pendingChat.push_back({text, red, green, blue});
-        return false;
+        return true;
     }
     lua_State* L = pImpl_->L;
     auto found = g_dx.handlers.find("onClientChatMessage");
-    if (found == g_dx.handlers.end()) return false;
+    if (found == g_dx.handlers.end() || found->second.empty()) return true;
+
+    g_eventCancelled = false;
     for (int ref : found->second) {
         OwnerScope scope(OwnerOfHandler(ref));
         lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
@@ -1041,7 +1058,7 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
             lua_pop(L, 1);
         }
     }
-    return true;
+    return !g_eventCancelled;
 }
 
 // Fires onClientClick (and onClientCursorMove) for the queued touches. Signature as on desktop:

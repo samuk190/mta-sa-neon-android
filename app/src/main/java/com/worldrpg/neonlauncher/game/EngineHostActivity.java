@@ -187,6 +187,12 @@ public final class EngineHostActivity extends GTASA {
         addContentView(transfer, transferParams);
         downloadPanel = transfer;
 
+        dxOverlay = new MtaDxView(this);
+        dxOverlay.setVisibility(View.GONE);
+        dxOverlay.setCursorListener(this::nativeCursorEvent);
+        addContentView(dxOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
         int chatWidth = Math.max(dp(280), (int) (metrics.widthPixels * 0.44f));
         float line = Math.max(22f, metrics.heightPixels / 720f * 22f);
@@ -197,14 +203,7 @@ public final class EngineHostActivity extends GTASA {
         chatParams.leftMargin = Math.max(dp(12), (int) (metrics.widthPixels * 0.02f));
         chatParams.topMargin = Math.max(dp(12), (int) (metrics.heightPixels * 0.03f));
         addContentView(chatLog, chatParams);
-
-        dxOverlay = new MtaDxView(this);
-        dxOverlay.setVisibility(View.GONE);
-        dxOverlay.setCursorListener(this::nativeCursorEvent);
-        addContentView(dxOverlay, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-
-        chatLog.setOnClickListener(v -> openChatInput());
+        chatLog.bringToFront();
         Button chatButton = new Button(this);
         chatButton.setText("Chat");
         chatButton.setTextColor(Color.WHITE);
@@ -347,6 +346,10 @@ public final class EngineHostActivity extends GTASA {
             }
             if (kind == 0) {
                 appendChat(text);
+                return;
+            }
+            if (kind == 10) {
+                if (chatLog != null) chatLog.setChatVisible(!"0".equals(text));
                 return;
             }
             if (kind != 2) return;

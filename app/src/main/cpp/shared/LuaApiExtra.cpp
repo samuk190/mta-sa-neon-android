@@ -91,6 +91,27 @@ int OutputChatBox(lua_State* L) {
     return 1;
 }
 
+static bool g_chatVisible = true;
+
+int ShowChat(lua_State* L) {
+    bool show = lua_isboolean(L, 1) ? lua_toboolean(L, 1) : true;
+    g_chatVisible = show;
+    WorldRPG::JniBridge::PostGameLine(10, show ? "1" : "0");
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int IsChatVisible(lua_State* L) {
+    lua_pushboolean(L, g_chatVisible ? 1 : 0);
+    return 1;
+}
+
+int ClearChatBox(lua_State* L) {
+    WorldRPG::JniBridge::PostGameLine(8, "");
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 // iprint(...) and debugMessage(text, level, r, g, b): console output only.
 int Iprint(lua_State* L) {
     std::string message;
@@ -259,6 +280,9 @@ uint32_t ElementIdOf(lua_State* L, int index) {
 void InstallExtraBindings(lua_State* L) {
     InstallJsonBindings(L);
     SetGlobal(L, "outputChatBox", OutputChatBox);
+    SetGlobal(L, "showChat", ShowChat);
+    SetGlobal(L, "isChatVisible", IsChatVisible);
+    SetGlobal(L, "clearChatBox", ClearChatBox);
     SetGlobal(L, "iprint", Iprint);
     SetGlobal(L, "debugMessage", DebugMessage);
     SetGlobal(L, "getElementData", GetElementData);
@@ -309,7 +333,7 @@ void InstallExtraBindings(lua_State* L) {
         {"restorePedNativeVehicleResponse", kTrue}, {"releasePedNativePointArm", kTrue},
         {"acquirePedNativePointArm", kFalse}, {"isLineOfSightClear", kFalse}, {"getWaterLevel", kNil},
         {"getScreenFromWorldPosition", kNil}, {"isControlEnabled", kTrue}, {"toggleControl", kTrue},
-        {"isConsoleActive", kFalse}, {"isMainMenuActive", kFalse}, {"showChat", kTrue},
+        {"isConsoleActive", kFalse}, {"isMainMenuActive", kFalse},
         {"executeCommandHandler", kFalse}, {"attachElements", kTrue}, {"detachElements", kTrue},
         {"setObjectMaterial", kTrue},
         {"playSoundFrontEnd", kFalse}, {"playSound3D", kFalse}, {"playSound", kFalse}, {"stopSound", kTrue},
@@ -325,7 +349,7 @@ void InstallExtraBindings(lua_State* L) {
         {"engineGetTXDIDFromName", kZero}, {"engineRequestModel", kZero},
         {"restoreWorldModel", kTrue}, {"removeWorldModel", kTrue},
         {"fileRead", kEmptyString}, {"fileGetSize", kZero}, {"fileClose", kTrue},
-        {"wasEventCancelled", kFalse}, {"updatePedNativePointArm", kFalse},
+        {"updatePedNativePointArm", kFalse},
         {"fxAddBlood", kTrue},
     };
     for (const auto& entry : defaults) SetDefault(L, entry.name, entry.kind);

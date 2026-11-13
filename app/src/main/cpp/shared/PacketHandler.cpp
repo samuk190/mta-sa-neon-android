@@ -62,7 +62,7 @@ std::string ReadChatText(WorldRPG::Net::BitStreamReader& reader) {
     std::string text;
     text.reserve(chars);
     for (unsigned char ch : raw) {
-        if (ch >= 0x20 && ch <= 0x7E) text.push_back(static_cast<char>(ch));
+        if (ch >= 0x20) text.push_back(static_cast<char>(ch));
     }
     while (!text.empty() && text.back() == ' ') text.pop_back();
     return text;
@@ -90,13 +90,29 @@ bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
             if (ReadableScore(other) > ReadableScore(text)) text = other;
         }
     }
-    if (ReadableScore(text) < 1) return false;
+    if (text.empty()) return false;
     char colored[400];
     std::snprintf(colored, sizeof(colored), "#%02X%02X%02X%s", red, green, blue, text.c_str());
     PKT_LOGI("ChatEcho: %s", colored);
-    if (!WorldRPG::Script::ActiveVmOnChat(text.c_str(), red, green, blue))
+    const bool notCancelled = WorldRPG::Script::ActiveVmOnChat(text.c_str(), red, green, blue);
+    if (notCancelled)
         WorldRPG::JniBridge::PostGameLine(0, colored);
     return true;
+}
+
+bool HandleLuaRPC(const uint8_t* body, size_t length, size_t bits) {
+    if (length < 2) return false;
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    uint8_t funcId = 0;
+    if (!reader.Read(funcId)) return false;
+    if (funcId == 120) { // SHOW_CHAT (Shared/sdk/net/rpc_enums.h)
+        uint8_t show = 1;
+        if (reader.Read(show)) {
+            WorldRPG::JniBridge::PostGameLine(10, show ? "1" : "0");
+            return true;
+        }
+    }
+    return false;
 }
 
 bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
@@ -961,6 +977,7 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 50) { WorldRPG::ServerWorld::OnEntityAdd(body, bodyLength, bodyBits); return true; }
         if (gameId == 51) { WorldRPG::ServerWorld::OnEntityRemove(body, bodyLength, bodyBits); return true; }
         if (gameId == 84) { WorldRPG::ServerWorld::OnCustomData(body, bodyLength, bodyBits); return true; }
+        if (gameId == 68) return HandleLuaRPC(body, bodyLength, bodyBits);
         if (gameId == 82) return HandleResourceStart(body, bodyLength, bodyBits);
         if (gameId == 83) {
             WorldRPG::Script::ActiveVmOnResourceStop(body, bodyLength, bodyBits);
