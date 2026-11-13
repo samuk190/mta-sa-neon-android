@@ -38,8 +38,8 @@ const Clock::time_point kProcessStart = Clock::now();
 
 constexpr float kPi = 3.14159265f;
 constexpr float kCarSpeed = 2.0f;           // m/s along the car heading once driving
-constexpr float kWalkSpeed = 4.0f;          // m/s on foot, from the spawn to the car door
-constexpr float kPickRadius = 80.0f;        // m from the spawn
+constexpr float kWalkSpeed = 25.0f;         // m/s on foot, from the spawn to the car door
+constexpr float kPickRadius = 700.0f;       // m from the spawn
 constexpr float kEnterReach = 1.0f;         // m from the door point before the enter request
 constexpr double kDriveSeconds = 20.0;      // enter -> exit
 constexpr double kShotDelaySeconds = 25.0;  // enter -> first shot
