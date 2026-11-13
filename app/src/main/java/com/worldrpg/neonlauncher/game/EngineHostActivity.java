@@ -40,6 +40,7 @@ public final class EngineHostActivity extends GTASA {
     private TextView downloadLabel;
     private MtaChatView chatLog;
     private MtaDxView dxOverlay;
+    private MtaTransferBox transferBox;
     private PlayerMapView playerMap;
     private final Handler mapHandler = new Handler(Looper.getMainLooper());
     private final Runnable mapRefresh = new Runnable() {
@@ -187,6 +188,11 @@ public final class EngineHostActivity extends GTASA {
         addContentView(transfer, transferParams);
         downloadPanel = transfer;
 
+        // Desktop transfer box for the HTTP file downloads (kind 3 lines from nativePulse).
+        transferBox = new MtaTransferBox(this);
+        addContentView(transferBox, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
         dxOverlay = new MtaDxView(this);
         dxOverlay.setVisibility(View.GONE);
         dxOverlay.setCursorListener(this::nativeCursorEvent);
@@ -301,6 +307,8 @@ public final class EngineHostActivity extends GTASA {
         runOnUiThread(() -> {
             if (connected) {
                 joinedOnce = true;
+                // The "Connecting to server" panel ends with the join, as the desktop connect dialog does.
+                hideDownload();
                 appendChat("#ACD5FEConnected to the server.");
             } else {
                 hideDownload();
@@ -351,6 +359,21 @@ public final class EngineHostActivity extends GTASA {
             }
             if (kind == 10) {
                 if (chatLog != null) chatLog.setChatVisible(!"0".equals(text));
+                return;
+            }
+            if (kind == 3) {
+                // "downloaded|total" in bytes; an empty line means the downloads ended.
+                long downloaded = 0, total = 0;
+                int bar = text.indexOf('|');
+                if (bar > 0) {
+                    try {
+                        downloaded = Long.parseLong(text.substring(0, bar));
+                        total = Long.parseLong(text.substring(bar + 1));
+                    } catch (NumberFormatException ignored) {
+                        total = 0;
+                    }
+                }
+                if (transferBox != null) transferBox.setProgress(downloaded, total);
                 return;
             }
             if (kind != 2) return;

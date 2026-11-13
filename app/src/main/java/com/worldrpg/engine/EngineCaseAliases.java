@@ -11,8 +11,31 @@ import java.util.Locale;
 public final class EngineCaseAliases {
     private EngineCaseAliases() { }
 
+    public static boolean isCaseInsensitive(File root) {
+        String path = root.getPath();
+        if (path.startsWith("/storage/") || path.startsWith("/sdcard/") || path.startsWith("/mnt/")) {
+            return true;
+        }
+        File lower = new File(root, ".case_test");
+        File upper = new File(root, ".CASE_TEST");
+        try {
+            if (lower.exists()) lower.delete();
+            if (lower.createNewFile()) {
+                boolean match = upper.exists();
+                lower.delete();
+                return match;
+            }
+        } catch (Exception ignored) { }
+        return false;
+    }
+
     public static void prepare(File privateRoot) throws IOException {
         File root = privateRoot.getCanonicalFile();
+        if (isCaseInsensitive(root)) {
+            // External storage (/sdcard, /storage/emulated) is already case-insensitive (fuse-bpf)
+            // and rejects symlinks. No case aliases needed.
+            return;
+        }
         prepareDirectory(root, root, 0);
     }
 
@@ -69,11 +92,13 @@ public final class EngineCaseAliases {
                     match = entry;
                 }
                 if (match == null) throw new IOException("Arquivo de mapa indisponivel: " + path);
-                try {
-                    alias(match, part);
-                } catch (ErrnoException error) {
-                    throw new IOException("Cannot prepare game data reference: " + path, error);
+                if (!isCaseInsensitive(base)) {
+                    try {
+                        alias(match, part);
+                    } catch (Exception ignored) {
+                    }
                 }
+                requested = match;
             }
             directory = requested.getCanonicalFile();
             if (!directory.getPath().startsWith(base.getPath() + File.separator)) {
@@ -85,6 +110,13 @@ public final class EngineCaseAliases {
 
     private static void alias(File target, String name) throws ErrnoException, IOException {
         if (name.equals(target.getName())) return;
+        if (name.equalsIgnoreCase(target.getName())) {
+            File alias = new File(target.getParentFile(), name);
+            if (alias.exists()) {
+                // Same file on case-insensitive filesystem
+                return;
+            }
+        }
         File alias = new File(target.getParentFile(), name);
         try {
             Os.lstat(alias.getPath());
@@ -95,7 +127,14 @@ public final class EngineCaseAliases {
             if (error.errno != OsConstants.ENOENT) throw error;
             // Relative aliases stay within the same private directory. Never
             // rename/overwrite originals or duplicate large game archives.
-            Os.symlink(target.getName(), alias.getPath());
+            try {
+                Os.symlink(target.getName(), alias.getPath());
+            } catch (ErrnoException linkErr) {
+                if (linkErr.errno == OsConstants.EPERM || linkErr.errno == OsConstants.EACCES) {
+                    return;
+                }
+                throw linkErr;
+            }
         }
     }
 }

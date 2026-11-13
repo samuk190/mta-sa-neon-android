@@ -366,6 +366,28 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
     if (g_enterServer.load()) WorldRPG::Game::BeginServerSession();
     g_state->network->DoPulse();
     g_state->join->Pulse();
+    {
+        // Transfer box (desktop CTransferBox): "downloaded|total" while files are in flight, then one
+        // empty line. Sent only when the numbers change.
+        static uint64_t lastDone = ~0ull, lastTotal = ~0ull;
+        static bool shown = false;
+        const auto transfer = WorldRPG::Net::HttpDownloader::GetTransfer();
+        if (transfer.active && transfer.total > 0) {
+            if (transfer.done != lastDone || transfer.total != lastTotal) {
+                lastDone = transfer.done;
+                lastTotal = transfer.total;
+                char line[64];
+                std::snprintf(line, sizeof(line), "%llu|%llu", static_cast<unsigned long long>(transfer.done),
+                              static_cast<unsigned long long>(transfer.total));
+                WorldRPG::JniBridge::PostGameLine(3, line);
+                shown = true;
+            }
+        } else if (shown) {
+            shown = false;
+            lastDone = lastTotal = ~0ull;
+            WorldRPG::JniBridge::PostGameLine(3, "");
+        }
+    }
     // Client scripts of resources that became ready run here, on the VM thread.
     WorldRPG::Script::ActiveVmPulseResources();
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;

@@ -88,6 +88,15 @@ bool WaitIdle(int timeoutMs);
 
 Stats GetStats();
 
+// Progress of the transfers in flight, for the transfer box. active is false when nothing is queued
+// or running; total and done are then 0.
+struct Transfer {
+    bool active = false;
+    uint64_t done = 0;
+    uint64_t total = 0;
+};
+Transfer GetTransfer();
+
 // Drops queued work, waits for running transfers, joins the workers.
 void Shutdown();
 

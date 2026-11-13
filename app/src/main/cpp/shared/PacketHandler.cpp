@@ -788,11 +788,9 @@ bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits
 bool ShowResourceProgress(const std::string& name) {
     static int resourceCount = 0;
     ++resourceCount;
-    const int percent = resourceCount > 24 ? 95 : resourceCount * 4;
-    char progress[160];
-    std::snprintf(progress, sizeof(progress), "%d|Downloading %s", percent, name.c_str());
-    PKT_LOGI("Recurso %s", name.c_str());
-    WorldRPG::JniBridge::PostGameLine(2, progress);
+    // No progress line: desktop shows no box for a resource start. The transfer box follows the
+    // real HTTP downloads (HttpDownloader::GetTransfer, posted from nativePulse).
+    PKT_LOGI("Recurso %s (%d)", name.c_str(), resourceCount);
     return true;
 }
 
@@ -984,10 +982,6 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
             return true;
         }
         if (gameId == 95) {
-            char progress[64];
-            const int percent = std::min(98, 40 + static_cast<int>(bodyLength / 1024));
-            std::snprintf(progress, sizeof(progress), "%d|Downloading resources", percent);
-            WorldRPG::JniBridge::PostGameLine(2, progress);
             // Scripts run later, from ActiveVmPulseResources, once the resource is ready.
             WorldRPG::Script::ActiveVmFeedScripts(body, bodyLength, bodyBits);
             return true;

@@ -49,6 +49,8 @@ class NativeAssetBridge(private val context: Context) {
             context.getExternalFilesDir(null)?.let { File(it, "gta_assets") },
             File(storage, "local_source"),
             File("/sdcard/Android/data/${context.packageName}/files/game_assets"),
+            File("/sdcard/Download/WorldRPG_backup"),
+            File("/sdcard/worldrpg_gamefiles"),
             File("/sdcard/mta_assets"),
             File("/sdcard/GTASA")
         )

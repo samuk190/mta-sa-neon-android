@@ -1,4 +1,5 @@
 #include "HttpDownloader.h"
+#include <atomic>
 
 #include "Checksums.h"
 #include "NeonJoinProtocol.h"
@@ -58,6 +59,18 @@ struct Request {
     bool hasMd5 = false;
     uint8_t md5[16] = {};
 };
+
+// Transfer box source (desktop CTransferBox: "Download Progress: X of Y"). Total is the size of the
+// files queued for transfer; done counts the bytes written so far. A cached file leaves the total, and
+// a failed one takes its bytes back, so the box never waits for bytes that will not arrive.
+std::atomic<uint64_t> g_transferTotal{0};
+std::atomic<uint64_t> g_transferDone{0};
+thread_local uint64_t t_transferReceived = 0;
+
+void TransferSubtract(std::atomic<uint64_t>& value, uint64_t amount) {
+    uint64_t current = value.load();
+    while (!value.compare_exchange_weak(current, current > amount ? current - amount : 0)) {}
+}
 
 struct Outcome {
     enum class Kind { Cached, Downloaded, Mismatch, Failed } kind = Kind::Failed;
@@ -370,6 +383,8 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
             return false;
         }
         hasher.Update(data, length);
+        g_transferDone += length;
+        t_transferReceived += length;
         return true;
     };
     const auto copyBytes = [&](unsigned long long count) -> bool {
@@ -519,6 +534,13 @@ Outcome ProcessRequest(const Request& req) {
 }
 
 void ApplyOutcome(Stats& stats, Outcome& outcome, const Request& req) {
+    if (outcome.kind == Outcome::Kind::Cached) {
+        TransferSubtract(g_transferTotal, req.size);
+    } else if (outcome.kind != Outcome::Kind::Downloaded) {
+        TransferSubtract(g_transferTotal, req.size);
+        TransferSubtract(g_transferDone, t_transferReceived);
+    }
+    t_transferReceived = 0;
     switch (outcome.kind) {
         case Outcome::Kind::Cached:
             ++stats.cached;
@@ -630,6 +652,7 @@ EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file)
     std::memcpy(req.md5, file.md5, sizeof(req.md5));
     state.queue.push_back(std::move(req));
     ++state.stats.queued;
+    g_transferTotal += file.size;
 
     if (state.workers.empty()) {
         for (int i = 0; i < kWorkerCount; ++i) state.workers.emplace_back(WorkerLoop);
@@ -658,6 +681,22 @@ bool WaitIdle(int timeoutMs) {
     std::unique_lock<std::mutex> lock(state.mutex);
     return state.idle.wait_for(lock, std::chrono::milliseconds(timeoutMs),
                                [&] { return state.queue.empty() && state.active == 0; });
+}
+
+Transfer GetTransfer() {
+    State& state = GetState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.queue.empty() && state.active == 0) {
+        // Desktop CTransferBox::Hide resets the total when the downloads end.
+        g_transferTotal = 0;
+        g_transferDone = 0;
+        return Transfer{};
+    }
+    Transfer out;
+    out.active = true;
+    out.total = g_transferTotal.load();
+    out.done = std::min(g_transferDone.load(), out.total);
+    return out;
 }
 
 Stats GetStats() {
