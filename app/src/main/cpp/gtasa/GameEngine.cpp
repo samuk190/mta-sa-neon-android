@@ -243,6 +243,21 @@ struct RemoteBody {
     bool ducked = false;
     int64_t lastFight = 0;
 };
+// Desktop CPacketHandler::Packet_EntityAdd (vehicle: SetRotationDegrees, SetHealth) and
+// CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleStartSync (CUnoccupiedVehicleSync.cpp 104-158: SetTargetPosition,
+// SetTargetRotation, SetMoveSpeed, SetTurnSpeed, SetHealth). Rotation is in degrees, as on the wire.
+struct CarSeed {
+    bool pending = false;
+    bool hasPose = false;
+    float x = 0, y = 0, z = 0;
+    bool hasRotation = false;
+    float rotX = 0, rotY = 0, rotZ = 0;
+    bool hasMotion = false;
+    float move[3] = {0, 0, 0};
+    float turn[3] = {0, 0, 0};
+    bool hasHealth = false;
+    float health = 0;
+};
 struct RemoteCar {
     void* body = nullptr;
     std::unique_ptr<std::byte[]> owned;
@@ -256,6 +271,10 @@ struct RemoteCar {
     float moveX = 0, moveY = 0, moveZ = 0;
     float turnX = 0, turnY = 0, turnZ = 0;
     bool motionPending = false;
+    // Server state the body has to take once (ApplyCarSeed). Filled from the ENTITY_ADD actor (rotation, health)
+    // and from VEHICLE_STARTSYNC (everything). Guarded by g_remoteMutex.
+    CarSeed seed;
+    bool actorSeeded = false;
 };
 static std::unordered_map<uint32_t, RemoteCar> g_remoteCars;
 static std::vector<uint32_t> g_forget;
@@ -597,6 +616,50 @@ static void WriteBodyPos(void* body, float x, float y, float z) {
     *reinterpret_cast<float*>(raw + 0x10) = z;
 }
 
+// Desktop CClientVehicle::SetRotationDegrees. The matrix rows are those of CMatrix::SetRotation (Shared/sdk/CMatrix.h
+// 253-279), the inverse of the CMatrix::GetRotation that SampleHostedCar reads back, and the current row lengths
+// (scale) are kept, as SetRotation does. Rows: right (+0x00), forward (+0x10), up (+0x20), as in SampleHostedCar.
+static bool WriteBodyRotation(void* body, float rotXDeg, float rotYDeg, float rotZDeg) {
+    auto* raw = static_cast<unsigned char*>(body);
+    auto* matrix = *reinterpret_cast<unsigned char**>(raw + 0x18);
+    const auto matrixAddr = reinterpret_cast<uintptr_t>(matrix);
+    if (!matrix || (matrixAddr & 3u) != 0 || matrixAddr < 0x10000u) return false;
+    if (!std::isfinite(rotXDeg) || !std::isfinite(rotYDeg) || !std::isfinite(rotZDeg)) return false;
+    constexpr float kDegToRad = 3.14159265f / 180.f;
+    const float fCosX = std::cos(-rotXDeg * kDegToRad);
+    const float fCosY = std::cos(-rotYDeg * kDegToRad);
+    const float fCosZ = std::cos(rotZDeg * kDegToRad);
+    const float fSinX = std::sin(-rotXDeg * kDegToRad);
+    const float fSinY = std::sin(-rotYDeg * kDegToRad);
+    const float fSinZ = std::sin(rotZDeg * kDegToRad);
+    auto scaleOf = [matrix](unsigned offset) {
+        const auto* v = reinterpret_cast<const float*>(matrix + offset);
+        const float len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        return (len > 1e-6f && std::isfinite(len)) ? len : 1.f;
+    };
+    const float sx = scaleOf(0x00), sy = scaleOf(0x10), sz = scaleOf(0x20);
+    auto* right = reinterpret_cast<float*>(matrix + 0x00);
+    auto* front = reinterpret_cast<float*>(matrix + 0x10);
+    auto* up = reinterpret_cast<float*>(matrix + 0x20);
+    right[0] = fCosY * fCosZ * sx;
+    right[1] = fCosY * fSinZ * sx;
+    right[2] = fSinY * sx;
+    front[0] = (fSinX * fSinY * fCosZ - fCosX * fSinZ) * sy;
+    front[1] = (fSinX * fSinY * fSinZ + fCosX * fCosZ) * sy;
+    front[2] = -fSinX * fCosY * sy;
+    up[0] = -(fCosX * fSinY * fCosZ + fSinX * fSinZ) * sz;
+    up[1] = (fCosZ * fSinX - fCosX * fSinY * fSinZ) * sz;
+    up[2] = fCosX * fCosY * sz;
+    return true;
+}
+
+// Desktop CClientVehicle::SetHealth. CVehicle::m_fHealth is at +0x634 (see SampleHostedCar). The wire range of
+// SVehicleHealthSync is 0 - 2047.5.
+static void WriteBodyHealth(void* body, float health) {
+    if (!std::isfinite(health) || health < 0.f || health > 2047.5f) return;
+    *reinterpret_cast<float*>(static_cast<unsigned char*>(body) + 0x634) = health;
+}
+
 // Live values for packet 56, read on the game thread like the ped snapshot. Desktop
 // CUnoccupiedVehicleSync::WriteVehicleInformation uses CClientVehicle::GetPosition, GetRotationDegrees,
 // GetMoveSpeed and GetTurnSpeed. GetRotationDegrees (mta_neon_source/Client/mods/deathmatch/logic/
@@ -787,6 +850,34 @@ static void UnseatPedsInCarLocked(uint32_t vehicleId) {
     for (uint32_t pedId : peds) UnseatLocked(pedId);
 }
 
+// Game thread. The local player's ped leaves `body` when it is inside it, with the same task the remote peds use
+// (desktop InternalRemoveFromVehicle, see UnseatRemotePedFromCar). True when the ped is not in that vehicle
+// afterwards, so the body may be destroyed. False when the ped could not be taken out.
+static bool EjectLocalPedFrom(void* body) {
+    TaskFns& api = Tasks();
+    if (!body || !api.findPlayerVehicle) return true;
+    if (api.findPlayerVehicle(-1, false) != body) return true;
+    void* ped = g_findPlayer ? g_findPlayer(0) : nullptr;
+    if (!ped || !UnseatRemotePedFromCar(ped, body)) return false;
+    return api.findPlayerVehicle(-1, false) != body;
+}
+
+// Game thread, caller holds g_remoteMutex. Destroys the body of a server car that is going away (ENTITY_REMOVE or
+// the reconnect reset). The desktop's vehicle destructor removes every occupant first (CClientVehicle::~CClientVehicle
+// calls RemoveFromVehicle on each one); here the remote peds leave through UnseatPedsInCarLocked and the local ped
+// through EjectLocalPedFrom. When the local ped cannot be taken out the body is left in the world instead of being
+// destroyed under it: a destroyed vehicle with the player inside leaves the ped with a dangling vehicle pointer.
+static void DropCarLocked(uint32_t id, RemoteCar& car) {
+    if (!car.body) return;
+    if (EjectLocalPedFrom(car.body)) {
+        DropBody(car.body, true, !car.owned);
+    } else {
+        ENGINE_LOGE("DIAG vehicle %u body kept: the local ped is still inside (no seat-out task available)", id);
+        (void)car.owned.release();  // the game still uses this memory
+    }
+    car.body = nullptr;
+}
+
 // One request on the game thread. True when it is finished (applied, or nothing to do). False keeps it for the next tick.
 static bool ApplyRemoteSeat(uint32_t pedId, const RemoteSeatRequest& req) {
     if (!req.seated) {
@@ -850,6 +941,42 @@ static void ApplyRemoteSeats() {
             ENGINE_LOGI("VehInOut: seat request for ped %u dropped, body not ready", pedId);
             g_seatRequests.erase(it);
         }
+    }
+}
+
+// Writes a pending CarSeed into the body, once. Game thread. `localVehicle` is the car the local ped is in: its
+// pose and speeds belong to the local driver (the desktop never applies remote state to the vehicle the local player
+// drives), so only the health is taken for it.
+static void ApplyCarSeed(uint32_t vehicleId, void* body, bool localVehicle) {
+    CarSeed seed;
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        auto found = g_remoteCars.find(vehicleId);
+        if (found == g_remoteCars.end() || !found->second.seed.pending) return;
+        seed = found->second.seed;
+        found->second.seed = CarSeed{};
+        if (seed.hasPose && !localVehicle) {
+            found->second.shownX = seed.x;
+            found->second.shownY = seed.y;
+            found->second.shownZ = seed.z;
+        }
+    }
+    if (!localVehicle) {
+        if (seed.hasPose) WriteBodyPos(body, seed.x, seed.y, seed.z);
+        if (seed.hasRotation) WriteBodyRotation(body, seed.rotX, seed.rotY, seed.rotZ);
+        if (seed.hasMotion) {
+            auto* raw = static_cast<unsigned char*>(body);
+            std::memcpy(raw + 0x68, seed.move, sizeof seed.move);
+            std::memcpy(raw + 0x74, seed.turn, sizeof seed.turn);
+        }
+    }
+    if (seed.hasHealth) WriteBodyHealth(body, seed.health);
+    static int reported = 0;
+    if (reported < 6) {
+        ++reported;
+        ENGINE_LOGI("Server vehicle %u seeded: pose %d rot %d (%.1f %.1f %.1f) motion %d health %d (%.1f)%s", vehicleId,
+            seed.hasPose ? 1 : 0, seed.hasRotation ? 1 : 0, seed.rotX, seed.rotY, seed.rotZ, seed.hasMotion ? 1 : 0,
+            seed.hasHealth ? 1 : 0, seed.health, localVehicle ? " [local vehicle: health only]" : "");
     }
 }
 
@@ -944,27 +1071,33 @@ static void ApplyRemotePeds() {
     NoteGameFrame();
     if (WorldRPG::Debug::Flag("noremote")) return;
     if (g_remoteResetPending.exchange(false)) {
+        // The whole reset runs under g_remoteMutex: the network thread adds cars and seat requests of the new
+        // session under the same mutex (NoteRemoteVehicle, NoteVehicleStartSync, NoteRemoteSeat). A record it added
+        // before this tick is dropped here with the rest; cars and peds come back from the ServerWorld actor table
+        // on this same tick (CopyActors below), which JNI nativeConnect cleared before the new session started.
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
         // Leave every seat while the car bodies still exist, then drop the requests.
         std::vector<uint32_t> seated;
         for (const auto& entry : g_seatedPeds) seated.push_back(entry.first);
-        for (uint32_t pedId : seated) UnseatApplied(pedId);
-        {
-            std::lock_guard<std::mutex> lock(g_remoteMutex);
-            g_seatRequests.clear();
-        }
+        for (uint32_t pedId : seated) UnseatLocked(pedId);
+        g_seatedPeds.clear();
+        g_seatRequests.clear();
         for (auto& entry : g_remoteBodies) {
             ClearRemoteStick(entry.second.ped);
             DropBody(entry.second.ped, false);
         }
         g_remoteBodies.clear();
-        for (auto& entry : g_remoteCars) DropBody(entry.second.body, true, !entry.second.owned);
+        // The local ped leaves its car before any car body is destroyed (DropCarLocked).
+        for (auto& entry : g_remoteCars) DropCarLocked(entry.first, entry.second);
         g_remoteCars.clear();
-        {
-            // A new session starts on foot: drop the stale vehicle and any queued VEHICLE_INOUT events.
-            std::lock_guard<std::mutex> lock(g_remoteMutex);
-            g_localVehicleId = kNoVehicle;
-            g_localVehicleEvents.clear();
-        }
+        // A new session starts on foot: drop the stale vehicle, its packet 33 sample, any queued VEHICLE_INOUT
+        // events and shots, and the hosted snapshots of the old session's element ids.
+        g_localVehicleId = kNoVehicle;
+        g_localCarValid = false;
+        g_localVehicleEvents.clear();
+        g_localShots.clear();
+        g_hostedSnap.clear();
+        g_hostedCarSnap.clear();
         ENGINE_LOGI("Remote world reset for reconnect");
     }
     {
@@ -995,6 +1128,21 @@ static void ApplyRemotePeds() {
                 auto& car = g_remoteCars[actor.id];
                 car.model = actor.model;
                 car.hosted = actor.hosted;
+                // Desktop Packet_EntityAdd, vehicle case: SetRotationDegrees and SetHealth. Once per record; a
+                // VEHICLE_STARTSYNC seed that arrived first is newer and is kept.
+                if (!car.actorSeeded) {
+                    car.actorSeeded = true;
+                    if (!car.seed.pending) {
+                        constexpr float kRadToDeg = 180.f / 3.14159265f;
+                        car.seed.hasRotation = true;
+                        car.seed.rotX = actor.rotX;
+                        car.seed.rotY = actor.rotY;
+                        car.seed.rotZ = actor.heading * kRadToDeg;
+                        car.seed.hasHealth = actor.health >= 0.f;
+                        car.seed.health = actor.health;
+                        car.seed.pending = true;
+                    }
+                }
                 if (!car.dirty && !car.shown) {
                     car.x = actor.x;
                     car.y = actor.y;
@@ -1019,7 +1167,7 @@ static void ApplyRemotePeds() {
             }
             auto car = g_remoteCars.find(id);
             if (car != g_remoteCars.end()) {
-                DropBody(car->second.body, true, !car->second.owned);
+                DropCarLocked(id, car->second);
                 g_remoteCars.erase(car);
             }
             g_remotePeds.erase(id);
@@ -1106,11 +1254,10 @@ static void ApplyRemotePeds() {
                     PlaceRemotePlayerPed(body, ped.x, ped.y, ped.z, ped.heading);
             }
             live->second.shown = true;
-            // The pad now presses ButtonCircle, so the game starts the fight task.
-            // Skip the separate punch from PresentOnFoot to avoid a second punch.
-            RemotePed quiet = ped;
-            quiet.fire = false;
-            PresentOnFoot(body, found->second, quiet);
+            // The pad hook only drives the stick. libGTASA reads fire from the touch widget, not from the pad
+            // (PlayerPedPort.cpp, RemotePlayerProcessControl), so the punch for a remote fire key comes from
+            // PresentOnFoot, as it does without the hook.
+            PresentOnFoot(body, found->second, ped);
             continue;
         }
         ClearRemoteStick(body);
@@ -1263,6 +1410,8 @@ static void ApplyRemotePeds() {
         for (const auto& [id, car] : g_remoteCars)
             cars.push_back({id, car.model, car.x, car.y, car.z, car.heading, car.hosted});
     }
+    // The car the local ped is in. Its body is moved by the local driver, not by server poses.
+    void* const localVehicle = api.findPlayerVehicle ? api.findPlayerVehicle(-1, false) : nullptr;
     for (const auto& car : cars) {
         const uint32_t id = car.id;
         if (!PlausiblePosition(car.x, car.y, car.z) || car.model < 400 || car.model > 611) continue;
@@ -1291,10 +1440,36 @@ static void ApplyRemotePeds() {
             found->second.shown = true;
             WriteBodyPos(body, car.x, car.y, car.z);
             if (g_setHeading) g_setHeading(body, car.heading);
+            // Server rotation and health from ENTITY_ADD or VEHICLE_STARTSYNC. A new body starts upright at the
+            // constructor health of 1000, which packets 56 and 33 would otherwise report back to the server.
+            ApplyCarSeed(id, body, false);
             static int created = 0;
             if (created < 6) {
                 ++created;
                 ENGINE_LOGI("Server vehicle %u model %d at %.0f %.0f %.0f", id, car.model, car.x, car.y, car.z);
+            }
+            continue;
+        }
+        ApplyCarSeed(id, body, body == localVehicle);
+        if (body == localVehicle) {
+            // The local ped is in this car. The desktop applies remote vehicle state (CNetAPI::ReadVehiclePuresync,
+            // Packet_UnoccupiedVehicleSync) only to vehicles other players sync; the local player's own vehicle is
+            // driven by the game. Once the server seats the ped it sends VEHICLE_STOPSYNC, so the car is not hosted
+            // and the pose lerp below would write the last server pose into the body on every frame. The record
+            // follows the live body instead, so the lerp starts from the right place when the ped leaves.
+            float lx = 0, ly = 0, lz = 0, lh = 0;
+            if (ReadBodyPos(body, lx, ly, lz, lh)) {
+                std::lock_guard<std::mutex> lock(g_remoteMutex);
+                auto live = g_remoteCars.find(id);
+                if (live != g_remoteCars.end()) {
+                    HostedCar pose;
+                    live->second.x = live->second.shownX = lx;
+                    live->second.y = live->second.shownY = ly;
+                    live->second.z = live->second.shownZ = lz;
+                    // Same heading convention as the server's rz (CarPose heading is rz in radians).
+                    if (SampleHostedCar(body, pose)) live->second.heading = live->second.shownH = pose.rotZ * 3.14159265f / 180.f;
+                    live->second.motionPending = false;
+                }
             }
             continue;
         }
@@ -1646,6 +1821,38 @@ void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float 
     car.heading = heading;
     car.dirty = true;
 }
+// Desktop CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleStartSync (CUnoccupiedVehicleSync.cpp 104-158): target
+// position, target rotation, move speed, turn speed and health are set on the vehicle before AddVehicle. The values are
+// applied to the body on the game thread (ApplyCarSeed). rot is in degrees.
+void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], const float move[3], const float turn[3],
+    float health) {
+    if (id == 0 || id == 0xFFFFFFFFu || !pos || !rot || !move || !turn) return;
+    if (!PlausiblePosition(pos[0], pos[1], pos[2])) return;
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.x = pos[0];
+    car.y = pos[1];
+    car.z = pos[2];
+    car.heading = rot[2] * 3.14159265f / 180.f;
+    car.dirty = true;
+    CarSeed& seed = car.seed;
+    seed.hasPose = true;
+    seed.x = pos[0];
+    seed.y = pos[1];
+    seed.z = pos[2];
+    seed.hasRotation = true;
+    seed.rotX = rot[0];
+    seed.rotY = rot[1];
+    seed.rotZ = rot[2];
+    seed.hasMotion = true;
+    for (int i = 0; i < 3; ++i) {
+        seed.move[i] = std::isfinite(move[i]) ? move[i] : 0.f;
+        seed.turn[i] = std::isfinite(turn[i]) ? turn[i] : 0.f;
+    }
+    seed.hasHealth = true;
+    seed.health = health;
+    seed.pending = true;
+}
 // Desktop CPacketHandler::Packet_Vehicle_InOut seats or unseats the ped. The request is applied in ApplyRemoteSeats.
 void NoteRemoteSeat(uint32_t pedId, uint32_t vehicleId, uint8_t seat) {
     if (pedId == 0 || pedId == 0xFFFFFFFFu || vehicleId == 0 || vehicleId == 0xFFFFFFFFu) return;
@@ -1787,6 +1994,7 @@ void SetPedHost(uint32_t, bool) {}
 void ForgetRemote(uint32_t) {}
 void RequestRemoteReset() {}
 void NoteRemoteVehicle(uint32_t, int, float, float, float, float) {}
+void NoteVehicleStartSync(uint32_t, const float*, const float*, const float*, const float*, float) {}
 void NoteRemoteSeat(uint32_t, uint32_t, uint8_t) {}
 void NoteRemoteUnseat(uint32_t) {}
 void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}

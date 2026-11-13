@@ -3,6 +3,7 @@
 #include "../gtasa/GameEngine.h"
 #include "../net/raknet/RakNetWrapper.h"
 #include "entity/EntityAddTypes.h"
+#include "entity/PedSyncState.h"
 
 #include <cmath>
 #include <cstring>
@@ -28,6 +29,9 @@ uint32_t g_local = 0;
 uint32_t g_resourceRoot = 0;
 std::unordered_map<uint32_t, Visual> g_visuals;
 std::unordered_map<uint32_t, std::unordered_map<std::string, Datum>> g_data;
+// Radar blip handles of a session that ended (ResetSession). CRadar is only touched on the game thread, so Tick
+// clears them. Guarded by g_lock.
+std::vector<int> g_staleBlips;
 
 #ifdef __ANDROID__
 using Vec3 = struct { float x, y, z; };
@@ -223,6 +227,23 @@ void Remember(uint32_t id, const Visual& visual) {
 
 } // namespace
 
+void ResetSession() {
+    std::vector<uint32_t> peds;
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        for (const auto& [id, visual] : g_visuals) {
+            if (visual.blipLive) g_staleBlips.push_back(visual.blipHandle);
+            if (visual.kind == 14) peds.push_back(id);
+        }
+        g_visuals.clear();
+        g_data.clear();
+        g_resourceRoot = 0;
+    }
+    // Hosted and observer ped state is keyed by ElementID, which the new session reuses.
+    for (uint32_t id : peds) WorldRPG::Sync::PedSyncState::Forget(id);
+    SW_LOGI("ServerWorld reset for a new session (%zu ped state(s) forgotten)", peds.size());
+}
+
 void SetLocalPlayer(uint32_t id) { g_local = id; }
 uint32_t LocalPlayer() { return g_local; }
 uint32_t LastResourceRoot() { return g_resourceRoot; }
@@ -242,6 +263,9 @@ int CopyActors(ActorSpawn* out, int capacity) {
         slot.y = visual.y;
         slot.z = visual.z;
         slot.heading = visual.heading;
+        slot.rotX = visual.rotX;
+        slot.rotY = visual.rotY;
+        slot.health = visual.health;
         slot.hosted = visual.hosted;
     }
     return count;
@@ -464,6 +488,10 @@ void Tick(float playerX, float playerY, float playerZ) {
     ResolveBlips();
     if (!g_setBlip) return;
     std::lock_guard<std::mutex> lock(g_lock);
+    if (g_clearBlip) {
+        for (int handle : g_staleBlips) g_clearBlip(handle);
+    }
+    g_staleBlips.clear();
     for (auto& [id, visual] : g_visuals) {
         if (visual.kind != 5 && visual.kind != 4) continue;
         float x = visual.x, y = visual.y, z = visual.z;

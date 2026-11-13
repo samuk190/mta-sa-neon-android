@@ -17,6 +17,9 @@ void SetOccupant(uint32_t playerId, uint32_t vehicleId, uint8_t seat);
 void ClearOccupant(uint32_t playerId);
 bool FindOccupant(uint32_t playerId, uint32_t& vehicleId, uint8_t& seat);
 
+// Reconnect: drops every stored vehicle state and occupant of the old session.
+void ResetSession();
+
 // Packet 56, one entry. Skips vehicles this client hosts (ServerWorld::ActorHosted).
 void ApplyUnoccupied(const VehicleSync::UnoccupiedUpdate& update);
 

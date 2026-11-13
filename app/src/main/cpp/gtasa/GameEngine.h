@@ -166,6 +166,10 @@ void ForgetRemote(uint32_t id);
 // P3.1: drop every remote body and car on the next game tick (reconnect).
 void RequestRemoteReset();
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading);
+// VEHICLE_STARTSYNC (desktop CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleStartSync): position, rotation in
+// degrees, move speed, turn speed and health, written to the car body once on the game thread. Each array has 3 floats.
+void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], const float move[3], const float turn[3],
+    float health);
 // VEHICLE_INOUT for another player (packet 58). Queued here and applied on the game thread in ApplyRemotePeds. A seated
 // ped is not moved by its on-foot pose until it is unseated. Seat 0 is the driver. Other seats use the passenger task
 // through the desktop seat table (PassengerGameDoor).

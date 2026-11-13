@@ -211,9 +211,10 @@ struct NeonJoinClient::Impl {
     // ported. Driving keys come from the local pad (CopyLocalCar, sampled in WatchLocalVehicle). Fire, action,
     // enter/exit and walk keys stay zero: no source yet. Player health comes from the CopyBody sample (armor has no
     // source, so 0, as on foot). The camera is assumed to look along the car heading, level pitch (no camera sample).
-    void SendDriverPuresync(const WorldRPG::Game::LocalCarState& car) {
+    // Returns false when the packet cannot be written (train models), so the caller can send the on-foot form.
+    bool SendDriverPuresync(const WorldRPG::Game::LocalCarState& car) {
         // Train block is not ported. Return before ConsumeDamage so a pending hit is not lost.
-        if (WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(car.model))) return;
+        if (WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(car.model))) return false;
 
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
         WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
@@ -258,7 +259,7 @@ struct NeonJoinClient::Impl {
 
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(33));          // PLAYER_VEHICLE_PURESYNC
-        if (!WorldRPG::VehicleSync::WriteDriverPuresync(w, in)) return;
+        if (!WorldRPG::VehicleSync::WriteDriverPuresync(w, in)) return false;
         if (net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                             PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) {
             static int reports = 0;
@@ -267,6 +268,69 @@ struct NeonJoinClient::Impl {
                 JOIN_LOGI("NeonJoin: sending PLAYER_VEHICLE_PURESYNC vehicle %u model %d at %.0f %.0f %.0f",
                           car.vehicleId, car.model, car.x, car.y, car.z);
             }
+        }
+        return true;
+    }
+
+    // PLAYER_KEYSYNC (packet 31) while the server has the local ped seated as driver. Desktop CNetAPI::DoPulse (385-397)
+    // sends WriteKeysync when no puresync went out on this pulse and IsSmallKeySyncNeeded (CNetAPI.cpp 462-547) sees a
+    // change against the last sent controller state. WriteKeysync (729-828) then sets bSyncingVehicle and writes the
+    // vehicle tail. The on-foot writer below was used here before, which relayed accelerate and brake as released
+    // between two packets 33.
+    WorldRPG::VehicleSync::FullKeys lastSentDriverKeys;  // desktop m_LastSentControllerState (SetLastSentControllerState)
+    bool lastSentLookLeft = false;
+    bool lastSentLookRight = false;
+    bool pureSyncSentThisPulse = false;
+    void SendDriverKeySync(const WorldRPG::Game::LocalCarState& car) {
+        // Desktop DoPulse: keysync is the else branch of the puresync send.
+        if (pureSyncSentThisPulse) return;
+
+        WorldRPG::VehicleSync::DriverKeysyncIn in;
+        // The same pad sample and mapping as SendDriverPuresync.
+        in.keys.stickX = car.steering;
+        in.keys.analogCross = car.accelerate;
+        in.keys.buttonCross = car.accelerate != 0;
+        in.keys.analogSquare = car.brake;
+        in.keys.buttonSquare = car.brake != 0;
+        in.keys.rightShoulder1 = car.handBrake;
+        in.keys.shockButtonL = car.horn;
+        in.lookLeft = car.lookLeft;
+        in.lookRight = car.lookRight;
+        in.model = car.model;
+
+        // IsSmallKeySyncNeeded, the parts the phone samples. LeftShoulder1, ButtonCircle, ButtonTriangle and m_bPedWalk
+        // have no source in a car and stay 0 on both sides of the compare.
+        const WorldRPG::VehicleSync::FullKeys& last = lastSentDriverKeys;
+        const bool aircraft = WorldRPG::Entity::VehicleModels::IsPlaneOrHeliModel(static_cast<uint32_t>(car.model));
+        bool needed = aircraft && (in.lookLeft != lastSentLookLeft || in.lookRight != lastSentLookRight);
+        needed = needed || in.keys.rightShoulder1 != last.rightShoulder1 || in.keys.analogSquare != last.analogSquare ||
+                 in.keys.analogCross != last.analogCross || in.keys.shockButtonL != last.shockButtonL;
+        // Stick: a change of more than 32 on either axis. LeftStickY is 0 in a car, so the desktop's analog-move rate
+        // limit (both axes inside 1..127 or -127..-1) never applies and the change is sent at once.
+        needed = needed || std::abs(static_cast<int>(in.keys.stickX) - static_cast<int>(last.stickX)) > 32;
+        // The camera-orbit and aim checks need iKeySyncRotation < iPureSync; both are 100 ms here (the pulse above),
+        // so the desktop skips them too.
+        if (!needed) return;
+
+        float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
+        WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+        in.playerRotation = heading;                       // pPlayerModel->GetCurrentRotation()
+        in.cameraRotation = -car.rotZ * 3.14159265f / 180.f;  // as SendDriverPuresync: the camera looks along the car
+
+        BitStreamWriter w;
+        w.Write(static_cast<uint8_t>(31));  // PLAYER_KEYSYNC
+        WorldRPG::VehicleSync::WriteDriverKeysync(w, in);
+        if (!net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                             PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) return;
+        lastSentDriverKeys = in.keys;
+        lastSentLookLeft = in.lookLeft;
+        lastSentLookRight = in.lookRight;
+        static int reports = 0;
+        if (reports < 4) {
+            ++reports;
+            JOIN_LOGI("NeonJoin: sending PLAYER_KEYSYNC (vehicle form) vehicle %u steer %d accel %u brake %u handbrake %d",
+                      car.vehicleId, static_cast<int>(car.steering), static_cast<unsigned>(car.accelerate),
+                      static_cast<unsigned>(car.brake), car.handBrake ? 1 : 0);
         }
     }
 
@@ -310,24 +374,36 @@ struct NeonJoinClient::Impl {
     // accepted by CanUpdateSync. Without this packet the server never
     // relays a position, so a desktop client has no ped to draw.
     void SendPureSync() {
+        pureSyncSentThisPulse = false;
         if (!net || !net->IsConnected()) return;
         const uint32_t now = NowMs();
         if (now - lastSyncMs < 100) return;
         lastSyncMs = now;
+        pureSyncSentThisPulse = true;
         // In a mapped car the driver sends packet 33 instead (SendDriverPuresync); on foot, packet 32 below.
         WorldRPG::Game::LocalCarState car;
         if (WorldRPG::Game::CopyLocalCar(car)) {
             // Only the car the server seated us in. GTA can place the ped in a car before the server confirms it
             // (request pending, refused or jacked); the desktop sends the on-foot sync then.
             if (car.vehicleId == g_confirmedVehicle) {
-                SendDriverPuresync(car);
-                return;
-            }
-            static int unconfirmedReports = 0;
-            if (unconfirmedReports < 4) {
-                ++unconfirmedReports;
-                JOIN_LOGI("NeonJoin: GTA car %u is not server-confirmed (confirmed %u); sending on-foot PURESYNC",
-                          car.vehicleId, g_confirmedVehicle);
+                if (SendDriverPuresync(car)) return;
+                // DIAG: the driver form could not be written (train block not ported: no hook samples the train
+                // position, track, direction and speed). The on-foot form below goes out instead of nothing. The
+                // server does not relay it for a seated player (CGame::Packet_PlayerPuresync) but still answers with
+                // return sync. SendVehicleInOut does not request a seat in a train, so this is not reached normally.
+                static int trainReports = 0;
+                if (trainReports < 4) {
+                    ++trainReports;
+                    JOIN_LOGI("DIAG NeonJoin: no driver PURESYNC for vehicle %u model %d (train block missing); sending on-foot PURESYNC",
+                              car.vehicleId, car.model);
+                }
+            } else {
+                static int unconfirmedReports = 0;
+                if (unconfirmedReports < 4) {
+                    ++unconfirmedReports;
+                    JOIN_LOGI("NeonJoin: GTA car %u is not server-confirmed (confirmed %u); sending on-foot PURESYNC",
+                              car.vehicleId, g_confirmedVehicle);
+                }
             }
         }
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
@@ -467,6 +543,14 @@ struct NeonJoinClient::Impl {
     // what the desktop uses to turn the remote ped.
     void SendKeySync() {
         if (!net || !net->IsConnected()) return;
+        // Driving a server-confirmed car: the vehicle form (SendDriverKeySync), as SendPureSync switches to packet 33.
+        {
+            WorldRPG::Game::LocalCarState car;
+            if (WorldRPG::Game::CopyLocalCar(car) && car.vehicleId == g_confirmedVehicle) {
+                SendDriverKeySync(car);
+                return;
+            }
+        }
         const uint32_t now = NowMs();
         if (now - lastSyncMs < 40 || now - lastKeyMs < 50) return;
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
@@ -691,6 +775,17 @@ struct NeonJoinClient::Impl {
         if (!net || !net->IsConnected() || info.localPlayerId == 0xFFFFFFFFu) return;
         WorldRPG::Game::LocalVehicleEvent ev;
         while (WorldRPG::Game::ConsumeLocalVehicleEvent(ev)) {
+            // DIAG: trains are not requested. Once the server seats the ped it expects packet 33 with the train block
+            // (CNetAPI::WriteVehiclePuresync, CNetAPI.cpp 1643-1654: train position, direction, speed, track), and no
+            // hook samples those from CTrain yet. A seated ped without packet 33 sends nothing the server relays, so
+            // other players would see it frozen where it boarded. Unrequested, the server keeps the ped on foot and
+            // relays the on-foot sync that SendPureSync falls back to. The leave is skipped too: no seat was taken.
+            const int evModel = WorldRPG::ServerWorld::ModelOf(ev.vehicleId);
+            if (evModel >= 0 && WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(evModel))) {
+                JOIN_LOGI("DIAG VehInOut: %s train veh=%u model=%d not sent (train puresync block missing)",
+                          ev.entered ? "request_in for" : "request_out for", ev.vehicleId, evModel);
+                continue;
+            }
             BitStreamWriter w;
             w.Write(static_cast<uint8_t>(58));  // PACKET_ID_VEHICLE_INOUT (Shared/sdk/net/Packets.h:96)
             WriteFieldLsb(w, info.localPlayerId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);

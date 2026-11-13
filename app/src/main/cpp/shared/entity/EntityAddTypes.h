@@ -60,6 +60,10 @@ struct Visual {
     int r = 255, g = 255, b = 255, a = 255;
     int markerType = 2;
     float heading = 0;
+    // Vehicles (kind 2) only, from the ENTITY_ADD body: roll and pitch in degrees and SVehicleHealthSync.
+    // health < 0 means the body did not carry one.
+    float rotX = 0, rotY = 0;
+    float health = -1.f;
     bool hosted = false;
     uint32_t attached = 0xFFFFFFFFu;
     int blipHandle = -1;

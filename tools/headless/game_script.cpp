@@ -390,6 +390,11 @@ void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float 
     s.heading = heading;
 }
 
+// VEHICLE_STARTSYNC: the pose is recorded like any other vehicle pose; speeds and health have no body here.
+void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], const float*, const float*, float) {
+    if (!pos || !rot) return;
+    NoteRemoteVehicle(id, 0, pos[0], pos[1], pos[2], rot[2] * 3.14159265f / 180.f);
+}
 void NoteRemoteSeat(uint32_t, uint32_t, uint8_t) {}
 void NoteRemoteUnseat(uint32_t) {}
 void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}

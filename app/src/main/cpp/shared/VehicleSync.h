@@ -184,6 +184,20 @@ struct DriverPuresyncIn {
 // train block is not ported) and flags.hasWeapon (the weapon block is not ported).
 bool WriteDriverPuresync(WorldRPG::Net::BitStreamWriter& writer, const DriverPuresyncIn& in);
 
+// Input for PLAYER_KEYSYNC (packet 31) while the local ped drives a vehicle (seat 0), client to server.
+struct DriverKeysyncIn {
+    FullKeys keys;               // same 8 bits, analog bytes and sticks as SSmallKeysyncSync
+    int32_t model = 0;           // GTA model id of the driven vehicle (400-611)
+    float playerRotation = 0;    // ped heading, radians
+    float cameraRotation = 0;    // camera heading, radians
+    bool lookLeft = false;       // planes and helicopters only
+    bool lookRight = false;
+};
+
+// Writes the body of packet 31 in the vehicle form (desktop CNetAPI::WriteKeysync with bSyncingVehicle set, CNetAPI.cpp
+// 729-828), in the order the server reader CKeysyncPacket::Read consumes it. The caller writes the packet id (31) first.
+void WriteDriverKeysync(WorldRPG::Net::BitStreamWriter& writer, const DriverKeysyncIn& in);
+
 // Reads the packet 33 body that follows the player ElementID. `seat` must be the occupant seat
 // (the reference reads it from the local player, not from the wire). False on a short read.
 bool ReadOccupiedSync(WorldRPG::Net::BitStreamReader& reader, uint8_t seat, OccupiedSync& out);

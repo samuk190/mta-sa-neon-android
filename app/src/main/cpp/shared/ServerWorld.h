@@ -9,6 +9,10 @@ struct ResourceStartInfo;
 
 namespace WorldRPG::ServerWorld {
 
+// Reconnect: forgets every element, its custom data and the resource root of the old session. Radar blips of the
+// old session are cleared on the next Tick (game thread). Call before the new session's first packet.
+void ResetSession();
+
 void SetLocalPlayer(uint32_t id);
 uint32_t LocalPlayer();
 void NotePlayerSkin(uint32_t id, int model);
@@ -30,6 +34,9 @@ struct ActorSpawn {
     int kind = 0;
     int model = -1;
     float x = 0, y = 0, z = 0, heading = 0;
+    // Vehicles only (see Entity::Visual): roll and pitch in degrees, and health (< 0 when unknown).
+    float rotX = 0, rotY = 0;
+    float health = -1.f;
     bool hosted = false;
 };
 int CopyActors(ActorSpawn* out, int capacity);

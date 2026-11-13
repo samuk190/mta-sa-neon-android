@@ -251,8 +251,12 @@ struct RemoteStick {
     bool fire = false;
 };
 
-// CControllerState: ButtonCircle is the 14th short (0x26), pressed = 255.
-constexpr std::size_t kButtonCircleOffset = 0x26;
+// Fire is not written into the pad. libGTASA 2.10 arm64 does not read the fire button from CControllerState:
+// CPad::GetMeleeAttack (0x4ddf50) loads the disable flag at [pad, #0x110] and then returns
+// CTouchInterface::IsTouched(1, nullptr, 1), the touch widget. A short written at pad+0x26 (the value used here
+// before, with a comment that named a different offset) therefore never started the fight task; it only overwrote
+// an unverified field of NewState for the length of the call. The remote punch is shown by PresentOnFoot (GameEngine.cpp)
+// until a touch-independent fire source is hooked.
 
 RemoteStick g_sticks[kMaxRemoteSticks]{};
 using ProcessControlFn = void (*)(void*);
@@ -286,8 +290,6 @@ void RemotePlayerProcessControl(void* self) {
     std::memcpy(saved, pad, kPadBytes);
     std::memcpy(pad + 0, &entry->x, sizeof entry->x);
     std::memcpy(pad + 2, &entry->y, sizeof entry->y);
-    const short circle = entry->fire ? 255 : 0;
-    std::memcpy(pad + kButtonCircleOffset, &circle, sizeof circle);
     g_originalControl(self);
     std::memcpy(pad, saved, kPadBytes);
 }
@@ -336,30 +338,90 @@ WeaponFireFn g_originalFire = nullptr;
 FindPlayerPedFn g_findPlayerPed = nullptr;
 bool g_bulletFireHook = false;
 
+// End point source. The desktop does not take the shot from CWeapon::Fire's arguments: its hook sits inside
+// CWeapon::FireInstantHit (HOOK_CWeapon_FireInstantHit_Mid, multiplayer_shotsync.cpp 1571-1650), after the game has
+// worked out the start and end. That matters because CTaskSimpleUseGun::FireGun (libGTASA 2.10 arm64, 0x5dfd50)
+// passes a null vecTarget for a free-aim shot: `mov x5, x21; ldr s0, [x5, #0x30]!` keeps &m_vecTarget only when its x
+// and y are non-zero, and the other branch does `mov x5, xzr` (0x5dff0c) before `bl CWeapon::Fire` (0x5dff14).
+// The same computed vectors reach the exported CWeapon::DoBulletImpact (0x705c7c): FireInstantHit calls it with
+// x3 = &start and x4 = &end (0x701f04-0x701f1c and 0x702124-0x702138; the function saves them with `mov x23, x3` and
+// `mov x22, x4`). That call is hooked and its vectors are captured while a local CWeapon::Fire is running.
+// Game thread only: both hooks run inside the game's own call.
+using BulletImpactFn = void (*)(void*, void*, void*, void*, void*, void*, int);
+BulletImpactFn g_originalBulletImpact = nullptr;
+struct FireCapture {
+    bool active = false;
+    void* owner = nullptr;
+    bool have = false;
+    bool fullLine = false;  // captured from a call with incrementalHit == 0
+    float start[3] = {0, 0, 0};
+    float end[3] = {0, 0, 0};
+};
+FireCapture g_fireCapture;
+
+void LocalBulletImpactHook(void* self, void* owner, void* victim, void* startPoint, void* endPoint, void* colPoint,
+    int incrementalHit) {
+    FireCapture& cap = g_fireCapture;
+    // The first call of this shot is kept. A later call replaces it only when it is the full line (incrementalHit 0)
+    // and the kept one is not: the pellet and pass-through calls (0x7020c0) pass a collision point as the end.
+    if (cap.active && owner && owner == cap.owner && startPoint && endPoint &&
+        (!cap.have || (incrementalHit == 0 && !cap.fullLine))) {
+        std::memcpy(cap.start, startPoint, sizeof cap.start);
+        std::memcpy(cap.end, endPoint, sizeof cap.end);
+        cap.have = true;
+        cap.fullLine = incrementalHit == 0;
+    }
+    if (g_originalBulletImpact) g_originalBulletImpact(self, owner, victim, startPoint, endPoint, colPoint, incrementalHit);
+}
+
 // Desktop CClientWeaponManager::HasWeaponBulletSync and the server's CWeaponStatManager::HasWeaponBulletSync: 22..34.
 constexpr int kFirstBulletSyncWeapon = 22;
 constexpr int kLastBulletSyncWeapon = 34;
 
 bool LocalBulletFireHook(void* self, void* owner, void* vecOrigin, void* vecEffectPos, void* targetEntity,
     void* vecTarget, void* vecAlt) {
+    // Read before the original runs: the weapon slot can change during the call.
+    const bool local = self && owner && g_findPlayerPed && owner == g_findPlayerPed(-1);
+    const int weapon = local ? *static_cast<const int*>(self) : 0;
+    const bool synced = local && weapon >= kFirstBulletSyncWeapon && weapon <= kLastBulletSyncWeapon;
+
+    // Capture the vectors FireInstantHit computes (LocalBulletImpactHook). The previous state is restored so a
+    // nested Fire cannot leave the capture armed.
+    const FireCapture outer = g_fireCapture;
+    if (synced) {
+        g_fireCapture = FireCapture{};
+        g_fireCapture.active = true;
+        g_fireCapture.owner = owner;
+    }
     // The original runs first. Its return value is passed through. The desktop does not gate on it either.
     const bool result = g_originalFire
         ? g_originalFire(self, owner, vecOrigin, vecEffectPos, targetEntity, vecTarget, vecAlt)
         : false;
-    if (!self || !owner || !g_findPlayerPed || owner != g_findPlayerPed(-1)) return result;
-    const int weapon = *static_cast<const int*>(self);
-    if (weapon < kFirstBulletSyncWeapon || weapon > kLastBulletSyncWeapon) return result;
+    if (!synced) return result;
+    const FireCapture shot = g_fireCapture;
+    g_fireCapture = outer;
 
     const auto* origin = static_cast<const float*>(vecOrigin);
     const auto* muzzle = static_cast<const float*>(vecEffectPos);
-    const auto* end = static_cast<const float*>(vecTarget);
-    if (!end) return result;
+    // The computed vectors when the game produced them, as on the desktop. vecTarget is only the fallback for a shot
+    // that never reached DoBulletImpact (or when that hook is not installed).
+    const float* start = shot.have ? shot.start : origin;
+    const float* end = shot.have ? shot.end : static_cast<const float*>(vecTarget);
+    if (!end) {
+        static int dropped = 0;
+        if (dropped < 4) {
+            ++dropped;
+            ENGINE_LOGI("DIAG local bullet shot weapon %d has no end point (null vecTarget, no DoBulletImpact); not synced",
+                weapon);
+        }
+        return result;
+    }
     // Desktop shotsync (multiplayer_shotsync.cpp 1582-1583): the 2D length from the aimed start to the end
-    // is checked against 0.0001. When it is degenerate, the muzzle position is the start.
-    const float* start = origin;
-    if (origin && muzzle) {
-        const float dx = end[0] - origin[0];
-        const float dy = end[1] - origin[1];
+    // is checked against 0.0001. When it is degenerate, the non-aimed start (the muzzle position) is used.
+    // DIAG gap: the desktop also trims the end to the weapon range (1585-1593); the range is not read here.
+    if (start && muzzle) {
+        const float dx = end[0] - start[0];
+        const float dy = end[1] - start[1];
         if (dx * dx + dy * dy < 0.0001f) start = muzzle;
     }
     NoteLocalShot(weapon, start, end);
@@ -396,6 +458,24 @@ bool InstallLocalBulletFireHook() {
     g_originalFire = reinterpret_cast<WeaponFireFn>(hooked.trampolineAddress);
     g_bulletFireHook = true;
     ENGINE_LOGI("Local CWeapon::Fire hook installed (PLAYER_BULLETSYNC source)");
+
+    // End point source for shots with a null vecTarget (see LocalBulletImpactHook). Without it those shots are not
+    // synced, which is logged per shot; the Fire hook still works for shots that carry a target.
+    void* impact = dlsym(handle, "_ZN7CWeapon14DoBulletImpactEP7CEntityS1_P7CVectorS3_P9CColPointi");
+    if (!impact) {
+        ENGINE_LOGE("DIAG local bullet end point: CWeapon::DoBulletImpact not found; free-aim shots are not synced");
+        return true;
+    }
+    static Hook::MemoryPatcher impactPatcher;
+    const auto impactHooked = impactPatcher.installHook(reinterpret_cast<uintptr_t>(impact),
+        reinterpret_cast<uintptr_t>(&LocalBulletImpactHook));
+    if (!impactHooked.success) {
+        ENGINE_LOGE("DIAG local bullet end point: DoBulletImpact hook failed: %s; free-aim shots are not synced",
+            impactHooked.errorMessage.c_str());
+        return true;
+    }
+    g_originalBulletImpact = reinterpret_cast<BulletImpactFn>(impactHooked.trampolineAddress);
+    ENGINE_LOGI("Local CWeapon::DoBulletImpact hook installed (bullet end point)");
     return true;
 #else
     return false;

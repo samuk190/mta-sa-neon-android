@@ -613,9 +613,15 @@ bool HandleVehicleStartSync(const uint8_t* body, size_t length, size_t bits) {
     if (!reader.Read(rx) || !reader.Read(ry) || !reader.Read(rz)) return false;
     if (!reader.Read(vx) || !reader.Read(vy) || !reader.Read(vz)) return false;
     if (!reader.Read(tx) || !reader.Read(ty) || !reader.Read(tz) || !reader.Read(health)) return false;
-    (void)vx; (void)vy; (void)vz; (void)tx; (void)ty; (void)tz; (void)health; (void)rx; (void)ry;
-    constexpr float pi = 3.14159265f;
-    WorldRPG::Game::NoteRemoteVehicle(id, 0, x, y, z, rz * pi / 180.f);
+    // Desktop CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleStartSync (CUnoccupiedVehicleSync.cpp 104-158):
+    // SetTargetPosition, SetTargetRotation, SetMoveSpeed, SetTurnSpeed, SetHealth, then AddVehicle. The values reach
+    // the body in GameEngine.cpp ApplyCarSeed. They used to be dropped, so the first packet 56 for this car reported
+    // the body's constructor health (1000) and an upright rotation back to the server.
+    const float pos[3] = {x, y, z};
+    const float rot[3] = {rx, ry, rz};
+    const float move[3] = {vx, vy, vz};
+    const float turn[3] = {tx, ty, tz};
+    WorldRPG::Game::NoteVehicleStartSync(id, pos, rot, move, turn, health);
     WorldRPG::ServerWorld::SetActorHost(id, true);
     return true;
 }

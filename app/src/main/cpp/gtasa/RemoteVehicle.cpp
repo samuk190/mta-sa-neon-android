@@ -68,6 +68,12 @@ void ClearOccupant(uint32_t playerId) {
     g_occupants.erase(playerId);
 }
 
+void ResetSession() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_vehicles.clear();
+    g_occupants.clear();
+}
+
 bool FindOccupant(uint32_t playerId, uint32_t& vehicleId, uint8_t& seat) {
     std::lock_guard<std::mutex> lock(g_mutex);
     auto found = g_occupants.find(playerId);
