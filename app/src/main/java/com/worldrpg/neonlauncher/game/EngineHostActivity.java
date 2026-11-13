@@ -84,6 +84,13 @@ public final class EngineHostActivity extends GTASA {
             // The VM calls the engine's JNI_OnLoad and registers the native
             // NvEventQueueActivity methods. A plain dlopen does not do this.
             System.loadLibrary("GTASA");
+            // Loaded here, before the engine thread exists: its JNI_OnLoad gives libGTASA a heap inside one
+            // 2 GB window (GameHeap.cpp). startMtaSession loads it again, which is then a no-op.
+            try {
+                System.loadLibrary("WorldRPGNeon");
+            } catch (UnsatisfiedLinkError error) {
+                Log.e(TAG, "MTA client library failed to load before the engine", error);
+            }
             Log.i(TAG, "Native GTA host prepared with generation " + generation.getName());
         } catch (IOException | LinkageError | SecurityException error) {
             bootError = error.getMessage() == null ? "Nao foi possivel preparar a engine GTA." : error.getMessage();

@@ -11,6 +11,7 @@
 #include "../net/HttpDownloader.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/GameEngine.h"
+#include "../gtasa/GameHeap.h"
 #include "../gtasa/RenderWareHooks.h"
 #include "../gtasa/InputHooks.h"
 #include "../gtasa/HUDRenderer.h"
@@ -149,6 +150,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     }
     g_jvm = vm;
     JNI_LOGI("JNI_OnLoad: WorldRPGNeon native library loaded");
+    // Engine process only: libGTASA is already loaded and its engine thread has not started yet.
+    WorldRPG::Game::InstallGameHeap();
     return JNI_VERSION_1_6;
 }
 
