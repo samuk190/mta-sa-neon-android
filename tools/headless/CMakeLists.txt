@@ -35,7 +35,9 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/PacketHandler.cpp"
     "${NATIVE_DIR}/shared/ResourceFiles.cpp"
     "${NATIVE_DIR}/shared/ResourceLoader.cpp"
+    "${NATIVE_DIR}/shared/ResourcePackets.cpp"
     "${NATIVE_DIR}/shared/LuaApiExtra.cpp"
+    "${NATIVE_DIR}/shared/LuaJsonApi.cpp"
     "${NATIVE_DIR}/net/Checksums.cpp"
     "${NATIVE_DIR}/net/HttpDownloader.cpp"
     "${NATIVE_DIR}/shared/VehicleSync.cpp"
@@ -64,13 +66,14 @@ set(NATIVE_SOURCES
     # Scripted engine surface (replaces gtasa/GameEngine.cpp in this build).
     "${HEADLESS_DIR}/game_script.cpp"
 
-    # Headless entry point and host stubs.
-    "${HEADLESS_DIR}/main.cpp"
+    # Host send tap and JNI bridge stub (shared by every headless executable).
     "${HEADLESS_DIR}/send_tap.cpp"
     "${HEADLESS_DIR}/stubs/jni_bridge_stub.cpp"
 )
 
-add_executable(neon_headless ${NATIVE_SOURCES})
+# The port's objects are compiled once and linked into each headless executable:
+# neon_headless (live join client, main.cpp) and neon_resource_tests (host checks).
+add_library(neon_core OBJECT ${NATIVE_SOURCES})
 
 # ElementManager.cpp uses std::unique_lock but only gets <shared_mutex> from its
 # header; libc++ (Android NDK) provides <mutex> transitively, libstdc++ does not.
@@ -78,7 +81,7 @@ add_executable(neon_headless ${NATIVE_SOURCES})
 set_source_files_properties("${NATIVE_DIR}/shared/ElementManager.cpp"
     PROPERTIES COMPILE_OPTIONS "-include;mutex")
 
-target_include_directories(neon_headless PRIVATE
+set(HEADLESS_INCLUDE_DIRS
     # Shadow android/log.h before anything else can resolve it.
     "${HEADLESS_DIR}/stubs"
     "${NATIVE_DIR}"
@@ -90,21 +93,29 @@ target_include_directories(neon_headless PRIVATE
     "${NATIVE_DIR}/shared"
     "${NATIVE_DIR}/shared/entity"
 )
+target_include_directories(neon_core PRIVATE ${HEADLESS_INCLUDE_DIRS})
 
 # Vendored Lua 5.3.6 (static, built into the headless build directory only).
 add_subdirectory("${NATIVE_DIR}/lua53" "${CMAKE_CURRENT_BINARY_DIR}/lua53")
 
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
+# Usage requirements only (Lua and zlib headers): the objects are linked by the executables below.
+target_link_libraries(neon_core PRIVATE lua53 ZLIB::ZLIB)
 # Link-time wrap of the one RakNetWrapper send entry point (see send_tap.cpp). The
 # symbol is RakNetWrapper::SendPacket(uint8_t, BitStreamWriter const&, PacketPriority,
 # PacketReliability, PacketOrdering); the calls come from NeonJoinProtocol.cpp.
-target_link_options(neon_headless PRIVATE
-    "-Wl,--wrap=_ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE")
+add_executable(neon_headless "${HEADLESS_DIR}/main.cpp" $<TARGET_OBJECTS:neon_core>)
+add_executable(neon_resource_tests "${HEADLESS_DIR}/resource_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 
-target_link_libraries(neon_headless PRIVATE
-    lua53
-    ZLIB::ZLIB
-    Threads::Threads
-    ${CMAKE_DL_LIBS}
-)
+foreach(headless_target neon_headless neon_resource_tests)
+    target_include_directories(${headless_target} PRIVATE ${HEADLESS_INCLUDE_DIRS})
+    target_link_options(${headless_target} PRIVATE
+        "-Wl,--wrap=_ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE")
+    target_link_libraries(${headless_target} PRIVATE
+        lua53
+        ZLIB::ZLIB
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+endforeach()

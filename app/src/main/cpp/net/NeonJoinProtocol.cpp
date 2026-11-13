@@ -1037,6 +1037,14 @@ bool SendGamePacket(BitStreamWriter& body, bool reliable) {
         reliable ? PacketReliability::RELIABLE_ORDERED : PacketReliability::UNRELIABLE_SEQUENCED);
 }
 
+// Same as SendGamePacket at the priority desktop uses for PLAYER_RESOURCE_START
+// (CResource.cpp 1636: PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED).
+bool SendGamePacketHighPriority(BitStreamWriter& body) {
+    if (!g_joinedNet || !g_joinedNet->IsConnected()) return false;
+    return g_joinedNet->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), body,
+        PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
+}
+
 // VEHICLE_INOUT replies for the local ped, called by PacketHandler on the net thread (game packet 58).
 // action is a client NOTIFY value: 1 = VEHICLE_NOTIFY_IN, 4 = VEHICLE_NOTIFY_OUT (CClientGame.h:175, 178).
 // Desktop sends ped, vehicle, action(4) only (CClientPed.cpp:10319-10324 notify out, 10369-10389 notify in).

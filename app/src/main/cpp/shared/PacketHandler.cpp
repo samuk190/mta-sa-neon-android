@@ -794,6 +794,7 @@ bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
                  static_cast<unsigned long long>(info.AutoDownloadBytes()),
                  info.layout == WorldRPG::Net::ResourceStartLayout::Desktop ? "desktop" : "mobile-shim",
                  info.files.empty() ? "n/a" : (info.md5Present ? "yes" : "no"));
+        WorldRPG::ServerWorld::OnResourceStart(info);
         WorldRPG::Script::ActiveVmOnResourceStart(info);
         return ShowResourceProgress(info.name);
     }
@@ -960,9 +961,10 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 50) { WorldRPG::ServerWorld::OnEntityAdd(body, bodyLength, bodyBits); return true; }
         if (gameId == 51) { WorldRPG::ServerWorld::OnEntityRemove(body, bodyLength, bodyBits); return true; }
         if (gameId == 84) { WorldRPG::ServerWorld::OnCustomData(body, bodyLength, bodyBits); return true; }
-        if (gameId == 82) {
-            WorldRPG::ServerWorld::OnResourceStart(body, bodyLength, bodyBits);
-            return HandleResourceStart(body, bodyLength, bodyBits);
+        if (gameId == 82) return HandleResourceStart(body, bodyLength, bodyBits);
+        if (gameId == 83) {
+            WorldRPG::Script::ActiveVmOnResourceStop(body, bodyLength, bodyBits);
+            return true;
         }
         if (gameId == 95) {
             char progress[64];

@@ -180,4 +180,7 @@ private:
 /// on the joined connection. Lua events use this from the net thread.
 bool SendGamePacket(BitStreamWriter& body, bool reliable);
 
+/// Same as SendGamePacket, at high priority and reliable ordered (desktop PLAYER_RESOURCE_START).
+bool SendGamePacketHighPriority(BitStreamWriter& body);
+
 } // namespace WorldRPG::Net

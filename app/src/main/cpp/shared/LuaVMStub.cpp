@@ -1,6 +1,7 @@
 #include "LuaVMStub.h"
 #include "LuaApiExtra.h"
 #include "ResourceLoader.h"
+#include "ResourcePackets.h"
 #include "ServerWorld.h"
 #include "../gtasa/GameEngine.h"
 #include "../net/NeonJoinProtocol.h"
@@ -31,15 +32,34 @@ struct DxRuntime {
     int screenH = 1080;
     bool chatHooked = false;
     std::unordered_map<std::string, std::vector<int>> handlers;
-    struct Timer { int ref = 0; int times = 1; int interval = 50; std::uint64_t next = 0; };
+    // Resource that registered each handler, keyed by registry ref ("" for core scripts).
+    std::unordered_map<int, std::string> handlerOwner;
+    struct Timer { int ref = 0; int times = 1; int interval = 50; std::uint64_t next = 0; std::string owner; };
     std::vector<Timer> timers;
     struct PendingChat { std::string text; int r = 255, g = 255, b = 255; };
     std::vector<PendingChat> pendingChat;
     std::string persistent;
     std::string frame;
+    std::string owner;  // resource whose code is running; tags the handlers and timers it registers
 };
 DxRuntime g_dx;
 static LuaVMStub* g_active = nullptr;
+
+// Sets the running resource for the duration of a Lua call (a load or a callback).
+struct OwnerScope {
+    explicit OwnerScope(std::string owner) : saved_(std::move(g_dx.owner)) { g_dx.owner = std::move(owner); }
+    ~OwnerScope() { g_dx.owner = std::move(saved_); }
+    OwnerScope(const OwnerScope&) = delete;
+    OwnerScope& operator=(const OwnerScope&) = delete;
+
+private:
+    std::string saved_;
+};
+
+static std::string OwnerOfHandler(int ref) {
+    auto found = g_dx.handlerOwner.find(ref);
+    return found == g_dx.handlerOwner.end() ? std::string() : found->second;
+}
 
 static std::uint64_t DxNow() {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -59,6 +79,7 @@ static void fireHandlers(const char* name, int nargs) {
     for (int ref : refs) {
         const auto& live = g_dx.handlers[name];
         if (std::find(live.begin(), live.end(), ref) == live.end()) continue;
+        OwnerScope scope(OwnerOfHandler(ref));
         lua_rawgeti(g_dx.L, LUA_REGISTRYINDEX, ref);
         for (int i = 0; i < nargs; ++i) lua_pushvalue(g_dx.L, -1 - nargs);
         if (lua_pcall(g_dx.L, nargs, 0, 0) != LUA_OK) {
@@ -75,6 +96,7 @@ static int l_addEventHandler(lua_State* L) {
     lua_pushvalue(L, 3);
     const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     g_dx.handlers[name].push_back(ref);
+    g_dx.handlerOwner[ref] = g_dx.owner;
     if (std::strcmp(name, "onClientChatMessage") == 0) g_dx.chatHooked = true;
     return 0;
 }
@@ -117,7 +139,9 @@ static int l_removeEventHandler(lua_State* L) {
         const bool same = lua_rawequal(L, -1, 3) != 0;
         lua_pop(L, 1);
         if (!same) continue;
-        luaL_unref(L, LUA_REGISTRYINDEX, *it);
+        const int ref = *it;
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+        g_dx.handlerOwner.erase(ref);
         refs.erase(it);
         lua_pushboolean(L, 1);
         break;
@@ -156,6 +180,7 @@ static int l_setTimer(lua_State* L) {
     timer.times = times == 0 ? -1 : times;
     timer.interval = interval;
     timer.next = DxNow() + static_cast<std::uint64_t>(interval);
+    timer.owner = g_dx.owner;
     g_dx.timers.push_back(timer);
     lua_pushinteger(L, timer.ref);
     return 1;
@@ -682,7 +707,7 @@ bool LuaVMStub::initialize() {
     // Names still without an implementation. Anything else is bound in installDxBindings
     // or LuaApiExtra.cpp, which replace these stubs.
     const char* mtaClientFunctions[] = {
-        "getResourceName", "toJSON", "fromJSON"
+        "getResourceName"
     };
 
     for (const char* fn : mtaClientFunctions) {
@@ -882,9 +907,26 @@ static bool ReadCachedScript(const std::string& path, std::vector<uint8_t>& out)
     return ok;
 }
 
+// Desktop CResource::Load (CResource.cpp 1636): PLAYER_RESOURCE_START (108) after onClientResourceStart,
+// at high priority, reliable ordered. The root check mirrors desktop's "if (m_pResourceEntity)".
+static void SendResourceStarted(const WorldRPG::Script::ResourceLoadJob& job) {
+    if (job.rootElement == 0) {
+        LUA_LOGI("LuaVM: resource %s has no root element: PLAYER_RESOURCE_START not sent", job.name.c_str());
+        return;
+    }
+    Net::BitStreamWriter packet;
+    ResourcePackets::BuildPlayerResourceStart(packet, job.netId, job.startCounter);
+    const bool sent = Net::SendGamePacketHighPriority(packet);
+    LUA_LOGI("LuaVM: PLAYER_RESOURCE_START %s netId=%u counter=%u (%s): %s", job.name.c_str(),
+             static_cast<unsigned>(job.netId), static_cast<unsigned>(job.startCounter),
+             job.startCounterFromWire ? "from RESOURCE_START" : "assumed first start, mobile shim stripped it",
+             sent ? "sent" : "not sent");
+}
+
 // Desktop CResource::Load: no-cache scripts first, then the CLIENT_SCRIPT files in
 // list order, then onClientResourceStart with the resource root as source.
 static void RunResourceJob(lua_State* L, const WorldRPG::Script::ResourceLoadJob& job) {
+    OwnerScope owner(job.name);
     refreshLocalPlayer(L);
     lua_newtable(L);                       // resource environment
     lua_newtable(L);                       // its metatable: reads fall through to the VM globals
@@ -915,6 +957,7 @@ static void RunResourceJob(lua_State* L, const WorldRPG::Script::ResourceLoadJob
     fireHandlers("onClientResourceStart", 0);
     LUA_LOGI("LuaVM: resource %s started: %d cached scripts, %d no-cache scripts", job.name.c_str(), cachedOk, noCacheOk);
     if (failed) LUA_LOGE("LuaVM: resource %s: %d script(s) failed to load", job.name.c_str(), failed);
+    SendResourceStarted(job);
 }
 
 static void FlushPendingChat(lua_State* L) {
@@ -923,6 +966,7 @@ static void FlushPendingChat(lua_State* L) {
     if (found != g_dx.handlers.end()) {
         for (const auto& chat : g_dx.pendingChat) {
             for (int ref : found->second) {
+                OwnerScope scope(OwnerOfHandler(ref));
                 lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
                 lua_pushlstring(L, chat.text.data(), chat.text.size());
                 lua_pushinteger(L, chat.r);
@@ -949,6 +993,7 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
     auto found = g_dx.handlers.find("onClientChatMessage");
     if (found == g_dx.handlers.end()) return false;
     for (int ref : found->second) {
+        OwnerScope scope(OwnerOfHandler(ref));
         lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
         lua_pushstring(L, text);
         lua_pushinteger(L, red);
@@ -966,15 +1011,19 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
 std::string LuaVMStub::pumpDx() {
     if (!pImpl_->L) return {};
     const auto now = DxNow();
-    for (auto& timer : g_dx.timers) {
-        if (timer.times == 0 || now < timer.next) continue;
-        lua_rawgeti(pImpl_->L, LUA_REGISTRYINDEX, timer.ref);
-        if (lua_pcall(pImpl_->L, 0, 0, 0) != LUA_OK) {
-            LUA_LOGE("Lua timer: %s", lua_tostring(pImpl_->L, -1));
-            lua_pop(pImpl_->L, 1);
+    // Index loop: a timer callback may call setTimer, which reallocates g_dx.timers.
+    for (size_t i = 0; i < g_dx.timers.size(); ++i) {
+        if (g_dx.timers[i].times == 0 || now < g_dx.timers[i].next) continue;
+        {
+            OwnerScope scope(g_dx.timers[i].owner);
+            lua_rawgeti(pImpl_->L, LUA_REGISTRYINDEX, g_dx.timers[i].ref);
+            if (lua_pcall(pImpl_->L, 0, 0, 0) != LUA_OK) {
+                LUA_LOGE("Lua timer: %s", lua_tostring(pImpl_->L, -1));
+                lua_pop(pImpl_->L, 1);
+            }
         }
-        timer.next = now + static_cast<std::uint64_t>(timer.interval);
-        if (timer.times > 0) --timer.times;
+        g_dx.timers[i].next = now + static_cast<std::uint64_t>(g_dx.timers[i].interval);
+        if (g_dx.timers[i].times > 0) --g_dx.timers[i].times;
     }
     g_dx.timers.erase(std::remove_if(g_dx.timers.begin(), g_dx.timers.end(),
         [](const DxRuntime::Timer& timer) { return timer.times == 0; }), g_dx.timers.end());
@@ -1125,25 +1174,109 @@ bool ActiveVmOnServerEvent(const uint8_t* body, size_t length, size_t bits) {
     if (!g_dx.L || !body) return false;
     Net::BitStreamReader reader(body, length, bits);
     uint32_t nameLength = 0;
-    if (!ReadCompressedBits(reader, 2, nameLength) || nameLength == 0 || nameLength > 256) return false;
+    if (!ReadCompressedBits(reader, 2, nameLength) || nameLength == 0 || nameLength > 256) {
+        LUA_LOGE("LuaVM: server event: name length did not parse (%zu bytes)", length);
+        return false;
+    }
     std::string name(nameLength, '\0');
-    if (!reader.ReadBits(reinterpret_cast<uint8_t*>(name.data()), nameLength * 8)) return false;
+    if (!reader.ReadBits(reinterpret_cast<uint8_t*>(name.data()), nameLength * 8)) {
+        LUA_LOGE("LuaVM: server event: name did not parse (%zu bytes)", length);
+        return false;
+    }
     uint32_t source = 0;
-    if (!ReadElementBits(reader, source)) return false;
+    if (!ReadElementBits(reader, source)) {
+        LUA_LOGE("LuaVM: server event %s: source did not parse", name.c_str());
+        return false;
+    }
     uint32_t count = 0;
-    if (!ReadCompressedBits(reader, 4, count) || count > 32) return false;
+    if (!ReadCompressedBits(reader, 4, count) || count > 32) {
+        LUA_LOGE("LuaVM: server event %s: argument count did not parse", name.c_str());
+        return false;
+    }
     lua_State* L = g_dx.L;
     const int top = lua_gettop(L);
     for (uint32_t i = 0; i < count; ++i) {
         if (!ReadLuaArg(L, reader, 0)) {
+            LUA_LOGE("LuaVM: server event %s: argument %u of %u did not parse", name.c_str(), i + 1, count);
             lua_settop(L, top);
             return false;
         }
     }
     PushElement(L, source);
     lua_setglobal(L, "source");
+    const auto handlers = g_dx.handlers.find(name);
+    if (handlers == g_dx.handlers.end() || handlers->second.empty()) {
+        LUA_LOGI("LuaVM: server event %s has no client handler (%u args)", name.c_str(), static_cast<unsigned>(count));
+    }
     fireHandlers(name.c_str(), static_cast<int>(count));
     return true;
+}
+
+// Removes the handlers and timers that a resource registered, and the resource's
+// Lua state with them (its environment is only referenced by those closures).
+static void DropResourceState(lua_State* L, const std::string& name) {
+    for (auto& [event, refs] : g_dx.handlers) {
+        refs.erase(std::remove_if(refs.begin(), refs.end(), [&](int ref) {
+            if (OwnerOfHandler(ref) != name) return false;
+            luaL_unref(L, LUA_REGISTRYINDEX, ref);
+            g_dx.handlerOwner.erase(ref);
+            return true;
+        }), refs.end());
+    }
+    for (auto& timer : g_dx.timers) {
+        if (timer.owner != name) continue;
+        luaL_unref(L, LUA_REGISTRYINDEX, timer.ref);
+        timer.times = 0;
+    }
+    g_dx.timers.erase(std::remove_if(g_dx.timers.begin(), g_dx.timers.end(),
+        [](const DxRuntime::Timer& timer) { return timer.times == 0; }), g_dx.timers.end());
+    const auto chat = g_dx.handlers.find("onClientChatMessage");
+    g_dx.chatHooked = chat != g_dx.handlers.end() && !chat->second.empty();
+}
+
+// Desktop CResource::Stop: onClientResourceStop runs with the resource root as source and
+// argument, then the resource's state is dropped. Only that resource's handlers run.
+static void RunResourceStop(lua_State* L, const std::string& name, uint32_t root) {
+    PushElement(L, root);
+    lua_setglobal(L, "source");
+    const auto found = g_dx.handlers.find("onClientResourceStop");
+    if (found != g_dx.handlers.end()) {
+        const std::vector<int> refs = found->second;
+        for (int ref : refs) {
+            const auto& live = g_dx.handlers["onClientResourceStop"];
+            if (std::find(live.begin(), live.end(), ref) == live.end()) continue;
+            if (OwnerOfHandler(ref) != name) continue;
+            OwnerScope scope(name);
+            lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+            PushElement(L, root);
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                LUA_LOGE("Lua onClientResourceStop (%s): %s", name.c_str(), lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+    }
+    DropResourceState(L, name);
+}
+
+// RESOURCE_STOP (83), desktop CPacketHandler::Packet_ResourceStop: the resource is removed
+// from the loader, and its scripts are stopped if they had run.
+void ActiveVmOnResourceStop(const uint8_t* body, size_t length, size_t bits) {
+    uint16_t netId = 0;
+    if (!ResourcePackets::ParseResourceStop(body, length, bits, netId)) {
+        LUA_LOGE("LuaVM: RESOURCE_STOP body too short");
+        return;
+    }
+    const ForgottenResource gone = ResourceLoader::Forget(netId);
+    if (!gone.found) {
+        LUA_LOGI("LuaVM: RESOURCE_STOP for unknown resource net id %u", static_cast<unsigned>(netId));
+        return;
+    }
+    if (g_dx.L) {
+        if (gone.started) RunResourceStop(g_dx.L, gone.name, gone.rootElement);
+        else DropResourceState(g_dx.L, gone.name);
+    }
+    LUA_LOGI("LuaVM: resource %s stopped (net id %u, scripts ran: %s)", gone.name.c_str(), static_cast<unsigned>(netId),
+             gone.started ? "yes" : "no");
 }
 
 bool ActiveVmFeedScripts(const uint8_t* body, size_t length, size_t bits) {

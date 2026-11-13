@@ -1,5 +1,6 @@
 #include "LuaApiExtra.h"
 
+#include "LuaJsonApi.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
 
@@ -254,6 +255,7 @@ uint32_t ElementIdOf(lua_State* L, int index) {
 }
 
 void InstallExtraBindings(lua_State* L) {
+    InstallJsonBindings(L);
     SetGlobal(L, "outputChatBox", OutputChatBox);
     SetGlobal(L, "iprint", Iprint);
     SetGlobal(L, "debugMessage", DebugMessage);

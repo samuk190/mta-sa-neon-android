@@ -2,6 +2,7 @@
 
 #include "LuaVMStub.h"
 #include "ResourceFiles.h"
+#include "ResourcePackets.h"
 #include "../net/HttpDownloader.h"
 #include "../net/raknet/RakNetWrapper.h"
 
@@ -45,6 +46,8 @@ struct Entry {
     std::vector<NoCacheItem> noCache;           // packet 95 items received so far
     std::string failure;                        // non-empty: the resource will not start
     bool started = false;
+    uint32_t startCounter = 0;                  // PLAYER_RESOURCE_START value
+    bool startCounterFromWire = false;          // false: stripped by the mobile shim, assumed
 };
 
 std::vector<Entry> g_entries;                               // RESOURCE_START order
@@ -108,6 +111,11 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
     entry.netId = info.resourceId;
     entry.root = info.entityId == kInvalidElement ? 0 : info.entityId;
     entry.noCacheExpected = info.noClientCacheScripts;
+    // The mobile-shim layout has no start counter on the wire (the shim strips it). The server's
+    // first start of a resource is kFirstStartCounter, so that value is used; a restarted resource
+    // will not match and the server then ignores the packet.
+    entry.startCounterFromWire = info.layout == WorldRPG::Net::ResourceStartLayout::Desktop;
+    entry.startCounter = entry.startCounterFromWire ? info.startCounter : ResourcePackets::kFirstStartCounter;
 
     for (const WorldRPG::Net::ResourceFile& file : info.files) {
         if (!file.autoDownload) continue;
@@ -217,6 +225,8 @@ std::vector<ResourceLoadJob> Pump() {
         job.name = entry.name;
         job.netId = entry.netId;
         job.rootElement = entry.root;
+        job.startCounter = entry.startCounter;
+        job.startCounterFromWire = entry.startCounterFromWire;
         unsigned index = 0;
         for (NoCacheItem& item : entry.noCache) {
             ResourceScript script;
@@ -234,6 +244,28 @@ std::vector<ResourceLoadJob> Pump() {
         jobs.push_back(std::move(job));
     }
     return jobs;
+}
+
+ForgottenResource Forget(uint16_t netId) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ForgottenResource out;
+    if (const Entry* entry = FindByNetId(netId)) {
+        out.found = true;
+        out.started = entry->started;
+        out.name = entry->name;
+        out.rootElement = entry->root;
+    }
+    std::erase_if(g_entries, [&](const Entry& entry) { return entry.netId == netId; });
+    g_orphans.erase(netId);
+    return out;
+}
+
+uint32_t RootElementOf(const std::string& name) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (auto it = g_entries.rbegin(); it != g_entries.rend(); ++it) {
+        if (it->name == name) return it->root;
+    }
+    return 0;
 }
 
 } // namespace WorldRPG::Script::ResourceLoader

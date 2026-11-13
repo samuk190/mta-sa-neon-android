@@ -1,4 +1,5 @@
 #include "ServerWorld.h"
+#include "ResourceFiles.h"
 #include "../gtasa/GameEngine.h"
 #include "../net/raknet/RakNetWrapper.h"
 #include "entity/EntityAddTypes.h"
@@ -444,25 +445,18 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
     if (players > 0) SW_LOGI("PLAYER_LIST stored %d player model(s)", players);
 }
 
-void OnResourceStart(const uint8_t* body, size_t length, size_t bits) {
-    Net::BitStreamReader reader(body, length, bits);
-    uint8_t nameLength = 0;
-    if (!reader.Read(nameLength) || nameLength == 0 || nameLength > 64) return;
-    std::vector<uint8_t> name(nameLength);
-    if (!reader.ReadBits(name.data(), nameLength * 8)) return;
-    uint32_t counter = 0, root = 0, dynamicRoot = 0;
-    uint16_t netId = 0, noCache = 0;
-    if (!reader.Read(counter) || !reader.Read(netId) || !ReadElementId(reader, root) || !ReadElementId(reader, dynamicRoot))
-        return;
-    if (!reader.Read(noCache)) return;
-    SW_LOGI("Resource %.*s id=%u root=%u", static_cast<int>(name.size()), name.data(), netId, root);
+// Takes the descriptor ParseResourceStart already built for either layout (desktop or mobile shim),
+// so the layout is detected once, in ResourceFiles.cpp, and not read a second time here.
+void OnResourceStart(const Net::ResourceStartInfo& info) {
+    constexpr uint32_t kInvalidElement = 0xFFFFFFFFu;
+    const uint32_t root = info.entityId == kInvalidElement ? 0 : info.entityId;
+    SW_LOGI("Resource %s id=%u root=%u", info.name.c_str(), static_cast<unsigned>(info.resourceId), static_cast<unsigned>(root));
     std::lock_guard<std::mutex> lock(g_lock);
     g_resourceRoot = root;
     Visual visual;
     visual.kind = 0;
     Remember(root, visual);
-    Remember(dynamicRoot, visual);
-    (void)counter; (void)noCache;
+    Remember(info.dynamicEntityId, visual);
 }
 
 void Tick(float playerX, float playerY, float playerZ) {

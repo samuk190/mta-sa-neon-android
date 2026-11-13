@@ -3,6 +3,10 @@
 #include <cstdint>
 #include <string>
 
+namespace WorldRPG::Net {
+struct ResourceStartInfo;
+}
+
 namespace WorldRPG::ServerWorld {
 
 void SetLocalPlayer(uint32_t id);
@@ -18,7 +22,7 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits);
 void OnEntityRemove(const uint8_t* body, size_t length, size_t bits);
 void OnCustomData(const uint8_t* body, size_t length, size_t bits);
 void OnPlayerList(const uint8_t* body, size_t length, size_t bits);
-void OnResourceStart(const uint8_t* body, size_t length, size_t bits);
+void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info);
 uint32_t LastResourceRoot();
 
 struct ActorSpawn {

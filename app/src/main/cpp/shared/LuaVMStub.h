@@ -102,5 +102,7 @@ std::string ActiveVmPump();
 void ActiveVmSetScreen(int width, int height);
 bool ActiveVmChatHooked();
 bool ActiveVmOnServerEvent(const uint8_t* body, size_t length, size_t bits);
+// RESOURCE_STOP (83): removes the resource and stops its scripts (desktop Packet_ResourceStop).
+void ActiveVmOnResourceStop(const uint8_t* body, size_t length, size_t bits);
 
 } // namespace WorldRPG::Script

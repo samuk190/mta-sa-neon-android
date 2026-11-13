@@ -33,8 +33,18 @@ struct ResourceLoadJob {
     std::string name;
     uint16_t netId = 0;
     uint32_t rootElement = 0;       // RESOURCE_START entity id (resource root)
+    uint32_t startCounter = 0;      // echoed in PLAYER_RESOURCE_START
+    bool startCounterFromWire = false;  // false: the mobile shim stripped it, startCounter is assumed
     std::vector<ResourceScript> noCacheScripts;  // packet 95 order
     std::vector<ResourceScript> clientScripts;   // RESOURCE_START file list order
+};
+
+// What RESOURCE_STOP removed from the loader.
+struct ForgottenResource {
+    bool found = false;
+    bool started = false;           // scripts ran, so the resource may have onClientResourceStop handlers
+    std::string name;
+    uint32_t rootElement = 0;
 };
 
 namespace ResourceLoader {
@@ -52,6 +62,12 @@ bool OnClientScripts(const uint8_t* body, size_t length, size_t bits);
 
 // Applies finished downloads and returns the resources that can start now.
 std::vector<ResourceLoadJob> Pump();
+
+// RESOURCE_STOP: removes the resource with this net id (desktop CResourceManager::RemoveResource).
+ForgottenResource Forget(uint16_t netId);
+
+// Root element of the newest resource with this name, 0 when unknown ("^R^name" values).
+uint32_t RootElementOf(const std::string& name);
 
 } // namespace ResourceLoader
 } // namespace WorldRPG::Script
