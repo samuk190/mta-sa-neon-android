@@ -7,6 +7,7 @@
 #include "ServerWorld.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/HudComponents.h"
+#include "../net/HttpDownloader.h"
 #include "../net/NeonJoinProtocol.h"
 #include "../net/raknet/RakNetWrapper.h"
 
@@ -18,6 +19,7 @@ extern "C" {
 #include "lualib.h"
 }
 
+#include <array>
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
@@ -155,6 +157,89 @@ static int l_dxDrawText(lua_State* L) {
     return 0;
 }
 
+// Resource file for a dxDrawImage path. "radar/a.png" is the running resource;
+// ":other/radar/a.png" names another resource. ".." is rejected. The result is
+// HttpDownloader::CachedFilePath, which is empty until a cache root is set.
+static std::string DxImageFile(const std::string& raw) {
+    if (g_dx.owner.empty() || raw.empty()) return {};
+    std::string path;
+    path.reserve(raw.size());
+    for (char ch : raw) path.push_back(ch == '\\' ? '/' : ch);
+    std::string resource = g_dx.owner;
+    if (path[0] == ':') {
+        const auto slash = path.find('/');
+        if (slash == std::string::npos || slash < 2) return {};
+        resource = path.substr(1, slash - 1);
+        path = path.substr(slash + 1);
+    }
+    while (!path.empty() && path.front() == '/') path.erase(path.begin());
+    if (resource.empty() || path.empty()) return {};
+    bool any = false;
+    for (size_t i = 0; i < path.size();) {
+        const auto slash = path.find('/', i);
+        const auto end = slash == std::string::npos ? path.size() : slash;
+        const std::string part = path.substr(i, end - i);
+        if (part == "..") return {};
+        if (!part.empty() && part != ".") any = true;
+        if (slash == std::string::npos) break;
+        i = slash + 1;
+    }
+    if (!any) return {};
+    for (unsigned char ch : resource)
+        if (ch < 32 || ch >= 127 || ch == '/') return {};
+    for (unsigned char ch : path)
+        if (ch < 32 || ch >= 127) return {};
+    return WorldRPG::Net::HttpDownloader::CachedFilePath(resource, path);
+}
+
+// Desktop CLuaDrawingDefs::DxDrawImage / DxDrawImageSection. One line for MtaDxView:
+//   I dx dy dw dh sx sy sw sh color rot ox oy <cache path>
+// dxDrawImage uses sx=sy=0 and sw=sh=-1 (the whole PNG). A call with no resource
+// (empty owner) appends nothing, so a server that does not send the HUD script
+// does not paint over the native radar.
+static int AppendImageDraw(lua_State* L, bool section) {
+    if (g_dx.owner.empty()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const int pathIndex = section ? 9 : 5;
+    if (lua_type(L, pathIndex) != LUA_TSTRING) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    size_t pathLength = 0;
+    const char* path = lua_tolstring(L, pathIndex, &pathLength);
+    const std::string file = DxImageFile(std::string(path ? path : "", pathLength));
+    if (file.empty()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const int rotIndex = pathIndex + 1;
+    const double x = luaL_checknumber(L, 1);
+    const double y = luaL_checknumber(L, 2);
+    const double w = luaL_checknumber(L, 3);
+    const double h = luaL_checknumber(L, 4);
+    const double sx = section ? luaL_checknumber(L, 5) : 0.0;
+    const double sy = section ? luaL_checknumber(L, 6) : 0.0;
+    const double sw = section ? luaL_checknumber(L, 7) : -1.0;
+    const double sh = section ? luaL_checknumber(L, 8) : -1.0;
+    const auto color = static_cast<unsigned>(luaL_optinteger(L, rotIndex + 3, static_cast<lua_Integer>(0xFFFFFFFFu)));
+    const double rotation = luaL_optnumber(L, rotIndex, 0);
+    const double ox = luaL_optnumber(L, rotIndex + 1, 0);
+    const double oy = luaL_optnumber(L, rotIndex + 2, 0);
+    char head[192];
+    std::snprintf(head, sizeof(head), "I %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %u %.1f %.1f %.1f ",
+                  x, y, w, h, sx, sy, sw, sh, color, rotation, ox, oy);
+    g_dx.frame += head;
+    g_dx.frame += file;
+    g_dx.frame += '\n';
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_dxDrawImage(lua_State* L) { return AppendImageDraw(L, false); }
+static int l_dxDrawImageSection(lua_State* L) { return AppendImageDraw(L, true); }
+
 static int l_removeEventHandler(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     lua_pushboolean(L, 0);
@@ -259,12 +344,41 @@ static int l_getTime(lua_State* L) {
     return 2;
 }
 
-// Desktop MTA getElementVelocity(): x, y, z. Remote velocity is not exposed to Lua yet.
+// Missing element or the local player. Remote bodies are not read here.
+static bool IsLocalStatElement(lua_State* L, int index) {
+    const uint32_t id = ElementIdOf(L, index);
+    return id == 0 || id == ServerWorld::LocalPlayer();
+}
+
+// Desktop CStaticFunctionDefinitions::GetElementVelocity for the local ped.
+// Remote velocity is not exposed to Lua yet.
 static int l_getElementVelocity(lua_State* L) {
-    lua_pushnumber(L, 0.0);
-    lua_pushnumber(L, 0.0);
-    lua_pushnumber(L, 0.0);
+    float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 0;
+    if (IsLocalStatElement(L, 1)) Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+    lua_pushnumber(L, vx);
+    lua_pushnumber(L, vy);
+    lua_pushnumber(L, vz);
     return 3;
+}
+
+// Desktop CLuaPedDefs::GetPedRotation: ConvertRadiansToDegrees(GetCurrentRotation()),
+// wrapped to [0, 360). The phone uses FindPlayerHeading (forward row), not the
+// pure-sync sample. 0 is north, 90 is west. The square radar draws arrow.png
+// with -heading so a clockwise dxDrawImage points the way the ped faces.
+static int l_getPedRotation(lua_State* L) {
+    double degrees = 0;
+    if (IsLocalStatElement(L, 1)) {
+        const double turns = static_cast<double>(Game::CopyRadarHeading()) * (180.0 / 3.14159265358979323846) + 360.0;
+        degrees = turns - 360.0 * std::floor(turns / 360.0);
+    }
+    lua_pushnumber(L, degrees);
+    return 1;
+}
+
+// Desktop getPedArmor for the local ped. The value is sampled in SampleLocalPose.
+static int l_getPedArmor(lua_State* L) {
+    lua_pushnumber(L, IsLocalStatElement(L, 1) ? Game::CopyLocalArmor() : 0.0);
+    return 1;
 }
 
 // Desktop MTA getElementRotation(): rx, ry, rz. Not tracked on the phone yet.
@@ -328,23 +442,7 @@ static void WriteBits(Net::BitStreamWriter& w, uint32_t value, int bits) {
 }
 
 static void WriteCompressed(Net::BitStreamWriter& w, uint32_t value, int bytes) {
-    uint8_t raw[4] = {};
-    for (int i = 0; i < 4; ++i) raw[i] = static_cast<uint8_t>((value >> (8 * i)) & 0xFF);
-    for (int i = bytes - 1; i > 0; --i) {
-        if (raw[i] == 0) WriteBits(w, 1, 1);
-        else {
-            WriteBits(w, 0, 1);
-            w.WriteBits(raw, static_cast<size_t>((i + 1) * 8));
-            return;
-        }
-    }
-    if ((raw[0] & 0xF0) == 0) {
-        WriteBits(w, 1, 1);
-        WriteBits(w, raw[0], 4);
-    } else {
-        WriteBits(w, 0, 1);
-        w.Write(raw[0]);
-    }
+    w.WriteCompressed(value, bytes);
 }
 
 static void WriteLuaValue(lua_State* L, int index, Net::BitStreamWriter& w, int depth) {
@@ -528,6 +626,75 @@ static int l_getLocalPlayer(lua_State* L) {
     return 1;
 }
 
+static void SetNetworkNumber(lua_State* L, const char* key, double value) {
+    lua_pushstring(L, key);
+    lua_pushnumber(L, value);
+    lua_settable(L, -3);
+}
+
+// Desktop CLuaFunctionDefs::GetNetworkStats (CLuaFunctionDefs.Util.cpp 114-169).
+// encryptionStatus is the desktop constant 1, not a transport counter.
+static int l_getNetworkStats(lua_State* L) {
+    auto* net = Net::RakNetWrapper::Live();
+    if (!net) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    Net::NetworkStatistics stats{};
+    if (!net->GetNetworkStatistics(stats)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_createtable(L, 0, 11);
+    SetNetworkNumber(L, "bytesReceived", static_cast<double>(stats.bytesReceived));
+    SetNetworkNumber(L, "bytesSent", static_cast<double>(stats.bytesSent));
+    SetNetworkNumber(L, "packetsReceived", stats.packetsReceived);
+    SetNetworkNumber(L, "packetsSent", stats.packetsSent);
+    SetNetworkNumber(L, "packetlossTotal", stats.packetlossTotal);
+    SetNetworkNumber(L, "packetlossLastSecond", stats.packetlossLastSecond);
+    SetNetworkNumber(L, "messagesInSendBuffer", stats.messagesInSendBuffer);
+    SetNetworkNumber(L, "messagesInResendBuffer", stats.messagesInResendBuffer);
+    SetNetworkNumber(L, "isLimitedByCongestionControl", stats.isLimitedByCongestionControl ? 1 : 0);
+    SetNetworkNumber(L, "isLimitedByOutgoingBandwidthLimit", stats.isLimitedByOutgoingBandwidthLimit ? 1 : 0);
+    SetNetworkNumber(L, "encryptionStatus", 1);
+    return 1;
+}
+
+static void PushUsageDirection(lua_State* L, const std::array<Net::PacketUsage, 256>& slots) {
+    lua_createtable(L, 0, 2);
+    lua_pushstring(L, "bits");
+    lua_createtable(L, 255, 1);
+    for (int i = 0; i < 256; ++i) {
+        lua_pushnumber(L, static_cast<double>(slots[static_cast<size_t>(i)].totalBytes) * 8.0);
+        lua_rawseti(L, -2, i);
+    }
+    lua_rawset(L, -3);
+
+    lua_pushstring(L, "count");
+    lua_createtable(L, 255, 1);
+    for (int i = 0; i < 256; ++i) {
+        lua_pushnumber(L, slots[static_cast<size_t>(i)].count);
+        lua_rawseti(L, -2, i);
+    }
+    lua_rawset(L, -3);
+}
+
+// Desktop CLuaFunctionDefs::GetNetworkUsageData (CLuaFunctionDefs.Util.cpp 54-111).
+// Slots are the wire packet id. bits = totalBytes * 8.
+static int l_getNetworkUsageData(lua_State* L) {
+    std::array<Net::PacketUsage, 256> incoming{};
+    std::array<Net::PacketUsage, 256> outgoing{};
+    if (auto* net = Net::RakNetWrapper::Live()) net->CopyPacketUsage(incoming, outgoing);
+    lua_createtable(L, 0, 2);
+    lua_pushstring(L, "in");
+    PushUsageDirection(L, incoming);
+    lua_rawset(L, -3);
+    lua_pushstring(L, "out");
+    PushUsageDirection(L, outgoing);
+    lua_rawset(L, -3);
+    return 1;
+}
+
 static void installDxBindings(lua_State* L) {
     g_dx.L = L;
     const struct { const char* name; lua_CFunction fn; } binds[] = {
@@ -537,13 +704,17 @@ static void installDxBindings(lua_State* L) {
         {"removeEventHandler", l_removeEventHandler},
         {"dxDrawRectangle", l_dxDrawRectangle},
         {"dxDrawText", l_dxDrawText},
+        {"dxDrawImage", l_dxDrawImage},
+        {"dxDrawImageSection", l_dxDrawImageSection},
         {"tocolor", l_tocolor},
         {"guiGetScreenSize", l_guiGetScreenSize},
         {"getCursorPosition", l_getCursorPosition},
         {"getTickCount", l_getTickCount},
+        {"getNetworkStats", l_getNetworkStats},
+        {"getNetworkUsageData", l_getNetworkUsageData},
         {"setTimer", l_setTimer},
         {"getElementHealth", l_getElementHealth},
-        {"getPedArmor", l_num0},
+        {"getPedArmor", l_getPedArmor},
         {"getTime", l_getTime},
         {"getPedOccupiedVehicle", l_false},
         {"getPedOccupiedVehicleSeat", l_false},
@@ -561,7 +732,7 @@ static void installDxBindings(lua_State* L) {
         {"getPedMoveState", l_getPedMoveState},
         {"engineStreamingGetModelLoadState", l_engineStreamingGetModelLoadState},
         // Ped and element natives the ped-traffic client calls. Defaults until the engine exposes them.
-        {"getPedRotation", l_num0},
+        {"getPedRotation", l_getPedRotation},
         {"getPedAmmoInClip", l_num0},
         {"getPedTotalAmmo", l_num0},
         {"getPedWeapon", l_num0},
@@ -645,6 +816,11 @@ static void installDxBindings(lua_State* L) {
     lua_setfield(L, -2, "id");
     lua_setglobal(L, "localPlayer");
     InstallExtraBindings(L);
+    // These two stay on this file even if extra bindings register the same names.
+    lua_pushcfunction(L, l_getNetworkStats);
+    lua_setglobal(L, "getNetworkStats");
+    lua_pushcfunction(L, l_getNetworkUsageData);
+    lua_setglobal(L, "getNetworkUsageData");
 }
 
 static void refreshLocalPlayer(lua_State* L) {
@@ -1161,29 +1337,7 @@ static bool ReadFlagBit(Net::BitStreamReader& reader, bool& out) {
 }
 
 static bool ReadCompressedBits(Net::BitStreamReader& reader, int bytes, uint32_t& out) {
-    out = 0;
-    for (int i = bytes - 1; i > 0; --i) {
-        bool empty = false;
-        if (!ReadFlagBit(reader, empty)) return false;
-        if (!empty) {
-            uint8_t buf[4] = {};
-            if (!reader.ReadBits(buf, static_cast<size_t>((i + 1) * 8))) return false;
-            for (int b = 0; b <= i; ++b) out |= static_cast<uint32_t>(buf[b]) << (8 * b);
-            return true;
-        }
-    }
-    bool highEmpty = false;
-    if (!ReadFlagBit(reader, highEmpty)) return false;
-    if (!highEmpty) {
-        uint8_t low = 0;
-        if (!reader.Read(low)) return false;
-        out = low;
-        return true;
-    }
-    uint8_t nibble = 0;
-    if (!reader.ReadBits(&nibble, 4)) return false;
-    out = nibble & 0x0Fu;
-    return true;
+    return reader.ReadCompressed(out, bytes);
 }
 
 static bool ReadElementBits(Net::BitStreamReader& reader, uint32_t& out) {

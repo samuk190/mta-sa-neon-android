@@ -5,6 +5,7 @@
 #include "ResourceFiles.h"
 #include "ResourcePackets.h"
 #include "../net/HttpDownloader.h"
+#include "../net/RemoteCalls.h"
 #include "../net/raknet/RakNetWrapper.h"
 
 #include <zlib.h>
@@ -100,6 +101,9 @@ Entry* FindByName(const std::string& name) {
 } // namespace
 
 void Reset() {
+    // Drop fetchRemote callbacks while this VM is still alive. ActiveVmResetSession
+    // calls Reset before it shuts the state down.
+    WorldRPG::Net::RemoteCalls::AbandonAll();
     std::lock_guard<std::mutex> lock(g_mutex);
     g_entries.clear();
     g_orphans.clear();
@@ -200,6 +204,9 @@ bool OnClientScripts(const uint8_t* body, size_t length, size_t bits) {
 }
 
 std::vector<ResourceLoadJob> Pump() {
+    // Same game thread that drains resource downloads. Callbacks run here, and
+    // not under g_mutex, so a callback cannot deadlock on the resource loader.
+    WorldRPG::Net::RemoteCalls::DeliverCompletions();
     std::lock_guard<std::mutex> lock(g_mutex);
     for (WorldRPG::Net::HttpDownloader::Completion& done : WorldRPG::Net::HttpDownloader::TakeCompletions()) {
         Entry* entry = FindByName(done.resource);

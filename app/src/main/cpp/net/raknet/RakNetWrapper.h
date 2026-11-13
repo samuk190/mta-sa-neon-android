@@ -103,6 +103,12 @@ struct NetworkStatistics {
     bool isLimitedByOutgoingBandwidthLimit;
 };
 
+// One slot of getNetworkUsageData. bits in Lua are totalBytes * 8.
+struct PacketUsage {
+    uint64_t totalBytes = 0;
+    uint32_t count = 0;
+};
+
 using PacketHandlerCallback = std::function<bool(uint8_t packetId, const uint8_t* data, size_t length, size_t bitLength)>;
 
 class BitStreamWriter {
@@ -119,12 +125,30 @@ public:
     void WriteBytes(const uint8_t* data, size_t length);
     void WriteBits(const uint8_t* data, size_t bitCount);
 
+    // Integer compression shared by NeonJoinProtocol and the Lua writer.
+    // `bytes` is the width (1-4). Partial bytes stay on the existing right-aligned path.
+    void WriteCompressed(uint32_t value, int bytes);
+    // RakNet BitStream::WriteCompressed(float): 16-bit value in [-1, 1].
+    void WriteCompressed(float value);
+    // VehicleSync unit vector: x sign, y and z zero flags, then 16-bit components.
+    void WriteNormVector(float x, float y, float z);
+    // RakNet BitStream::WriteVector (BitStream.h 1799-1811).
+    void WriteVector(float x, float y, float z);
+    // RakNet BitStream::WriteNormQuat (BitStream.h 1815-1824).
+    void WriteNormQuat(float w, float x, float y, float z);
+    // RakNet BitStream::WriteOrthMatrix (BitStream.h 1828-1862).
+    void WriteOrthMatrix(float m00, float m01, float m02,
+                         float m10, float m11, float m12,
+                         float m20, float m21, float m22);
+
     const uint8_t* GetData() const;
     size_t GetByteLength() const;
     size_t GetBitLength() const;
     void Reset();
 
 private:
+    void WriteBit(bool value);
+
     struct Impl;
     std::unique_ptr<Impl> pImpl_;
 };
@@ -143,11 +167,28 @@ public:
     bool ReadBytes(uint8_t* buffer, size_t length);
     bool ReadBits(uint8_t* buffer, size_t bitCount);
 
+    // Inverse of BitStreamWriter::WriteCompressed(uint32_t, int).
+    bool ReadCompressed(uint32_t& out, int bytes);
+    // Inverse of BitStreamWriter::WriteCompressed(float).
+    bool ReadCompressed(float& value);
+    // Inverse of BitStreamWriter::WriteNormVector.
+    bool ReadNormVector(float& x, float& y, float& z);
+    // RakNet BitStream::ReadVector (BitStream.h 1920-1953).
+    bool ReadVector(float& x, float& y, float& z);
+    // RakNet BitStream::ReadNormQuat (BitStream.h 1957-1984).
+    bool ReadNormQuat(float& w, float& x, float& y, float& z);
+    // RakNet BitStream::ReadOrthMatrix (BitStream.h 1988-2021).
+    bool ReadOrthMatrix(float& m00, float& m01, float& m02,
+                        float& m10, float& m11, float& m12,
+                        float& m20, float& m21, float& m22);
+
     size_t GetReadOffsetBits() const;
     size_t GetRemainingBits() const;
     void Reset();
 
 private:
+    bool ReadBit(bool& out);
+
     struct Impl;
     std::unique_ptr<Impl> pImpl_;
 };
@@ -187,6 +228,11 @@ public:
     std::string GetConnectedServer(bool includePort = false) const;
 
     bool GetNetworkStatistics(NetworkStatistics& stats) const;
+    // Snapshot of the 256 wire-id slots filled by SendPacket and DoPulse.
+    void CopyPacketUsage(std::array<PacketUsage, 256>& incoming,
+                         std::array<PacketUsage, 256>& outgoing) const;
+    // The wrapper that last finished StartNetwork. Send and receive keep it current.
+    static RakNetWrapper* Live();
     int GetPing() const;
     uint32_t GetTime() const;
     std::string GetLocalIP() const;
@@ -216,11 +262,17 @@ public:
     void MarkSessionAccepted();
 
 private:
+    void NoteUsage(bool incoming, uint8_t id, size_t bytes);
+
     struct Impl;
     std::unique_ptr<Impl> pImpl_;
 };
 
 // ASCII normalization utility for strings sent to the game client
 std::string NormalizeAscii(const std::string& input);
+
+// True when WriteNormVector emits the same bytes as the VehicleSync 16-bit
+// encoding. The later headless check calls this; it does not change the wire.
+bool NormVectorBytesMatchVehicleSync();
 
 } // namespace WorldRPG::Net

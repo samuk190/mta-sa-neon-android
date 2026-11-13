@@ -5,6 +5,7 @@
 #include <cstring>
 #include <memory>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -30,6 +31,23 @@ bool UdpSocket::Connect(const std::string& host, std::uint16_t port) {
     for (auto* address = addresses.get(); address; address = address->ai_next) {
         fd_ = ::socket(address->ai_family, address->ai_socktype | SOCK_CLOEXEC, address->ai_protocol);
         if (fd_ < 0) continue;
+        // connect() to 127.0.0.1 binds implicitly. On this WSL2 kernel that
+        // socket never receives the peer's reply, so OPEN_REPLY is lost and
+        // the handshake stays in Opening. Binding INADDR_ANY first keeps the
+        // same route and the reply arrives. Remote hosts skip this.
+        if (address->ai_addrlen >= sizeof(sockaddr_in)) {
+            const auto* dest = reinterpret_cast<const sockaddr_in*>(address->ai_addr);
+            if (dest->sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
+                sockaddr_in local{};
+                local.sin_family = AF_INET;
+                local.sin_addr.s_addr = htonl(INADDR_ANY);
+                local.sin_port = 0;
+                if (::bind(fd_, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != 0) {
+                    Close();
+                    continue;
+                }
+            }
+        }
         if (::connect(fd_, address->ai_addr, address->ai_addrlen) == 0) return true;
         Close();
     }

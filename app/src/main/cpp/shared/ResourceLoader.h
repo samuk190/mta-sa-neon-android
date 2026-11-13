@@ -8,8 +8,9 @@
 // A resource starts when every auto-download file is cached or downloaded and
 // all of its RESOURCE_CLIENT_SCRIPTS (packet 95) items have arrived. Resources
 // start in RESOURCE_START order and a resource still downloading blocks the
-// ones after it, as on desktop. Lua never runs here: Pump() returns jobs and the
-// caller runs them on the VM thread.
+// ones after it, as on desktop. Pump() returns resource jobs and the caller
+// runs those on the VM thread. The same Pump() delivers fetchRemote completions:
+// it is the game pulse that already drains HttpDownloader::TakeCompletions.
 
 #include <cstddef>
 #include <cstdint>

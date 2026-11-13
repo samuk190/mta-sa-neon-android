@@ -32,30 +32,10 @@ constexpr float kPi = 3.14159265f;
         }                                                                               \
     } while (0)
 
-// MTA NetBitStream::ReadNormVector encoding: x sign flag, y and z zero flags, then 16-bit
-// components for y and z (when not zero); x is rebuilt from the unit-length constraint.
-// Same encoding as ReadMtaNorm in PacketHandler.cpp, which the phone already uses for players.
+// MTA NetBitStream::ReadNormVector encoding, now BitStreamReader::ReadNormVector:
+// x sign flag, y and z zero flags, then 16-bit components. x is rebuilt from the unit length.
 bool ReadNormVector(Reader& r, Vec3& out) {
-    bool xNeg = false, yZero = false, zZero = false;
-    VS_TRY(ReadFlag(r, xNeg) && ReadFlag(r, yZero));
-    float y = 0.0f, z = 0.0f;
-    if (!yZero) {
-        uint16_t raw = 0;
-        VS_TRY(r.Read(raw));
-        y = (static_cast<float>(raw) / 32767.5f) - 1.0f;
-    }
-    VS_TRY(ReadFlag(r, zZero));
-    if (!zZero) {
-        uint16_t raw = 0;
-        VS_TRY(r.Read(raw));
-        z = (static_cast<float>(raw) / 32767.5f) - 1.0f;
-    }
-    const float rest = 1.0f - y * y - z * z;
-    float x = rest > 0.0f ? std::sqrt(rest) : 0.0f;
-    if (xNeg) x = -x;
-    out.x = x;
-    out.y = y;
-    out.z = z;
+    VS_TRY(r.ReadNormVector(out.x, out.y, out.z));
     return true;
 }
 
@@ -359,23 +339,9 @@ void WriteVec3Rotation(Writer& w, const Vec3& in) {
     WriteRotationAxis(w, in.z);
 }
 
-// Inverse of the 16-bit norm component used by ReadNormVector: (c + 1) * 32767.5 over [-1, 1].
-uint16_t QuantizeNormComponent(float c) {
-    const double scaled = std::isfinite(c) ? std::clamp(static_cast<double>(c), -1.0, 1.0) : 0.0;
-    const long raw = std::lround((scaled + 1.0) * 32767.5);
-    return static_cast<uint16_t>(std::clamp(raw, 0L, 65535L));
-}
-
-// Inverse of ReadNormVector: x sign flag, y zero flag and value, z zero flag and value.
-// x is not sent; the reader rebuilds its magnitude from the unit length.
+// Inverse of ReadNormVector. Bytes come from BitStreamWriter::WriteNormVector.
 void WriteNormVector(Writer& w, const Vec3& in) {
-    WriteFlag(w, in.x < 0.0f);
-    const bool yZero = in.y == 0.0f;
-    WriteFlag(w, yZero);
-    if (!yZero) w.Write(QuantizeNormComponent(in.y));
-    const bool zZero = in.z == 0.0f;
-    WriteFlag(w, zZero);
-    if (!zZero) w.Write(QuantizeNormComponent(in.z));
+    w.WriteNormVector(in.x, in.y, in.z);
 }
 
 // Inverse of ReadVelocity (SVelocitySync): moving flag, then module float and norm vector.

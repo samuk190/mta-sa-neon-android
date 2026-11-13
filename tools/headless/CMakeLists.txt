@@ -41,6 +41,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/LuaJsonApi.cpp"
     "${NATIVE_DIR}/net/Checksums.cpp"
     "${NATIVE_DIR}/net/HttpDownloader.cpp"
+    "${NATIVE_DIR}/net/RemoteCalls.cpp"
     "${NATIVE_DIR}/shared/VehicleSync.cpp"
     "${NATIVE_DIR}/shared/CombatSync.cpp"
     "${NATIVE_DIR}/shared/ServerWorld.cpp"

@@ -24,6 +24,8 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 - **Native Engine:** C++20 standard, ARM NEON acceleration, custom Lua 5.3 runtime, Opus audio codec, and RenderWare graphics pipeline.
 - **Networking:** MTA Neon transport protocol with native handshake, cipher, and bitstream serialization.
 
+The `fetchRemote` HTTP queue behavior and the network-stats shape were ported onto the Neon RakNet transport, using [mta-network](https://github.com/vaxeus/mta-network) by vaxeus as the reference. The phone still uses Neon RakNet; it did not vendor that project's ENet `net.dll` / `netc.dll` and did not switch to ENet.
+
 ---
 
 ## Current Status & Feature Checklist

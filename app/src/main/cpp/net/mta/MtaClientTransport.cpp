@@ -61,6 +61,10 @@ struct ClientTransport::Impl {
     std::bitset<65536> received;
     std::uint64_t began{}, lastOpen{}, lastReceive{}, lastClock{};
     int ping{};
+    std::uint64_t bytesSent{};
+    std::uint64_t bytesReceived{};
+    std::uint32_t packetsSent{};
+    std::uint32_t packetsReceived{};
 
     void Queue(Bytes bytes, std::size_t bits = 0) {
         // A sync burst can arrive faster than one packet per frame. Closing
@@ -311,7 +315,12 @@ bool ClientTransport::connect(const char* host, unsigned short port) {
 }
 bool ClientTransport::send(const unsigned char* data, int length, int priority, int reliability, int channel, std::size_t bits) {
     if (!isConnected() || !data || length <= 0 || priority < 0 || priority > 2 || reliability < 0 || reliability > 4 || channel < 0 || channel > 31) return false;
-    return pImpl_->Message({data,static_cast<std::size_t>(length)},bits ? bits : static_cast<std::size_t>(length)*8,reliability,channel);
+    const bool sent = pImpl_->Message({data,static_cast<std::size_t>(length)},bits ? bits : static_cast<std::size_t>(length)*8,reliability,channel);
+    if (sent) {
+        pImpl_->packetsSent += 1;
+        pImpl_->bytesSent += static_cast<std::uint64_t>(length);
+    }
+    return sent;
 }
 int ClientTransport::receive(unsigned char* buffer, int capacity, std::size_t* bits) {
     if (!buffer || capacity <= 0) return 0;
@@ -336,7 +345,18 @@ int ClientTransport::receive(unsigned char* buffer, int capacity, std::size_t* b
     auto event = std::move(pImpl_->events.front()); pImpl_->events.pop_front(); pImpl_->eventBytes -= std::min(pImpl_->eventBytes,event.bytes.size());
     std::copy(event.bytes.begin(),event.bytes.end(),buffer);
     if (bits) *bits = event.bits;
+    pImpl_->packetsReceived += 1;
+    pImpl_->bytesReceived += event.bytes.size();
     return event.bytes.size();
+}
+FrameCounters ClientTransport::frameCounters() const {
+    FrameCounters out;
+    out.bytesReceived = pImpl_->bytesReceived;
+    out.bytesSent = pImpl_->bytesSent;
+    out.packetsReceived = pImpl_->packetsReceived;
+    out.packetsSent = pImpl_->packetsSent;
+    out.messagesInResendBuffer = static_cast<std::uint32_t>(pImpl_->pending.size());
+    return out;
 }
 int ClientTransport::getPing() const { return pImpl_->ping; }
 bool ClientTransport::isConnected() const { return pImpl_->state == Impl::State::Connected; }

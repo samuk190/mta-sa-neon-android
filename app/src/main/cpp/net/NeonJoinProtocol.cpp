@@ -67,53 +67,14 @@ bool ReadBit(BitStreamReader& r, bool& out) {
     return true;
 }
 
-// RakNet BitStream::WriteCompressed(unsigned int) — variable-length encoding:
-// a 1-bit per all-zero high byte, then either a 1-bit + 4 low bits (when the
-// final byte's high nibble is zero) or a 0-bit + the whole final byte.
+// RakNet BitStream::WriteCompressed(unsigned int). The bytes are produced by
+// BitStreamWriter::WriteCompressed so this helper cannot drift from the class.
 [[maybe_unused]] void WriteCompressedU32(BitStreamWriter& w, uint32_t value) {
-    uint8_t bytes[4];
-    memcpy(bytes, &value, 4);
-    for (int currentByte = 3; currentByte > 0; --currentByte) {
-        if (bytes[currentByte] == 0) {
-            WriteBit(w, true);
-        } else {
-            WriteBit(w, false);
-            w.WriteBits(bytes, static_cast<size_t>(currentByte + 1) * 8);
-            return;
-        }
-    }
-    if ((bytes[0] & 0xF0) == 0) {
-        WriteBit(w, true);
-        w.WriteBits(bytes, 4);
-    } else {
-        WriteBit(w, false);
-        w.WriteBits(bytes, 8);
-    }
+    w.WriteCompressed(value, 4);
 }
 
 bool ReadCompressedU32(BitStreamReader& r, uint32_t& out) {
-    uint8_t bytes[4] = {0, 0, 0, 0};
-    for (int currentByte = 3; currentByte > 0; --currentByte) {
-        bool flag = false;
-        if (!ReadBit(r, flag)) return false;
-        if (flag) {
-            bytes[currentByte] = 0;
-        } else {
-            if (!r.ReadBits(bytes, static_cast<size_t>(currentByte + 1) * 8)) return false;
-            memcpy(&out, bytes, 4);
-            return true;
-        }
-    }
-    bool half = false;
-    if (!ReadBit(r, half)) return false;
-    if (half) {
-        if (!r.ReadBits(bytes, 4)) return false;
-        bytes[0] &= 0x0F;
-    } else {
-        if (!r.ReadBits(bytes, 8)) return false;
-    }
-    memcpy(&out, bytes, 4);
-    return true;
+    return r.ReadCompressed(out, 4);
 }
 
 // ElementID: 17 significant bits (NumberOfSignificantBits(131072-1));

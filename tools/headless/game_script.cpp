@@ -345,12 +345,19 @@ void CopyPose(float& x, float& y, float& z, float& heading) {
     BodyPose(x, y, z, heading, vx, vy, vz);
 }
 
+float CopyRadarHeading() {
+    float x = 0, y = 0, z = 0, heading = 0;
+    CopyPose(x, y, z, heading);
+    return heading;
+}
+
 void CopyBody(float& x, float& y, float& z, float& heading,
               float& vx, float& vy, float& vz, float& health) {
     Advance();
     BodyPose(x, y, z, heading, vx, vy, vz);
     health = 100.f;
 }
+float CopyLocalArmor() { return 0.f; }
 
 void NoteDamage(uint32_t, float, uint8_t) {}
 bool ConsumeDamage(uint32_t&, uint8_t&) { return false; }

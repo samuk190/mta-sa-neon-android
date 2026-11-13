@@ -5,9 +5,9 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 ## Parity Status
 
 - **Total Functions:** 195
-- **Implemented:** 16 (8.2%)
+- **Implemented:** 23 (11.8%)
 - **Stubs:** 15
-- **Missing:** 164
+- **Missing:** 157
 
 > **Technical Requirement:** Pure CPU/platform logic. Mostly ported or needs standard library wrappers (e.g. tinyxml2, sha256, zlib).
 
@@ -15,7 +15,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 
 | Lua Function | Status | Desktop Source Ref | Desktop Handler | Conversion Requirement / Implementation Notes |
 |---|---|---|---|---|
-| `abortRemoteRequest` | Missing | `CLuaNetworkDefs.cpp:29` | `AbortRemoteRequest` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
+| `abortRemoteRequest` | **Implemented** | `CLuaNetworkDefs.cpp:29` | `AbortRemoteRequest` | Operational on Android. Drops the call so a late completion skips the callback. (LuaAbortRemoteRequest) |
 | `addClothingModel` | Missing | `CLuaManager.cpp:193` | `CLuaFunctionDefs::AddClothingModel` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `addCommandHandler` | *Stub* | `CLuaManager.cpp:225` | `CLuaFunctionDefs::AddCommandHandler` | Currently stubbed: `l_true: lua_pushboolean(L, 1)`. Needs native engine wiring. |
 | `addDebugHook` | Missing | `CLuaManager.cpp:236` | `CLuaFunctionDefs::AddDebugHook` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
@@ -49,7 +49,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `downloadFile` | Missing | `CLuaManager.cpp:206` | `CLuaFunctionDefs::DownloadFile` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `encodeString` | Missing | `CLuaCryptDefs.cpp:32` | `EncodeString` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `executeCommandHandler` | *Stub* | `CLuaManager.cpp:227` | `CLuaFunctionDefs::ExecuteCommandHandler` | Currently stubbed: `DefaultValue(kFalse)`. Needs native engine wiring. |
-| `fetchRemote` | Missing | `CLuaNetworkDefs.cpp:26` | `FetchRemote` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
+| `fetchRemote` | **Implemented** | `CLuaNetworkDefs.cpp:26` | `FetchRemote` | Operational on Android. Options-table callback reports the HTTP statusCode. https fails in the callback (code 1). Completions run from ResourceLoader::Pump. (LuaFetchRemote) |
 | `fileClose` | *Stub* | `CLuaFileDefs.cpp:47` | `fileClose` | Currently stubbed: `DefaultValue(kTrue)`. Needs native engine wiring. |
 | `fileCopy` | Missing | `CLuaFileDefs.cpp:44` | `fileCopy` | Needs local sandbox file I/O operations. |
 | `fileCreate` | Missing | `CLuaFileDefs.cpp:42` | `fileCreate` | Needs local sandbox file I/O operations. |
@@ -93,13 +93,13 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `getLatentEventStatus` | Missing | `CLuaManager.cpp:173` | `CLuaFunctionDefs::GetLatentEventStatus` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getLocalization` | Missing | `CLuaManager.cpp:243` | `CLuaFunctionDefs::GetLocalization` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getNeonClientSetting` | Missing | `CLuaClientDefs.cpp:28` | `ArgumentParser<GetNeonClientSetting>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getNetworkStats` | Missing | `CLuaManager.cpp:232` | `CLuaFunctionDefs::GetNetworkStats` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getNetworkUsageData` | Missing | `CLuaManager.cpp:231` | `CLuaFunctionDefs::GetNetworkUsageData` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
+| `getNetworkStats` | **Implemented** | `CLuaManager.cpp:232` | `CLuaFunctionDefs::GetNetworkStats` | Operational on Android from RakNetWrapper. packetloss, messagesInSendBuffer, and both limit flags stay 0. encryptionStatus is 1. (l_getNetworkStats) |
+| `getNetworkUsageData` | **Implemented** | `CLuaManager.cpp:231` | `CLuaFunctionDefs::GetNetworkUsageData` | Operational on Android. Slots are the wire packet id. bits are totalBytes * 8. (l_getNetworkUsageData) |
 | `getPerformanceStats` | Missing | `CLuaManager.cpp:233` | `CLuaFunctionDefs::GetPerformanceStats` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getProcessMemoryStats` | Missing | `CLuaUtilDefs.cpp:75` | `ArgumentParser<GetProcessMemoryStats>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getRealTime` | Missing | `CLuaUtilDefs.cpp:47` | `GetCTime` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRemoteRequestInfo` | Missing | `CLuaNetworkDefs.cpp:28` | `GetRemoteRequestInfo` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRemoteRequests` | Missing | `CLuaNetworkDefs.cpp:27` | `GetRemoteRequests` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
+| `getRemoteRequestInfo` | **Implemented** | `CLuaNetworkDefs.cpp:28` | `GetRemoteRequestInfo` | Operational on Android. resource is false. (LuaGetRemoteRequestInfo) |
+| `getRemoteRequests` | **Implemented** | `CLuaNetworkDefs.cpp:27` | `GetRemoteRequests` | Operational on Android. Handles are {id, remoteRequest=true}. (LuaGetRemoteRequests) |
 | `getResourceConfig` | Missing | `CLuaResourceDefs.cpp:22` | `GetResourceConfig` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getResourceDynamicElementRoot` | Missing | `CLuaResourceDefs.cpp:27` | `GetResourceDynamicElementRoot` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getResourceExportedFunctions` | Missing | `CLuaResourceDefs.cpp:28` | `GetResourceExportedFunctions` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
@@ -109,7 +109,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `getResourceRootElement` | Missing | `CLuaResourceDefs.cpp:25` | `GetResourceRootElement` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getResourceState` | Missing | `CLuaResourceDefs.cpp:30` | `GetResourceState` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getResources` | Missing | `CLuaResourceDefs.cpp:29` | `ArgumentParser<GetResources>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getServerIp` | Missing | `CLuaNetworkDefs.cpp:30` | `ArgumentParser<GetServerIp>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
+| `getServerIp` | **Implemented** | `CLuaNetworkDefs.cpp:30` | `ArgumentParser<GetServerIp>` | Operational on Android against the live RakNetWrapper. The headless wrapper stays on the stack, so that build returns an empty string. (LuaGetServerIp) |
 | `getThisResource` | Missing | `CLuaResourceDefs.cpp:21` | `GetThisResource` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
 | `getTickCount` | **Implemented** | `CLuaUtilDefs.cpp:46` | `GetTickCount_` | Operational on Android. (l_getTickCount) |
 | `getTimerDetails` | Missing | `CLuaTimerDefs.cpp:25` | `GetTimerDetails` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |

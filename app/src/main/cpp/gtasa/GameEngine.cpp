@@ -67,10 +67,13 @@ static std::atomic<float> g_poseX{1754.f};
 static std::atomic<float> g_poseY{-1894.f};
 static std::atomic<float> g_poseZ{14.f};
 static std::atomic<float> g_poseH{0.f};
+// FindPlayerHeading, for the radar arrow only. g_poseH stays the sync sample.
+static std::atomic<float> g_radarH{0.f};
 static std::atomic<float> g_velX{0.f};
 static std::atomic<float> g_velY{0.f};
 static std::atomic<float> g_velZ{0.f};
 static std::atomic<float> g_health{100.f};
+static std::atomic<float> g_armor{0.f};
 static std::atomic<bool> g_healthOwned{false};
 static std::atomic<bool> g_damagePending{false};
 static std::atomic<uint32_t> g_damager{0xFFFFFFFFu};
@@ -150,25 +153,39 @@ static void SampleLocalPose() {
     if (!g_findPlayer) return;
     auto* ped = static_cast<unsigned char*>(g_findPlayer(0));
     if (!ped) return;
-    float x = 0, y = 0, z = 0, heading = g_poseH.load();
+    float x = 0, y = 0, z = 0, heading = g_poseH.load(), radarHeading = g_radarH.load();
     auto* matrix = *reinterpret_cast<unsigned char**>(ped + 0x18);
     const auto matrixAddr = reinterpret_cast<uintptr_t>(matrix);
     if (matrix && (matrixAddr & 3u) == 0 && matrixAddr > 0x10000u) {
         x = *reinterpret_cast<float*>(matrix + 0x30);
         y = *reinterpret_cast<float*>(matrix + 0x34);
         z = *reinterpret_cast<float*>(matrix + 0x38);
-        // `at` is the facing axis. The right vector is 90 degrees off, which
-        // made every remote ped walk sideways.
+        // Pure-sync still publishes this sample. The radar arrow does not use it:
+        // row +0x20 is up, so its X is ~0 (east/west never turns the arrow) and
+        // its Y is only pitch (north/south comes out backwards).
         heading = std::atan2(-*reinterpret_cast<float*>(matrix + 0x20),
                               *reinterpret_cast<float*>(matrix + 0x24));
+        // FindPlayerHeading (libGTASA 2.10, 0x4f0720): ldp s0,s1,[matrix,#0x10];
+        // fneg s0; atan2f. Forward row, atan2(-forward.x, forward.y). 0 is north,
+        // east is -pi/2. Position stays +0x30/+0x34 (CPed::Teleport stores X, then Y).
+        radarHeading = std::atan2(-*reinterpret_cast<float*>(matrix + 0x10),
+                                   *reinterpret_cast<float*>(matrix + 0x14));
     } else {
         x = *reinterpret_cast<float*>(ped + 0x08);
         y = *reinterpret_cast<float*>(ped + 0x0C);
         z = *reinterpret_cast<float*>(ped + 0x10);
         heading = *reinterpret_cast<float*>(ped + 0x14);
+        radarHeading = heading;
     }
     if (!PlausiblePosition(x, y, z)) return;
     auto* health = reinterpret_cast<float*>(ped + 0x6AC);
+    // CPed armour on libGTASA 2.10 arm64, not the PC field at +0x548.
+    // CWidgetPlayerInfo::RenderHealthBar (0x37d770) loads health with
+    // `ldr s0, [ped, #0x6ac]`. RenderArmorBar (0x37d93c) loads armour from
+    // that same ped pointer with `ldr s1, [ped, #0x6b4]`.
+    // CPedDamageResponseCalculator::AccountForPedArmour (0x444044) reads and
+    // writes `CPed*` (x1) at the same +0x6B4.
+    auto* armor = reinterpret_cast<float*>(ped + 0x6B4);
     auto* speed = reinterpret_cast<float*>(ped + 0x68);
     if (g_healthOwned.load()) {
         const float owned = g_health.load();
@@ -177,6 +194,7 @@ static void SampleLocalPose() {
     } else if (*health > 0.f && *health < 1000.f) {
         g_health = *health;
     }
+    if (std::isfinite(*armor) && *armor >= 0.f && *armor < 1000.f) g_armor = *armor;
     g_velX = speed[0];
     g_velY = speed[1];
     g_velZ = speed[2];
@@ -186,6 +204,7 @@ static void SampleLocalPose() {
     g_poseY = y;
     g_poseZ = z;
     g_poseH = heading;
+    g_radarH = radarHeading;
     SampleLocalTasks(ped);
     if (dx * dx + dy * dy > 9.f) {
         static int reports = 0;
@@ -723,10 +742,39 @@ static bool SampleHostedCar(void* body, HostedCar& out) {
     return true;
 }
 
+// libGTASA 2.10 arm64. CPlaceable::CPlaceable (0x4ebd58) stores _ZTV10CPlaceable+0x10
+// (Itanium: the object vptr skips the offset-to-top and typeinfo). Desktop
+// IsPlaceableVTBL compares against that pointer (CPlaceableSA.h:29, 0x863C40 on x86).
+static bool IsPlaceableVtable(void* body) {
+    static void* placeable = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        auto* symbol = handle ? static_cast<unsigned char*>(dlsym(handle, "_ZTV10CPlaceable")) : nullptr;
+        if (symbol) placeable = symbol + 16;
+    }
+    if (!placeable || !body) return false;
+    return *reinterpret_cast<void**>(body) == placeable;
+}
+
 static void DropBody(void* body, bool car, bool pooled = false) {
+    if (!body) return;
+    // Desktop CVehicleSA::~CVehicleSA (CVehicleSA.cpp:400-438) and
+    // CPlayerPedSA::~CPlayerPedSA (CPlayerPedSA.cpp:141-148) skip CWorld::Remove
+    // and the game destructor once the interface vtable is CPlaceable: the game
+    // has already destroyed it. Remove's first virtual call is vtable+0x20
+    // (CWorld::Remove at 0x5073b4). Past CPlaceable's two slots that word is
+    // MI_CRANE_HARNESS (0x8862d6), and the branch SIGBUSes.
+    // Device: 2026-11-13 18:46:58, libGTASA base 0x6cfae14000, fault
+    // 0x6cfb69a2d6 = base+0x8862d6, from DropCarLocked.
+    if (IsPlaceableVtable(body)) {
+        ENGINE_LOGI("DIAG drop skipped: body %p vtable is CPlaceable", body);
+        return;
+    }
     TaskFns& api = Tasks();
-    if (api.worldRemove && body) api.worldRemove(body);
-    if (!car || !body) return;
+    if (api.worldRemove) api.worldRemove(body);
+    if (!car) return;
     if (pooled) {
         // Pool-owned vehicle (CreateCarForScript): call the deleting destructor (Itanium ABI vtable slot 1)
         // so the pool slot is released, like the desktop's delete.
@@ -1547,6 +1595,56 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
     --depth;
 }
 
+// Desktop CMultiplayerSA.cpp:1415-1416 writes a ret at the start of
+// CEntryExitManager::Update ("they crash when you enter anyway").
+// libGTASA 2.10 arm64: CGame::Process calls Update, which calls
+// CEntryExit::TransitionFinished(FindPlayerPed). That virtual-calls
+// CPed::Teleport (vtable + 0x78) and the slot is not executable code
+// (logcat 2026-11-13 18:31:09, SIGSEGV SEGV_ACCERR, TransitionFinished+1552).
+static void DisableEntryExits() {
+    constexpr std::uint32_t kOriginalWord = 0xd10283ffu;  // sub sp, sp, #0xa0
+    constexpr std::uint32_t kReturnWord = 0xd65f03c0u;    // ret
+
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) {
+        ENGINE_LOGE("CEntryExitManager::Update: libGTASA.so not loaded");
+        return;
+    }
+    void* fn = dlsym(handle, "_ZN17CEntryExitManager6UpdateEv");
+    if (!fn) {
+        ENGINE_LOGE("CEntryExitManager::Update symbol missing");
+        return;
+    }
+
+    auto* site = static_cast<unsigned char*>(fn);
+    std::uint32_t word = 0;
+    std::memcpy(&word, site, sizeof(word));
+    if (word == kReturnWord) return;
+    if (word != kOriginalWord) {
+        ENGINE_LOGE("CEntryExitManager::Update: unexpected word 0x%08x", word);
+        return;
+    }
+
+    const long pageSizeLong = sysconf(_SC_PAGESIZE);
+    if (pageSizeLong <= 0) {
+        ENGINE_LOGE("CEntryExitManager::Update: sysconf failed");
+        return;
+    }
+    const auto pageSize = static_cast<std::uintptr_t>(pageSizeLong);
+    const auto addr = reinterpret_cast<std::uintptr_t>(site);
+    void* page = reinterpret_cast<void*>(addr & ~(pageSize - 1));
+    if (mprotect(page, pageSize, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        ENGINE_LOGE("CEntryExitManager::Update: mprotect RWX failed");
+        return;
+    }
+    std::memcpy(site, &kReturnWord, sizeof(kReturnWord));
+    if (mprotect(page, pageSize, PROT_READ | PROT_EXEC) != 0) {
+        ENGINE_LOGE("CEntryExitManager::Update: mprotect RX failed");
+    }
+    __builtin___clear_cache(reinterpret_cast<char*>(site), reinterpret_cast<char*>(site) + 4);
+    ENGINE_LOGI("Disabled CEntryExitManager::Update (desktop CMultiplayerSA.cpp:1416)");
+}
+
 bool BeginServerSession() {
     static bool leftMenu = false;
     const uintptr_t base = Hook::MemoryPatcher::getLibraryBaseAddress("libGTASA.so");
@@ -1610,6 +1708,7 @@ bool BeginServerSession() {
         } else {
             ENGINE_LOGE("CPopulation::ManagePopulation was not exported");
         }
+        DisableEntryExits();
     }
     // Idle opens MobileMenu::InitForPause when this byte is set. The story
     // script is what normally consumes it. Keep it clear until the world is up.
@@ -1664,6 +1763,7 @@ void ApplyServerSpawn(float x, float y, float z) {
     g_poseY = y;
     g_poseZ = z;
     g_health = 100.f;
+    g_armor = 0.f;
     g_healthOwned = false;
     g_damagePending = false;
     PlacePlayer();
@@ -1679,6 +1779,7 @@ void CopyPose(float& x, float& y, float& z, float& heading) {
     z = g_poseZ.load();
     heading = g_poseH.load();
 }
+float CopyRadarHeading() { return g_radarH.load(); }
 void CopyBody(float& x, float& y, float& z, float& heading,
     float& vx, float& vy, float& vz, float& health) {
     CopyPose(x, y, z, heading);
@@ -1687,6 +1788,7 @@ void CopyBody(float& x, float& y, float& z, float& heading,
     vz = g_velZ.load();
     health = g_health.load();
 }
+float CopyLocalArmor() { return g_armor.load(); }
 void NoteDamage(uint32_t attacker, float amount, uint8_t weapon) {
     if (attacker == 0 || attacker == 0xFFFFFFFFu || amount <= 0.f) return;
     const int64_t now = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1979,10 +2081,12 @@ bool BeginServerSession() { return false; }
 void ApplyServerSpawn(float, float, float) {}
 void CopySpawn(float& x, float& y, float& z) { x = y = z = 0.f; }
 void CopyPose(float& x, float& y, float& z, float& heading) { x = y = z = heading = 0.f; }
+float CopyRadarHeading() { return 0.f; }
 void CopyBody(float& x, float& y, float& z, float& heading, float& vx, float& vy, float& vz, float& health) {
     x = y = z = heading = vx = vy = vz = 0.f;
     health = 100.f;
 }
+float CopyLocalArmor() { return 0.f; }
 void NoteDamage(uint32_t, float, uint8_t) {}
 bool ConsumeDamage(uint32_t&, uint8_t&) { return false; }
 void NoteRemoteAim(uint32_t, float, float, int, int, bool, bool) {}

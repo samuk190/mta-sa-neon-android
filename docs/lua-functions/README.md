@@ -17,10 +17,10 @@ Each document lists every single function, its current Android implementation st
 | **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](AUDIO_AND_VOICE.md) | 57 | 0 | 8 | 49 | 0.0% |
 | **Camera & Viewport (CLuaCameraDefs)** | [CAMERA.md](CAMERA.md) | 47 | 1 | 5 | 41 | 2.1% |
 | **Weapons & Projectiles (CLuaWeaponDefs, CLuaProjectileDefs)** | [WEAPONS_AND_COMBAT.md](WEAPONS_AND_COMBAT.md) | 31 | 0 | 0 | 31 | 0.0% |
-| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](CORE_AND_UTILITY.md) | 195 | 16 | 15 | 164 | 8.2% |
+| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](CORE_AND_UTILITY.md) | 195 | 23 | 15 | 157 | 11.8% |
 | **Markers, Blips, ColShapes & Spatial** | [MARKERS_AND_SPATIAL.md](MARKERS_AND_SPATIAL.md) | 145 | 0 | 3 | 142 | 0.0% |
 | **Web Browser & Compatibility (CEF / Discord)** | [BROWSER_AND_COMPATIBILITY.md](BROWSER_AND_COMPATIBILITY.md) | 103 | 0 | 0 | 103 | 0.0% |
-| **TOTAL** | **All Categories** | **1581** | **60** | **196** | **1325** | **3.8%** |
+| **TOTAL** | **All Categories** | **1581** | **67** | **196** | **1318** | **4.2%** |
 
 ## Implementation Priority Tiers
 

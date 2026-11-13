@@ -9,6 +9,7 @@
 #include "../net/raknet/RakNetWrapper.h"
 #include "../net/NeonJoinProtocol.h"
 #include "../net/HttpDownloader.h"
+#include "../net/RemoteCalls.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
@@ -413,6 +414,7 @@ JNIEXPORT jstring JNICALL
 Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeMapSnapshot(JNIEnv* env, jobject) {
     float x = 0, y = 0, z = 0, heading = 0;
     WorldRPG::Game::CopyPose(x, y, z, heading);
+    heading = WorldRPG::Game::CopyRadarHeading();
     const std::string text = WorldRPG::ServerWorld::MapSnapshot(x, y, heading);
     return env->NewStringUTF(text.c_str());
 }
@@ -526,3 +528,13 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIE
 }
 
 } // extern "C"
+
+namespace WorldRPG::Net {
+// Lua runs inside nativePulse, which already holds g_stateMutex. Locking again
+// would deadlock. StartNetwork writes the host on the activity thread and takes
+// that same mutex, so it cannot run during this call.
+std::string QueryConnectedServer(bool includePort) {
+    if (!g_state || !g_state->network) return {};
+    return g_state->network->GetConnectedServer(includePort);
+}
+}  // namespace WorldRPG::Net

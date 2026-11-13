@@ -138,8 +138,13 @@ void ApplyServerSpawn(float x, float y, float z);
 void CopySpawn(float& x, float& y, float& z);
 // Live pose sampled on the game thread. Heading is radians, -pi..pi.
 void CopyPose(float& x, float& y, float& z, float& heading);
+// Local-player facing for the radar arrow and the F11 map. Radians, -pi..pi.
+// Same value FindPlayerHeading reads (forward row). Not the pure-sync heading.
+float CopyRadarHeading();
 void CopyBody(float& x, float& y, float& z, float& heading,
     float& vx, float& vy, float& vz, float& health);
+// Local ped armour sampled beside health in SampleLocalPose. 0 until that sample runs.
+float CopyLocalArmor();
 // Another player shot this ped. Health is reported in the next pure sync.
 void NoteDamage(uint32_t attacker, float amount, uint8_t weapon);
 bool ConsumeDamage(uint32_t& attacker, uint8_t& weapon);

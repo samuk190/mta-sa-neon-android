@@ -4,6 +4,7 @@
 #include "LuaJsonApi.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
+#include "../net/RemoteCalls.h"
 
 extern "C" {
 #include "lua.h"
@@ -279,6 +280,12 @@ uint32_t ElementIdOf(lua_State* L, int index) {
 
 void InstallExtraBindings(lua_State* L) {
     InstallJsonBindings(L);
+    WorldRPG::Net::RemoteCalls::BindState(L);
+    SetGlobal(L, "fetchRemote", WorldRPG::Net::RemoteCalls::LuaFetchRemote);
+    SetGlobal(L, "getRemoteRequests", WorldRPG::Net::RemoteCalls::LuaGetRemoteRequests);
+    SetGlobal(L, "getRemoteRequestInfo", WorldRPG::Net::RemoteCalls::LuaGetRemoteRequestInfo);
+    SetGlobal(L, "abortRemoteRequest", WorldRPG::Net::RemoteCalls::LuaAbortRemoteRequest);
+    SetGlobal(L, "getServerIp", WorldRPG::Net::RemoteCalls::LuaGetServerIp);
     SetGlobal(L, "outputChatBox", OutputChatBox);
     SetGlobal(L, "showChat", ShowChat);
     SetGlobal(L, "isChatVisible", IsChatVisible);
@@ -341,7 +348,7 @@ void InstallExtraBindings(lua_State* L) {
         {"setSoundPosition", kTrue}, {"setSoundDopplerEnabled", kTrue},
         {"setCameraTarget", kTrue}, {"setCameraInterior", kTrue}, {"setCameraFieldOfView", kTrue},
         {"fadeCamera", kTrue}, {"getPedCameraRotation", kZero},
-        {"dxDrawImage", kTrue}, {"dxDrawCircle", kTrue}, {"dxDrawPrimitive", kTrue},
+        {"dxDrawCircle", kTrue}, {"dxDrawPrimitive", kTrue},
         {"engineLoadIMG", kNil}, {"engineAddImage", kNil}, {"engineLoadCOL", kNil}, {"engineParseSAMPMap", kNil},
         {"engineFreeTXD", kTrue}, {"engineFreeModel", kTrue}, {"engineImageLinkTXD", kTrue},
         {"engineImageLinkDFF", kTrue}, {"engineSetModelTXDID", kTrue}, {"engineReplaceCOL", kTrue},
