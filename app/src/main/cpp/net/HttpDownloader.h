@@ -58,9 +58,30 @@ void SetServerBase(const std::string& baseUrl);
 // http://<host>:<httpPort>, type 2 means the external URL, type 0 means none.
 std::string BuildServerBase(const NeonJoinInfo& info, const std::string& host);
 
-// Queues one client file for download. Returns false when disabled, a duplicate
-// is already in flight, or the downloader is shut down.
-bool Enqueue(const std::string& resourceName, const ResourceFile& file);
+enum class EnqueueResult : uint8_t {
+    Queued,     // accepted; a Completion follows
+    Duplicate,  // the same file is already in flight; its Completion follows
+    Disabled,   // no cache root or no HTTP service yet; no Completion will come
+    Stopped,    // shut down; no Completion will come
+};
+
+// Queues one client file (or CLIENT_SCRIPT) for download.
+EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file);
+
+// One finished request, in completion order. ok is true for a verified local copy
+// (cached or downloaded); otherwise note says why the file is not available.
+struct Completion {
+    std::string resource;
+    std::string file;
+    bool ok = false;
+    std::string note;
+};
+
+// Returns and clears the completions recorded since the last call (thread-safe).
+std::vector<Completion> TakeCompletions();
+
+// Cache path of a file, or empty when no cache root is set.
+std::string CachedFilePath(const std::string& resourceName, const std::string& fileName);
 
 // Blocks until the queue is empty and no transfer runs, or the timeout expires.
 bool WaitIdle(int timeoutMs);

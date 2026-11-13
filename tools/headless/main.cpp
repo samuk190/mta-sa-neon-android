@@ -313,17 +313,31 @@ int main(int argc, char** argv) {
 
     // nativePulse loop at 10 ms cadence for the requested duration. A Failed
     // join is terminal, so the loop ends early in that case.
+    // Pulse order matches JNI nativePulse: network, join, resources, then the DX frame (~60 Hz).
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(opt.seconds);
+    auto nextFrame = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() < deadline) {
         WorldRPG::Game::BeginServerSession();
         net.DoPulse();
         join.Pulse();
+        WorldRPG::Script::ActiveVmPulseResources();
+        if (std::chrono::steady_clock::now() >= nextFrame) {
+            WorldRPG::Script::ActiveVmPump();
+            nextFrame += std::chrono::milliseconds(16);
+        }
         if (join.State() == JoinState::Failed) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // Client-file downloads run on worker threads; give the last transfers a bounded wait.
-    const bool httpIdle = WorldRPG::Net::HttpDownloader::WaitIdle(20000);
+    // Client-file downloads run on worker threads; keep pulsing (so resources still start) for a bounded wait.
+    bool httpIdle = false;
+    const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (std::chrono::steady_clock::now() < drainDeadline) {
+        httpIdle = WorldRPG::Net::HttpDownloader::WaitIdle(50);
+        WorldRPG::Script::ActiveVmPulseResources();
+        if (httpIdle) break;
+    }
+    WorldRPG::Script::ActiveVmPulseResources();
     // Shutdown drops what is still queued and lets running transfers finish; stats are read after it.
     WorldRPG::Net::HttpDownloader::Shutdown();
     const auto resourceTotals = WorldRPG::Net::GetResourceStartTotals();

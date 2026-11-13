@@ -1,4 +1,6 @@
 #include "LuaVMStub.h"
+#include "LuaApiExtra.h"
+#include "ResourceLoader.h"
 #include "ServerWorld.h"
 #include "../gtasa/GameEngine.h"
 #include "../net/NeonJoinProtocol.h"
@@ -51,8 +53,12 @@ static void fireHandlers(const char* name, int nargs) {
         lua_pop(g_dx.L, nargs);
         return;
     }
-    // Args are already on the stack. Copy them for every handler.
-    for (int ref : found->second) {
+    // Args are already on the stack. Copy them for every handler. Iterate over a copy
+    // of the list, and skip handlers removed by an earlier handler of the same event.
+    const std::vector<int> refs = found->second;
+    for (int ref : refs) {
+        const auto& live = g_dx.handlers[name];
+        if (std::find(live.begin(), live.end(), ref) == live.end()) continue;
         lua_rawgeti(g_dx.L, LUA_REGISTRYINDEX, ref);
         for (int i = 0; i < nargs; ++i) lua_pushvalue(g_dx.L, -1 - nargs);
         if (lua_pcall(g_dx.L, nargs, 0, 0) != LUA_OK) {
@@ -99,6 +105,26 @@ static int l_dxDrawText(lua_State* L) {
     return 0;
 }
 
+static int l_removeEventHandler(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    lua_pushboolean(L, 0);
+    if (!lua_isfunction(L, 3)) return 1;
+    auto found = g_dx.handlers.find(name);
+    if (found == g_dx.handlers.end()) return 1;
+    auto& refs = found->second;
+    for (auto it = refs.begin(); it != refs.end(); ++it) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, *it);
+        const bool same = lua_rawequal(L, -1, 3) != 0;
+        lua_pop(L, 1);
+        if (!same) continue;
+        luaL_unref(L, LUA_REGISTRYINDEX, *it);
+        refs.erase(it);
+        lua_pushboolean(L, 1);
+        break;
+    }
+    return 1;
+}
+
 static int l_tocolor(lua_State* L) {
     const int r = static_cast<int>(luaL_optinteger(L, 1, 255)) & 255;
     const int g = static_cast<int>(luaL_optinteger(L, 2, 255)) & 255;
@@ -132,26 +158,6 @@ static int l_setTimer(lua_State* L) {
     timer.next = DxNow() + static_cast<std::uint64_t>(interval);
     g_dx.timers.push_back(timer);
     lua_pushinteger(L, timer.ref);
-    return 1;
-}
-
-static int l_getElementData(lua_State* L) {
-    uint32_t id = WorldRPG::ServerWorld::LocalPlayer();
-    if (lua_istable(L, 1)) {
-        lua_getfield(L, 1, "id");
-        if (lua_isinteger(L, -1)) id = static_cast<uint32_t>(lua_tointeger(L, -1));
-        lua_pop(L, 1);
-    }
-    const char* key = luaL_checkstring(L, 2);
-    double number = 0;
-    std::string text;
-    bool isNumber = false;
-    if (!WorldRPG::ServerWorld::GetData(id, key, number, text, isNumber)) {
-        lua_pushnil(L);
-        return 1;
-    }
-    if (isNumber) lua_pushnumber(L, number);
-    else lua_pushlstring(L, text.data(), text.size());
     return 1;
 }
 
@@ -240,22 +246,6 @@ static int l_guiCreateWindow(lua_State* L) {
     g_dx.persistent += line;
     lua_pushinteger(L, 1);
     return 1;
-}
-
-static uint32_t ElementIdOf(lua_State* L, int index) {
-    if (!lua_istable(L, index)) return 0;
-    lua_getfield(L, index, "id");
-    const uint32_t id = lua_isinteger(L, -1) ? static_cast<uint32_t>(lua_tointeger(L, -1)) : 0;
-    lua_pop(L, 1);
-    return id;
-}
-
-static void PushElement(lua_State* L, uint32_t id) {
-    lua_newtable(L);
-    lua_pushinteger(L, static_cast<lua_Integer>(id));
-    lua_setfield(L, -2, "id");
-    lua_pushboolean(L, 1);
-    lua_setfield(L, -2, "element");
 }
 
 static bool IsElementTable(lua_State* L, int index) {
@@ -471,13 +461,13 @@ static void installDxBindings(lua_State* L) {
     g_dx.L = L;
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"addEventHandler", l_addEventHandler},
+        {"removeEventHandler", l_removeEventHandler},
         {"dxDrawRectangle", l_dxDrawRectangle},
         {"dxDrawText", l_dxDrawText},
         {"tocolor", l_tocolor},
         {"guiGetScreenSize", l_guiGetScreenSize},
         {"getTickCount", l_getTickCount},
         {"setTimer", l_setTimer},
-        {"getElementData", l_getElementData},
         {"getElementHealth", l_getElementHealth},
         {"getPedArmor", l_num0},
         {"getTime", l_getTime},
@@ -579,6 +569,7 @@ static void installDxBindings(lua_State* L) {
     lua_pushinteger(L, static_cast<lua_Integer>(WorldRPG::ServerWorld::LocalPlayer()));
     lua_setfield(L, -2, "id");
     lua_setglobal(L, "localPlayer");
+    InstallExtraBindings(L);
 }
 
 static void refreshLocalPlayer(lua_State* L) {
@@ -688,16 +679,10 @@ bool LuaVMStub::initialize() {
     pImpl_->registerStdLibs();
 
     // Register default MTA client-side function stubs
+    // Names still without an implementation. Anything else is bound in installDxBindings
+    // or LuaApiExtra.cpp, which replace these stubs.
     const char* mtaClientFunctions[] = {
-        "outputChatBox", "triggerServerEvent", "addEventHandler",
-        "removeEventHandler", "getLocalPlayer", "getElementPosition",
-        "setElementPosition", "getElementHealth", "setElementHealth",
-        "createVehicle", "destroyElement", "getPedOccupiedVehicle",
-        "setPedAnimation", "guiCreateWindow", "guiCreateButton",
-        "guiSetText", "guiGetText", "dxDrawText", "dxDrawRectangle",
-        "dxDrawImage", "getTickCount", "setTimer", "killTimer",
-        "getResourceName", "fileOpen", "fileRead", "fileClose",
-        "toJSON", "fromJSON", "iprint", "debugMessage"
+        "getResourceName", "toJSON", "fromJSON"
     };
 
     for (const char* fn : mtaClientFunctions) {
@@ -863,74 +848,80 @@ void LuaVMStub::setScreenSize(int width, int height) {
     if (height > 0) g_dx.screenH = height;
 }
 
-bool LuaVMStub::feedClientScripts(const uint8_t* body, size_t length, size_t bits) {
-    if (!pImpl_->L || !body || length < 8) return false;
-    auto runBlob = [&](const uint8_t* data, uint32_t len, int index) {
-        const uint8_t* source = data;
-        uint32_t sourceLength = len;
-        std::vector<uint8_t> inflated;
-        if (len > 8 && data[4] == 0x78) {
-            const uint32_t original = (static_cast<uint32_t>(data[0]) << 24) | (static_cast<uint32_t>(data[1]) << 16) |
-                                      (static_cast<uint32_t>(data[2]) << 8) | data[3];
-            if (original > 0 && original < 2 * 1024 * 1024) {
-                inflated.resize(original);
-                uLongf dest = original;
-                if (uncompress(inflated.data(), &dest, data + 4, len - 4) == Z_OK) {
-                    source = inflated.data();
-                    sourceLength = static_cast<uint32_t>(dest);
-                }
-            }
-        }
-        if (!looksLikeLua(source, sourceLength)) return;
-        refreshLocalPlayer(pImpl_->L);
-        char name[32];
-        std::snprintf(name, sizeof(name), "resource_%d", index);
-        const uint32_t root = WorldRPG::ServerWorld::LastResourceRoot();
-        lua_State* L = pImpl_->L;
-        if (luaL_loadbuffer(L, reinterpret_cast<const char*>(source), sourceLength, name) != LUA_OK) {
-            LUA_LOGE("Resource script %s failed: %s", name, lua_tostring(L, -1));
-            lua_pop(L, 1);
-            return;
-        }
-        lua_newtable(L);
-        lua_newtable(L);
-        lua_pushglobaltable(L);
-        lua_setfield(L, -2, "__index");
-        lua_setmetatable(L, -2);
-        PushElement(L, root);
-        lua_setfield(L, -2, "resourceRoot");
-        const char* upvalue = lua_getupvalue(L, -2, 1);
-        if (upvalue && std::strcmp(upvalue, "_ENV") == 0) {
-            lua_pop(L, 1);
-            lua_setupvalue(L, -2, 1);
-        } else {
-            if (upvalue) lua_pop(L, 1);
-            lua_pop(L, 1);
-        }
-        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-            LUA_LOGE("Resource script %s failed: %s", name, lua_tostring(L, -1));
-            lua_pop(L, 1);
-            return;
-        }
-        PushElement(L, root);
-        lua_setglobal(L, "source");
-        fireHandlers("onClientResourceStart", 0);
-    };
-    Net::BitStreamReader reader(body, length, bits);
-    uint16_t resource = 0, count = 0;
-    if (!reader.Read(resource) || !reader.Read(count) || count == 0 || count > 64) return false;
-    for (uint16_t i = 0; i < count; ++i) {
-        uint32_t len = 0;
-        if (!reader.Read(len) || len == 0 || len > reader.GetRemainingBits() / 8) return false;
-        std::vector<uint8_t> blob(len);
-        if (!reader.ReadBytes(blob.data(), len)) return false;
-        runBlob(blob.data(), len, i);
+// Runs one resource script with the resource's shared environment as _ENV.
+// Globals a file defines are visible to the other files of the same resource
+// (desktop: one Lua state per resource). Reads fall through to the VM globals.
+static bool RunResourceChunk(lua_State* L, const std::string& chunk, const uint8_t* source, size_t length, int envRef) {
+    if (luaL_loadbuffer(L, reinterpret_cast<const char*>(source), length, ("@" + chunk).c_str()) != LUA_OK) {
+        LUA_LOGE("Resource script %s failed: %s", chunk.c_str(), lua_tostring(L, -1));
+        lua_pop(L, 1);
+        return false;
     }
-    if (g_dx.chatHooked) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, envRef);
+    lua_setupvalue(L, -2, 1);
+    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+        LUA_LOGE("Resource script %s failed: %s", chunk.c_str(), lua_tostring(L, -1));
+        lua_pop(L, 1);
+        return false;
+    }
+    return true;
+}
+
+static bool ReadCachedScript(const std::string& path, std::vector<uint8_t>& out) {
+    constexpr size_t kMaxScript = 4u * 1024u * 1024u;
+    std::FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file) return false;
+    out.clear();
+    uint8_t buffer[16384];
+    size_t got = 0;
+    while (out.size() <= kMaxScript && (got = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        out.insert(out.end(), buffer, buffer + got);
+    }
+    const bool ok = std::ferror(file) == 0 && out.size() <= kMaxScript;
+    std::fclose(file);
+    return ok;
+}
+
+// Desktop CResource::Load: no-cache scripts first, then the CLIENT_SCRIPT files in
+// list order, then onClientResourceStart with the resource root as source.
+static void RunResourceJob(lua_State* L, const WorldRPG::Script::ResourceLoadJob& job) {
+    refreshLocalPlayer(L);
+    lua_newtable(L);                       // resource environment
+    lua_newtable(L);                       // its metatable: reads fall through to the VM globals
+    lua_pushglobaltable(L);
+    lua_setfield(L, -2, "__index");
+    lua_setmetatable(L, -2);
+    PushElement(L, job.rootElement);
+    lua_setfield(L, -2, "resourceRoot");
+    const int envRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    int cachedOk = 0, noCacheOk = 0, failed = 0;
+    for (const ResourceScript& script : job.noCacheScripts) {
+        if (RunResourceChunk(L, script.chunkName, script.source.data(), script.source.size(), envRef)) ++noCacheOk;
+        else ++failed;
+    }
+    for (const ResourceScript& script : job.clientScripts) {
+        std::vector<uint8_t> source;
+        if (!ReadCachedScript(script.cachePath, source) || source.empty()) {
+            LUA_LOGE("Resource script %s: cached file unreadable (%s)", script.chunkName.c_str(), script.cachePath.c_str());
+            ++failed;
+            continue;
+        }
+        if (RunResourceChunk(L, script.chunkName, source.data(), source.size(), envRef)) ++cachedOk;
+        else ++failed;
+    }
+    luaL_unref(L, LUA_REGISTRYINDEX, envRef);
+    PushElement(L, job.rootElement);
+    lua_setglobal(L, "source");
+    fireHandlers("onClientResourceStart", 0);
+    LUA_LOGI("LuaVM: resource %s started: %d cached scripts, %d no-cache scripts", job.name.c_str(), cachedOk, noCacheOk);
+    if (failed) LUA_LOGE("LuaVM: resource %s: %d script(s) failed to load", job.name.c_str(), failed);
+}
+
+static void FlushPendingChat(lua_State* L) {
+    if (!g_dx.chatHooked || g_dx.pendingChat.empty()) return;
+    auto found = g_dx.handlers.find("onClientChatMessage");
+    if (found != g_dx.handlers.end()) {
         for (const auto& chat : g_dx.pendingChat) {
-            lua_State* L = pImpl_->L;
-            auto found = g_dx.handlers.find("onClientChatMessage");
-            if (found == g_dx.handlers.end()) break;
             for (int ref : found->second) {
                 lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
                 lua_pushlstring(L, chat.text.data(), chat.text.size());
@@ -944,10 +935,8 @@ bool LuaVMStub::feedClientScripts(const uint8_t* body, size_t length, size_t bit
                 }
             }
         }
-        g_dx.pendingChat.clear();
     }
-    LUA_LOGI("LuaVM: loaded %u client script(s) from resource %u", count, resource);
-    return true;
+    g_dx.pendingChat.clear();
 }
 
 bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
@@ -1158,7 +1147,27 @@ bool ActiveVmOnServerEvent(const uint8_t* body, size_t length, size_t bits) {
 }
 
 bool ActiveVmFeedScripts(const uint8_t* body, size_t length, size_t bits) {
-    return g_active && g_active->feedClientScripts(body, length, bits);
+    return WorldRPG::Script::ResourceLoader::OnClientScripts(body, length, bits);
+}
+void ActiveVmOnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
+    WorldRPG::Script::ResourceLoader::OnResourceStart(info);
+}
+bool ActiveVmPulseResources() {
+    if (!g_active || !g_active->isReady() || !g_dx.L) return false;
+    const bool wasHooked = g_dx.chatHooked;
+    for (const auto& job : WorldRPG::Script::ResourceLoader::Pump()) RunResourceJob(g_dx.L, job);
+    FlushPendingChat(g_dx.L);
+    return !wasHooked && g_dx.chatHooked;
+}
+void ActiveVmResetSession() {
+    WorldRPG::Script::ResourceLoader::Reset();
+    if (!g_active) return;
+    // A new session starts from a clean VM: no handlers, timers or globals from the old one.
+    const int width = g_dx.screenW, height = g_dx.screenH;
+    g_active->shutdown();
+    g_active->initialize();
+    g_dx.screenW = width;
+    g_dx.screenH = height;
 }
 bool ActiveVmOnChat(const char* text, int red, int green, int blue) {
     return g_active && g_active->onChatMessage(text, red, green, blue);

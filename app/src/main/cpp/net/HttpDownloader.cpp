@@ -71,6 +71,7 @@ struct State {
     std::condition_variable wake;  // work queued or stop requested
     std::condition_variable idle;  // queue drained and no transfer running
     std::deque<Request> queue;
+    std::vector<Completion> completions;
     std::unordered_set<std::string> inFlight;
     std::vector<std::thread> workers;
     size_t active = 0;
@@ -88,6 +89,9 @@ struct State {
             std::lock_guard<std::mutex> lock(mutex);
             stopping = true;
             stats.dropped += queue.size();
+            for (const Request& req : queue) {
+                completions.push_back({req.resource, req.file, false, "dropped at shutdown"});
+            }
             queue.clear();
         }
         wake.notify_all();
@@ -559,6 +563,8 @@ void WorkerLoop() {
 
         std::lock_guard<std::mutex> lock(state.mutex);
         ApplyOutcome(state.stats, outcome, req);
+        const bool ok = outcome.kind == Outcome::Kind::Cached || outcome.kind == Outcome::Kind::Downloaded;
+        state.completions.push_back({req.resource, req.file, ok, ok ? std::string() : outcome.note});
         state.inFlight.erase(req.resource + "/" + req.file);
         --state.active;
         if (state.queue.empty() && state.active == 0) state.idle.notify_all();
@@ -589,28 +595,28 @@ std::string BuildServerBase(const NeonJoinInfo& info, const std::string& host) {
     return std::string();
 }
 
-bool Enqueue(const std::string& resourceName, const ResourceFile& file) {
+EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file) {
     State& state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
-    if (state.stopping) return false;
+    if (state.stopping) return EnqueueResult::Stopped;
     if (state.cacheRoot.empty()) {
         if (!state.rootWarned) {
             HTTP_LOGI("HTTP: cache root not set, client files are not downloaded");
             state.rootWarned = true;
         }
-        return false;
+        return EnqueueResult::Disabled;
     }
     if (state.serverBase.empty()) {
         if (!state.baseWarned) {
             HTTP_LOGI("HTTP: no HTTP download service in the join packet, client files are not downloaded");
             state.baseWarned = true;
         }
-        return false;
+        return EnqueueResult::Disabled;
     }
     const std::string key = resourceName + "/" + file.name;
     if (!state.inFlight.insert(key).second) {
         ++state.stats.skippedDuplicate;
-        return false;
+        return EnqueueResult::Duplicate;
     }
 
     Request req;
@@ -629,7 +635,22 @@ bool Enqueue(const std::string& resourceName, const ResourceFile& file) {
         for (int i = 0; i < kWorkerCount; ++i) state.workers.emplace_back(WorkerLoop);
     }
     state.wake.notify_one();
-    return true;
+    return EnqueueResult::Queued;
+}
+
+std::vector<Completion> TakeCompletions() {
+    State& state = GetState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    std::vector<Completion> out;
+    out.swap(state.completions);
+    return out;
+}
+
+std::string CachedFilePath(const std::string& resourceName, const std::string& fileName) {
+    State& state = GetState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.cacheRoot.empty()) return std::string();
+    return state.cacheRoot + "/" + resourceName + "/" + fileName;
 }
 
 bool WaitIdle(int timeoutMs) {

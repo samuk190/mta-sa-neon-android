@@ -303,6 +303,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
     if (g_sessionOpened) {
         g_state->network->StopNetwork();
         WorldRPG::Game::RequestRemoteReset();
+        WorldRPG::Script::ActiveVmResetSession();
     }
     const bool started = ipStr[0] != '\0' && !normalizedNick.empty() &&
         g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
@@ -362,6 +363,8 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
     if (g_enterServer.load()) WorldRPG::Game::BeginServerSession();
     g_state->network->DoPulse();
     g_state->join->Pulse();
+    // Client scripts of resources that became ready run here, on the VM thread.
+    if (WorldRPG::Script::ActiveVmPulseResources()) WorldRPG::JniBridge::PostGameLine(8, "");
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
     const std::string frame = WorldRPG::Script::ActiveVmPump();
     if (frame.empty()) return;

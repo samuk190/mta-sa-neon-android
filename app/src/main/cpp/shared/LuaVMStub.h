@@ -17,6 +17,10 @@
 #define LUA_LOGE(...) do { fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 #endif
 
+namespace WorldRPG::Net {
+struct ResourceStartInfo;
+}
+
 namespace WorldRPG::Script {
 
 /// Lua script execution result
@@ -71,10 +75,6 @@ public:
     /// Physical pixels the client scripts see from guiGetScreenSize.
     void setScreenSize(int width, int height);
 
-    /// Mobile RESOURCE_CLIENT_SCRIPTS body. Runs each Lua blob and keeps
-    /// dxDraw / guiCreate output for the overlay.
-    bool feedClientScripts(const uint8_t* body, size_t length, size_t bits);
-
     /// Delivers a CHAT_ECHO into onClientChatMessage when a resource
     /// registered one. Returns false when the Java chat should show it.
     bool onChatMessage(const char* text, int red, int green, int blue);
@@ -88,7 +88,15 @@ private:
     std::unique_ptr<Impl> pImpl_;
 };
 
+// RESOURCE_START (82): records the resource and queues its client files and scripts.
+void ActiveVmOnResourceStart(const WorldRPG::Net::ResourceStartInfo& info);
+// RESOURCE_CLIENT_SCRIPTS (95): holds the no-cache scripts until the resource can start.
 bool ActiveVmFeedScripts(const uint8_t* body, size_t length, size_t bits);
+// Runs resources that became ready (downloads finished, scripts received). Call on the
+// VM thread after each network pulse. Returns true when the chat hook became active.
+bool ActiveVmPulseResources();
+// New session: drops every resource and restarts the VM with a clean state.
+void ActiveVmResetSession();
 bool ActiveVmOnChat(const char* text, int red, int green, int blue);
 std::string ActiveVmPump();
 void ActiveVmSetScreen(int width, int height);

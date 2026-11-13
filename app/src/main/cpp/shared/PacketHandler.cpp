@@ -10,7 +10,6 @@
 #include "ServerWorld.h"
 #include "CombatSync.h"
 #include "ResourceFiles.h"
-#include "../net/HttpDownloader.h"
 #include "../gtasa/RemoteCombat.h"
 
 namespace PedSyncState = WorldRPG::Sync::PedSyncState;
@@ -789,14 +788,13 @@ bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
     std::string error;
     if (WorldRPG::Net::ParseResourceStart(body, length, bits, info, error)) {
         // md5 is only meaningful when the packet lists files; a zero-file packet does not show the field either way.
-        PKT_LOGI("Resource %s: %zu files (%zu client files, %zu auto-download, %llu bytes) layout=%s md5=%s", info.name.c_str(),
+        PKT_LOGI("Resource %s id=%u noCache=%u: %zu files (%zu client files, %zu auto-download, %llu bytes) layout=%s md5=%s", info.name.c_str(),
+                 static_cast<unsigned>(info.resourceId), static_cast<unsigned>(info.noClientCacheScripts),
                  info.files.size(), info.ClientFileCount(), info.AutoDownloadCount(),
                  static_cast<unsigned long long>(info.AutoDownloadBytes()),
                  info.layout == WorldRPG::Net::ResourceStartLayout::Desktop ? "desktop" : "mobile-shim",
                  info.files.empty() ? "n/a" : (info.md5Present ? "yes" : "no"));
-        for (const WorldRPG::Net::ResourceFile& file : info.files) {
-            if (file.clientFile && file.autoDownload) WorldRPG::Net::HttpDownloader::Enqueue(info.name, file);
-        }
+        WorldRPG::Script::ActiveVmOnResourceStart(info);
         return ShowResourceProgress(info.name);
     }
 
@@ -971,10 +969,8 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
             const int percent = std::min(98, 40 + static_cast<int>(bodyLength / 1024));
             std::snprintf(progress, sizeof(progress), "%d|Downloading resources", percent);
             WorldRPG::JniBridge::PostGameLine(2, progress);
-            const bool hadChat = WorldRPG::Script::ActiveVmChatHooked();
+            // Scripts run later, from ActiveVmPulseResources, once the resource is ready.
             WorldRPG::Script::ActiveVmFeedScripts(body, bodyLength, bodyBits);
-            if (!hadChat && WorldRPG::Script::ActiveVmChatHooked())
-                WorldRPG::JniBridge::PostGameLine(8, "");
             return true;
         }
         auto it = pImpl_->handlers.find(gameId);
