@@ -692,10 +692,17 @@ Transfer GetTransfer() {
         g_transferDone = 0;
         return Transfer{};
     }
+    const uint64_t total = g_transferTotal.load();
+    const uint64_t done = g_transferDone.load();
+    if (total == 0 || (done >= total && state.queue.empty())) {
+        g_transferTotal = 0;
+        g_transferDone = 0;
+        return Transfer{};
+    }
     Transfer out;
     out.active = true;
-    out.total = g_transferTotal.load();
-    out.done = std::min(g_transferDone.load(), out.total);
+    out.total = total;
+    out.done = std::min(done, out.total);
     return out;
 }
 

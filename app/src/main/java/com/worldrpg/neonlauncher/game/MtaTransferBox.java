@@ -15,16 +15,18 @@ import java.util.Locale;
 
 /**
  * The MTA transfer box (desktop Client/mods/deathmatch/logic/CTransferBox.cpp), drawn with the Default
- * skin colours (skins/Default/CGUI.png). Sizes are the desktop pixel values:
- * window height 58, progress bar from y 20 with height 27, icon 20, width = widest text + 80,
+ * skin colours (skins/Default/CGUI.png).
+ * Scaled 2.5x for mobile high-DPI displays.
+ * Window height 58 * 2.5 = 145, progress bar from y 50 with height 67.5, icon 50,
  * centred horizontally with its middle at 85% of the screen height, alpha 0.7.
  */
 public final class MtaTransferBox extends View {
-    private static final float HEIGHT = 58f;
-    private static final float ICON = 20f;
-    private static final float PROGRESS_HEIGHT = 28f;
-    private static final float Y_START = 20f;
-    private static final float SPACER = 11f;
+    private static final float SCALE = 2.5f;
+    private static final float HEIGHT = 58f * SCALE;
+    private static final float ICON = 20f * SCALE;
+    private static final float Y_START = 20f * SCALE;
+    private static final float SPACER = 11f * SCALE;
+    private static final float PADDING = 80f * SCALE;
     private static final float ALPHA = 0.7f;
     private static final int ICON_COUNT = 10;
     private static final long ICON_MILLIS = 50L;
@@ -49,18 +51,22 @@ public final class MtaTransferBox extends View {
     private int iconIndex;
     private long iconTime;
 
+    private final Runnable autoHideRunnable = () -> {
+        setVisibility(GONE);
+    };
+
     public MtaTransferBox(Context context) {
         super(context);
         setClickable(false);
         // "default-bold-small" for the title and "default-normal" for the label (Tahoma 8 pt bold / 9 pt).
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextSize(11f);
+        title.setTextSize(11f * SCALE);
         title.setColor(0xFFFFFFFF);
         info.setTypeface(Typeface.DEFAULT);
-        info.setTextSize(12f);
+        info.setTextSize(12f * SCALE);
         info.setColor(0xFF000000);
         String sample = PREFIX + " " + "999.99 kB of 999.99 kB";
-        boxWidth = Math.max(title.measureText(sample), info.measureText(INFO)) + 80f;
+        boxWidth = Math.max(title.measureText(sample), info.measureText(INFO)) + PADDING;
         for (int i = 0; i < ICON_COUNT; ++i) {
             try (InputStream in = context.getAssets().open("cgui/transferset/" + (i + 1) + ".png")) {
                 icons[i] = BitmapFactory.decodeStream(in);
@@ -73,6 +79,7 @@ public final class MtaTransferBox extends View {
 
     /** Desktop SetDownloadProgress. A total of 0 hides the box (desktop Hide). */
     public void setProgress(long downloaded, long totalBytes) {
+        removeCallbacks(autoHideRunnable);
         if (totalBytes <= 0) {
             setVisibility(GONE);
             return;
@@ -81,6 +88,11 @@ public final class MtaTransferBox extends View {
         total = totalBytes;
         setVisibility(VISIBLE);
         invalidate();
+
+        if (done >= total && total > 0) {
+            // When download reaches 100%, hide the transfer box after a brief pause (desktop Hide)
+            postDelayed(autoHideRunnable, 800L);
+        }
     }
 
     /** Desktop GetDataUnit (Shared/mods/deathmatch/logic/Utils.cpp). */
@@ -110,9 +122,9 @@ public final class MtaTransferBox extends View {
         canvas.drawRect(left, top, left + boxWidth, top + HEIGHT, fill);
         fill.setColor(COLOR_HIGHLIGHT);
         fill.setAlpha(alpha);
-        canvas.drawRect(left, top, left + boxWidth, top + 1f, fill);
+        canvas.drawRect(left, top, left + boxWidth, top + (1.5f * SCALE), fill);
         fill.setStyle(Paint.Style.STROKE);
-        fill.setStrokeWidth(1f);
+        fill.setStrokeWidth(1.5f * SCALE);
         fill.setColor(COLOR_BORDER);
         fill.setAlpha(alpha);
         canvas.drawRect(left, top, left + boxWidth, top + HEIGHT, fill);
@@ -135,7 +147,8 @@ public final class MtaTransferBox extends View {
 
         // Icon and label, centred together inside the bar.
         float infoWidth = info.measureText(INFO);
-        float start = left + (boxWidth - infoWidth - ICON - 4f) * 0.5f;
+        float iconTextGap = 6f * SCALE;
+        float start = left + (boxWidth - infoWidth - ICON - iconTextGap) * 0.5f;
         long now = android.os.SystemClock.uptimeMillis();
         if (now - iconTime >= ICON_MILLIS) {
             iconTime = now;
@@ -143,14 +156,14 @@ public final class MtaTransferBox extends View {
         }
         Bitmap icon = icons[iconIndex];
         if (icon != null) {
-            float iconTop = barTop + PROGRESS_HEIGHT * 0.5f - ICON * 0.5f;
+            float iconTop = barTop + (barHeight - ICON) * 0.5f;
             rect.set(start, iconTop, start + ICON, iconTop + ICON);
             fill.setAlpha(alpha);
             canvas.drawBitmap(icon, null, rect, fill);
         }
         info.setAlpha(alpha);
-        float infoY = barTop + (PROGRESS_HEIGHT - (info.descent() + info.ascent())) * 0.5f;
-        canvas.drawText(INFO, start + ICON + 4f, infoY, info);
+        float infoY = barTop + (barHeight - (info.descent() + info.ascent())) * 0.5f;
+        canvas.drawText(INFO, start + ICON + iconTextGap, infoY, info);
 
         // Keep the icon moving while the box is up (desktop DoPulse, every 50 ms).
         postInvalidateDelayed(ICON_MILLIS);

@@ -59,6 +59,9 @@ public final class EngineHostActivity extends GTASA {
     private int connectPort = 0;
     private String connectNick = "";
     private boolean joinedOnce = false;
+    // A Retry attempt is in flight. nativeConnect only schedules the join, so a failure can still arrive later
+    // through onNativeConnectionStateChange; the dialog has to come back then. UI thread only.
+    private boolean retryPending = false;
     private DisconnectDialog disconnectDialog;
     private volatile boolean netRunning;
     private Thread netThread;
@@ -307,6 +310,7 @@ public final class EngineHostActivity extends GTASA {
         runOnUiThread(() -> {
             if (connected) {
                 joinedOnce = true;
+                retryPending = false;
                 // The "Connecting to server" panel ends with the join, as the desktop connect dialog does.
                 hideDownload();
                 appendChat("#ACD5FEConnected to the server.");
@@ -314,9 +318,11 @@ public final class EngineHostActivity extends GTASA {
                 hideDownload();
                 String text = message == null || message.isEmpty() ? "Disconnected." : message;
                 appendChat("#FF6666" + text);
-                // Only a drop after a join offers Retry / Quit (P3.1).
-                if (joinedOnce) {
+                // A drop after a join offers Retry / Quit (P3.1), and so does a retried join that fails later
+                // (timeout, refused, transport failure): without it the player is left in a dead session.
+                if (joinedOnce || retryPending) {
                     joinedOnce = false;
+                    retryPending = false;
                     showDisconnectDialog(text);
                 }
             }
@@ -329,8 +335,12 @@ public final class EngineHostActivity extends GTASA {
             @Override public void onRetry() {
                 disconnectDialog = null;
                 if (!nativeConnect(connectIp, connectPort, connectNick)) {
+                    retryPending = false;
                     appendChat("#FF6666Falha ao reconectar.");
                     showDisconnectDialog("Falha ao reconectar.");
+                } else {
+                    // The attempt was only scheduled; its result arrives in onNativeConnectionStateChange.
+                    retryPending = true;
                 }
             }
             @Override public void onQuit() {
@@ -576,6 +586,7 @@ public final class EngineHostActivity extends GTASA {
 
     @Override
     public void onDestroy() {
+        if (transferBox != null) transferBox.setProgress(0, 0);
         netRunning = false;
         if (netThread != null) netThread.interrupt();
         try {

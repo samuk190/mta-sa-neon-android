@@ -12,6 +12,7 @@
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
+#include "../gtasa/RemoteVehicle.h"
 #include "../gtasa/RenderWareHooks.h"
 #include "../gtasa/InputHooks.h"
 #include "../gtasa/HUDRenderer.h"
@@ -51,9 +52,9 @@ void PostGameLine(int kind, const char* text) {
     std::string safe;
     safe.reserve(std::strlen(text));
     for (const unsigned char ch : std::string(text)) {
-        if (ch >= 0x20 && ch <= 0x7E) safe.push_back(static_cast<char>(ch));
+        if (ch >= 0x20) safe.push_back(static_cast<char>(ch));
     }
-    if (safe.empty()) return;
+    if (text[0] != '\0' && safe.empty()) return;
     text = safe.c_str();
     JNIEnv* env = nullptr;
     bool attached = false;
@@ -305,6 +306,11 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
     env->ReleaseStringUTFChars(nickname, nickStr);
     if (g_sessionOpened) {
         g_state->network->StopNetwork();
+        // The element table goes first: ApplyRemotePeds copies its peds and cars back into the remote records
+        // every tick, so a table that outlives the session would recreate the old world after the reset.
+        // No packet runs here: packets are handled in nativePulse, which takes g_stateMutex like this call.
+        WorldRPG::ServerWorld::ResetSession();
+        WorldRPG::RemoteVehicle::ResetSession();
         WorldRPG::Game::RequestRemoteReset();
         WorldRPG::Script::ActiveVmResetSession();
     }
@@ -385,7 +391,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
         } else if (shown) {
             shown = false;
             lastDone = lastTotal = ~0ull;
-            WorldRPG::JniBridge::PostGameLine(3, "");
+            WorldRPG::JniBridge::PostGameLine(3, "0|0");
         }
     }
     // Client scripts of resources that became ready run here, on the VM thread.
