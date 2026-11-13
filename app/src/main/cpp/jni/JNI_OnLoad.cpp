@@ -8,6 +8,7 @@
 
 #include "../net/raknet/RakNetWrapper.h"
 #include "../net/NeonJoinProtocol.h"
+#include "../net/HttpDownloader.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RenderWareHooks.h"
@@ -19,6 +20,9 @@
 #include "../shared/LuaVMStub.h"
 #include "../shared/ServerWorld.h"
 #include "../shared/AssetManager.h"
+
+// Host the player connected to; the HTTP file service lives on the same host.
+static std::string g_serverHost;
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -212,6 +216,11 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
         using WorldRPG::Net::JoinState;
         if (state == JoinState::Complete) {
             PostConnectionState(true, "Neon join complete");
+            // Desktop Packet_ServerJoined: client files come from the server's HTTP service.
+            if (g_state && g_state->join) {
+                WorldRPG::Net::HttpDownloader::SetServerBase(
+                    WorldRPG::Net::HttpDownloader::BuildServerBase(g_state->join->Info(), g_serverHost));
+            }
         } else if (state == JoinState::Failed) {
             PostConnectionState(false, detail);
         }
@@ -282,6 +291,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
 
     const char* ipStr = env->GetStringUTFChars(ip, nullptr);
     if (!ipStr) return JNI_FALSE;
+    g_serverHost = ipStr;
     const char* nickStr = env->GetStringUTFChars(nickname, nullptr);
     if (!nickStr) {
         env->ReleaseStringUTFChars(ip, ipStr);
@@ -410,6 +420,17 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetAssetPath(
     struct stat metadata{};
     g_state->assetsReady = path[0] != '\0' && stat(path, &metadata) == 0 &&
         S_ISDIR(metadata.st_mode) && g_state->assetManager->initialize(path);
+    if (g_state->assetsReady) {
+        // Resource client files are cached next to the game data, in the app's private files dir:
+        // <...>/files/game_assets/... -> <...>/files/mta_resource_cache.
+        std::string root(path);
+        const auto filesPos = root.find("/files/");
+        root = filesPos != std::string::npos ? root.substr(0, filesPos + 6) : root;
+        root += "/mta_resource_cache";
+        mkdir(root.c_str(), 0700);
+        WorldRPG::Net::HttpDownloader::SetResourceCacheRoot(root);
+        JNI_LOGI("Resource cache: %s", root.c_str());
+    }
     env->ReleaseStringUTFChars(assetPath, path);
     if (!g_state->assetsReady) JNI_LOGE("nativeSetAssetPath: installed directory is unavailable");
     return g_state->assetsReady ? JNI_TRUE : JNI_FALSE;

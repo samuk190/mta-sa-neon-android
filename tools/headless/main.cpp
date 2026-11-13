@@ -18,10 +18,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <thread>
 
+#include "net/HttpDownloader.h"
 #include "net/NeonJoinProtocol.h"
 #include "net/raknet/RakNetWrapper.h"
 #include "gtasa/GameEngine.h"
@@ -30,6 +32,7 @@
 #include "shared/ElementManager.h"
 #include "shared/LuaVMStub.h"
 #include "shared/PacketHandler.h"
+#include "shared/ResourceFiles.h"
 #include "shared/ServerWorld.h"
 #include "shared/SyncManager.h"
 #include "shared/VehicleSync.h"
@@ -82,6 +85,24 @@ struct Options {
     int seconds = 60;
     WorldRPG::Headless::Mode mode = WorldRPG::Headless::Mode::Observer;
 };
+
+// First three RESOURCE_START (82) bodies: full hex to resource_start_dumps.txt, one line to stdout.
+void DumpResourceStart(const uint8_t* body, size_t length, size_t bits) {
+    static int dumped = 0;
+    if (dumped >= 3) return;
+    ++dumped;
+    std::FILE* f = std::fopen("resource_start_dumps.txt", dumped == 1 ? "w" : "a");
+    if (f) {
+        std::fprintf(f, "RESOURCE_START #%d bytes=%zu bits=%zu\n", dumped, length, bits);
+        for (size_t i = 0; i < length; ++i) {
+            std::fprintf(f, "%02x", body[i]);
+            if (i % 32 == 31) std::fputc('\n', f);
+        }
+        std::fputc('\n', f);
+        std::fclose(f);
+    }
+    std::printf("RESOURCE_START dump #%d: bytes=%zu bits=%zu (hex in resource_start_dumps.txt)\n", dumped, length, bits);
+}
 
 Options ParseArgs(int argc, char** argv) {
     Options o;
@@ -208,6 +229,10 @@ int main(int argc, char** argv) {
     WorldRPG::Headless::SetMode(opt.mode);
     const bool driver = opt.mode == WorldRPG::Headless::Mode::Driver;
 
+    const std::string cacheRoot = (std::filesystem::current_path() / "resource_cache").string();
+    WorldRPG::Net::HttpDownloader::SetResourceCacheRoot(cacheRoot);
+    std::printf("resource cache: %s\n", cacheRoot.c_str());
+
     std::printf("neon_headless: %s:%u nick=%s seconds=%d mode=%s\n", opt.host.c_str(), opt.port,
                 opt.nickname.c_str(), opt.seconds, driver ? "driver" : "observer");
 
@@ -235,6 +260,10 @@ int main(int argc, char** argv) {
             std::printf("[%7.3fs] JOIN local_player=%u root=%u\n", WorldRPG::Headless::ElapsedSeconds(),
                         info.localPlayerId, info.rootElementId);
             WorldRPG::Headless::MarkJoined();
+            const std::string httpBase = WorldRPG::Net::HttpDownloader::BuildServerBase(info, opt.host);
+            WorldRPG::Net::HttpDownloader::SetServerBase(httpBase);
+            std::printf("[%7.3fs] HTTP download service: %s (type=%u)\n", WorldRPG::Headless::ElapsedSeconds(),
+                        httpBase.empty() ? "none" : httpBase.c_str(), static_cast<unsigned>(info.httpDownloadType));
         }
     });
 
@@ -267,6 +296,7 @@ int main(int argc, char** argv) {
                         GameIdName(gameId), length - 1);
         }
         const size_t bodyBits = bitLength >= 8 ? bitLength - 8 : 0;
+        if (gameId == 82) DumpResourceStart(data + 1, length - 1, bodyBits);
         LogReceived(gameId, data + 1, length - 1, bodyBits, join.Info().localPlayerId);
         if (join.ProcessGamePacket(gameId, data + 1, length - 1, bodyBits)) return true;
         if (join.State() != JoinState::Complete) return false;
@@ -291,6 +321,13 @@ int main(int argc, char** argv) {
         if (join.State() == JoinState::Failed) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+
+    // Client-file downloads run on worker threads; give the last transfers a bounded wait.
+    const bool httpIdle = WorldRPG::Net::HttpDownloader::WaitIdle(20000);
+    // Shutdown drops what is still queued and lets running transfers finish; stats are read after it.
+    WorldRPG::Net::HttpDownloader::Shutdown();
+    const auto resourceTotals = WorldRPG::Net::GetResourceStartTotals();
+    const auto httpStats = WorldRPG::Net::HttpDownloader::GetStats();
 
     const JoinState finalState = join.State();
     const NeonJoinInfo& info = join.Info();
@@ -322,6 +359,28 @@ int main(int argc, char** argv) {
     }
     std::printf(" undecodable=%llu\n", static_cast<unsigned long long>(g_relay.bulletsUndecodable));
     WorldRPG::Headless::PrintSentSummary();
+    std::printf("resource start: packets=%llu parsed=%llu failed=%llu layout desktop=%llu mobile-shim=%llu\n",
+                static_cast<unsigned long long>(resourceTotals.packets), static_cast<unsigned long long>(resourceTotals.parsed),
+                static_cast<unsigned long long>(resourceTotals.failed), static_cast<unsigned long long>(resourceTotals.desktopLayout),
+                static_cast<unsigned long long>(resourceTotals.mobileShimLayout));
+    std::printf("resource files: listed=%llu client=%llu auto-download=%llu\n",
+                static_cast<unsigned long long>(resourceTotals.filesListed),
+                static_cast<unsigned long long>(resourceTotals.clientFilesListed),
+                static_cast<unsigned long long>(resourceTotals.autoDownloadFiles));
+    std::printf("http downloads: queued=%llu cached=%llu downloaded=%llu (md5-verified=%llu crc-only=%llu) mismatch=%llu failed=%llu "
+                "bytes=%llu skipped-dup=%llu dropped=%llu idle=%s\n",
+                static_cast<unsigned long long>(httpStats.queued), static_cast<unsigned long long>(httpStats.cached),
+                static_cast<unsigned long long>(httpStats.downloaded), static_cast<unsigned long long>(httpStats.md5Verified),
+                static_cast<unsigned long long>(httpStats.crcVerified), static_cast<unsigned long long>(httpStats.mismatches),
+                static_cast<unsigned long long>(httpStats.failed), static_cast<unsigned long long>(httpStats.bytes),
+                static_cast<unsigned long long>(httpStats.skippedDuplicate), static_cast<unsigned long long>(httpStats.dropped),
+                httpIdle ? "yes" : "no");
+    for (const auto& sample : httpStats.samples) {
+        std::printf("  sample %s size=%llu crc=%08x md5=%s packet[md5=%s crc=%08x]\n", sample.path.c_str(),
+                    static_cast<unsigned long long>(sample.size), sample.crc, sample.md5Hex.c_str(),
+                    sample.packetHadMd5 ? sample.packetMd5Hex.c_str() : "absent", sample.packetCrc);
+    }
+    for (const auto& failure : httpStats.failures) std::printf("  failure: %s\n", failure.c_str());
     std::printf("packets received:\n");
     for (const auto& [key, t] : tally) {
         if (key >= 0x100) {

@@ -872,6 +872,10 @@ struct NeonJoinClient::Impl {
         ok = ok && r.Read(info.httpMaxConnections);
         uint8_t httpType = 0;
         ok = ok && r.Read(httpType);
+        // Only 0 (off), 1 (port) and 2 (URL) exist (CPlayerJoinCompletePacket). On the 152-bit mobile
+        // profile this desktop read runs past the missing fakelag bit and can still succeed with a
+        // garbage type (observed live: http=3 port=0). Treat it as a failed parse so the mobile path runs.
+        ok = ok && httpType <= 2;
 
         if (ok && (httpType == 1 /*PORT*/ || httpType == 2 /*URL*/)) {
             ok = r.Read(info.httpPort);

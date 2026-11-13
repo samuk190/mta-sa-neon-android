@@ -33,6 +33,9 @@ set(NATIVE_SOURCES
 
     # Packet dispatch and game-state subsystems the join path references.
     "${NATIVE_DIR}/shared/PacketHandler.cpp"
+    "${NATIVE_DIR}/shared/ResourceFiles.cpp"
+    "${NATIVE_DIR}/net/Checksums.cpp"
+    "${NATIVE_DIR}/net/HttpDownloader.cpp"
     "${NATIVE_DIR}/shared/VehicleSync.cpp"
     "${NATIVE_DIR}/shared/CombatSync.cpp"
     "${NATIVE_DIR}/shared/ServerWorld.cpp"

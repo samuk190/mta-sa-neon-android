@@ -9,6 +9,8 @@
 #include "VehicleSync.h"
 #include "ServerWorld.h"
 #include "CombatSync.h"
+#include "ResourceFiles.h"
+#include "../net/HttpDownloader.h"
 #include "../gtasa/RemoteCombat.h"
 
 namespace PedSyncState = WorldRPG::Sync::PedSyncState;
@@ -767,15 +769,8 @@ bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits
     return true;
 }
 
-bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
-    WorldRPG::Net::BitStreamReader reader(body, length, bits);
-    uint8_t nameLength = 0;
-    if (!reader.Read(nameLength) || nameLength == 0 || nameLength > 64) return false;
-    std::vector<uint8_t> raw(nameLength);
-    if (!reader.ReadBits(raw.data(), nameLength * 8)) return false;
-    std::string name(raw.begin(), raw.end());
-    name = WorldRPG::Net::NormalizeAscii(name);
-    if (name.empty()) return false;
+// Loading-screen line for one resource start. Shared by the full descriptor path and the name-only fallback.
+bool ShowResourceProgress(const std::string& name) {
     static int resourceCount = 0;
     ++resourceCount;
     const int percent = resourceCount > 24 ? 95 : resourceCount * 4;
@@ -784,6 +779,38 @@ bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
     PKT_LOGI("Recurso %s", name.c_str());
     WorldRPG::JniBridge::PostGameLine(2, progress);
     return true;
+}
+
+// RESOURCE_START (82): parse the full descriptor (ResourceFiles.cpp, desktop
+// Packet_ResourceStart layout or the mobile-shim layout) and queue the client
+// files with auto-download for the HTTP cache (HttpDownloader.cpp).
+bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
+    WorldRPG::Net::ResourceStartInfo info;
+    std::string error;
+    if (WorldRPG::Net::ParseResourceStart(body, length, bits, info, error)) {
+        // md5 is only meaningful when the packet lists files; a zero-file packet does not show the field either way.
+        PKT_LOGI("Resource %s: %zu files (%zu client files, %zu auto-download, %llu bytes) layout=%s md5=%s", info.name.c_str(),
+                 info.files.size(), info.ClientFileCount(), info.AutoDownloadCount(),
+                 static_cast<unsigned long long>(info.AutoDownloadBytes()),
+                 info.layout == WorldRPG::Net::ResourceStartLayout::Desktop ? "desktop" : "mobile-shim",
+                 info.files.empty() ? "n/a" : (info.md5Present ? "yes" : "no"));
+        for (const WorldRPG::Net::ResourceFile& file : info.files) {
+            if (file.clientFile && file.autoDownload) WorldRPG::Net::HttpDownloader::Enqueue(info.name, file);
+        }
+        return ShowResourceProgress(info.name);
+    }
+
+    PKT_LOGI("RESOURCE_START descriptor not parsed: %s", error.c_str());
+    // Name-only fallback, the behaviour before the descriptor parser existed.
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    uint8_t nameLength = 0;
+    if (!reader.Read(nameLength) || nameLength == 0 || nameLength > 64) return false;
+    std::vector<uint8_t> raw(nameLength);
+    if (!reader.ReadBits(raw.data(), nameLength * 8)) return false;
+    std::string name(raw.begin(), raw.end());
+    name = WorldRPG::Net::NormalizeAscii(name);
+    if (name.empty()) return false;
+    return ShowResourceProgress(name);
 }
 } // namespace
 
