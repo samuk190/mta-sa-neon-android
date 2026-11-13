@@ -1,5 +1,6 @@
 #include "GameEngine.h"
 #include "PlayerPedPort.h"
+#include "RenderGuard.h"
 #include "GTASAOffsets.h"
 #include "../shared/ServerWorld.h"
 #include "../shared/entity/PedSyncState.h"
@@ -1417,6 +1418,8 @@ bool BeginServerSession() {
         ENGINE_LOGI("Blocked CRunningScript::Process; main.scm will not run");
         if (!InstallRemoteControlHook())
             ENGINE_LOGE("Remote players keep the velocity fallback (no controller hook)");
+        if (!InstallRenderGuard())
+            ENGINE_LOGE("RenderGuard not installed; the sortLODs crash is unguarded");
         if (!InstallLocalBulletFireHook())
             ENGINE_LOGE("Local bullet sync (PLAYER_BULLETSYNC) disabled: CWeapon::Fire hook missing");
         ENGINE_LOGI("Ped symbols add=%p ctor=%p heading=%p density=%p manage=%p",
