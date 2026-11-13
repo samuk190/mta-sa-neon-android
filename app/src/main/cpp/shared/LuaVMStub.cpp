@@ -1,3 +1,4 @@
+#include "DebugFlags.h"
 #include "LuaVMStub.h"
 #include "LuaApiExtra.h"
 #include "LuaGuiApi.h"
@@ -79,7 +80,9 @@ static void fireHandlers(const char* name, int nargs) {
     for (int ref : refs) {
         const auto& live = g_dx.handlers[name];
         if (std::find(live.begin(), live.end(), ref) == live.end()) continue;
-        OwnerScope scope(OwnerOfHandler(ref));
+        const std::string owner = OwnerOfHandler(ref);
+        if (std::strcmp(name, "onClientRender") == 0 && WorldRPG::Debug::Flag(("nodx:" + owner + ";").c_str())) continue;
+        OwnerScope scope(owner);
         lua_rawgeti(g_dx.L, LUA_REGISTRYINDEX, ref);
         for (int i = 0; i < nargs; ++i) lua_pushvalue(g_dx.L, -1 - nargs);
         if (lua_pcall(g_dx.L, nargs, 0, 0) != LUA_OK) {
@@ -353,6 +356,7 @@ static int l_triggerServerEvent(lua_State* L) {
     size_t nameLength = 0;
     const char* name = luaL_checklstring(L, 1, &nameLength);
     if (!name || nameLength == 0 || nameLength > 256) return 0;
+    if (WorldRPG::Debug::Flag("notrigger")) return 0;
     Net::BitStreamWriter packet;
     packet.Write(static_cast<uint8_t>(81));
     WriteCompressed(packet, static_cast<uint32_t>(nameLength), 2);
@@ -914,6 +918,7 @@ static void SendResourceStarted(const WorldRPG::Script::ResourceLoadJob& job) {
 // Desktop CResource::Load: no-cache scripts first, then the CLIENT_SCRIPT files in
 // list order, then onClientResourceStart with the resource root as source.
 static void RunResourceJob(lua_State* L, const WorldRPG::Script::ResourceLoadJob& job) {
+    if (WorldRPG::Debug::Flag("nolua")) return;
     OwnerScope owner(job.name);
     refreshLocalPlayer(L);
     lua_newtable(L);                       // resource environment
@@ -1016,7 +1021,7 @@ std::string LuaVMStub::pumpDx() {
     g_dx.timers.erase(std::remove_if(g_dx.timers.begin(), g_dx.timers.end(),
         [](const DxRuntime::Timer& timer) { return timer.times == 0; }), g_dx.timers.end());
     g_dx.frame.clear();
-    fireHandlers("onClientRender", 0);
+    if (!WorldRPG::Debug::Flag("nodx")) fireHandlers("onClientRender", 0);
     GuiAppendDraws(g_dx.frame);
     std::string out = g_dx.frame;
     if (out.size() > 24000) out.resize(24000);
@@ -1271,6 +1276,7 @@ void ActiveVmOnResourceStop(const uint8_t* body, size_t length, size_t bits) {
 }
 
 bool ActiveVmFeedScripts(const uint8_t* body, size_t length, size_t bits) {
+    if (WorldRPG::Debug::Flag("noresources")) return true;
     return WorldRPG::Script::ResourceLoader::OnClientScripts(body, length, bits);
 }
 void ActiveVmOnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {

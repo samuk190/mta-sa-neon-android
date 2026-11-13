@@ -359,9 +359,27 @@ public final class EngineHostActivity extends GTASA {
 
     @SuppressWarnings("unused")
     public void onNativeDxFrame(String commands) {
+        final String flags = debugFlags();
+        if (flags.contains("nooverlay")) return;
+        final String shown = flags.contains("overlayempty") ? "X" : commands;
         runOnUiThread(() -> {
-            if (dxOverlay != null) dxOverlay.setFrame(commands);
+            if (dxOverlay != null) dxOverlay.setFrame(shown);
         });
+    }
+
+    private String debugFlagsCache;
+
+    /** Same file as the native WorldRPG::Debug::Flag switches (files/neon_debug_flags). */
+    private String debugFlags() {
+        if (debugFlagsCache != null) return debugFlagsCache;
+        String value = "";
+        try {
+            java.io.File file = new java.io.File(getFilesDir(), "neon_debug_flags");
+            if (file.isFile()) value = new String(java.nio.file.Files.readAllBytes(file.toPath()));
+        } catch (Exception ignored) {
+        }
+        debugFlagsCache = value;
+        return value;
     }
 
     /** Back opens this panel. It does not open the GTA story pause menu. */

@@ -1,3 +1,4 @@
+#include "../shared/DebugFlags.h"
 #include "GameEngine.h"
 #include "PlayerPedPort.h"
 #include "RenderGuard.h"
@@ -941,6 +942,7 @@ static void WatchLocalVehicle() {
 
 static void ApplyRemotePeds() {
     NoteGameFrame();
+    if (WorldRPG::Debug::Flag("noremote")) return;
     if (g_remoteResetPending.exchange(false)) {
         // Leave every seat while the car bodies still exist, then drop the requests.
         std::vector<uint32_t> seated;

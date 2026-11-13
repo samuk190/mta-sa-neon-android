@@ -1,3 +1,4 @@
+#include "DebugFlags.h"
 #include "ResourceLoader.h"
 
 #include "LuaVMStub.h"
@@ -105,6 +106,7 @@ void Reset() {
 }
 
 void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
+    if (WorldRPG::Debug::Flag("noresources")) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     Entry entry;
     entry.name = info.name;
