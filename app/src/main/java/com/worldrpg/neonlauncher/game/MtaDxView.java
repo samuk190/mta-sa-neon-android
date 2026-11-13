@@ -52,7 +52,9 @@ public final class MtaDxView extends View {
         float x = f(p[0]), y = f(p[1]), right = f(p[2]), bottom = f(p[3]);
         float scale = f(p[4]);
         text.setColor((int) l(p[5]));
-        text.setTextSize(Math.max(12f, 14f * scale * getResources().getDisplayMetrics().density));
+        // The draw line is in the pixels that guiGetScreenSize reports (no density factor).
+        // Desktop draws the default font at 15 px times the scale (CGraphics fontInfos).
+        text.setTextSize(15f * scale);
         CharSequence shown = "1".equals(p[6]) ? MtaChatView.colorize(p[7]) : p[7];
         int width = Math.max(1, (int) (right - x));
         StaticLayout layout = StaticLayout.Builder.obtain(shown, 0, shown.length(), text, width)

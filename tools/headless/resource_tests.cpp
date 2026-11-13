@@ -4,6 +4,8 @@
 //   - fromJSON / toJSON against the desktop rules; with a path argument, the real catalog.json.
 //   - RESOURCE_STOP: onClientResourceStop runs for its own resource, its handlers and timers
 //     are dropped, and another resource keeps running.
+//   - GUI elements (desktop CLuaGUIDefs): a hidden window and its children are not drawn,
+//     relative placement, alpha inheritance, destroyElement, and the DX font scale.
 // Usage: neon_resource_tests [path/to/catalog.json]
 
 #include "LuaVMStub.h"
@@ -171,6 +173,79 @@ void CheckJson(WorldRPG::Script::LuaVMStub& vm, const char* catalogPath) {
     }
 }
 
+bool Has(const std::string& text, const char* needle) {
+    return text.find(needle) != std::string::npos;
+}
+
+// Screen is the default 1920x1080 (no surface size is set in the host build).
+void CheckGui(WorldRPG::Script::LuaVMStub& vm) {
+    RunLua(vm, "gui-create", R"LUA(
+        win = guiCreateWindow(10, 20, 300, 200, "Hello Window", false)
+        lab = guiCreateLabel(5, 40, 100, 20, "Child label", false, win)
+        btn = guiCreateButton(0.5, 0.5, 0.25, 0.1, "OK", true)
+        assert(getElementType(win) == "gui-window" and getElementType(lab) == "gui-label", 'types')
+        assert(getElementType(btn) == "gui-button", 'button type')
+        assert(isElement(win) and isElement(lab) and isElement(btn), 'gui elements are elements')
+        assert(guiGetVisible(win) == true and guiGetVisible(lab) == true, 'visible on create')
+        assert(guiGetText(win) == "Hello Window" and guiGetText(lab) == "Child label", 'text')
+        assert(guiGetEnabled(btn) == true and guiGetAlpha(win) == 1, 'enabled and opaque on create')
+        local x, y = guiGetPosition(btn, true)
+        assert(x == 0.5 and y == 0.5, 'relative position kept')
+        local px, py = guiGetPosition(btn, false)
+        assert(px == 960 and py == 540, 'absolute position of relative element: ' .. px .. ' ' .. py)
+        local w, h = guiGetSize(btn, false)
+        assert(w == 480 and h == 108, 'absolute size of relative element')
+        assert(showCursor(true) == true and isCursorShowing() == true, 'cursor flag')
+    )LUA");
+
+    std::string frame = WorldRPG::Script::ActiveVmPump();
+    CHECK(Has(frame, "R 10.0 20.0 300.0 200.0 "));
+    CHECK(Has(frame, "Hello Window"));
+    CHECK(Has(frame, "T 15.0 60.0 115.0 80.0 1.00 4294967295 0 Child label"));
+    CHECK(Has(frame, "R 960.0 540.0 480.0 108.0 "));
+
+    // A window hidden by the script is no longer drawn, and neither is its child.
+    RunLua(vm, "gui-hide", "guiSetVisible(win, false)\nassert(guiGetVisible(win) == false)");
+    frame = WorldRPG::Script::ActiveVmPump();
+    CHECK(!Has(frame, "Hello Window"));
+    CHECK(!Has(frame, "Child label"));
+    CHECK(Has(frame, "R 960.0 540.0 480.0 108.0 "));  // the button is a separate element
+
+    // Shown again: the window and its child come back, with the window alpha inherited.
+    RunLua(vm, "gui-show", "guiSetVisible(win, true)\nguiSetAlpha(win, 0.5)");
+    frame = WorldRPG::Script::ActiveVmPump();
+    CHECK(Has(frame, "Hello Window"));
+    CHECK(Has(frame, "Child label"));
+    CHECK(Has(frame, "2147483647 0 Child label"));  // white text at alpha 0.5 (127 of 255)
+    RunLua(vm, "gui-alpha-reset", "guiSetAlpha(win, 1)");
+
+    // Font scale: desktop pricedown is 30 px, so the draw line carries scale 2.
+    RunLua(vm, "dx-font", R"LUA(
+        assert(dxGetFontHeight(1, "default") == 15 and dxGetFontHeight(1, "pricedown") == 30)
+        assert(dxGetFontHeight(2) == 30, 'default height at scale 2')
+        -- dx calls are only valid in onClientRender: draw once from a render handler.
+        local function once()
+            dxDrawText("BIG", 0, 0, 10, 10, tocolor(255, 255, 255, 255), 1, "pricedown")
+            dxDrawText("SMALL", 0, 0, 10, 10, tocolor(255, 255, 255, 255), 1, "default")
+            removeEventHandler("onClientRender", root, once)
+        end
+        addEventHandler("onClientRender", root, once)
+    )LUA");
+    frame = WorldRPG::Script::ActiveVmPump();
+    CHECK(Has(frame, "T 0.0 0.0 10.0 10.0 2.00 "));
+    CHECK(Has(frame, "T 0.0 0.0 10.0 10.0 1.00 "));
+
+    // destroyElement removes the element and its children; the element is no longer an element.
+    RunLua(vm, "gui-destroy", "destroyElement(win)\nassert(not isElement(win) and not isElement(lab), 'children destroyed')");
+    frame = WorldRPG::Script::ActiveVmPump();
+    CHECK(!Has(frame, "Hello Window"));
+    CHECK(!Has(frame, "Child label"));
+    CHECK(Has(frame, "R 960.0 540.0 480.0 108.0 "));
+    RunLua(vm, "gui-cleanup", "destroyElement(btn)\nassert(not isElement(btn), 'button destroyed')");
+    frame = WorldRPG::Script::ActiveVmPump();
+    CHECK(!Has(frame, "R 960.0 540.0"));
+}
+
 void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     // Resource "demo" (net id 5, root 0x1234) and "other" (net id 6, root 0x2222). Both start
     // from one no-cache script each (packet 95).
@@ -197,6 +272,7 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
         addEventHandler("onClientRender", root, function() _G.demoRenders = (_G.demoRenders or 0) + 1 end)
         addEventHandler("onClientResourceStop", root, function(res) _G.demoStopped = res end)
         setTimer(function() _G.demoTicks = (_G.demoTicks or 0) + 1 end, 1, 0)
+        _G.demoWin = guiCreateWindow(0, 0, 50, 50, "demo window", false)
     )LUA";
     const std::string otherScript = R"LUA(
         addEventHandler("onClientRender", root, function() _G.otherRenders = (_G.otherRenders or 0) + 1 end)
@@ -224,6 +300,7 @@ void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     WorldRPG::Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
     RunLua(vm, "stop-event",
            "assert(_G.demoStopped ~= nil and _G.demoStopped.id == 0x1234, 'onClientResourceStop got the root')");
+    RunLua(vm, "stop-gui", "assert(not isElement(_G.demoWin), 'stopped resource GUI elements are destroyed')");
 
     // The stopped resource's handlers and timers are gone; the other resource still runs.
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -262,6 +339,7 @@ int main(int argc, char** argv) {
     WorldRPG::ServerWorld::SetLocalPlayer(777);
 
     CheckJson(vm, argc > 1 ? argv[1] : nullptr);
+    CheckGui(vm);
     CheckStopLifecycle(vm);
 
     if (argc > 1) {

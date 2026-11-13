@@ -1,5 +1,6 @@
 #include "LuaVMStub.h"
 #include "LuaApiExtra.h"
+#include "LuaGuiApi.h"
 #include "ResourceLoader.h"
 #include "ResourcePackets.h"
 #include "ServerWorld.h"
@@ -38,7 +39,6 @@ struct DxRuntime {
     std::vector<Timer> timers;
     struct PendingChat { std::string text; int r = 255, g = 255, b = 255; };
     std::vector<PendingChat> pendingChat;
-    std::string persistent;
     std::string frame;
     std::string owner;  // resource whose code is running; tags the handlers and timers it registers
 };
@@ -114,11 +114,13 @@ static int l_dxDrawText(lua_State* L) {
     const char* text = luaL_optstring(L, 1, "");
     std::string safe(text ? text : "");
     for (char& ch : safe) if (ch == '\n' || ch == '\r') ch = ' ';
+    // The renderer draws scale * 15 px, so a font taller than the default is scaled here.
+    const char* font = lua_type(L, 8) == LUA_TSTRING ? lua_tostring(L, 8) : "default";
     char head[128];
     std::snprintf(head, sizeof(head), "T %.1f %.1f %.1f %.1f %.2f %u %d ",
         luaL_optnumber(L, 2, 0), luaL_optnumber(L, 3, 0),
         luaL_optnumber(L, 4, 0), luaL_optnumber(L, 5, 0),
-        luaL_optnumber(L, 7, 1),
+        luaL_optnumber(L, 7, 1) * DxFontScale(font),
         static_cast<unsigned>(luaL_optinteger(L, 6, 0xFFFFFFFF)),
         lua_toboolean(L, 14));
     g_dx.frame += head;
@@ -254,25 +256,6 @@ static int l_debug(lua_State* L) {
     return 0;
 }
 
-static int l_guiCreateWindow(lua_State* L) {
-    double x = luaL_optnumber(L, 1, 0);
-    double y = luaL_optnumber(L, 2, 0);
-    double w = luaL_optnumber(L, 3, 200);
-    double h = luaL_optnumber(L, 4, 120);
-    const char* title = luaL_optstring(L, 5, "");
-    if (lua_toboolean(L, 6)) {
-        x *= g_dx.screenW; y *= g_dx.screenH; w *= g_dx.screenW; h *= g_dx.screenH;
-    }
-    char line[256];
-    std::snprintf(line, sizeof(line), "R %.1f %.1f %.1f %.1f %u\n", x, y, w, h, 0xE0101820u);
-    g_dx.persistent += line;
-    std::snprintf(line, sizeof(line), "T %.1f %.1f %.1f %.1f %.2f %u %d %s\n",
-        x + 8, y + 4, x + w - 8, y + 28, 1.0, 0xFFFFFFFFu, 0, title ? title : "");
-    g_dx.persistent += line;
-    lua_pushinteger(L, 1);
-    return 1;
-}
-
 static bool IsElementTable(lua_State* L, int index) {
     if (!lua_istable(L, index)) return false;
     lua_getfield(L, index, "element");
@@ -396,6 +379,7 @@ static int l_isElement(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     float x = 0, y = 0, z = 0;
     const bool known = id != 0 && (id == ServerWorld::LocalPlayer() || id == ServerWorld::LastResourceRoot() ||
+                                    GuiIsElement(id) ||
                                     ServerWorld::ElementPose(id, x, y, z) || Game::CopyRemotePose(id, x, y, z));
     lua_pushboolean(L, known ? 1 : 0);
     return 1;
@@ -409,6 +393,10 @@ static int l_isElementSyncer(lua_State* L) {
 
 static int l_getElementType(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
+    if (const char* guiType = GuiElementType(id)) {
+        lua_pushstring(L, guiType);
+        return 1;
+    }
     lua_pushstring(L, id == 0 ? "userdata" : ServerWorld::ElementKindName(id));
     return 1;
 }
@@ -582,7 +570,6 @@ static void installDxBindings(lua_State* L) {
         {"setPlayerHudComponentVisible", l_true},
         {"outputDebugString", l_debug},
         {"addCommandHandler", l_true},
-        {"guiCreateWindow", l_guiCreateWindow},
     };
     for (const auto& bind : binds) {
         lua_pushcfunction(L, bind.fn);
@@ -863,6 +850,7 @@ void LuaVMStub::reset() {
 
     // Re-register MTA functions
     pImpl_->registerAllFunctions();
+    GuiReset();
 
     pImpl_->loadedScripts.clear();
     LUA_LOGI("LuaVM: reset complete");
@@ -1029,7 +1017,8 @@ std::string LuaVMStub::pumpDx() {
         [](const DxRuntime::Timer& timer) { return timer.times == 0; }), g_dx.timers.end());
     g_dx.frame.clear();
     fireHandlers("onClientRender", 0);
-    std::string out = g_dx.persistent + g_dx.frame;
+    GuiAppendDraws(g_dx.frame);
+    std::string out = g_dx.frame;
     if (out.size() > 24000) out.resize(24000);
     std::string clean;
     clean.reserve(out.size());
@@ -1043,6 +1032,7 @@ void LuaVMStub::shutdown() {
     if (!pImpl_->initialized) return;
     if (g_active == this) g_active = nullptr;
     g_dx = DxRuntime{};
+    GuiReset();
 
     if (pImpl_->L) {
         lua_close(pImpl_->L);
@@ -1215,6 +1205,7 @@ bool ActiveVmOnServerEvent(const uint8_t* body, size_t length, size_t bits) {
 // Removes the handlers and timers that a resource registered, and the resource's
 // Lua state with them (its environment is only referenced by those closures).
 static void DropResourceState(lua_State* L, const std::string& name) {
+    GuiDropResource(name);
     for (auto& [event, refs] : g_dx.handlers) {
         refs.erase(std::remove_if(refs.begin(), refs.end(), [&](int ref) {
             if (OwnerOfHandler(ref) != name) return false;
@@ -1307,6 +1298,13 @@ bool ActiveVmOnChat(const char* text, int red, int green, int blue) {
 }
 std::string ActiveVmPump() {
     return g_active ? g_active->pumpDx() : std::string();
+}
+void ActiveVmScreenSize(int& width, int& height) {
+    width = g_dx.screenW;
+    height = g_dx.screenH;
+}
+const std::string& ActiveVmOwner() {
+    return g_dx.owner;
 }
 void ActiveVmSetScreen(int width, int height) {
     if (g_active) g_active->setScreenSize(width, height);

@@ -37,6 +37,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/ResourceLoader.cpp"
     "${NATIVE_DIR}/shared/ResourcePackets.cpp"
     "${NATIVE_DIR}/shared/LuaApiExtra.cpp"
+    "${NATIVE_DIR}/shared/LuaGuiApi.cpp"
     "${NATIVE_DIR}/shared/LuaJsonApi.cpp"
     "${NATIVE_DIR}/net/Checksums.cpp"
     "${NATIVE_DIR}/net/HttpDownloader.cpp"

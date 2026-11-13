@@ -316,21 +316,21 @@ def port_lua_bindings(shared_dir, helpers, fn_bodies):
     Returns {name: {"kind": ..., "fn": ..., "where": "file:line"}}.
     """
     eff = OrderedDict()
-    binds_src = defaults_src = None
+    binds_srcs = []
+    defaults_src = None
     files = {}
     for path in walk(shared_dir, {".cpp"}):
         files[path] = Src(path)
 
     for path, src in files.items():
-        m = re.search(r"\bbinds\[\]\s*=\s*\{", src.masked)
-        if m:
-            binds_src = (path, src, src.masked.find("{", m.start()))
+        # Several files may own a binds[] table (LuaVMStub.cpp, LuaGuiApi.cpp).
+        for m in re.finditer(r"\bbinds\[\]\s*=\s*\{", src.masked):
+            binds_srcs.append((path, src, src.masked.find("{", m.start())))
         m = re.search(r"\bdefaults\[\]\s*=\s*\{", src.masked)
         if m:
             defaults_src = (path, src, src.masked.find("{", m.start()))
 
-    if binds_src:
-        path, src, open_idx = binds_src
+    for path, src, open_idx in binds_srcs:
         for e in re.finditer(r'\{\s*"(\w+)"\s*,\s*(\w+)\s*\}', src.clean, re.S):
             if open_idx < e.start() < src.block_end(open_idx):
                 eff[e.group(1)] = {"kind": "bind", "fn": e.group(2),

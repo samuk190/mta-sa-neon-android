@@ -1,5 +1,6 @@
 #include "LuaApiExtra.h"
 
+#include "LuaGuiApi.h"
 #include "LuaJsonApi.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
@@ -194,8 +195,7 @@ int GetCameraMatrix(lua_State* L) {
     return 8;
 }
 
-// dxGetTextWidth(text, scale, font) and dxGetFontHeight(scale, font): rough metrics
-// until the phone's font metrics are wired (P4).
+// dxGetTextWidth(text, scale, font): rough width until the phone's font metrics are wired (P4).
 int DxGetTextWidth(lua_State* L) {
     size_t length = 0;
     luaL_optlstring(L, 1, "", &length);
@@ -203,8 +203,10 @@ int DxGetTextWidth(lua_State* L) {
     return 1;
 }
 
+// dxGetFontHeight(scale, font): desktop line height, the font's D3DX height times scale (15 px default).
 int DxGetFontHeight(lua_State* L) {
-    lua_pushnumber(L, 14.0 * luaL_optnumber(L, 1, 1.0));
+    const char* font = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "default";
+    lua_pushnumber(L, 15.0 * luaL_optnumber(L, 1, 1.0) * DxFontScale(font));
     return 1;
 }
 
@@ -265,6 +267,7 @@ void InstallExtraBindings(lua_State* L) {
     SetGlobal(L, "getCameraMatrix", GetCameraMatrix);
     SetGlobal(L, "dxGetTextWidth", DxGetTextWidth);
     SetGlobal(L, "dxGetFontHeight", DxGetFontHeight);
+    InstallGuiBindings(L);
     SetGlobal(L, "fileOpen", FileOpen);
     SetGlobal(L, "getAmbientPedPopulationProfile", GetAmbientPedPopulationProfile);
     SetGlobal(L, "createVehicle", FalseResult);
@@ -275,7 +278,6 @@ void InstallExtraBindings(lua_State* L) {
     SetGlobal(L, "createPed", FalseResult);
     SetGlobal(L, "setElementPosition", TrueResult);
     SetGlobal(L, "setElementHealth", TrueResult);
-    SetGlobal(L, "destroyElement", TrueResult);
     SetGlobal(L, "setPedAnimation", TrueResult);
 
     // Defaults for natives with no engine hook yet. Same values as the existing
@@ -307,7 +309,7 @@ void InstallExtraBindings(lua_State* L) {
         {"restorePedNativeVehicleResponse", kTrue}, {"releasePedNativePointArm", kTrue},
         {"acquirePedNativePointArm", kFalse}, {"isLineOfSightClear", kFalse}, {"getWaterLevel", kNil},
         {"getScreenFromWorldPosition", kNil}, {"isControlEnabled", kTrue}, {"toggleControl", kTrue},
-        {"isConsoleActive", kFalse}, {"isMainMenuActive", kFalse}, {"showCursor", kTrue}, {"showChat", kTrue},
+        {"isConsoleActive", kFalse}, {"isMainMenuActive", kFalse}, {"showChat", kTrue},
         {"executeCommandHandler", kFalse}, {"attachElements", kTrue}, {"detachElements", kTrue},
         {"setObjectMaterial", kTrue},
         {"playSoundFrontEnd", kFalse}, {"playSound3D", kFalse}, {"playSound", kFalse}, {"stopSound", kTrue},
@@ -315,7 +317,6 @@ void InstallExtraBindings(lua_State* L) {
         {"setSoundPosition", kTrue}, {"setSoundDopplerEnabled", kTrue},
         {"setCameraTarget", kTrue}, {"setCameraInterior", kTrue}, {"setCameraFieldOfView", kTrue},
         {"fadeCamera", kTrue}, {"getPedCameraRotation", kZero},
-        {"guiSetText", kTrue}, {"guiGetText", kEmptyString}, {"guiCreateButton", kZero},
         {"dxDrawImage", kTrue}, {"dxDrawCircle", kTrue}, {"dxDrawPrimitive", kTrue},
         {"engineLoadIMG", kNil}, {"engineAddImage", kNil}, {"engineLoadCOL", kNil}, {"engineParseSAMPMap", kNil},
         {"engineFreeTXD", kTrue}, {"engineFreeModel", kTrue}, {"engineImageLinkTXD", kTrue},
