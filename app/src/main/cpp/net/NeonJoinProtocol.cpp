@@ -1060,6 +1060,31 @@ bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action) 
     return true;
 }
 
+// VEHICLE_NOTIFY_JACK_ABORT (client action 7). The port can't play the jack, so it answers REQUEST_JACK_CONFIRMED
+// with the abort, as desktop CClientPed::UpdateVehicleInOut does when a jack is cancelled (CClientPed.cpp ~10418):
+// door (3 bits), SDoorOpenRatioSync closed (uncompressed=0, notZero=0), started-jacking bit = 0. Server reader:
+// CVehicleInOutPacket::Read. Without it the server keeps the ped in the jacking action and refuses every later
+// entry with FAIL_ACTION (reason 7), seen in the live headless test.
+bool SendVehicleJackAbort(uint32_t pedId, uint32_t vehicleId, uint8_t door) {
+    if (!g_joinedNet || !g_joinedNet->IsConnected() || pedId == 0xFFFFFFFFu) return false;
+    BitStreamWriter w;
+    w.Write(static_cast<uint8_t>(58));  // PACKET_ID_VEHICLE_INOUT
+    WriteFieldLsb(w, pedId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
+    WriteFieldLsb(w, vehicleId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
+    WriteFieldLsb(w, 7u, 4);              // VEHICLE_NOTIFY_JACK_ABORT
+    WriteFieldLsb(w, door & 0x7u, 3);
+    WriteFieldLsb(w, 0u, 1);              // SDoorOpenRatioSync: not uncompressed
+    WriteFieldLsb(w, 0u, 1);              //   ratio 0 (closed)
+    WriteFieldLsb(w, 0u, 1);              // bAlreadyStartedJacking
+    const bool sent = g_joinedNet->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                                              PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
+    g_inOutPending = VehicleInOutPending::None;
+    g_confirmedVehicle = 0xFFFFFFFFu;
+    JOIN_LOGI("VehInOut: sent notify_jack_abort ped=%u veh=%u door=%u ok=%d", pedId, vehicleId,
+              static_cast<unsigned>(door), sent ? 1 : 0);
+    return sent;
+}
+
 // VEHICLE_ATTEMPT_FAILED (action 9) and NOTIFY_*_RETURN for the local ped end the outstanding request.
 // NOTIFY_IN_RETURN also arrives for the local ped after our NOTIFY_IN, so this must not touch g_confirmedVehicle.
 void ClearVehicleInOutPending() {

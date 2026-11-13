@@ -29,6 +29,7 @@ namespace WorldRPG::Net {
 bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action);
 void ClearVehicleInOutPending();
 void ClearVehicleInOutConfirmed();
+bool SendVehicleJackAbort(uint32_t pedId, uint32_t vehicleId, uint8_t door);
 }
 
 namespace {
@@ -713,10 +714,11 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
             WorldRPG::Net::ClearVehicleInOutConfirmed();
             WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 4);
             break;
-        case 7:  // REQUEST_JACK_CONFIRMED: jacking is not ported (no animation, no NOTIFY_JACK). Treat as not seated.
+        case 7:  // REQUEST_JACK_CONFIRMED: jacking is not ported (no animation), so abort it like desktop does
             WorldRPG::Net::ClearVehicleInOutPending();
             WorldRPG::Net::ClearVehicleInOutConfirmed();
-            PKT_LOGI("VehInOut: jack not ported; local ped veh=%u not treated as seated, no packet 33", vehicleId);
+            WorldRPG::Net::SendVehicleJackAbort(pedId, vehicleId, door);
+            PKT_LOGI("VehInOut: jack not ported; sent notify_jack_abort for veh=%u, no packet 33", vehicleId);
             break;
         case 9:  // ATTEMPT_FAILED: the server refused the request, so the ped is not seated
             WorldRPG::Net::ClearVehicleInOutConfirmed();
