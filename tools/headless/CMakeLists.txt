@@ -220,12 +220,13 @@ add_executable(neon_resource_tests "${HEADLESS_DIR}/resource_tests.cpp" $<TARGET
 add_executable(neon_dx_conversion_tests "${HEADLESS_DIR}/dx_conversion_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_ped_query_tests "${HEADLESS_DIR}/ped_query_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_spatial_tests "${HEADLESS_DIR}/spatial_tests.cpp" $<TARGET_OBJECTS:neon_core>)
+add_executable(neon_vehicle_sync_tests "${HEADLESS_DIR}/vehicle_sync_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_join_codec_tests "${HEADLESS_DIR}/../../tests/test_join_codec.cpp"
     $<FILTER:$<TARGET_OBJECTS:neon_core>,EXCLUDE,NeonJoinProtocol[.]cpp[.]o$>)
 target_link_options(neon_dx_conversion_tests PRIVATE
     "-Wl,--wrap=eglCreatePbufferSurface" "-Wl,--wrap=eglMakeCurrent")
 
-foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tests neon_ped_query_tests neon_spatial_tests neon_join_codec_tests)
+foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tests neon_ped_query_tests neon_spatial_tests neon_vehicle_sync_tests neon_join_codec_tests)
     target_include_directories(${headless_target} PRIVATE ${HEADLESS_INCLUDE_DIRS})
     target_link_options(${headless_target} PRIVATE
         "-Wl,--wrap=_ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE")
@@ -243,12 +244,27 @@ foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tes
 endforeach()
 
 # Codec compatibility checks use the production wrapper and vendored Speex.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(HOST_OPUS REQUIRED IMPORTED_TARGET opus)
+# Opus is the one host dependency that is not vendored for the phone build path,
+# so a clean Linux checkout without libopus-dev used to fail at configure time.
+# Prefer the system package (same ABI the release tests target); fall back to the
+# vendored 1.4 tree the Android build already compiles.
+find_package(PkgConfig QUIET)
+set(NEON_HOST_OPUS_TARGET "")
+if(PkgConfig_FOUND)
+    pkg_check_modules(HOST_OPUS QUIET IMPORTED_TARGET opus)
+    if(HOST_OPUS_FOUND)
+        set(NEON_HOST_OPUS_TARGET PkgConfig::HOST_OPUS)
+    endif()
+endif()
+if(NOT NEON_HOST_OPUS_TARGET)
+    message(STATUS "Host libopus not found; using the vendored Opus 1.4 tree")
+    add_subdirectory("${NATIVE_DIR}/opus" "${CMAKE_CURRENT_BINARY_DIR}/opus")
+    set(NEON_HOST_OPUS_TARGET opus)
+endif()
 add_subdirectory("${NATIVE_DIR}/speex" "${CMAKE_CURRENT_BINARY_DIR}/speex")
 add_executable(neon_voice_tests voice_tests.cpp "${NATIVE_DIR}/shared/VoiceCodecStub.cpp")
 target_include_directories(neon_voice_tests PRIVATE "${NATIVE_DIR}/shared")
-target_link_libraries(neon_voice_tests PRIVATE neon_speex PkgConfig::HOST_OPUS)
+target_link_libraries(neon_voice_tests PRIVATE neon_speex ${NEON_HOST_OPUS_TARGET})
 add_executable(neon_projectile_tests projectile_tests.cpp
     "${NATIVE_DIR}/gtasa/GameTasks.cpp" "${NATIVE_DIR}/gtasa/ProjectileEngine.cpp")
 target_include_directories(neon_projectile_tests PRIVATE "${NATIVE_DIR}")

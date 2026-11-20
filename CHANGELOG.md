@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Standard joins use `0x41E7`. The entity reader consumes three or four water vertices and both water flags, following Neon’s `CPacketHandler::Packet_EntityAdd` and `CEntityAddPacket::Write`. Truncated water packets fail decoding.
 - The launcher can answer a trusted issuer’s Android Keystore challenge during join. Chat text and HTTP resource downloads use the companion fixes from Neon PR #135.
 
+### Fixed — Unoccupied vehicle pose now reaches the body (2026-11-20)
+
+- `UNOCCUPIED_VEHICLE_SYNC` (56) only logged its decoded state: `RemoteVehicle::SetTargetPosition` / `SetTargetRotation` stored the pose in a private table that `ApplyRemoteCars` never reads, so an empty car the server moved stayed still. Both setters now publish through `Game::NoteRemoteVehicle` (`PublishPose`), the queue `ENTITY_ADD`, `VEHICLE_STARTSYNC` and packet 33 already use, and the game thread interpolates the body as before. Rotation-only entries keep the stored/`ENTITY_ADD` position instead of sending the car to the origin. Desktop reference: `CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleSync` (`CUnoccupiedVehicleSync.cpp` 178-208) calling `CClientVehicle::SetTargetPosition` / `SetTargetRotation`. Host test: `tools/headless/vehicle_sync_tests.cpp` (fails without the publish). Move speed, turn speed, health, engine and derailed state still log only. Not yet run on a device.
+- Host tests now configure on a clean Linux checkout without `libopus-dev`: `tools/headless/CMakeLists.txt` falls back to the vendored Opus 1.4 tree when the system package is absent, and `tests/run_host_tests.sh` builds and runs the new `neon_vehicle_sync_tests` target.
+
 ### Added — Ko-fi Support Link & Badge (2026-11-19)
 
 - Documentation (`README.md`): Added official Ko-fi support badge and contribution link (`https://ko-fi.com/samuk190`) to the header and Community & Support section so contributors and community members can support ongoing development work.

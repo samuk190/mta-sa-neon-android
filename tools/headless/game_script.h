@@ -21,4 +21,8 @@ void NoteServerVehicleInOut(uint32_t vehicle, uint8_t action);
 // Seconds since process start; the timestamp used by every headless log line.
 double ElapsedSeconds();
 
+// Test hook: the pose Game::NoteRemoteVehicle last recorded for a vehicle id, i.e. what the
+// game thread would feed ApplyRemoteCars. False when the id was never named.
+bool CopySeenVehicle(uint32_t id, int& model, float& x, float& y, float& z, float& heading);
+
 } // namespace WorldRPG::Headless

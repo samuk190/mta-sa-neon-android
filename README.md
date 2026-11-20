@@ -196,7 +196,7 @@ To set up and host your own compatible game server, clone and build the San Andr
 ### 3. Step C — Occupied and unoccupied vehicle sync
 - [~] **Vehicle `ENTITY_ADD` parse** (type 2) is implemented in S3; no vehicle element has reached the phone on device yet, so this is unverified.
 - [~] **Occupied vehicle sync** `PLAYER_VEHICLE_PURESYNC` (33): decoders match `CNetAPI.cpp:1306-1610`; occupancy is not bound, so packets are ignored (`SetOccupant` has no caller). Engine apply is log-only.
-- [~] **Unoccupied vehicle sync** `UNOCCUPIED_VEHICLE_SYNC` (56): decoder matches `CUnoccupiedVehicleSync.cpp:178-208`; engine apply is log-only (no `VehicleHandle` for remote cars).
+- [~] **Unoccupied vehicle sync** `UNOCCUPIED_VEHICLE_SYNC` (56): decoder matches `CUnoccupiedVehicleSync.cpp:178-208`. Position and rotation now reach the remote car body through `Game::NoteRemoteVehicle` (`ApplyRemoteCars` interpolates); host-tested, not verified on a device. Speed, health, engine and derailed state are still log-only.
 - [ ] **Driver drives the vehicle**: target position, rotation, velocity and turn speed through `CClientVehicle::SetTargetPosition` (interpolated).
 - [ ] **Passenger state**: controller, weapon aim and health from packet 33.
 - [ ] **Hosted empty cars** publish deltas in outgoing packet 56 (not started on the phone).
