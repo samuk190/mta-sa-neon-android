@@ -6,12 +6,15 @@ import android.util.Log
 import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.utils.GameAssetManifest.Entry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONException
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -26,6 +29,8 @@ import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Installs and verifies GTA data from a local folder or configured CDN before making it available to the engine. */
 class NativeAssetBridge(private val context: Context) {
@@ -37,7 +42,7 @@ class NativeAssetBridge(private val context: Context) {
     sealed interface DownloadState {
         data object FetchingManifest : DownloadState
         data class Verifying(val current: Int, val total: Int) : DownloadState
-        data class Downloading(val fileName: String, val percent: Int) : DownloadState
+        data class Syncing(val current: Int, val total: Int, val percent: Int) : DownloadState
         data class Complete(val fileCount: Int) : DownloadState
         data class Error(val message: String) : DownloadState
     }
@@ -86,35 +91,35 @@ class NativeAssetBridge(private val context: Context) {
         }
     }
 
-    fun syncAssets(): Flow<DownloadState> = flow {
+    fun syncAssets(): Flow<DownloadState> = channelFlow {
         if (!installationLock.tryLock()) {
-            emit(DownloadState.Error("Game assets are already syncing."))
-            return@flow
+            send(DownloadState.Error("Game assets are already syncing."))
+            return@channelFlow
         }
 
         try {
             // findLocalAssetsFolder is disabled when a CDN is configured.
             val localSource = findLocalAssetsFolder()
             if (localSource != null) {
-                emit(DownloadState.FetchingManifest)
-                syncFromLocalFolder(localSource) { emit(it) }
-                return@flow
+                send(DownloadState.FetchingManifest)
+                syncFromLocalFolder(localSource) { send(it) }
+                return@channelFlow
             }
 
             // Sync the configured CDN into private storage before engine startup.
             if (cdnRoot.isBlank()) {
                 val expectedPath = context.getExternalFilesDir(null)?.let { File(it, "game_assets").absolutePath }
                     ?: BuildConfig.DEVICE_ASSETS_PATH
-                emit(DownloadState.Error(
+                send(DownloadState.Error(
                     "Local game assets not found!\n" +
                     "Please place original GTA Mobile 2.10 files in:\n" +
                     "$expectedPath\n" +
                     "or configure GAME_ASSETS_DIR in .env"
                 ))
-                return@flow
+                return@channelFlow
             }
 
-            emit(DownloadState.FetchingManifest)
+            send(DownloadState.FetchingManifest)
             val manifest = fetchManifest(cdnRoot)
             // Reuse a fully installed generation if a previous sync stopped before switching the pointer.
             val current = activeGeneration()?.takeUnless { it.name.startsWith("local-") }
@@ -126,42 +131,49 @@ class NativeAssetBridge(private val context: Context) {
                     .sortedByDescending { it.lastModified() }
                     .firstOrNull { installedEntries(it) == manifest.entries }
             val previous = matching ?: current
-            if (matching != null && manifest.entries.withIndex().all { (index, entry) ->
-                    emit(DownloadState.Verifying(index + 1, manifest.entries.size))
-                    matches(assetFile(matching, entry.path), entry)
-                }) {
-                activateGeneration(matching)
-                emit(DownloadState.Complete(manifest.entries.size))
-                return@flow
+            if (matching != null && verifyGeneration(matching, manifest.entries) { send(it) }) {
+                if (matching != current) activateGeneration(matching)
+                send(DownloadState.Complete(manifest.entries.size))
+                return@channelFlow
             }
 
             ensureDirectory(generations)
             val staging = assetFile(storage, "staging-${manifest.generationId}")
             ensureDirectory(staging)
-            val partial = assetFile(storage, "asset-download.part")
+            val partials = List(DOWNLOAD_WORKERS) { assetFile(storage, "asset-download-$it.part") }
+            // A previous process may have stopped while a worker was writing.
+            assetFile(storage, "asset-download.part").delete()
+            partials.forEach { it.delete() }
+            val progress = SyncProgress(manifest.entries) { send(it) }
+            progress.start()
+            val previousByPath = currentEntries?.takeIf { previous == current }?.associateBy(Entry::path)
+            // Start the large archives early so they can overlap other transfers.
+            val pending = manifest.entries.sortedByDescending(Entry::size)
             try {
-                manifest.entries.forEachIndexed { index, entry ->
-                    emit(DownloadState.Verifying(index + 1, manifest.entries.size))
+                parallelFiles(pending.size, DOWNLOAD_WORKERS) { worker, index ->
+                    val entry = pending[index]
                     val target = assetFile(staging, entry.path)
-                    if (matches(target, entry)) return@forEachIndexed
+                    if (matches(target, entry)) {
+                        progress.advance(entry.size, finished = true)
+                        return@parallelFiles
+                    }
                     ensureDirectory(target.parentFile ?: staging)
                     if (staging.usableSpace < entry.size) {
                         throw IOException("Not enough free space for game assets.")
                     }
-                    val old = previous?.let { assetFile(it, entry.path) }
-                    if (old != null && matches(old, entry)) {
-                        old.inputStream().buffered().use { input ->
-                            copyVerified(input, partial, entry) {}
-                        }
-                    } else {
+                    val partial = partials[worker]
+                    val old = previous?.takeIf { previousByPath == null || previousByPath[entry.path] == entry }
+                        ?.let { assetFile(it, entry.path) }
+                    var reported = 0L
+                    if (!copyMatchingAsset(old, partial, entry)) {
                         val path = entry.path.split('/').joinToString("/") { Uri.encode(it) }
                         val url = URL("$cdnRoot/${manifest.sourceRevision}/$CONTENT_DIR/$path")
                         val connection = open(url)
                         try {
-                            emit(DownloadState.Downloading(entry.path, 0))
-                            connection.inputStream.buffered().use { input ->
-                                copyVerified(input, partial, entry) { percent ->
-                                    emit(DownloadState.Downloading(entry.path, percent))
+                            connection.inputStream.use { input ->
+                                copyVerified(input, partial, entry) { total ->
+                                    progress.advance(total - reported)
+                                    reported = total
                                 }
                             }
                         } finally {
@@ -169,6 +181,7 @@ class NativeAssetBridge(private val context: Context) {
                         }
                     }
                     atomicMove(partial, target)
+                    progress.advance(entry.size - reported, finished = true)
                 }
 
                 currentCoroutineContext().ensureActive()
@@ -178,22 +191,51 @@ class NativeAssetBridge(private val context: Context) {
                 atomicMove(staging, installed)
                 activateGeneration(installed)
             } finally {
-                partial.delete()
+                partials.forEach { it.delete() }
             }
-            emit(DownloadState.Complete(manifest.entries.size))
+            send(DownloadState.Complete(manifest.entries.size))
         } catch (error: IOException) {
             Log.w(TAG, "Game asset sync failed", error)
-            emit(DownloadState.Error(error.message ?: "Game asset sync failed."))
+            send(DownloadState.Error(error.message ?: "Game asset sync failed."))
         } catch (error: SecurityException) {
             Log.w(TAG, "Cannot access game asset storage", error)
-            emit(DownloadState.Error("Cannot access game asset storage."))
+            send(DownloadState.Error("Cannot access game asset storage."))
         } catch (error: JSONException) {
             Log.w(TAG, "Invalid game asset manifest", error)
-            emit(DownloadState.Error("Invalid game asset manifest."))
+            send(DownloadState.Error("Invalid game asset manifest."))
         } finally {
             installationLock.unlock()
         }
     }.flowOn(Dispatchers.IO)
+
+    private suspend fun verifyGeneration(
+        directory: File,
+        entries: List<Entry>,
+        emitState: suspend (DownloadState) -> Unit
+    ): Boolean {
+        val mismatch = AtomicBoolean()
+        val progressLock = Mutex()
+        var checked = 0
+        emitState(DownloadState.Verifying(0, entries.size))
+        parallelFiles(entries.size, DISK_WORKERS) { _, index ->
+            if (mismatch.get()) return@parallelFiles
+            val entry = entries[index]
+            if (!matches(assetFile(directory, entry.path), entry)) mismatch.set(true)
+            progressLock.withLock { emitState(DownloadState.Verifying(++checked, entries.size)) }
+        }
+        return !mismatch.get()
+    }
+
+    private suspend fun copyMatchingAsset(source: File?, partial: File, entry: Entry): Boolean {
+        if (source == null || !source.isFile || source.length() != entry.size) return false
+        return try {
+            source.inputStream().use { copyVerified(it, partial, entry) }
+            true
+        } catch (_: AssetContentsException) {
+            partial.delete()
+            false
+        }
+    }
 
     private suspend fun syncFromLocalFolder(
         sourceDir: File,
@@ -206,17 +248,25 @@ class NativeAssetBridge(private val context: Context) {
         val staging = assetFile(storage, "staging-${installed.name}")
         ensureDirectory(staging)
         try {
-            val verified = files.mapIndexed { index, entry ->
-                emitState(DownloadState.Verifying(index + 1, files.size))
+            val progress = SyncProgress(files, emitState)
+            val verified = arrayOfNulls<Entry>(files.size)
+            progress.start()
+            parallelFiles(files.size, DISK_WORKERS) { _, index ->
+                val entry = files[index]
                 val source = assetFile(sourceRoot, entry.path)
                 val target = assetFile(staging, entry.path)
                 ensureDirectory(target.parentFile ?: staging)
-                val sha = source.inputStream().buffered().use { input ->
-                    copyVerified(input, target, entry) {}
+                var reported = 0L
+                val sha = source.inputStream().use { input ->
+                    copyVerified(input, target, entry) { total ->
+                        progress.advance(total - reported)
+                        reported = total
+                    }
                 }
-                entry.copy(sha256 = sha)
+                verified[index] = entry.copy(sha256 = sha)
+                progress.advance(entry.size - reported, finished = true)
             }
-            writeSynced(File(staging, GameAssetManifest.FILE_NAME), GameAssetManifest.encode(verified))
+            writeSynced(File(staging, GameAssetManifest.FILE_NAME), GameAssetManifest.encode(verified.map { checkNotNull(it) }))
             currentCoroutineContext().ensureActive()
             atomicMove(staging, installed)
             activateGeneration(installed)
@@ -300,7 +350,7 @@ class NativeAssetBridge(private val context: Context) {
     }
 
     private fun ensureDirectory(directory: File) {
-        if (!directory.isDirectory && !directory.mkdirs()) {
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
             throw IOException("Cannot create game asset storage.")
         }
     }
@@ -331,7 +381,7 @@ class NativeAssetBridge(private val context: Context) {
         if (entry.sha256.isEmpty()) return true
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(BUFFER_SIZE)
-        file.inputStream().buffered().use { input ->
+        file.inputStream().use { input ->
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val count = input.read(buffer)
@@ -342,37 +392,78 @@ class NativeAssetBridge(private val context: Context) {
         return digest.hexDigest() == entry.sha256
     }
 
+    private class AssetContentsException(message: String) : IOException(message)
+
     private suspend fun copyVerified(
         input: InputStream,
         partial: File,
         entry: Entry,
-        progress: suspend (Int) -> Unit
+        progress: (suspend (Long) -> Unit)? = null
     ): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(BUFFER_SIZE)
         var total = 0L
-        var previousPercent = 0
+        var reported = 0L
+        val reportEvery = maxOf(1L, entry.size / 100)
         return FileOutputStream(partial).use { output ->
             while (true) {
                 currentCoroutineContext().ensureActive()
                 val count = input.read(buffer)
                 if (count < 0) break
                 total += count
-                if (total > entry.size) throw IOException("Unexpected size for ${entry.path}.")
+                if (total > entry.size) throw AssetContentsException("Unexpected size for ${entry.path}.")
                 digest.update(buffer, 0, count)
                 output.write(buffer, 0, count)
-                val percent = (100L * total / entry.size).toInt().coerceAtMost(99)
-                if (percent > previousPercent) {
-                    progress(percent)
-                    previousPercent = percent
+                if (progress != null && total - reported >= reportEvery) {
+                    progress(total)
+                    reported = total
                 }
             }
             val sha = digest.hexDigest()
             if (total != entry.size || (entry.sha256.isNotEmpty() && sha != entry.sha256)) {
-                throw IOException("Integrity check failed for ${entry.path}.")
+                throw AssetContentsException("Integrity check failed for ${entry.path}.")
             }
             output.fd.sync()
             sha
+        }
+    }
+
+    private suspend fun parallelFiles(
+        count: Int,
+        workers: Int,
+        process: suspend (worker: Int, index: Int) -> Unit
+    ) = coroutineScope {
+        val next = AtomicInteger()
+        repeat(minOf(count, workers)) { worker ->
+            launch {
+                while (true) {
+                    ensureActive()
+                    val index = next.getAndIncrement()
+                    if (index >= count) break
+                    process(worker, index)
+                }
+            }
+        }
+    }
+
+    private class SyncProgress(entries: List<Entry>, private val emitState: suspend (DownloadState) -> Unit) {
+        private val totalBytes = entries.sumOf(Entry::size)
+        private val totalFiles = entries.size
+        private val mutex = Mutex()
+        private var bytes = 0L
+        private var files = 0
+        private var percent = 0
+
+        suspend fun start() = emitState(DownloadState.Syncing(0, totalFiles, 0))
+
+        suspend fun advance(delta: Long, finished: Boolean = false) = mutex.withLock {
+            bytes += delta
+            if (finished) ++files
+            val nextPercent = if (files == totalFiles) 100 else (100L * bytes / totalBytes).toInt().coerceAtMost(99)
+            if (nextPercent != percent || finished) {
+                percent = nextPercent
+                emitState(DownloadState.Syncing(files, totalFiles, percent))
+            }
         }
     }
 
@@ -414,6 +505,8 @@ class NativeAssetBridge(private val context: Context) {
         const val DEFAULT_CDN_ROOT = ""
         const val CONTENT_DIR = "game_files_android_mta"
         const val BUFFER_SIZE = 64 * 1024
+        const val DOWNLOAD_WORKERS = 4
+        const val DISK_WORKERS = 2
         val GENERATION = Regex("([0-9a-f]{40}|local)-[0-9a-f-]{36}")
         val REDIRECTS = setOf(301, 302, 303, 307, 308)
         val installationLock = Mutex()

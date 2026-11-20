@@ -22,7 +22,8 @@ def main():
     doubles.mkdir(parents=True, exist_ok=True)
     # Compile production methods with the real SDK signatures. The SVG/chat
     # adapters aren't exercised here and keep this test independent of Gradle.
-    source = [game / name for name in ("MtaDxView.java", "DxFrameQueue.java", "DxFontCache.java", "DxTextLayout.java", "InterfaceScale.java")]
+    source = [game / name for name in ("MtaDxView.java", "DxFrameQueue.java", "DxFontCache.java", "DxTextLayout.java",
+                                       "InterfaceScale.java", "HudLayout.java")]
     source += list((fixtures / "com").rglob("*.java"))
     subprocess.run([args.javac, "-cp", str(args.android_jar), "-d", str(product), *map(str, source)], check=True)
     source = list((fixtures / "android").rglob("*.java"))

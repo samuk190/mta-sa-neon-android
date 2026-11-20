@@ -401,12 +401,11 @@ struct NeonJoinClient::Impl {
     }
 
     // Bitstream 0x0030, the version the join hook stores for this client:
-    // no extended positions and no native-task block. Time context 0 is
-    // accepted by CanUpdateSync. Without this packet the server never
-    // relays a position, so a desktop client has no ped to draw.
+    // no extended positions and no native-task block. Suppress sync while
+    // a server position is waiting to be applied to the local body.
     void SendPureSync() {
         pureSyncSentThisPulse = false;
-        if (!net || !net->IsConnected()) return;
+        if (!net || !net->IsConnected() || WorldRPG::Game::LocalPlacementPending()) return;
         const uint32_t now = NowMs();
         if (now - lastSyncMs < 100) return;
         lastSyncMs = now;
@@ -499,15 +498,12 @@ struct NeonJoinClient::Impl {
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(32));          // PLAYER_PURESYNC
         // CNetAPI::WritePlayerPuresync writes GetSyncTimeContext (CNetAPI.cpp 1119).
-        // ENTITY_ADD does not store a player (ServerWorld::OnEntityAdd skips type 1) and the
-        // PLAYER_LIST context byte is not kept, so the phone has no local time context. 0 is
-        // what CanUpdateSync accepts for a fresh element.
+        // The mobile client doesn't process every RPC that can change the local context.
         static bool loggedContext = false;
         if (!loggedContext) {
             loggedContext = true;
-            JOIN_LOGI("DIAG PLAYER_PURESYNC time context stays 0: CClientPlayer::GetSyncTimeContext "
-                      "is not stored for the local player (CNetAPI.cpp 1118-1119). "
-                      "Skipped at bitstream 0x0030: SNativeTaskLocomotionSync (NativeTaskLocomotionPresentation 0x3C). "
+            JOIN_LOGI("DIAG PLAYER_PURESYNC skipped at bitstream 0x0030: "
+                      "SNativeTaskLocomotionSync (NativeTaskLocomotionPresentation 0x3C). "
                       "Not read, so those bits stay clear: HasJetPack, GetContactEntity, GetWeapon / aim, "
                       "IsOnGround (bIsOnGround stays set), GetArmor (SPlayerArmorSync stays 0). "
                       "WriteCameraOrientation (CNetAPI.cpp 1023-1114) has no camera matrix; "
@@ -618,7 +614,7 @@ struct NeonJoinClient::Impl {
     // CNetAPI::DoPulse (381-397) sends this only when that pulse did not send puresync.
     // A pad release (IsSmallKeySyncNeeded 507: the stick left the analog band) is sent at once.
     void SendKeySync() {
-        if (!net || !net->IsConnected()) return;
+        if (!net || !net->IsConnected() || WorldRPG::Game::LocalPlacementPending()) return;
         // Driving a server-confirmed car: the vehicle form (SendDriverKeySync), as SendPureSync switches to packet 33.
         // The on-foot release below does not run in the driver branch.
         {

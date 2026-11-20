@@ -49,6 +49,7 @@ using LoadAllRequestedModelsFn = void (*)(bool);
 using SetupPlayerPedFn = void (*)(int);
 using FindPlayerPedFn = void* (*)(int);
 using TeleportFn = void (*)(void*, Vec3, unsigned char);
+using LoadSceneCollisionFn = void (*)(const Vec3&);
 using EndUserPauseFn = void (*)();
 using RemoveTopFn = void (*)(void*, int, int);
 using SwitchOffFn = void (*)();
@@ -92,8 +93,13 @@ static std::atomic<int64_t> g_lastDamageMs{0};
 static std::atomic<int64_t> g_lastMeleeMs{0};
 static std::atomic<bool> g_localFire{false};
 static std::atomic<bool> g_localDuck{false};
-// SET_ELEMENT_POSITION on the local player: CClientPlayer::Teleport on the game thread (PlacePlayer).
-static std::atomic<bool> g_localTeleportPending{false};
+// The game thread publishes the position after all native work for this request.
+// The network thread waits for that acknowledgement before sending its next sample.
+static std::mutex g_localPlacementMutex;
+static Vec3 g_localPlacement{1754.f, -1894.f, 14.f};
+static uint64_t g_requestedPlacement = 0;
+static uint64_t g_appliedPlacement = 0;
+static std::atomic<int> g_pendingLocalInterior{-1};
 // ButtonCross (sprint) held, and a ButtonSquare (jump) press waiting for the next on-foot packet.
 static std::atomic<bool> g_localSprint{false};
 static std::atomic<bool> g_localJumpLatch{false};
@@ -111,6 +117,8 @@ static std::atomic<bool> g_padStickValid{false};
 static std::atomic<float> g_cameraRot{0.f};
 static std::atomic<bool> g_cameraRotValid{false};
 static TeleportFn g_teleport = nullptr;
+static LoadSceneCollisionFn g_loadSceneCollision = nullptr;
+static int* g_currentArea = nullptr;
 static EndUserPauseFn g_endPause = nullptr;
 static RemoveTopFn g_removeTop = nullptr;
 static void (*g_processMenuPending)(void*) = nullptr;
@@ -118,9 +126,6 @@ static SwitchOffFn g_switchOff = nullptr;
 static void* g_mobileMenu = nullptr;
 using ScriptProcessFn = void (*)(void*);
 static ScriptProcessFn g_originalScript = nullptr;
-static std::atomic<float> g_spawnX{1754.f};
-static std::atomic<float> g_spawnY{-1894.f};
-static std::atomic<float> g_spawnZ{14.f};
 
 static void AllowWrite(void* address, size_t size) {
     long page = sysconf(_SC_PAGESIZE);
@@ -151,18 +156,56 @@ static void ResolvePlayerFns() {
     g_pedDensity = reinterpret_cast<float*>(dlsym(handle, "_ZN11CPopulation20PedDensityMultiplierE"));
     g_managePopulation = dlsym(handle, "_ZN11CPopulation16ManagePopulationEv");
     g_teleport = reinterpret_cast<TeleportFn>(dlsym(handle, "_ZN4CPed8TeleportE7CVectorh"));
+    g_loadSceneCollision = reinterpret_cast<LoadSceneCollisionFn>(
+        dlsym(handle, "_ZN10CStreaming18LoadSceneCollisionERK7CVector"));
+    g_currentArea = static_cast<int*>(dlsym(handle, "_ZN5CGame8currAreaE"));
+    if (!g_loadSceneCollision) ENGINE_LOGI("DIAG local teleport: CStreaming::LoadSceneCollision is unavailable");
+    if (!g_currentArea) ENGINE_LOGI("DIAG local interior: CGame::currArea is unavailable");
     g_endPause = reinterpret_cast<EndUserPauseFn>(dlsym(handle, "_ZN6CTimer12EndUserPauseEv"));
     g_removeTop = reinterpret_cast<RemoveTopFn>(dlsym(handle, "_ZN10MobileMenu15RemoveTopScreenEbb"));
     g_processMenuPending = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN10MobileMenu14ProcessPendingEv"));
     g_switchOff = reinterpret_cast<SwitchOffFn>(dlsym(handle, "_Z20Menu_SwitchOffToGamev"));
 }
 
-static void PlacePlayer() {
+static void QueueLocalPlacement(float x, float y, float z) {
+    std::lock_guard lock(g_localPlacementMutex);
+    g_localPlacement = {x, y, z};
+    ++g_requestedPlacement;
+}
+
+bool LocalPlacementPending() {
+    std::lock_guard lock(g_localPlacementMutex);
+    return g_requestedPlacement != g_appliedPlacement;
+}
+
+static void PlacePlayer(bool initial = false) {
+    Vec3 pos;
+    uint64_t request;
+    {
+        std::lock_guard lock(g_localPlacementMutex);
+        request = g_requestedPlacement;
+        if (!initial && request == g_appliedPlacement) return;
+        pos = g_localPlacement;
+    }
     if (!g_findPlayer || !g_teleport) return;
     void* ped = g_findPlayer(0);
     if (!ped) return;
-    Vec3 pos{g_spawnX.load(), g_spawnY.load(), g_spawnZ.load()};
+    // Desktop CClientPed::Teleport waits for ground collision on jumps over
+    // 50 units. Arm64 LoadSceneCollision loads COL and IPLs at the target.
+    const float dx = pos.x - g_poseX.load();
+    const float dy = pos.y - g_poseY.load();
+    const float dz = pos.z - g_poseZ.load();
+    if (g_loadSceneCollision && dx * dx + dy * dy + dz * dz > 2500.f)
+        g_loadSceneCollision(pos);
     g_teleport(ped, pos, 0);
+    g_poseX = pos.x;
+    g_poseY = pos.y;
+    g_poseZ = pos.z;
+    g_velX = 0.f;
+    g_velY = 0.f;
+    g_velZ = 0.f;
+    std::lock_guard lock(g_localPlacementMutex);
+    g_appliedPlacement = std::max(g_appliedPlacement, request);
 }
 
 // Same replacement the PC client installs on CRunningScript::Process: the
@@ -2707,6 +2750,13 @@ static void ApplyLocalPedRpcs() {
     if (local == 0) return;
     void* ped = g_findPlayer(0);
     if (!ped) return;
+    if (const int interior = g_pendingLocalInterior.exchange(-1); interior >= 0) {
+        // CClientPed::SetInterior changes the camera area if it followed the ped.
+        const auto previous = static_cast<const unsigned char*>(ped)[0x4B];
+        static RemoteBody localArea;
+        ApplyPedInterior(ped, localArea, static_cast<uint8_t>(interior));
+        if (g_currentArea && *g_currentArea == previous) *g_currentArea = interior;
+    }
     RunPedRpcOps(local, ped, true, nullptr);
     static int alphaApplied = -1, collisionsApplied = -1;
     const auto* raw = static_cast<const unsigned char*>(ped);
@@ -2717,8 +2767,6 @@ static void ApplyLocalPedRpcs() {
 static void ApplyRemotePeds() {
     NoteGameFrame();
     LogPoolUsage(g_remoteBodies.size());
-    if (g_localTeleportPending.exchange(false)) PlacePlayer();
-    ApplyLocalPedRpcs();
     if (WorldRPG::Debug::Flag("noremote")) return;
     if (g_remoteResetPending.exchange(false)) {
         // The whole reset runs under g_remoteMutex: the network thread adds cars and seat requests of the new
@@ -4035,6 +4083,8 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         Projectiles::Pump(ResolveProjectileEntity);
         GameTasks::Service();
         if (g_pedDensity) *g_pedDensity = 0.f;
+        ApplyLocalPedRpcs();
+        PlacePlayer();
         SampleLocalPose();
         SampleLocalPadAndCamera();
         ApplyRemotePeds();
@@ -4049,7 +4099,8 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         g_requestSpecial(0, "player", 26);
         g_loadAll(true);
         g_setupPlayer(0);
-        PlacePlayer();
+        ApplyLocalPedRpcs();
+        PlacePlayer(true);
         DressLocalPlayer();
         if (g_endPause) g_endPause();
         ENGINE_LOGI("Player created without main.scm");
@@ -4494,22 +4545,18 @@ static bool BeginServerSessionOnGameThread() {
     return true;
 }
 void ApplyServerSpawn(float x, float y, float z) {
-    g_spawnX = x;
-    g_spawnY = y;
-    g_spawnZ = z;
-    g_poseX = x;
-    g_poseY = y;
-    g_poseZ = z;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
+    QueueLocalPlacement(x, y, z);
     g_health = 100.f;
     g_armor = 0.f;
     g_healthOwned = false;
     g_damagePending = false;
-    g_localTeleportPending = true;
 }
 void CopySpawn(float& x, float& y, float& z) {
-    x = g_spawnX.load();
-    y = g_spawnY.load();
-    z = g_spawnZ.load();
+    std::lock_guard lock(g_localPlacementMutex);
+    x = g_localPlacement.x;
+    y = g_localPlacement.y;
+    z = g_localPlacement.z;
 }
 void CopyPose(float& x, float& y, float& z, float& heading) {
     x = g_poseX.load();
@@ -4725,13 +4772,7 @@ void RpcSetPosition(uint32_t id, float x, float y, float z) {
     if (id == 0 || id == 0xFFFFFFFFu || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     if (id == ServerWorld::LocalPlayer()) {
         // CClientPlayer::Teleport for the local player (CElementRPCs.cpp 133-150): run on the game thread.
-        g_spawnX = x;
-        g_spawnY = y;
-        g_spawnZ = z;
-        g_poseX = x;
-        g_poseY = y;
-        g_poseZ = z;
-        g_localTeleportPending = true;
+        QueueLocalPlacement(x, y, z);
         return;
     }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -4781,7 +4822,11 @@ void RpcSetRotation(uint32_t id, float radians) {
 }
 
 void RpcSetInterior(uint32_t id, uint8_t interior) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    if (id == ServerWorld::LocalPlayer()) {
+        g_pendingLocalInterior = interior;
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     g_remotePeds[id].interior = interior;
 }
@@ -4915,6 +4960,11 @@ void SetPedVitals(uint32_t id, float health, float armor) {
 // Reconnect (P3.1): the network thread clears the record set; the game thread
 // drops the bodies in ApplyRemotePeds on its next tick.
 void RequestRemoteReset() {
+    {
+        std::lock_guard lock(g_localPlacementMutex);
+        g_appliedPlacement = g_requestedPlacement;
+        g_pendingLocalInterior = -1;
+    }
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         g_remotePeds.clear();
@@ -5098,6 +5148,7 @@ bool ConsumeLocalShot(LocalShot& out) {
 bool InstallServerSessionHook() { return false; }
 bool BeginServerSession() { return false; }
 bool ServerSessionLive() { return false; }
+bool LocalPlacementPending() { return false; }
 void ApplyServerSpawn(float, float, float) {}
 void CopySpawn(float& x, float& y, float& z) { x = y = z = 0.f; }
 void CopyPose(float& x, float& y, float& z, float& heading) { x = y = z = heading = 0.f; }

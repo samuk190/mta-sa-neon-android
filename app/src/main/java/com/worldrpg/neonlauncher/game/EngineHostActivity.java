@@ -47,6 +47,8 @@ import java.io.IOException;
 public final class EngineHostActivity extends GTASA {
     public static final String EXTRA_BOOT_ERROR = "engine_boot_error";
     private static final String TAG = "NeonEngineHost";
+    private static final int COMPACT_IME = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN;
+    private static final int PANEL_ELEVATION_DP = 24;
     private String gameDirectory;
     private String bootError;
     private View mtaPause;
@@ -89,6 +91,12 @@ public final class EngineHostActivity extends GTASA {
     private boolean clientReady;
     private Thread netThread;
     private int interfaceScalePercent = InterfaceScale.DEFAULT_PERCENT;
+    private int chatAnchor = HudLayout.TOP_LEFT;
+    private int buttonAnchor = HudLayout.FOLLOW_CHAT;
+    private int chatPercent = HudLayout.DEFAULT_CHAT_PERCENT;
+    private boolean chatTouch = true;
+    private View hudHost;
+    private int keyboardInset;
     private int reportedUiWidth;
     private int reportedUiHeight;
 
@@ -262,6 +270,7 @@ public final class EngineHostActivity extends GTASA {
         super.onResume();
         // The launcher can change this while the separate engine process is paused.
         interfaceScalePercent = InterfaceScaleSettings.read(this);
+        GameSettingsView.applyHudSettings(this, settingsHost);
         if (dxOverlay != null) reportDxScreen(dxOverlay.getWidth(), dxOverlay.getHeight());
     }
 
@@ -373,31 +382,34 @@ public final class EngineHostActivity extends GTASA {
 
         dxOverlay = new MtaDxView(this);
         dxOverlay.setVisibility(View.GONE);
+        dxOverlay.setElevation(dp(12));
         dxOverlay.setCursorListener(this::onCursorTouch);
         dxOverlay.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
             int w = right - left;
             int h = bottom - top;
-            if (w > 0 && h > 0 && (w != oldRight - oldLeft || h != oldBottom - oldTop)) reportDxScreen(w, h);
+            boolean legacyIme = Build.VERSION.SDK_INT < 30 && scriptKeyboardShown;
+            if (!legacyIme && w > 0 && h > 0 && (w != oldRight - oldLeft || h != oldBottom - oldTop)) reportDxScreen(w, h);
+            updateKeyboardViewport();
         });
+        if (Build.VERSION.SDK_INT >= 30) {
+            dxOverlay.setOnApplyWindowInsetsListener((v, insets) -> {
+                keyboardInset = insets.getInsets(WindowInsets.Type.ime()).bottom;
+                updateKeyboardViewport();
+                return insets;
+            });
+        }
         addContentView(dxOverlay, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-        int chatWidth = Math.max(dp(280), (int) (metrics.widthPixels * 0.44f));
-        float line = Math.max(22f, metrics.heightPixels / 720f * 22f);
         chatLog = new MtaChatView(this);
         chatLog.setVisibility(View.GONE);
-        FrameLayout.LayoutParams chatParams = new FrameLayout.LayoutParams(
-                chatWidth, (int) (line * 10 + dp(20)), Gravity.TOP | Gravity.START);
-        chatParams.leftMargin = Math.max(dp(12), (int) (metrics.widthPixels * 0.02f));
-        chatParams.topMargin = Math.max(dp(12), (int) (metrics.heightPixels * 0.03f));
-        addContentView(chatLog, chatParams);
-        chatLog.bringToFront();
+        addContentView(chatLog, new FrameLayout.LayoutParams(0, 0));
+        hudHost = (View) chatLog.getParent();
+        hudHost.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) layoutHud();
+        });
         chatLog.setOnClickListener(v -> openChatInput());
         installRadarZone();
-        // Cog, Chat and the key list sit in one row under the chat lines, clear of a radar drawn in the
-        // bottom-left corner. The cog opens the same menu as Back.
-        int rowTop = chatParams.topMargin + chatParams.height + dp(6);
         ImageButton settingsButton = new ImageButton(this);
         settingsButton.setImageResource(com.worldrpg.neonlauncher.R.drawable.ic_settings_hud);
         settingsButton.setImageTintList(ColorStateList.valueOf(Color.WHITE));
@@ -406,23 +418,18 @@ public final class EngineHostActivity extends GTASA {
         settingsButton.setPadding(dp(8), dp(8), dp(8), dp(8));
         settingsButton.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
         settingsButton.setOnClickListener(v -> toggleMtaPause());
-        FrameLayout.LayoutParams settingsParams = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP | Gravity.START);
-        settingsParams.leftMargin = chatParams.leftMargin;
-        settingsParams.topMargin = rowTop;
-        addContentView(settingsButton, settingsParams);
+        addContentView(settingsButton, new FrameLayout.LayoutParams(dp(40), dp(40)));
         Button chatButton = new Button(this);
         chatButton.setText("Chat");
         chatButton.setAllCaps(false);
         chatButton.setTextColor(Color.WHITE);
         chatButton.setBackground(hudButtonBackground());
         chatButton.setOnClickListener(v -> openChatInput());
-        FrameLayout.LayoutParams buttonParams = new FrameLayout.LayoutParams(dp(88), dp(40), Gravity.TOP | Gravity.START);
-        buttonParams.leftMargin = settingsParams.leftMargin + dp(48);
-        buttonParams.topMargin = rowTop;
-        addContentView(chatButton, buttonParams);
+        addContentView(chatButton, new FrameLayout.LayoutParams(dp(88), dp(40)));
         settingsButtonView = settingsButton;
         chatButtonView = chatButton;
-        installKeyList(buttonParams.leftMargin + dp(96), rowTop);
+        installKeyList();
+        GameSettingsView.applyHudSettings(this, settingsHost);
 
         chatInput = new EditText(this);
         chatInput.setHint("Say:");
@@ -431,7 +438,7 @@ public final class EngineHostActivity extends GTASA {
         chatInput.setFilters(new InputFilter[] {new InputFilter.LengthFilter(96)});
         chatInput.setTextColor(Color.WHITE);
         chatInput.setHintTextColor(0xFFACD5FE);
-        chatInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        chatInput.setImeOptions(EditorInfo.IME_ACTION_SEND | COMPACT_IME);
         chatInput.setOnEditorActionListener((v, action, event) -> {
             if (action == EditorInfo.IME_ACTION_SEND) {
                 submitChat();
@@ -466,7 +473,7 @@ public final class EngineHostActivity extends GTASA {
     // The key list of the legacy SA-MP launcher (samp/gui/samp_widgets/buttonpanel.cpp): ">>" opens a
     // horizontal row and "<<" closes it. The row holds the keys that scripts bound with bindKey, read
     // when it opens. A tap is one key press (down, then up).
-    private void installKeyList(int leftMargin, int topMargin) {
+    private void installKeyList() {
         keysOpenButton = new Button(this);
         keysOpenButton.setText(">>");
         keysOpenButton.setTextColor(Color.WHITE);
@@ -474,11 +481,7 @@ public final class EngineHostActivity extends GTASA {
         keysOpenButton.setOnClickListener(v -> openKeyList());
         // Shown while connected (legacy ButtonPanel::draw returns unless GAMESTATE_CONNECTED).
         keysOpenButton.setVisibility(View.GONE);
-        FrameLayout.LayoutParams openParams =
-                new FrameLayout.LayoutParams(dp(56), dp(40), Gravity.TOP | Gravity.START);
-        openParams.leftMargin = leftMargin;
-        openParams.topMargin = topMargin;
-        addContentView(keysOpenButton, openParams);
+        addContentView(keysOpenButton, new FrameLayout.LayoutParams(dp(56), dp(40)));
 
         keysRow = new LinearLayout(this);
         keysRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -487,13 +490,65 @@ public final class EngineHostActivity extends GTASA {
         scroll.addView(keysRow, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         scroll.setVisibility(View.GONE);
-        FrameLayout.LayoutParams rowParams = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, dp(40), Gravity.TOP | Gravity.START);
-        rowParams.leftMargin = leftMargin;
-        rowParams.rightMargin = dp(12);
-        rowParams.topMargin = topMargin;
-        addContentView(scroll, rowParams);
+        addContentView(scroll, new FrameLayout.LayoutParams(0, dp(40)));
         keysPanel = scroll;
+    }
+
+    private void layoutHud() {
+        if (hudHost == null || settingsButtonView == null || keysPanel == null) return;
+        int width = hudHost.getWidth();
+        int height = hudHost.getHeight();
+        if (width <= 0 || height <= 0) return;
+        int marginX = Math.min(width / 4, Math.max(dp(12), Math.round(width * 0.02f)));
+        int marginY = Math.min(height / 4, Math.max(dp(12), Math.round(height * 0.03f)));
+        int gap = dp(8);
+        int rowHeight = dp(40);
+        int chatWidth = Math.min(width - 2 * marginX,
+                Math.round(Math.max(dp(280), width * 0.44f) * chatPercent / 100f));
+        int chatLimit = Math.max(1, height - 2 * marginY - rowHeight - gap);
+        float line = Math.min(chatLimit / 10f, Math.max(22f, height * 22f / 720f) * chatPercent / 100f);
+        int chatHeight = (int) Math.ceil(line * 10);
+        int chatLeft = HudLayout.left(chatAnchor, width, chatWidth, marginX);
+        int chatTop = HudLayout.top(chatAnchor, height, chatHeight, marginY);
+        positionHudView(chatLog, chatLeft, chatTop, chatWidth, chatHeight);
+        chatLog.setLayoutOptions(line, chatTouch, chatAnchor >= HudLayout.BOTTOM_LEFT);
+
+        int anchor = buttonAnchor == HudLayout.FOLLOW_CHAT ? chatAnchor : buttonAnchor;
+        int settingsWidth = dp(40), chatButtonWidth = dp(88), keysWidth = dp(56);
+        int rowWidth = settingsWidth + chatButtonWidth + keysWidth + 2 * gap;
+        int rowLeft = HudLayout.left(anchor, width, rowWidth, marginX);
+        int rowTop = HudLayout.top(anchor, height, rowHeight, marginY);
+        if (rowLeft < chatLeft + chatWidth && chatLeft < rowLeft + rowWidth)
+            rowTop = HudLayout.besideChat(rowTop, rowHeight, chatTop, chatHeight, anchor, height, marginY, gap);
+
+        int chatButtonLeft = rowLeft + settingsWidth + gap;
+        int keysLeft = chatButtonLeft + chatButtonWidth + gap;
+        positionHudView(settingsButtonView, rowLeft, rowTop, settingsWidth, rowHeight);
+        positionHudView(chatButtonView, chatButtonLeft, rowTop, chatButtonWidth, rowHeight);
+        positionHudView(keysOpenButton, keysLeft, rowTop, keysWidth, rowHeight);
+        int listWidth = Math.min(width - 2 * marginX, dp(480));
+        int listLeft = keysLeft;
+        int listTop = rowTop;
+        if (width - marginX - keysLeft < dp(160)) {
+            listLeft = HudLayout.left(anchor, width, listWidth, marginX);
+            listTop = rowTop + rowHeight + gap;
+            if (listTop + rowHeight > height - marginY) listTop = Math.max(marginY, rowTop - rowHeight - gap);
+        } else {
+            listWidth = Math.min(listWidth, width - marginX - keysLeft);
+        }
+        positionHudView(keysPanel, listLeft, listTop, listWidth, rowHeight);
+    }
+
+    private static void positionHudView(View view, int x, int y, int width, int height) {
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) view.getLayoutParams();
+        if (params.gravity == (Gravity.TOP | Gravity.LEFT) && params.leftMargin == x && params.topMargin == y
+                && params.width == width && params.height == height) return;
+        params.gravity = Gravity.TOP | Gravity.LEFT;
+        params.leftMargin = x;
+        params.topMargin = y;
+        params.width = width;
+        params.height = height;
+        view.setLayoutParams(params);
     }
 
     private Button keyListButton(String label) {
@@ -616,7 +671,7 @@ public final class EngineHostActivity extends GTASA {
         scriptInput.setShowSoftInputOnFocus(true);
         // NEXT: the action key moves to the next DX field (tab) or closes the keyboard.
         // It does not send enter, which the login screen treats as submit.
-        scriptInput.setImeOptions(EditorInfo.IME_ACTION_NEXT);
+        scriptInput.setImeOptions(EditorInfo.IME_ACTION_NEXT | COMPACT_IME);
         scriptInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         scriptInput.setOnEditorActionListener((v, action, event) -> {
             int id = action & EditorInfo.IME_MASK_ACTION;
@@ -692,7 +747,7 @@ public final class EngineHostActivity extends GTASA {
     // Called from the tap as well as from the K line.
     private void raiseScriptKeyboard() {
         if (scriptInput == null) return;
-        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        getWindow().setSoftInputMode(keyboardAdjustMode()
                 | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
         if (view != null) view.clearFocus();
         scriptInput.requestFocus();
@@ -702,6 +757,18 @@ public final class EngineHostActivity extends GTASA {
         }
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.showSoftInput(scriptInput, InputMethodManager.SHOW_IMPLICIT);
+        dxOverlay.requestApplyInsets();
+    }
+
+    private int keyboardAdjustMode() {
+        return Build.VERSION.SDK_INT >= 30 ? WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                : WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
+    }
+
+    private void updateKeyboardViewport() {
+        if (dxOverlay == null) return;
+        float scale = scriptKeyboardShown ? HudLayout.keyboardScale(dxOverlay.getHeight(), keyboardInset) : 1f;
+        dxOverlay.setKeyboardScale(scale);
     }
 
     private void hideScriptKeyboard() {
@@ -717,6 +784,7 @@ public final class EngineHostActivity extends GTASA {
         }
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(scriptInput.getWindowToken(), 0);
+        updateKeyboardViewport();
     }
 
     // The login form asks for the keyboard from a server event, which Android ignores.
@@ -760,8 +828,8 @@ public final class EngineHostActivity extends GTASA {
             scriptInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                     | (multiline ? InputType.TYPE_TEXT_FLAG_MULTI_LINE : 0));
             scriptInput.setSingleLine(!multiline);
-            scriptInput.setImeOptions(multiline ? EditorInfo.IME_ACTION_NONE | EditorInfo.IME_FLAG_NO_ENTER_ACTION
-                    : EditorInfo.IME_ACTION_NEXT);
+            scriptInput.setImeOptions(COMPACT_IME | (multiline ? EditorInfo.IME_ACTION_NONE | EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                    : EditorInfo.IME_ACTION_NEXT));
             scriptApplying = false;
             InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
             if (keyboard != null) keyboard.restartInput(scriptInput);
@@ -778,6 +846,8 @@ public final class EngineHostActivity extends GTASA {
         scriptKeyboardShown = false;
         hideScriptKeyboard();
         chatInputBar.setVisibility(View.VISIBLE);
+        raisePanel(chatInputBar);
+        getWindow().setSoftInputMode(keyboardAdjustMode());
         nativeChatInputActive(true);
         // The chat bar covers the key list; hide both key views until the chat closes.
         if (keysPanel != null) keysPanel.setVisibility(View.GONE);
@@ -793,6 +863,7 @@ public final class EngineHostActivity extends GTASA {
         String typed = chatInput.getText() == null ? "" : chatInput.getText().toString().trim();
         chatInput.setText("");
         if (chatInputBar != null) chatInputBar.setVisibility(View.GONE);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         nativeChatInputActive(false);
         closeKeyList();
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -1218,7 +1289,12 @@ public final class EngineHostActivity extends GTASA {
         runOnUiThread(() -> {
             syncScriptKeyboard(shown);
             if (dxOverlay != null) {
+                boolean wasInteractive = dxOverlay.isCursorShown();
                 dxOverlay.setFrame(shown);
+                if (wasInteractive != dxOverlay.isCursorShown()) {
+                    if (dxOverlay.isCursorShown()) raisePanel(dxOverlay);
+                    else dxOverlay.setElevation(dp(12));
+                }
                 setHudRowHidden(dxOverlay.isCursorShown());
             }
         });
@@ -1321,7 +1397,6 @@ public final class EngineHostActivity extends GTASA {
         root.addView(panel, panelParams);
         addContentView(root, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        root.setElevation(dp(24));
         mtaPause = root;
     }
 
@@ -1483,7 +1558,6 @@ public final class EngineHostActivity extends GTASA {
         container.addView(close, closeParams);
         addContentView(container, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        container.setElevation(dp(24));
         playerMap.setTag(container);
     }
 
@@ -1492,7 +1566,7 @@ public final class EngineHostActivity extends GTASA {
         Object tag = playerMap.getTag();
         if (tag instanceof View) {
             ((View) tag).setVisibility(show ? View.VISIBLE : View.GONE);
-            if (show) ((View) tag).bringToFront();
+            if (show) raisePanel((View) tag);
         }
         mapHandler.removeCallbacks(mapRefresh);
         if (show) mapHandler.post(mapRefresh);
@@ -1519,6 +1593,14 @@ public final class EngineHostActivity extends GTASA {
             if (chatLog != null) chatLog.setChatVisible(shown);
         }
 
+        @Override public void setHudLayout(int chat, int buttons, int size, boolean touch) {
+            chatAnchor = chat;
+            buttonAnchor = buttons;
+            chatPercent = size;
+            chatTouch = touch;
+            layoutHud();
+        }
+
         @Override public int getInterfaceScalePercent() {
             return interfaceScalePercent;
         }
@@ -1539,8 +1621,6 @@ public final class EngineHostActivity extends GTASA {
     private void installSettings() {
         settingsView = new GameSettingsView(this, settingsHost);
         settingsView.setVisibility(View.GONE);
-        // Above the HUD buttons, whose default elevation would draw their labels over this screen.
-        settingsView.setElevation(dp(24));
         addContentView(settingsView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
     }
@@ -1549,7 +1629,7 @@ public final class EngineHostActivity extends GTASA {
         if (settingsView == null) return;
         if (show) settingsView.refresh();
         settingsView.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (show) settingsView.bringToFront();
+        if (show) raisePanel(settingsView);
     }
 
     private void applySavedSettings() {
@@ -1559,7 +1639,14 @@ public final class EngineHostActivity extends GTASA {
     private void showMtaPause(boolean show) {
         if (mtaPause == null) return;
         mtaPause.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (show) mtaPause.bringToFront();
+        if (show) raisePanel(mtaPause);
+    }
+
+    // A single elevation band for panels. Draw and touch order follow the
+    // most recent opening without promoting the DX view on every frame.
+    private void raisePanel(View panel) {
+        panel.setElevation(dp(PANEL_ELEVATION_DP));
+        panel.bringToFront();
     }
 
     private void toggleMtaPause() {

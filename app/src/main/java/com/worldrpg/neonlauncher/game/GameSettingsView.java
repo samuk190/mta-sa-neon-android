@@ -9,11 +9,14 @@ import android.graphics.drawable.StateListDrawable;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.worldrpg.neonlauncher.R;
@@ -31,6 +34,7 @@ public final class GameSettingsView extends FrameLayout {
         int[] get(int index);
         boolean set(int index, int value);
         void setChatShown(boolean shown);
+        void setHudLayout(int chatAnchor, int buttonsAnchor, int chatPercent, boolean chatTouch);
         int getInterfaceScalePercent();
         boolean setInterfaceScalePercent(int percent);
         void onClose();
@@ -43,6 +47,10 @@ public final class GameSettingsView extends FrameLayout {
             BRIGHTNESS, SUBTITLES, VIBRATION, FRAME_LIMITER};
     private static final String PREFS = "neon_game_settings";
     static final String KEY_CHAT = "chat_shown";
+    private static final String KEY_CHAT_ANCHOR = "chat_anchor";
+    private static final String KEY_BUTTONS_ANCHOR = "hud_buttons_anchor";
+    private static final String KEY_CHAT_SCALE = "chat_scale_percent";
+    private static final String KEY_CHAT_TOUCH = "chat_touch";
 
     private final Host host;
     private final SharedPreferences prefs;
@@ -107,6 +115,7 @@ public final class GameSettingsView extends FrameLayout {
 
         section(getContext().getString(R.string.section_interface));
         interfaceScale();
+        hudSettings();
 
         section("Graphics");
         choice("Visual quality", QUALITY, new String[] {"Low", "Medium", "High", "Very high"});
@@ -139,6 +148,76 @@ public final class GameSettingsView extends FrameLayout {
             if (prefs.contains(key)) host.set(index, prefs.getInt(key, 0));
         }
         host.setChatShown(prefs.getBoolean(KEY_CHAT, true));
+        applyHudSettings(context, host);
+    }
+
+    static void applyHudSettings(Context context, Host host) {
+        SharedPreferences saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        host.setHudLayout(
+                HudLayout.clamp(saved.getInt(KEY_CHAT_ANCHOR, HudLayout.TOP_LEFT), HudLayout.TOP_LEFT, HudLayout.BOTTOM_RIGHT),
+                HudLayout.clamp(saved.getInt(KEY_BUTTONS_ANCHOR, HudLayout.FOLLOW_CHAT), HudLayout.TOP_LEFT, HudLayout.FOLLOW_CHAT),
+                HudLayout.clamp(saved.getInt(KEY_CHAT_SCALE, HudLayout.DEFAULT_CHAT_PERCENT),
+                        HudLayout.MIN_CHAT_PERCENT, HudLayout.MAX_CHAT_PERCENT),
+                saved.getBoolean(KEY_CHAT_TOUCH, true));
+    }
+
+    private void hudSettings() {
+        anchorChoice(R.string.hud_chat_anchor, KEY_CHAT_ANCHOR, HudLayout.TOP_LEFT, R.array.hud_chat_anchors);
+        anchorChoice(R.string.hud_buttons_anchor, KEY_BUTTONS_ANCHOR, HudLayout.FOLLOW_CHAT, R.array.hud_button_anchors);
+
+        LinearLayout box = new LinearLayout(getContext());
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        SeekBar bar = new SeekBar(getContext());
+        TextView value = new TextView(getContext());
+        value.setTextColor(0xFFD5DEE8);
+        int percent = HudLayout.clamp(prefs.getInt(KEY_CHAT_SCALE, HudLayout.DEFAULT_CHAT_PERCENT),
+                HudLayout.MIN_CHAT_PERCENT, HudLayout.MAX_CHAT_PERCENT);
+        value.setText(percent + "%");
+        bar.setMax(HudLayout.MAX_CHAT_PERCENT - HudLayout.MIN_CHAT_PERCENT);
+        bar.setProgress(percent - HudLayout.MIN_CHAT_PERCENT);
+        bar.setContentDescription(getContext().getString(R.string.hud_chat_size));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int next = HudLayout.MIN_CHAT_PERCENT + progress;
+                value.setText(next + "%");
+                if (fromUser) {
+                    prefs.edit().putInt(KEY_CHAT_SCALE, next).apply();
+                    applyHudSettings(getContext(), host);
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        box.addView(bar, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        box.addView(value, new LinearLayout.LayoutParams(dp(56), LayoutParams.WRAP_CONTENT));
+        row(getContext().getString(R.string.hud_chat_size), box);
+
+        row(getContext().getString(R.string.hud_chat_touch),
+                segmented(new String[]{getContext().getString(R.string.hud_off), getContext().getString(R.string.hud_on)},
+                        prefs.getBoolean(KEY_CHAT_TOUCH, true) ? 1 : 0, picked -> {
+                            prefs.edit().putBoolean(KEY_CHAT_TOUCH, picked == 1).apply();
+                            applyHudSettings(getContext(), host);
+                        }));
+    }
+
+    private void anchorChoice(int label, String key, int defaultValue, int names) {
+        Spinner spinner = new Spinner(getContext(), Spinner.MODE_DROPDOWN);
+        ArrayAdapter<CharSequence> options = ArrayAdapter.createFromResource(getContext(), names,
+                android.R.layout.simple_spinner_item);
+        options.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(options);
+        spinner.setSelection(HudLayout.clamp(prefs.getInt(key, defaultValue), 0, options.getCount() - 1));
+        spinner.setContentDescription(getContext().getString(label));
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (view instanceof TextView) ((TextView) view).setTextColor(Color.WHITE);
+                if (prefs.getInt(key, defaultValue) == position) return;
+                prefs.edit().putInt(key, position).apply();
+                applyHudSettings(getContext(), host);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        row(getContext().getString(label), spinner);
     }
 
     private void store(int index, int value) {

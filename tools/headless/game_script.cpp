@@ -358,6 +358,7 @@ namespace WorldRPG::Game {
 
 bool BeginServerSession() { return false; }
 bool ServerSessionLive() { return true; }
+bool LocalPlacementPending() { return false; }
 
 void ApplyServerSpawn(float x, float y, float z) {
     g_spawn = Foot{x, y, z, 0.f};
@@ -634,7 +635,9 @@ void ForgetPedNativeTaskState(uint32_t) {}
 void SetPedVitals(uint32_t, float, float) {}
 void NoteRemoteClothes(uint32_t, const std::vector<WorldRPG::Entity::PedClothes>&) {}
 void NoteRemoteButtons(uint32_t, uint8_t) {}
-void RpcSetPosition(uint32_t, float, float, float) {}
+void RpcSetPosition(uint32_t id, float x, float y, float z) {
+    if (id == WorldRPG::ServerWorld::LocalPlayer()) g_foot = {x, y, z, g_foot.heading};
+}
 void RpcSetFrozen(uint32_t, bool) {}
 void NoteRemoteWasted(uint32_t, int, int, int) {}
 bool ConsumeHostedWasted(HostedWasted&) { return false; }

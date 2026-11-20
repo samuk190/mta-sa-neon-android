@@ -1116,8 +1116,7 @@ static bool IsLocalStatElement(lua_State* L, int index) {
     return id == 0 || id == ServerWorld::LocalPlayer();
 }
 
-// Desktop CStaticFunctionDefinitions::GetElementVelocity for the local ped.
-// Remote velocity is not exposed to Lua yet.
+// Desktop CStaticFunctionDefinitions::GetElementVelocity (466-516).
 static int l_getElementVelocity(lua_State* L) {
     float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 0;
     const uint32_t id = ElementIdOf(L, 1);
@@ -1127,7 +1126,14 @@ static int l_getElementVelocity(lua_State* L) {
         lua_pushnumber(L, vz);
         return 3;
     }
-    if (IsLocalStatElement(L, 1)) Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+    Game::LocalCarState car;
+    if (IsLocalStatElement(L, 1)) {
+        Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+    } else if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        vx = car.vx;
+        vy = car.vy;
+        vz = car.vz;
+    }
     lua_pushnumber(L, vx);
     lua_pushnumber(L, vy);
     lua_pushnumber(L, vz);
@@ -1573,8 +1579,14 @@ static int l_getElementPosition(lua_State* L) {
         return 3;
     }
     float x = 0, y = 0, z = 0, heading = 0;
-    if (id == 0 || id == ServerWorld::LocalPlayer()) Game::CopyPose(x, y, z, heading);
-    else if (!Game::CopyRemotePose(id, x, y, z) && !ServerWorld::ElementPose(id, x, y, z)) {
+    Game::LocalCarState car;
+    if (id == 0 || id == ServerWorld::LocalPlayer()) {
+        Game::CopyPose(x, y, z, heading);
+    } else if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        x = car.x;
+        y = car.y;
+        z = car.z;
+    } else if (!Game::CopyRemotePose(id, x, y, z) && !ServerWorld::ElementPose(id, x, y, z)) {
         lua_pushnil(L);
         return 1;
     }

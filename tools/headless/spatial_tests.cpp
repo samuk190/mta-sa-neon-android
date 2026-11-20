@@ -566,6 +566,14 @@ int main() {
         _G.elementTreeOk = true
     )LUA");
     Lua(vm, "assert(elementTreeOk, 'element tree script')");
+    Check(Rpc(handler, MtaIds::Rpc::SetElementPosition, 1, [](auto& w) {
+        w.Write(2229.5f); w.Write(-1722.f); w.Write(14.5f); w.Write(uint8_t(7));
+    }), "server teleport of the local player");
+    Lua(vm, "local x,y,z = getElementPosition(localPlayer); assert(x == 2229.5 and y == -1722 and z == 14.5)");
+    Check(Rpc(handler, MtaIds::Rpc::SetElementInterior, 1, [](auto& w) {
+        w.Write(uint8_t(0)); w.Write(uint8_t(0));
+    }), "server return to the exterior");
+    Check(ServerWorld::InteriorOf(1) == 0, "exterior applies to the local player");
     lua_State* L=Script::ActiveVmState();lua_getglobal(L,"otherShape");
     uint32_t localId=Script::ElementIdOf(L,-1);lua_pop(L,1);
     vm.shutdown();Check(!Script::SpatialShapeAlive(localId),"VM shutdown releases local colshapes");

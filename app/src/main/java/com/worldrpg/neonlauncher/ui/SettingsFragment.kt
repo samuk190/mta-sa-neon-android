@@ -150,8 +150,8 @@ class SettingsFragment : Fragment() {
                                     "Verifying game assets ${state.current}/${state.total}",
                                     if (state.total > 0) state.current * 100 / state.total else null
                                 )
-                            is NativeAssetBridge.DownloadState.Downloading ->
-                                showAssetProgress("Downloading ${state.fileName}", state.percent)
+                            is NativeAssetBridge.DownloadState.Syncing ->
+                                showAssetProgress("Syncing game assets ${state.current}/${state.total}", state.percent)
                             is NativeAssetBridge.DownloadState.Complete ->
                                 Toast.makeText(
                                     context,

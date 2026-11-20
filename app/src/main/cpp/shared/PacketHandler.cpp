@@ -205,6 +205,7 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             float x = 0, y = 0, z = 0;
             uint8_t context = 0;
             if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z) || !reader.Read(context)) return false;
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return false;
             WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
             if(kind && std::strcmp(kind,"colshape")==0) { WorldRPG::ServerWorld::NoteElementPosition(id,x,y,z); return true; }
             if (!pedLike) { WorldRPG::ServerWorld::NoteElementPosition(id,x,y,z); logUnported("native position on a non-ped element not ported; client pose stored"); return true; }
@@ -305,8 +306,6 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
                 PedSyncState::Teleport(id, {x, y, z});
                 WorldRPG::Game::RpcSetPosition(id, x, y, z);
             }
-            if (id == WorldRPG::ServerWorld::LocalPlayer())
-                logUnported("local SetInterior and SetAllInteriors not ported");
             return true;
         }
         case Rpc::SetElementModel: {
@@ -591,6 +590,7 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
         if (haveDimension) {
             WorldRPG::ServerWorld::SetLocalDimension(spawnDimension);
             WorldRPG::ServerWorld::NoteElementInterior(playerId,spawnInterior);
+            WorldRPG::Game::RpcSetInterior(playerId, spawnInterior);
         }
         WorldRPG::Game::ApplyServerSpawn(x, y, z);
         WorldRPG::JniBridge::PostGameLine(2, "100|");

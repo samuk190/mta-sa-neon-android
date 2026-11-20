@@ -109,6 +109,17 @@ public final class MtaDxView extends View {
     // Offscreen bitmaps keep their own pixel dimensions and are never DPI-scaled here.
     private int viewportWidth;
     private int viewportHeight;
+    private float keyboardScale = 1f;
+
+    void setKeyboardScale(float scale) {
+        if (keyboardScale == scale) return;
+        keyboardScale = scale;
+        invalidate();
+    }
+
+    private float keyboardOffsetX() {
+        return getWidth() * (1f - keyboardScale) * 0.5f;
+    }
 
     public void setCursorListener(CursorListener listener) {
         cursorListener = listener;
@@ -124,8 +135,8 @@ public final class MtaDxView extends View {
     @Override
     public boolean onTouchEvent(android.view.MotionEvent event) {
         if (!cursorShown || cursorListener == null) return false;
-        float x = InterfaceScale.toLogical(event.getX(), getWidth(), viewportWidth);
-        float y = InterfaceScale.toLogical(event.getY(), getHeight(), viewportHeight);
+        float x = InterfaceScale.toLogical((event.getX() - keyboardOffsetX()) / keyboardScale, getWidth(), viewportWidth);
+        float y = InterfaceScale.toLogical(event.getY() / keyboardScale, getHeight(), viewportHeight);
         switch (event.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
                 cursorListener.onCursor(0, x, y);
@@ -177,6 +188,8 @@ public final class MtaDxView extends View {
         Canvas screen = canvas;
         screen.save();
         try {
+            screen.translate(keyboardOffsetX(), 0f);
+            screen.scale(keyboardScale, keyboardScale);
             if (viewportWidth > 0 && viewportHeight > 0 && getWidth() > 0 && getHeight() > 0)
                 screen.scale((float) getWidth() / viewportWidth, (float) getHeight() / viewportHeight);
             for (String line : lines) {

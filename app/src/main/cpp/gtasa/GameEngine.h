@@ -144,6 +144,7 @@ bool BeginServerSession();
 // True once BeginServerSession left the frontend and the game is playing (read-only).
 bool ServerSessionLive();
 void ApplyServerSpawn(float x, float y, float z);
+bool LocalPlacementPending();
 void CopySpawn(float& x, float& y, float& z);
 // Live pose sampled on the game thread. Heading is radians, -pi..pi.
 void CopyPose(float& x, float& y, float& z, float& heading);
