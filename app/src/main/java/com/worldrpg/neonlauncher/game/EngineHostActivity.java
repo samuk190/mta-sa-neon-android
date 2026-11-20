@@ -35,6 +35,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.worldrpg.neonlauncher.BuildConfig;
+import com.worldrpg.neonlauncher.network.JoinProtocolSettings;
 import com.worldrpg.neonlauncher.utils.PreferencesManager;
 import com.rockstargames.gtasa.GTASA;
 import com.worldrpg.engine.EngineCaseAliases;
@@ -93,15 +94,11 @@ public final class EngineHostActivity extends GTASA {
 
     private native boolean nativeInit();
     private native boolean nativeSetAssetPath(String assetPath);
-    private native boolean nativeConnect(String ip, int port, String nickname);
+    private native boolean nativeConnect(String ip, int port, String nickname, int joinProfile);
     private native boolean nativeSetNetworkSerial(String serial);
     private native boolean nativeCancelIdentityRequest(long requestId);
     private native void nativeProvideIdentityTicket(long requestId, String ticket, String error);
     private com.worldrpg.neonlauncher.ui.NeonIdentityUi identityUi;
-
-    public int getNativeJoinProfile() {
-        return getIntent().getIntExtra("join_profile", 0);
-    }
 
     public void onNativeIdentityRequest(long requestId, String serverId, String endpoint, int mode) {
         // JNI can be holding the state mutex. Always queue before calling JNI back.
@@ -317,7 +314,8 @@ public final class EngineHostActivity extends GTASA {
 
     private boolean connectToServer() {
         if (!clientReady || isFinishing() || isDestroyed()) return false;
-        if (!nativeConnect(connectIp, connectPort, connectNick)) return false;
+        int joinProfile = getIntent().getIntExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, 0);
+        if (!nativeConnect(connectIp, connectPort, connectNick, joinProfile)) return false;
         if (loadingView != null) loadingView.update("Connecting to " + connectIp + ":" + connectPort, 0f, 0f, 1f);
         else showDownload(0, "Connecting to server");
         if (netRunning) return true;

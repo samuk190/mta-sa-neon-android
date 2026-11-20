@@ -93,7 +93,6 @@ public:
 
     // --- MTA Handshake Helpers ---
     bool SendOpenPacket();
-    bool SendJoinRequest(const std::string& nickname, const std::string& serial);
 
 private:
     std::unique_ptr<RakNetWrapper> raknet_;
@@ -253,11 +252,6 @@ bool CNetAdapter::VerifySignature(const uint8_t* data, size_t length) {
 bool CNetAdapter::SendOpenPacket() {
     if (!initialized_.load()) return false;
     return raknet_->SendOpenPacket();
-}
-
-bool CNetAdapter::SendJoinRequest(const std::string& nickname, const std::string& serial) {
-    if (!initialized_.load()) return false;
-    return raknet_->SendJoinRequest(nickname, serial);
 }
 
 // ---------------------------------------------------------------------------

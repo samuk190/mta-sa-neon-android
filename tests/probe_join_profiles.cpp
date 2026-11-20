@@ -11,7 +11,10 @@ int main(int argc, char** argv) {
     if (argc != 4) { std::cerr << "usage: probe_join_profiles host port auto|standard|legacy\n"; return 2; }
     const std::string mode = argv[3];
     if (mode != "auto" && mode != "standard" && mode != "legacy") return 2;
-    const auto profile = SelectJoinProfile(argv[1], std::atoi(argv[2]), mode == "standard" ? JoinProfile::Standard : mode == "legacy" ? JoinProfile::LegacyMobile : JoinProfile::Automatic);
+    auto requestedProfile = JoinProfile::Automatic;
+    if (mode == "standard") requestedProfile = JoinProfile::Standard;
+    if (mode == "legacy") requestedProfile = JoinProfile::LegacyMobile;
+    const auto profile = SelectJoinProfile(requestedProfile);
     RakNetWrapper net;
     bool finished = false, accepted = false, sent = false;
     net.SetConnectionStateCallback([&](bool connected, const char* reason) {

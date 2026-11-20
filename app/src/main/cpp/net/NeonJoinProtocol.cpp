@@ -14,7 +14,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -147,7 +146,6 @@ struct NeonJoinClient::Impl {
     std::string nickname;
     std::string password;
     std::string identityTicket;
-    JoinProfile requestedProfile = JoinProfile::Automatic;
     uint32_t deadlineMs = 0;
 
     void SetState(JoinState next, const char* detail) {
@@ -1027,8 +1025,8 @@ struct NeonJoinClient::Impl {
         const bool valid = BuildJoinData(info.joinProfile, nickname, password, identityTicket, w);
         identityTicket.clear(); // Tickets are consumed once, including failed sends.
         if (!valid) return false;
-        JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s bitstream=0x30",
-                  info.joinProfile == JoinProfile::LegacyMobile ? 19 : 4,
+        JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s platform=android bitstream=0x30",
+                  static_cast<unsigned>(w.GetData()[0]),
                   info.joinProfile == JoinProfile::LegacyMobile ? "legacy-mobile" : "standard");
         return SendUpe(w);
     }
@@ -1081,12 +1079,6 @@ struct NeonJoinClient::Impl {
         if (modName != "deathmatch") {
             Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
             return;
-        }
-        if (net) {
-            const std::string endpoint = net->GetConnectedServer(true);
-            const auto colon = endpoint.rfind(':');
-            const uint16_t port = colon == std::string::npos ? 0 : static_cast<uint16_t>(std::strtoul(endpoint.c_str() + colon + 1, nullptr, 10));
-            info.joinProfile = SelectJoinProfile(net->GetConnectedServer(false), port, requestedProfile);
         }
         WorldRPG::ServerWorld::SetCurrentWaterFlags(info.joinProfile == JoinProfile::Standard);
         JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
@@ -1258,7 +1250,7 @@ bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, cons
     pImpl_->identityTicket.clear();
     pImpl_->identityRequestId = 0;
     pImpl_->info = NeonJoinInfo{};
-    pImpl_->requestedProfile = profile;
+    pImpl_->info.joinProfile = SelectJoinProfile(profile);
     pImpl_->SetState(JoinState::WaitingRakNet, "waiting for RakNet connect");
     return true;
 }

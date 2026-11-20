@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Current Neon gameplay protocol
 
+- Automatic and Standard join with packet 4 on every endpoint. Explicit Legacy mobile uses packet 19. Android declares its platform in the existing fixed-width field from desktop `CClientGame::StartGame` (`CClientGame.cpp:744-767`).
 - Server spawn packets schedule local player placement on the game thread, using the same path as server position updates.
 - Standard joins use `0x41E7`. The entity reader consumes three or four water vertices and both water flags, following Neon’s `CPacketHandler::Packet_EntityAdd` and `CEntityAddPacket::Write`. Truncated water packets fail decoding.
 - The launcher can answer a trusted issuer’s Android Keystore challenge during join. Chat text and HTTP resource downloads use the companion fixes from Neon PR #135.

@@ -250,7 +250,6 @@ public:
 
     // MTA handshake helpers
     bool SendOpenPacket();
-    bool SendJoinRequest(const std::string& nickname, const std::string& serial);
     bool VerifySerialSignature(const uint8_t* data, size_t length);
 
     /// Returns true once the full MTA handshake has completed (RakNet connected + join accepted).

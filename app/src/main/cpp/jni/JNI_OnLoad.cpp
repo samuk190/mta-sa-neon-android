@@ -566,7 +566,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeResume(JNIEnv* env, jobje
 
 JNIEXPORT jboolean JNICALL
 Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
-    JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname)
+    JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname, jint joinProfile)
 {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state->assetsReady || !ip || !nickname ||
@@ -602,15 +602,10 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
     // The Neon join handshake (PLAYER_JOIN -> MOD_NAME -> PLAYER_JOINDATA ->
     // SERVER_JOIN_COMPLETE -> RPCs -> SERVER_JOINEDGAME) is driven by
     // NeonJoinClient from nativePulse once the transport is up.
-    jint joinProfile = 0;
-    jclass activityClass = env->GetObjectClass(thiz);
-    jmethodID getProfile = env->GetMethodID(activityClass, "getNativeJoinProfile", "()I");
-    if (env->ExceptionCheck()) env->ExceptionClear();
-    if (getProfile) joinProfile = env->CallIntMethod(thiz, getProfile);
-    if (env->ExceptionCheck()) { env->ExceptionClear(); joinProfile = 0; }
-    env->DeleteLocalRef(activityClass);
-    if (joinProfile < 0 || joinProfile > 2) joinProfile = 0;
-    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "", static_cast<WorldRPG::Net::JoinProfile>(joinProfile))) {
+    const auto profile = joinProfile == static_cast<jint>(WorldRPG::Net::JoinProfile::LegacyMobile)
+        ? WorldRPG::Net::JoinProfile::LegacyMobile
+        : WorldRPG::Net::JoinProfile::Standard;
+    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "", profile)) {
         g_state->network->StopNetwork();
         return JNI_FALSE;
     }
@@ -896,8 +891,9 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSetAssetPath(JNIEnv
     return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetAssetPath(env, thiz, assetPath);
 }
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeConnect(JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname) {
-    return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(env, thiz, ip, port, nickname);
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeConnect(
+    JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname, jint joinProfile) {
+    return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(env, thiz, ip, port, nickname, joinProfile);
 }
 JNIEXPORT void JNICALL
 Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz) {

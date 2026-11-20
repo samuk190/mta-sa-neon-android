@@ -2,8 +2,10 @@ package com.worldrpg.neonlauncher.network
 
 import android.content.Context
 
-/** Per-server override. Native Automatic chooses legacy only for known World RPG endpoints. */
+/** The legacy handshake is an explicit per-server preference. */
 object JoinProtocolSettings {
+    const val EXTRA_JOIN_PROFILE = "join_profile"
+
     @JvmStatic fun read(context: Context, host: String, port: Int): Int =
         context.getSharedPreferences("neon_join_protocol", Context.MODE_PRIVATE)
             .getInt(key(host, port), 0).takeIf { it in 0..2 } ?: 0

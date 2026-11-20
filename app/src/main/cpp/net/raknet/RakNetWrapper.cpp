@@ -594,7 +594,6 @@ enum class HandshakeState : uint8_t {
     IDLE = 0,
     RAKNET_CONNECTING,
     RAKNET_CONNECTED,       // RakNet CONNECTION_REQUEST_ACCEPTED received
-    JOIN_SENT,              // SendJoinRequest dispatched
     HANDSHAKE_COMPLETE,     // Server accepted join (user packet or spawn)
     FAILED
 };
@@ -614,8 +613,6 @@ struct RakNetWrapper::Impl {
     std::atomic<uint8_t> connectionError{0};
     char serialBuffer[64] = {};
     uint32_t startTime = 0;
-    std::string pendingNickname;
-    std::string pendingSerial;
     // Wire packet id 0..255. Application packets use 99 + ePacketID.
     std::array<PacketUsage, 256> usageIn{};
     std::array<PacketUsage, 256> usageOut{};
@@ -840,7 +837,7 @@ bool RakNetWrapper::SendPacket(uint8_t packetId, const BitStreamWriter& stream,
     size_t bits = stream.GetBitLength();
     if (packetId == static_cast<uint8_t>(PacketID::USER_PACKET_ENUM)) {
         if (bits < 8 || stream.GetData()[0] > 156) return false;
-        if (stream.GetData()[0] == 4) {
+        if (stream.GetData()[0] == NEON_JOIN_DATA_ID) {
             BitStreamWriter envelope;
             if (!BuildNetJoinEnvelope(stream,pImpl_->serialBuffer,envelope)) return false;
             sendBuf.assign(envelope.GetData(),envelope.GetData()+envelope.GetByteLength());
@@ -967,35 +964,6 @@ bool RakNetWrapper::SendOpenPacket() {
                       stream, PacketPriority::HIGH, PacketReliability::RELIABLE);
 }
 
-bool RakNetWrapper::SendJoinRequest(const std::string& nickname, const std::string& serial) {
-    // Store credentials for deferred send if RakNet hasn't connected yet
-    pImpl_->pendingNickname = nickname;
-    pImpl_->pendingSerial = serial;
-
-    auto state = pImpl_->handshakeState.load();
-    if (state != HandshakeState::RAKNET_CONNECTED && state != HandshakeState::JOIN_SENT) {
-        LOGI("RakNetWrapper: JoinRequest deferred (state=%d, waiting for RakNet connect)",
-             static_cast<int>(state));
-        return true; // Will be sent automatically when CONNECTION_REQUEST_ACCEPTED arrives
-    }
-
-    // Envelope: SendPacket() writes the RID_USER_PACKET_ENUM (99) prefix byte
-    // exactly once; the stream carries only the game packet body. Writing the
-    // UPE byte here too would double-prefix the join on the wire.
-    // TODO(P1B.2): replace simplified body with real PLAYER_JOINDATA layout
-    // from Client/mods/deathmatch/logic/CPacketHandler.cpp.
-    BitStreamWriter stream;
-    stream.Write(NormalizeAscii(nickname).c_str());
-    stream.Write(NormalizeAscii(serial).c_str());
-    bool sent = SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM),
-                           stream, PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
-    if (sent) {
-        pImpl_->handshakeState.store(HandshakeState::JOIN_SENT);
-        LOGI("RakNetWrapper: JoinRequest sent for '%s'", nickname.c_str());
-    }
-    return sent;
-}
-
 void RakNetWrapper::SetConnectionStateCallback(ConnectionStateCallback callback) {
     pImpl_->connectionStateCallback = std::move(callback);
 }
@@ -1011,7 +979,6 @@ void RakNetWrapper::MarkSessionAccepted() {
 bool RakNetWrapper::IsRakNetConnected() const {
     const auto s = pImpl_->handshakeState.load();
     return s == HandshakeState::RAKNET_CONNECTED ||
-           s == HandshakeState::JOIN_SENT ||
            s == HandshakeState::HANDSHAKE_COMPLETE;
 }
 

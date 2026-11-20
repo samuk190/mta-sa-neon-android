@@ -1,5 +1,5 @@
 #pragma once
-#include "raknet/RakNetWrapper.h"
+#include "JoinDataCodec.h"
 #include <array>
 #include <string>
 
@@ -9,12 +9,12 @@ namespace WorldRPG::Net {
 // 0x13d9c0..0x13e4c8: version, encoded serial/extra, version fields, build checksum,
 // optional module-data vector, alignment, then the game payload. No runtime patches.
 inline bool BuildNetJoinEnvelope(const BitStreamWriter& game, const std::string& serial, BitStreamWriter& out) {
-    if (game.GetBitLength() < 8 || game.GetData()[0] != 4 || serial.size() != 32) return false;
+    if (game.GetBitLength() < 8 || game.GetData()[0] != NEON_JOIN_DATA_ID || serial.size() != 32) return false;
     for (const char c : serial) if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) return false;
     constexpr std::array<uint8_t, 32> mask{
         0xd0,0xd2,0xd7,0xda,0xc5,0xf4,0x97,0x56,0xd8,0xda,0xdf,0xd2,0xcd,0xfc,0x9f,0x5e,
         0xc0,0xc2,0xc7,0xca,0xd5,0xe4,0x87,0x46,0xc8,0xca,0xcf,0xc2,0xdd,0xec,0x8f,0x4e};
-    out.Write(static_cast<uint8_t>(4));
+    out.Write(NEON_JOIN_DATA_ID);
     out.Write(static_cast<uint16_t>(0x0030));
     std::array<uint8_t, 32> encodedSerial{};
     for (size_t i=0; i<32; ++i) encodedSerial[i] = static_cast<uint8_t>(serial[i]) ^ mask[i];

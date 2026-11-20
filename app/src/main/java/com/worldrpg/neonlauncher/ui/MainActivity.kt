@@ -14,6 +14,7 @@ import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.R
 import com.worldrpg.neonlauncher.databinding.ActivityMainBinding
 import com.worldrpg.neonlauncher.game.EngineHostActivity
+import com.worldrpg.neonlauncher.network.JoinProtocolSettings
 import com.worldrpg.neonlauncher.game.EngineDiagnostics
 import com.worldrpg.neonlauncher.game.GameActivity
 import com.worldrpg.neonlauncher.network.ServerInfo
@@ -122,7 +123,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(GameActivity.EXTRA_SERVER_IP, server.ip)
             putExtra(GameActivity.EXTRA_SERVER_PORT, server.port)
             putExtra(GameActivity.EXTRA_SERVER_NAME, server.name)
-            putExtra("join_profile", com.worldrpg.neonlauncher.network.JoinProtocolSettings.read(this@MainActivity, server.ip, server.port))
+            putExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, JoinProtocolSettings.read(this@MainActivity, server.ip, server.port))
         }
         startActivity(intent)
     }
