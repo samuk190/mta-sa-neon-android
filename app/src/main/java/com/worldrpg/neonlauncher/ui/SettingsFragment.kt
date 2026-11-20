@@ -1,6 +1,7 @@
 package com.worldrpg.neonlauncher.ui
 
 import android.content.Intent
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -31,7 +32,10 @@ class SettingsFragment : Fragment() {
     private var identityUi: NeonIdentityUi? = null
     private var savedInterfaceScale = InterfaceScale.DEFAULT_PERCENT
 
-    private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
+    private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.data?.getBooleanExtra(EngineHostActivity.EXTRA_GAME_ASSETS_REQUIRED, false) == true) {
+            (activity as? MainActivity)?.showGameAssetsSetup()
+        }
         // MainActivity presents stored failures, including native crashes with no Activity result.
         updateEngineTestButton()
     }
@@ -133,44 +137,47 @@ class SettingsFragment : Fragment() {
     }
 
     private fun setupAssetSyncButton() {
-        val button = binding.btnSyncAssets
-        button.setOnClickListener {
-            button.isEnabled = false
-            syncingAssets = true
-            updateEngineTestButton()
-            showAssetProgress(getString(R.string.downloading_assets), null)
-            viewLifecycleOwner.lifecycleScope.launch {
-                try {
-                    nativeAssetBridge.syncAssets().collect { state ->
-                        when (state) {
-                            NativeAssetBridge.DownloadState.FetchingManifest ->
-                                showAssetProgress("Fetching game asset manifest...", null)
-                            is NativeAssetBridge.DownloadState.Verifying ->
-                                showAssetProgress(
-                                    "Verifying game assets ${state.current}/${state.total}",
-                                    if (state.total > 0) state.current * 100 / state.total else null
-                                )
-                            is NativeAssetBridge.DownloadState.Syncing ->
-                                showAssetProgress("Syncing game assets ${state.current}/${state.total}", state.percent)
-                            is NativeAssetBridge.DownloadState.Complete ->
-                                Toast.makeText(
-                                    context,
-                                    "${state.fileCount} game data files verified",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            is NativeAssetBridge.DownloadState.Error ->
-                                Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
-                        }
+        binding.btnSyncAssets.setOnClickListener { syncGameAssets() }
+    }
+
+    internal fun syncGameAssets() {
+        val viewBinding = _binding ?: return
+        val status = viewBinding.assetStatus
+        status.post {
+            status.requestRectangleOnScreen(Rect(0, 0, status.width, status.height + viewBinding.btnSyncAssets.height))
+        }
+        if (syncingAssets) return
+        viewBinding.btnSyncAssets.isEnabled = false
+        syncingAssets = true
+        updateEngineTestButton()
+        showAssetProgress(getString(R.string.downloading_assets), null)
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                nativeAssetBridge.syncAssets().collect { state ->
+                    when (state) {
+                        NativeAssetBridge.DownloadState.FetchingManifest ->
+                            showAssetProgress("Fetching game asset manifest...", null)
+                        is NativeAssetBridge.DownloadState.Verifying ->
+                            showAssetProgress(
+                                "Verifying game assets ${state.current}/${state.total}",
+                                if (state.total > 0) state.current * 100 / state.total else null
+                            )
+                        is NativeAssetBridge.DownloadState.Syncing ->
+                            showAssetProgress("Syncing game assets ${state.current}/${state.total}", state.percent)
+                        is NativeAssetBridge.DownloadState.Complete ->
+                            Toast.makeText(context, "${state.fileCount} game files verified", Toast.LENGTH_LONG).show()
+                        is NativeAssetBridge.DownloadState.Error ->
+                            Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
                     }
-                } finally {
-                    _binding?.let { b ->
-                        b.assetStatus.visibility = View.GONE
-                        b.assetProgress.visibility = View.GONE
-                        b.btnSyncAssets.isEnabled = true
-                    }
-                    syncingAssets = false
-                    updateEngineTestButton()
                 }
+            } finally {
+                _binding?.let { b ->
+                    b.assetStatus.visibility = View.GONE
+                    b.assetProgress.visibility = View.GONE
+                    b.btnSyncAssets.isEnabled = true
+                }
+                syncingAssets = false
+                updateEngineTestButton()
             }
         }
     }
@@ -197,8 +204,8 @@ class SettingsFragment : Fragment() {
         binding.btnTestGta.visibility = if (BuildConfig.DEBUG) View.VISIBLE else View.GONE
         binding.btnTestGta.setOnClickListener {
             if (!BuildConfig.DEBUG || syncingAssets) return@setOnClickListener
-            if (nativeAssetBridge.getReadyStoragePath() == null) {
-                Toast.makeText(context, "Sincronize os arquivos do jogo antes de testar o GTA.", Toast.LENGTH_LONG).show()
+            if (EngineHostActivity.findReadyGameDirectory(requireContext(), nativeAssetBridge) == null) {
+                (activity as? MainActivity)?.showGameAssetsSetup()
                 updateEngineTestButton()
                 return@setOnClickListener
             }
@@ -214,7 +221,8 @@ class SettingsFragment : Fragment() {
     private fun updateEngineTestButton() {
         val viewBinding = _binding ?: return
         viewBinding.btnTestGta.isEnabled = BuildConfig.DEBUG && !syncingAssets &&
-            ::nativeAssetBridge.isInitialized && nativeAssetBridge.getReadyStoragePath() != null
+            ::nativeAssetBridge.isInitialized &&
+            EngineHostActivity.findReadyGameDirectory(requireContext(), nativeAssetBridge) != null
     }
 
     override fun onResume() {

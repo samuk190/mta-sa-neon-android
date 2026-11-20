@@ -1076,7 +1076,8 @@ struct NeonJoinClient::Impl {
             Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
             return;
         }
-        WorldRPG::ServerWorld::SetCurrentWaterFlags(info.joinProfile == JoinProfile::Standard);
+        const bool standard = info.joinProfile == JoinProfile::Standard;
+        WorldRPG::ServerWorld::ConfigureEntityAdd(standard, standard && bsVersion >= 0x0031);
         JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
                   modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
         if (info.authMode != NeonAuthMode::Disabled && identityCallback) {

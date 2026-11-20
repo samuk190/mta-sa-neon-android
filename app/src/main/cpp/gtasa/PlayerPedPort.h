@@ -40,6 +40,7 @@ void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera =
                     uint8_t buttons = 0);
 // True when remote bodies get their own virtual touch (CTouchInterface hooks installed).
 bool RemoteTouchActive();
+bool InRemoteControlContext();
 void ClearRemoteStick(void* ped);
 
 // Hooks CWeapon::Fire once (desktop CWeaponSA::Fire / CMultiplayerSA shotsync). For the local ped with a

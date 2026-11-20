@@ -39,6 +39,8 @@ class NativeAssetBridge(private val context: Context) {
     private val active = File(storage, "active")
     private val cdnRoot = BuildConfig.CDN_ROOT_URL.trim().trimEnd('/').ifBlank { DEFAULT_CDN_ROOT }
 
+    fun usesCdn(): Boolean = cdnRoot.isNotBlank()
+
     sealed interface DownloadState {
         data object FetchingManifest : DownloadState
         data class Verifying(val current: Int, val total: Int) : DownloadState

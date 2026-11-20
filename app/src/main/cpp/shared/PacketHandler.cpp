@@ -4,6 +4,7 @@
 #include "MtaIds.h"
 #include "ConnectionLoading.h"
 #include "entity/EntityAddTypes.h"
+#include "entity/EntityVehicleModels.h"
 #include "entity/PedWire.h"
 #include "entity/PedSyncState.h"
 #include "PerformanceProfiler.h"
@@ -199,6 +200,39 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             return WorldRPG::ServerWorld::ReadSetElementDataRpc(id, reader);
         case Rpc::RemoveElementData:
             return WorldRPG::ServerWorld::ReadRemoveElementDataRpc(id, reader);
+        case Rpc::SetVehicleLocked: {
+            // CVehicleRPCs::SetVehicleLocked (161-175) reads a full byte.
+            uint8_t locked = 0;
+            if (!reader.Read(locked)) return false;
+            WorldRPG::ServerWorld::SetVehicleDoorLockMode(id, locked != 0 ? 2 : 1);
+            return true;
+        }
+        case Rpc::AddVehicleUpgrade: {
+            // CVehicleRPCs.cpp:255-270 sends the full upgrade id as uint16.
+            uint16_t upgrade = 0;
+            if (!reader.Read(upgrade)) return false;
+            if (WorldRPG::Entity::VehicleModels::IsNitroUpgrade(upgrade))
+                WorldRPG::ServerWorld::SetVehicleNitroUpgrade(id, upgrade, true);
+            else
+                logUnported("non-nitro vehicle upgrades are not applied");
+            return true;
+        }
+        case Rpc::AddAllVehicleUpgrades:
+            // CVehicleRPCs.cpp:272-283. The desktop adds in ascending order, ending the nitro slot at 1010.
+            WorldRPG::ServerWorld::SetVehicleNitroUpgrade(id, WorldRPG::Entity::VehicleModels::kNitroUpgrade10x, true);
+            logUnported("non-nitro vehicle upgrades are not applied");
+            return true;
+        case Rpc::RemoveVehicleUpgrade: {
+            // CVehicleRPCs.cpp:285-303 sends the upgrade id minus 1000 as uint8.
+            uint8_t upgrade = 0;
+            if (!reader.Read(upgrade)) return false;
+            const auto modelId = static_cast<uint16_t>(1000 + upgrade);
+            if (WorldRPG::Entity::VehicleModels::IsNitroUpgrade(modelId))
+                WorldRPG::ServerWorld::SetVehicleNitroUpgrade(id, modelId, false);
+            else
+                logUnported("non-nitro vehicle upgrades are not applied");
+            return true;
+        }
         case Rpc::SetElementPosition: {
             // CElementRPCs::SetElementPosition (122-170): x, y, z floats, u8 time context; a player then has an
             // optional u8 warp (Teleport vs SetPosition, both place the body here).

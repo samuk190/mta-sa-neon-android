@@ -94,7 +94,11 @@ struct ClientTransport::Impl {
         socket.Close();
     }
     bool Raw(std::span<const std::uint8_t> bytes) {
-        if (!cipher || !socket.Send(cipher->Seal(bytes, selector++))) { Fail("MTA datagram send failed"); return false; }
+        if (!cipher) { Fail("MTA datagram cipher unavailable"); return false; }
+        if (!socket.Send(cipher->Seal(bytes, selector++))) {
+            Fail("MTA datagram send failed: " + socket.Error());
+            return false;
+        }
         return true;
     }
     bool Frame(const ReliableFrame& frame) {

@@ -1182,35 +1182,76 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
         super.onStop();
     }
 
-    @Override // android.app.Activity
-    public boolean onTouchEvent(android.view.MotionEvent motionEvent) {
-        boolean onTouchEvent = super.onTouchEvent(motionEvent);
-        if (!onTouchEvent) {
-            int pointerCount = motionEvent.getPointerCount();
-            int i = 0;
-            int i2 = 0;
-            int i3 = 0;
-            int i4 = 0;
-            int i5 = 0;
-            for (int i6 = 0; i6 < pointerCount; i6++) {
-                if (motionEvent.getPointerId(i6) < 2) {
-                    if (i == 0) {
-                        i2 = (int) motionEvent.getX(i6);
-                        i3 = (int) motionEvent.getY(i6);
-                    } else if (i == 1) {
-                        i4 = (int) motionEvent.getX(i6);
-                        i5 = (int) motionEvent.getY(i6);
-                    }
-                    i++;
-                }
+    private static final int NO_TOUCH = -1;
+    private final int[] gameTouchIds = {NO_TOUCH, NO_TOUCH};
+
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent event) {
+        if (super.onTouchEvent(event)) return true;
+        try {
+            return dispatchGameTouch(event);
+        } catch (java.lang.UnsatisfiedLinkError unused) {
+            return false;
+        }
+    }
+
+    private boolean dispatchGameTouch(android.view.MotionEvent event) {
+        final int action = event.getActionMasked();
+        if (action == android.view.MotionEvent.ACTION_CANCEL
+                || action == android.view.MotionEvent.ACTION_DOWN) {
+            if (gameTouchIds[1] != NO_TOUCH) {
+                // The 2.10 bridge only cancels slot zero on ACTION_CANCEL.
+                multiTouchEvent(pointerAction(android.view.MotionEvent.ACTION_POINTER_UP, 1),
+                        2, 0, 0, 0, 0, event);
             }
-            try {
-                return multiTouchEvent(motionEvent.getAction(), i, i2, i3, i4, i5, motionEvent);
-            } catch (java.lang.UnsatisfiedLinkError unused) {
+            if (gameTouchIds[0] != NO_TOUCH) {
+                multiTouchEvent(android.view.MotionEvent.ACTION_CANCEL, 0, 0, 0, 0, 0, event);
+            }
+            gameTouchIds[0] = NO_TOUCH;
+            gameTouchIds[1] = NO_TOUCH;
+            if (action == android.view.MotionEvent.ACTION_CANCEL) return true;
+        }
+
+        // Android pointer IDs can be greater than one, and its pointer indices
+        // change after a lift. The native bridge uses two fixed coordinate slots
+        // and interprets pointer-up actions 6 and 262 as releases of those slots.
+        int nativeAction = android.view.MotionEvent.ACTION_MOVE;
+        int releasedSlot = NO_TOUCH;
+        if (action != android.view.MotionEvent.ACTION_MOVE) {
+            final int id = event.getPointerId(event.getActionIndex());
+            if (action == android.view.MotionEvent.ACTION_DOWN
+                    || action == android.view.MotionEvent.ACTION_POINTER_DOWN) {
+                final int slot = gameTouchIds[0] == NO_TOUCH ? 0 : 1;
+                if (gameTouchIds[slot] != NO_TOUCH) return true;
+                gameTouchIds[slot] = id;
+                nativeAction = slot == 0 ? android.view.MotionEvent.ACTION_DOWN
+                        : pointerAction(android.view.MotionEvent.ACTION_POINTER_DOWN, 1);
+            } else if (action == android.view.MotionEvent.ACTION_UP
+                    || action == android.view.MotionEvent.ACTION_POINTER_UP) {
+                if (gameTouchIds[0] == id) releasedSlot = 0;
+                else if (gameTouchIds[1] == id) releasedSlot = 1;
+                else return true;
+                nativeAction = releasedSlot == 0 && gameTouchIds[1] == NO_TOUCH
+                        ? android.view.MotionEvent.ACTION_UP
+                        : pointerAction(android.view.MotionEvent.ACTION_POINTER_UP, releasedSlot);
+            } else {
                 return false;
             }
         }
-        return onTouchEvent;
+
+        final int first = event.findPointerIndex(gameTouchIds[0]);
+        final int second = event.findPointerIndex(gameTouchIds[1]);
+        if (first < 0 && second < 0) return true;
+        final boolean handled = multiTouchEvent(nativeAction, second >= 0 ? 2 : 1,
+                first >= 0 ? (int) event.getX(first) : 0, first >= 0 ? (int) event.getY(first) : 0,
+                second >= 0 ? (int) event.getX(second) : 0, second >= 0 ? (int) event.getY(second) : 0,
+                event);
+        if (releasedSlot != NO_TOUCH) gameTouchIds[releasedSlot] = NO_TOUCH;
+        return handled;
+    }
+
+    private static int pointerAction(int action, int slot) {
+        return action | (slot << android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT);
     }
 
     @Override // android.app.Activity, android.view.Window.Callback

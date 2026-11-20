@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -32,8 +33,7 @@
 
 namespace WorldRPG::Entity {
 
-// Effective peer bitstream for entity/ped data. NeonJoinProtocol pins the peer to 0x0030,
-// so the server writes the 0x0030 layout even though MOD_NAME reports 0x3D.
+// Advertised peer bitstream for the baseline sync fields.
 constexpr uint16_t kServerEntityBitStream = 0x0030;
 
 // Element type ids (CClientGame.h enum). Only the values S1 touches are named.
@@ -91,6 +91,9 @@ struct Visual {
     // health < 0 means the body did not carry one.
     float rotX = 0, rotY = 0;
     float health = -1.f;
+    int vehicleDoorLock = 1;
+    uint16_t nitroUpgrade = 0;
+    uint64_t nitroRevision = 0;
     bool hosted = false;
     // ENTITY_ADD common header. CClientPed::SetInterior / RequestCollision use it.
     uint8_t interior = 0;
@@ -225,20 +228,20 @@ bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out);
 // ---- Element parsing ----
 
 // Common header, custom data and name. Defined in EntityAddCore.cpp.
-bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out);
+bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out, bool extendedHeader);
 
 // Dispatch on common.type. Defined in EntityAddCore.cpp.
 // Returns false on a parse failure (DIAG already logged); the caller stops the packet.
 // Resolver runs under the caller's element-table lock; -1 means unknown.
-using ElementKindResolver = int (*)(uint32_t id);
+using ElementKindResolver = std::function<int(uint32_t)>;
 bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
-                    ElementKindResolver resolveKind = nullptr, bool currentWaterFlags = true);
+                    const ElementKindResolver& resolveKind = {}, bool currentWaterFlags = true);
 
 // Per-type bodies.
 bool ReadEntityBodyPed(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual);      // EntityAddPed.cpp (stub)
 bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual);  // EntityAddVehicle.cpp (stub)
 bool ReadEntityBodyObject(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
-                          ElementKindResolver resolveKind = nullptr); // EntityAddObject.cpp
+                          const ElementKindResolver& resolveKind = {}); // EntityAddObject.cpp
 bool ReadEntityBodyDummy(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual);   // EntityAddDummy.cpp
 bool ReadEntityBodyMarker(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual);  // EntityAddMarker.cpp
 bool ReadEntityBodyOther(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual);   // EntityAddOther.cpp: BLIP, PICKUP, RADAR_AREA, COLSHAPE, PATH_NODE, TEAM, ...

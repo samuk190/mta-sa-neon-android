@@ -162,7 +162,20 @@ private suspend fun verifyCdn(root: File) {
     check(repaired != after && File(repaired, "data/addon.dat").readText() == "new")
     check(requests["data/addon.dat"] == checkNotNull(beforeRepair["data/addon.dat"]) + 1)
     check(requests.filterKeys { it != "data/addon.dat" } == beforeRepair.filterKeys { it != "data/addon.dat" })
-    check(File(repaired, "data/addon.dat").delete())
+
+    val libraries = listOf("libGTASA.so", "libSCAnd.so", "libOpenAL64.so")
+        .associate { name -> "lib/$name" to name.toByteArray() }
+    val beforeEngineSync = requests.toMap()
+    update.set(Update(second.files + libraries))
+    expectComplete(bridge)
+    val withEngine = installed(bridge)
+    check(withEngine != repaired)
+    for ((path, content) in libraries) {
+        check(File(withEngine, path).readBytes().contentEquals(content))
+        check(requests[path] == 1)
+    }
+    check(requests.filterKeys { it !in libraries } == beforeEngineSync)
+    check(File(withEngine, "lib/libSCAnd.so").delete())
     check(bridge.getReadyStoragePath() == null)
 }
 

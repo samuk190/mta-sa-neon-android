@@ -184,6 +184,10 @@ public final class EngineDiagnostics {
                     JSONObject old = new JSONObject(read(marker));
                     String state = old.optString("state");
                     if ("closed".equals(state) || "reported".equals(state)) return;
+                    // Updating the APK can leave a running marker from the retired engine process.
+                    long started = old.optLong("started");
+                    if (started < activity.getPackageManager().getPackageInfo(activity.getPackageName(), 0).lastUpdateTime)
+                        return;
                     int pid = old.optInt("pid");
                     ActivityManager manager = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
                     List<ActivityManager.RunningAppProcessInfo> processes = manager == null ? null : manager.getRunningAppProcesses();

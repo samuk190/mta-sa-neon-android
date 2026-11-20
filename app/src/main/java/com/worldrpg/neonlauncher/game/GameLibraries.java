@@ -15,12 +15,9 @@ import java.util.List;
 /**
  * Loads the GTA San Andreas Mobile 2.10 native libraries.
  *
- * A developer build may package them (app/src/main/jniLibs/arm64-v8a, git-ignored). The public
- * release APK does not ship them: they are the game's own code, so each player copies them from
- * their own copy of the game into the game folder, under {@code lib/}. Android will not load code
- * from shared storage, so the files are copied into the app's private storage first and loaded
- * from there. libGTASA.so needs libSCAnd.so and libOpenAL64.so (DT_NEEDED), so those load first;
- * the linker then matches them by soname.
+ * The CDN installs the libraries under {@code lib/} in the active game folder. A local
+ * installation can supply the same files, and developer builds can package them. The loader
+ * stages external libraries in private storage and loads libGTASA.so after its dependencies.
  */
 final class GameLibraries {
     private static final String TAG = "GameLibraries";
@@ -29,8 +26,13 @@ final class GameLibraries {
 
     private GameLibraries() {}
 
+    static boolean areAvailable(Context context, File gameDirectory, File localAssetsFolder) {
+        File packaged = new File(context.getApplicationInfo().nativeLibraryDir, "libGTASA.so");
+        return packaged.isFile() || findSource(gameDirectory, localAssetsFolder) != null;
+    }
+
     /** Loads libGTASA (and its two dependencies). Throws with a player-readable message when missing. */
-    static void load(Context context, File gameDirectory, File localAssetsFolder) throws IOException {
+    static void load(Context context, File gameDirectory, File localAssetsFolder, boolean usesCdn) throws IOException {
         try {
             System.loadLibrary("GTASA");
             Log.i(TAG, "libGTASA.so loaded from the APK");
@@ -41,6 +43,9 @@ final class GameLibraries {
 
         File source = findSource(gameDirectory, localAssetsFolder);
         if (source == null) {
+            if (usesCdn) {
+                throw new IOException("Game engine files are missing. Run Sync game assets in Settings.");
+            }
             String where = (localAssetsFolder != null ? localAssetsFolder : gameDirectory) + File.separator + "lib";
             throw new IOException("Game libraries missing. Copy libGTASA.so, libSCAnd.so and libOpenAL64.so from "
                     + "lib/arm64-v8a/ of your GTA San Andreas 2.10 APK to " + where);

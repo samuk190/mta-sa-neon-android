@@ -15,8 +15,13 @@
     <string name="interface_scale_default">Padrão</string>
     <string name="interface_scale_save_failed">Não foi possível salvar a escala da interface.</string>
     <string name="engine_debug">Debug da engine</string>
+    <string name="sync_assets">Sincronizar arquivos do jogo</string>
+    <string name="game_setup_title">Prepare os arquivos do jogo</string>
+    <string name="game_setup_message">Sincronize os arquivos do jogo antes de entrar em um servidor.</string>
     <string name="engine_debug_description">Captura os logs do jogo e abre uma janela após uma falha da engine. Aplicado na próxima sessão do jogo.</string>
     <string name="connection_mode">Modo de conexão</string>
+    <string name="disconnect_close">Fechar</string>
+    <string name="disconnect_retry">Reconectar</string>
     <string-array name="connection_modes">
         <item>Automático</item>
         <item>Padrão</item>

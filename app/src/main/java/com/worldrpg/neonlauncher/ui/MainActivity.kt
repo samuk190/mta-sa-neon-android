@@ -3,6 +3,7 @@ package com.worldrpg.neonlauncher.ui
 import android.content.Intent
 import android.os.Bundle
 import android.widget.ImageView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -10,6 +11,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.R
 import com.worldrpg.neonlauncher.databinding.ActivityMainBinding
@@ -18,10 +21,20 @@ import com.worldrpg.neonlauncher.network.JoinProtocolSettings
 import com.worldrpg.neonlauncher.game.EngineDiagnostics
 import com.worldrpg.neonlauncher.game.GameActivity
 import com.worldrpg.neonlauncher.network.ServerInfo
+import com.worldrpg.neonlauncher.utils.NativeAssetBridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private var checkingGameAssets = false
+    private val game = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.data?.getBooleanExtra(EngineHostActivity.EXTRA_GAME_ASSETS_REQUIRED, false) == true) {
+            showGameAssetsSetup()
+        }
+    }
 
     override fun onResume() {
         super.onResume()
@@ -119,12 +132,39 @@ class MainActivity : AppCompatActivity() {
      * touch controls. The blank GameActivity surface only pumped the network.
      */
     fun launchGame(server: ServerInfo) {
-        val intent = Intent(this, EngineHostActivity::class.java).apply {
-            putExtra(GameActivity.EXTRA_SERVER_IP, server.ip)
-            putExtra(GameActivity.EXTRA_SERVER_PORT, server.port)
-            putExtra(GameActivity.EXTRA_SERVER_NAME, server.name)
-            putExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, JoinProtocolSettings.read(this@MainActivity, server.ip, server.port))
+        if (checkingGameAssets) return
+        checkingGameAssets = true
+        lifecycleScope.launch {
+            try {
+                val ready = withContext(Dispatchers.IO) {
+                    EngineHostActivity.findReadyGameDirectory(applicationContext, NativeAssetBridge(applicationContext)) != null
+                }
+                if (isFinishing || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+                if (!ready) {
+                    showGameAssetsSetup()
+                    return@launch
+                }
+                game.launch(Intent(this@MainActivity, EngineHostActivity::class.java).apply {
+                    putExtra(GameActivity.EXTRA_SERVER_IP, server.ip)
+                    putExtra(GameActivity.EXTRA_SERVER_PORT, server.port)
+                    putExtra(GameActivity.EXTRA_SERVER_NAME, server.name)
+                    putExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, JoinProtocolSettings.read(this@MainActivity, server.ip, server.port))
+                })
+            } finally {
+                checkingGameAssets = false
+            }
         }
-        startActivity(intent)
+    }
+
+    internal fun showGameAssetsSetup() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.game_setup_title)
+            .setMessage(R.string.game_setup_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.sync_assets) { _, _ ->
+                binding.navigationRail.selectedItemId = R.id.nav_settings
+                (supportFragmentManager.findFragmentByTag(tabTags[2]) as? SettingsFragment)?.syncGameAssets()
+            }
+            .show()
     }
 }

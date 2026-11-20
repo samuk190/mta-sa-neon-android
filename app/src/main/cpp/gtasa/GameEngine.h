@@ -423,6 +423,14 @@ struct LocalCarState {
 // False when the local ped is not in a mapped vehicle (always false off Android).
 bool CopyLocalCar(LocalCarState& out);
 
+// Screen-relative bounds of the visible native driving controls.
+struct VehicleTouchRect {
+    float left, top, right, bottom;
+};
+#ifdef __ANDROID__
+std::vector<VehicleTouchRect> CopyVehicleTouchControlBounds();
+#endif
+
 // Local bullet-weapon shot from CWeapon::Fire (PlayerPedPort.cpp LocalBulletFireHook). Desktop source:
 // CClientGame::BulletFire (CClientGame.cpp 6242-6257) sets the start/end vectors that PostWeaponFire (6024-6026)
 // sends as PLAYER_BULLETSYNC (98). weapon is the eWeaponType id, start/end are world coordinates.

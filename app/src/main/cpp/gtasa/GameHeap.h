@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 namespace WorldRPG::Game {
 
 // Gives libGTASA its own heap inside one address window smaller than 2 GB.
@@ -14,6 +16,11 @@ namespace WorldRPG::Game {
 // It must run after libGTASA is loaded and before its engine thread starts. Returns false when libGTASA
 // is not loaded, the arena cannot be reserved, or the "noheap" debug switch is set.
 bool InstallGameHeap();
+
+#ifdef __ANDROID__
+void* AllocateGameMemory(std::size_t bytes);
+void FreeGameMemory(void* memory);
+#endif
 
 // One log line with the arena use. Safe to call from any thread.
 void LogGameHeap(const char* reason);

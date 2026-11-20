@@ -136,9 +136,13 @@ bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& com
 
     uint8_t upgradeCount = 0;
     if (!reader.Read(upgradeCount)) ENTITY_BODY_FAIL();
+    uint16_t nitroUpgrade = 0;
     for (unsigned i = 0; i < upgradeCount; ++i) {
         uint8_t upgrade = 0;
         if (!reader.Read(upgrade)) ENTITY_BODY_FAIL();
+        // Desktop adds 1000 to the wire id (CPacketHandler.cpp:3578-3602).
+        const auto modelId = static_cast<uint16_t>(1000 + upgrade);
+        if (VehicleModels::IsNitroUpgrade(modelId) && VehicleModels::SupportsNitro(model)) nitroUpgrade = modelId;
     }
 
     uint8_t regPlate[8] = {};  // char szRegPlate[9], 8 raw bytes
@@ -206,6 +210,9 @@ bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& com
     visual.rotX = rotX;
     visual.rotY = rotY;
     visual.health = health;
+    // CPacketHandler.cpp:3625,3648 reads the lock bit and calls SetDoorsLocked.
+    visual.vehicleDoorLock = flags[4] ? 2 : 1;
+    visual.nitroUpgrade = nitroUpgrade;
 
     DIAG("vehicle stored id=%u model=%u pos=%.2f,%.2f,%.2f health=%.1f blow=%u paint=%u rot=%.1f",
          common.id, static_cast<unsigned>(model), x, y, z, health, static_cast<unsigned>(blowState),

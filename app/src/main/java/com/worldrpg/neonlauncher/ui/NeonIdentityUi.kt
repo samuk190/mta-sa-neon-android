@@ -1,13 +1,19 @@
 package com.worldrpg.neonlauncher.ui
 
 import android.app.Activity
+import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.os.SystemClock
+import android.util.Log
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.worldrpg.neonlauncher.network.NeonIdentityApi
 import com.worldrpg.neonlauncher.network.NeonIdentitySession
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import java.io.IOException
 import java.util.function.Consumer
 
 /** Shared by launcher and engine. Never keeps a game handshake alive during browser login. */
@@ -44,21 +50,15 @@ class NeonIdentityUi(private val activity: Activity) {
             dialog = waiting
             try {
                 val flow = api.start()
-                activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(flow.authorizationUrl)).addCategory(Intent.CATEGORY_BROWSABLE))
-                val deadline = SystemClock.elapsedRealtime() + 300_000
-                var token: String? = null
-                while (token == null && SystemClock.elapsedRealtime() < deadline) {
-                    delay(2_500)
-                    token = api.poll(flow)
-                }
-                if (token == null) throw java.io.IOException("SA:O sign-in expired. Please try again.")
+                val token = awaitBrowserSession(flow)
                 withContext(Dispatchers.IO) {
                     currentCoroutineContext().ensureActive()
                     session.save(token)
                 }
             } catch (cancel: CancellationException) {
                 throw cancel
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                Log.w("NeonIdentity", "Browser sign-in failed (${error.javaClass.simpleName})")
                 failure.accept("Unable to complete SA:O sign-in. Please try again.")
                 return@launch
             } finally {
@@ -66,6 +66,51 @@ class NeonIdentityUi(private val activity: Activity) {
                 if (dialog === waiting) dialog = null
             }
             success.run()
+        }
+    }
+
+    private suspend fun awaitBrowserSession(flow: NeonIdentityApi.Flow): String {
+        val resumed = MutableStateFlow(true)
+        var pauses = 0
+        val lifecycle = object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(owner: Activity) {
+                if (owner === activity) resumed.value = true
+            }
+
+            override fun onActivityPaused(owner: Activity) {
+                if (owner !== activity) return
+                pauses++
+                resumed.value = false
+            }
+
+            override fun onActivityCreated(owner: Activity, state: Bundle?) = Unit
+            override fun onActivityStarted(owner: Activity) = Unit
+            override fun onActivityStopped(owner: Activity) = Unit
+            override fun onActivitySaveInstanceState(owner: Activity, state: Bundle) = Unit
+            override fun onActivityDestroyed(owner: Activity) = Unit
+        }
+        activity.application.registerActivityLifecycleCallbacks(lifecycle)
+        try {
+            activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(flow.authorizationUrl))
+                .addCategory(Intent.CATEGORY_BROWSABLE))
+            val deadline = SystemClock.elapsedRealtime() + 300_000
+            while (true) {
+                delay(2_500)
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0 || withTimeoutOrNull(remaining) { resumed.first { it } } == null ||
+                    SystemClock.elapsedRealtime() >= deadline) {
+                    throw IOException("SA:O sign-in expired. Please try again.")
+                }
+                // Android can suspend the launcher's network access while the browser is on top.
+                val pausesBeforePoll = pauses
+                try {
+                    api.poll(flow)?.let { return it }
+                } catch (error: IOException) {
+                    if (pausesBeforePoll == pauses) throw error
+                }
+            }
+        } finally {
+            activity.application.unregisterActivityLifecycleCallbacks(lifecycle)
         }
     }
 

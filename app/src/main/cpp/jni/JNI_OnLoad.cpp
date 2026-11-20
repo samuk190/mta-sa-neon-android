@@ -16,6 +16,7 @@
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
 #include "../gtasa/RemoteVehicle.h"
+#include "../gtasa/RenderGuard.h"
 #include "../gtasa/RenderWareHooks.h"
 #include "../gtasa/InputHooks.h"
 #include "../gtasa/HUDRenderer.h"
@@ -398,6 +399,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     JNI_LOGI("JNI_OnLoad: WorldRPGNeon native library loaded");
     // Engine process only: libGTASA is already loaded and its engine thread has not started yet.
     WorldRPG::Game::InstallGameHeap();
+    WorldRPG::Game::InstallRenderQueueCapacity();
     WorldRPG::Game::InstallServerSessionHook();
     return JNI_VERSION_1_6;
 }
@@ -697,11 +699,9 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeWindowFocus(
     WorldRPG::Script::MtaWindowSetFocused(focused == JNI_TRUE);
 }
 
-/// Process incoming network packets on the view's GL thread.
-/// Suppressed while the Activity is paused (no frames are drawn then, but a
-/// queued event could still arrive; the transport must not advance).
-JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobject thiz) {
+// The engine host keeps RakNet and Lua timers running while backgrounded. Only
+// the foreground host marshals draw commands and starts game-thread resources.
+static void PulseClient(JNIEnv* env, jobject thiz, bool renderFrame) {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state->network) return;
     if (g_enterServer.load()) WorldRPG::Game::BeginServerSession();
@@ -753,15 +753,16 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
     WorldRPG::ConnectionLoading::Flush();
     // Initial resource scripts may load models synchronously through the
     // game's task queue. Run them once the game can service that queue.
-    if (gameReady) WorldRPG::Script::ActiveVmPulseResources();
+    if (gameReady && renderFrame) WorldRPG::Script::ActiveVmPulseResources();
     // CClientWeaponManager::DoPulse for createWeapon and touched server weapons.
     WorldRPG::Script::WeaponsPulse();
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
-    const std::string frame = WorldRPG::Script::ActiveVmPump();
+    const std::string frame = WorldRPG::Script::ActiveVmPump(renderFrame);
     // Commands that a key bind ran go to the server as a typed command does (COMMAND_Executed).
     for (const std::string& line : WorldRPG::Script::ActiveVmTakeServerCommands()) {
         if (g_state->join) g_state->join->SendChat(line);
     }
+    if (!renderFrame) return;
     // An empty frame is sent once, so the overlay clears what the scripts stopped drawing.
     static bool lastFrameEmpty = true;
     if (frame.empty() && lastFrameEmpty) return;
@@ -772,6 +773,11 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
     env->CallVoidMethod(g_gameActivityRef, g_onDxFrameMethod, jtext);
     if (env->ExceptionCheck()) env->ExceptionClear();
     env->DeleteLocalRef(jtext);
+}
+
+JNIEXPORT void JNICALL
+Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobject thiz) {
+    PulseClient(env, thiz, true);
 }
 
 JNIEXPORT jstring JNICALL
@@ -896,8 +902,8 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeConnect(
     return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(env, thiz, ip, port, nickname, joinProfile);
 }
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz) {
-    Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(env, thiz);
+Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz, jboolean renderFrame) {
+    PulseClient(env, thiz, renderFrame == JNI_TRUE);
 }
 JNIEXPORT void JNICALL
 Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeDestroy(JNIEnv* env, jobject thiz) {

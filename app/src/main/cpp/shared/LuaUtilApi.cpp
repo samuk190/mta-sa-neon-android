@@ -5,6 +5,9 @@
 #include "LuaVMStub.h"
 #include "Checksums.h"
 #include "ResourceLoader.h"
+#ifdef __ANDROID__
+#include "../gtasa/GameEngine.h"
+#endif
 #include "../net/RemoteCalls.h"
 
 #include "lua.hpp"
@@ -367,6 +370,24 @@ int l_getVersion(lua_State* L) {
     lua_pushstring(L, "Android"); lua_setfield(L, -2, "tag");
     return 1;
 }
+
+#ifdef __ANDROID__
+int l_getVehicleTouchControlBounds(lua_State* L) {
+    const auto controls = Game::CopyVehicleTouchControlBounds();
+    lua_createtable(L, static_cast<int>(controls.size()), 0);
+    int index = 0;
+    for (const auto& control : controls) {
+        lua_createtable(L, 4, 0);
+        const float bounds[] = {control.left, control.top, control.right, control.bottom};
+        for (int coordinate = 0; coordinate < 4; ++coordinate) {
+            lua_pushnumber(L, bounds[coordinate]);
+            lua_rawseti(L, -2, coordinate + 1);
+        }
+        lua_rawseti(L, -2, ++index);
+    }
+    return 1;
+}
+#endif
 
 const char* kWeapons[] = {
     "Fist", "Brassknuckle", "Golfclub", "Nightstick", "Knife", "Bat", "Shovel", "Poolstick",
@@ -1606,6 +1627,9 @@ void InstallUtilLua(lua_State* L) {
         {"utfCode", l_utfCode},
         {"utfSeek", l_utfSeek},
         {"getVersion", l_getVersion},
+#ifdef __ANDROID__
+        {"getVehicleTouchControlBounds", l_getVehicleTouchControlBounds},
+#endif
         {"getWeaponNameFromID", l_getWeaponNameFromID},
         {"getWeaponIDFromName", l_getWeaponIDFromName},
         {"getSlotFromWeapon", l_getSlotFromWeapon},

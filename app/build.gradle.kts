@@ -134,7 +134,8 @@ android {
 }
 
 // The public release APK carries no game code: libGTASA.so, libSCAnd.so and libOpenAL64.so are
-// GTA San Andreas Mobile 2.10 files. Players copy them into the game folder (GameLibraries.java).
+// GTA San Andreas Mobile 2.10 files. Game Sync installs them into lib/ from a configured CDN.
+// Local installations can also supply them in the game folder (GameLibraries.java).
 // The same game files sit in src/main/assets (american.gxt, fonts, scache lists, menu sounds,
 // mainV1.scm, menu.pvr); the engine reads the game folder first (EngineAssetLoader), so the release
 // leaves them out too. -PnoGameFiles applies the same rules to a debug build, for testing.

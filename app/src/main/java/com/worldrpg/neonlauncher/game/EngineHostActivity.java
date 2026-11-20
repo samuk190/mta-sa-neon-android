@@ -38,14 +38,17 @@ import com.worldrpg.neonlauncher.BuildConfig;
 import com.worldrpg.neonlauncher.network.JoinProtocolSettings;
 import com.worldrpg.neonlauncher.utils.PreferencesManager;
 import com.rockstargames.gtasa.GTASA;
+import com.worldrpg.engine.EngineAssetLoader;
 import com.worldrpg.engine.EngineCaseAliases;
 import com.worldrpg.neonlauncher.utils.NativeAssetBridge;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 
 /** Debug checkpoint for the native GTA Activity, Surface and EGL lifecycle. */
 public final class EngineHostActivity extends GTASA {
     public static final String EXTRA_BOOT_ERROR = "engine_boot_error";
+    public static final String EXTRA_GAME_ASSETS_REQUIRED = "game_assets_required";
     private static final String TAG = "NeonEngineHost";
     private static final int COMPACT_IME = EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN;
     private static final int PANEL_ELEVATION_DP = 24;
@@ -88,6 +91,7 @@ public final class EngineHostActivity extends GTASA {
     private boolean joinedOnce = false;
     private DisconnectDialog disconnectDialog;
     private volatile boolean netRunning;
+    private volatile boolean foreground;
     private boolean clientReady;
     private Thread netThread;
     private int interfaceScalePercent = InterfaceScale.DEFAULT_PERCENT;
@@ -137,7 +141,7 @@ public final class EngineHostActivity extends GTASA {
                 error -> nativeProvideIdentityTicket(requestId, "", error));
         });
     }
-    private native void nativePulse();
+    private native void nativePulse(boolean renderFrame);
     private native void nativeDestroy();
     private native void nativeSetScreenSize(int width, int height);
 
@@ -215,30 +219,38 @@ public final class EngineHostActivity extends GTASA {
         wifiLock = null;
     }
 
+    public static String findReadyGameDirectory(android.content.Context context, NativeAssetBridge assets) {
+        String installed = assets.getReadyStoragePath();
+        if (installed == null) return null;
+        return GameLibraries.areAvailable(context, new File(installed), assets.findLocalAssetsFolder())
+                ? installed : null;
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        NativeAssetBridge assets = new NativeAssetBridge(this);
+        String installed = findReadyGameDirectory(this, assets);
+        if (installed == null) {
+            setResult(RESULT_CANCELED, new Intent().putExtra(EXTRA_GAME_ASSETS_REQUIRED, true));
+            super.onCreate(savedInstanceState); // The base closes the Activity without initializing GTA.
+            return;
+        }
         EngineDiagnostics.begin(this);
         try {
-            String installed = new NativeAssetBridge(this).getReadyStoragePath();
-            if (installed == null) throw new IOException("Sincronize os arquivos do jogo antes de testar o GTA.");
             File generation = new File(installed).getCanonicalFile();
             gameDirectory = generation.getPath() + File.separator;
             GpuTextureSupport gpu = GpuProbe.inspect();
             EngineDiagnostics.noteGpu(this, gpu);
             EngineCaseAliases.prepare(generation);
+            validateGameText(assets.usesCdn());
             gpu.validate(generation);
             validateLevelDefinitions(generation);
             // The VM calls the engine's JNI_OnLoad and registers the native
             // NvEventQueueActivity methods. A plain dlopen does not do this.
-            // From the APK in a developer build, else from <game folder>/lib (GameLibraries).
-            GameLibraries.load(this, generation, new NativeAssetBridge(this).findLocalAssetsFolder());
+            GameLibraries.load(this, generation, assets.findLocalAssetsFolder(), assets.usesCdn());
             // Loaded here, before the engine thread exists: its JNI_OnLoad gives libGTASA a heap inside one
             // 2 GB window (GameHeap.cpp). startMtaSession loads it again, which is then a no-op.
-            try {
-                System.loadLibrary("WorldRPGNeon");
-            } catch (UnsatisfiedLinkError error) {
-                Log.e(TAG, "MTA client library failed to load before the engine", error);
-            }
+            System.loadLibrary("WorldRPGNeon");
             Log.i(TAG, "Native GTA host prepared with generation " + generation.getName());
         } catch (IOException | LinkageError | SecurityException error) {
             bootError = error.getMessage() == null ? "Nao foi possivel preparar a engine GTA." : error.getMessage();
@@ -249,8 +261,8 @@ public final class EngineHostActivity extends GTASA {
         // The base class still receives Android's lifecycle after a failed
         // preparation. shouldStartEngine then refuses native initialization.
         super.onCreate(savedInstanceState);
-        if (bootError == null && gameDirectory != null) acquireWifiLock();
         if (bootError == null && gameDirectory != null) {
+            acquireWifiLock();
             installMtaPause();
             installPlayerMap();
             installTransferAndChat();
@@ -268,10 +280,17 @@ public final class EngineHostActivity extends GTASA {
     @Override
     public void onResume() {
         super.onResume();
+        foreground = true;
         // The launcher can change this while the separate engine process is paused.
         interfaceScalePercent = InterfaceScaleSettings.read(this);
         GameSettingsView.applyHudSettings(this, settingsHost);
         if (dxOverlay != null) reportDxScreen(dxOverlay.getWidth(), dxOverlay.getHeight());
+    }
+
+    @Override
+    public void onPause() {
+        foreground = false;
+        super.onPause();
     }
 
     private void startMtaSession() {
@@ -331,9 +350,9 @@ public final class EngineHostActivity extends GTASA {
         netRunning = true;
         netThread = new Thread(() -> {
             while (netRunning) {
-                nativePulse();
+                nativePulse(foreground);
                 try {
-                    Thread.sleep(16);
+                    Thread.sleep(foreground ? 16 : 100);
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                     return;
@@ -1092,7 +1111,7 @@ public final class EngineHostActivity extends GTASA {
     }
 
     private void showDisconnectDialog(String title, String message) {
-        if (isFinishing() || disconnectDialog != null) return;
+        if (isFinishing() || isDestroyed() || disconnectDialog != null) return;
         disconnectDialog = new DisconnectDialog(this, title, message, gameDirectory, new DisconnectDialog.Actions() {
             @Override public void onRetry() {
                 disconnectDialog = null;
@@ -1283,10 +1302,12 @@ public final class EngineHostActivity extends GTASA {
 
     @SuppressWarnings("unused")
     public void onNativeDxFrame(String commands) {
+        if (!foreground) return;
         final String flags = debugFlags();
         if (flags.contains("nooverlay")) return;
         final String shown = flags.contains("overlayempty") ? "X" : commands;
         runOnUiThread(() -> {
+            if (!foreground) return;
             syncScriptKeyboard(shown);
             if (dxOverlay != null) {
                 boolean wasInteractive = dxOverlay.isCursorShown();
@@ -1657,6 +1678,18 @@ public final class EngineHostActivity extends GTASA {
         showMtaPause(mtaPause.getVisibility() != View.VISIBLE);
     }
 
+    private void validateGameText(boolean usesCdn) throws IOException {
+        // GTA 2.10's CText::Load reads the result of OpenFile without checking
+        // for a null handle. Check the same external and packaged text table here.
+        final String path = "Text/american.gxt";
+        try (InputStream text = EngineAssetLoader.open(this, gameDirectory, path)) {
+            if (text.read() < 0) throw new IOException("Empty text table");
+        } catch (IOException error) {
+            String action = usesCdn ? " Run Sync game assets in Settings." : " Add it to the game folder.";
+            throw new IOException("Game text table is missing or empty (" + path + ")." + action, error);
+        }
+    }
+
     private static void validateLevelDefinitions(File root) throws IOException {
         // The native loader dereferences null file handles. Check each required
         // map definition with its exact spelling before transferring control.
@@ -1701,6 +1734,10 @@ public final class EngineHostActivity extends GTASA {
 
     @Override
     public void onDestroy() {
+        if (disconnectDialog != null) {
+            disconnectDialog.dismiss();
+            disconnectDialog = null;
+        }
         if (identityUi != null) identityUi.close();
         releaseWifiLock();
         for (Integer id : new java.util.ArrayList<>(sounds.keySet())) stopUrlSound(Integer.toString(id));

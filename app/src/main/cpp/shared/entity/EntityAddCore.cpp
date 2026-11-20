@@ -153,7 +153,7 @@ bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out) {
     return SkipLuaBody(reader, kind, 0);
 }
 
-bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
+bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out, bool extendedHeader) {
     // Reference order: ElementID, type (1 byte), parent ElementID, interior (1 byte),
     // dimension (ReadCompressed ushort), attached flag.
     uint32_t id = 0, parent = 0, dimension = 0;
@@ -193,9 +193,11 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
         DIAG("ENTITY_ADD fail line=%d stage=collisions id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
         return false;
     }
-    // Call-propagation bit exists only for peers at 0x31+ (reference: Can(ExtendedWorldPositions)).
+    // The current World RPG server sends both desktop header fields for a
+    // standard mobile join at 0x0030. Verified with /driftcar supra on
+    // 2026-11-20: count/name are zero and vehicle 401 starts at body bit 87.
     out.callProp = true;
-    if (kServerEntityBitStream >= 0x0031 && !ReadFlag(reader, out.callProp)) {
+    if (extendedHeader && !ReadFlag(reader, out.callProp)) {
         DIAG("ENTITY_ADD fail line=%d stage=callprop id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
         return false;
     }
@@ -210,12 +212,9 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
         return false;
     }
 
-    // Sync time context: one byte after the name.
-    // In upstream MTA:SA server (CEntityAddPacket.cpp:217), syncTimeContext is gated on
-    // Can(eBitStreamVersion::ExtendedWorldPositions) (0x0031+).
-    // Peers at 0x0030 (standard mobile baseline) do not receive this byte.
+    // CPacketHandler::Packet_EntityAdd (3097-3099): sync context follows the name.
     out.syncTimeContext = 0;
-    if (kServerEntityBitStream >= 0x0031 && !reader.Read(out.syncTimeContext)) {
+    if (extendedHeader && !reader.Read(out.syncTimeContext)) {
         DIAG("ENTITY_ADD fail line=%d stage=synctime id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
         return false;
     }
@@ -224,7 +223,7 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
 }
 
 bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
-                    ElementKindResolver resolveKind, bool currentWaterFlags) {
+                    const ElementKindResolver& resolveKind, bool currentWaterFlags) {
     switch (common.type) {
         case kTypeWater: {
             uint8_t count = 0;

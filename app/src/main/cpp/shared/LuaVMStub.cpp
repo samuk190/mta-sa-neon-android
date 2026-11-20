@@ -2549,7 +2549,7 @@ static void PumpCursorEvents() {
     }
 }
 
-std::string LuaVMStub::pumpDx() {
+std::string LuaVMStub::pumpDx(bool renderFrame) {
     if (!pImpl_->L) return {};
     // CClientGame::OnWindowFocusChange (CClientGame.cpp:8069-8078). One report per pump.
     bool windowFocused = false;
@@ -2587,6 +2587,10 @@ std::string LuaVMStub::pumpDx() {
     ApplySvgUpdates();
     g_dx.frame.clear();
     g_dx.postGuiFrame.clear();
+    if (!renderFrame) {
+        PulseSpatial();
+        return {};
+    }
     DxBeginFrame(g_dx.frame);
     PulseCamera();
     PulseSpatial();
@@ -2627,7 +2631,7 @@ std::string LuaVMStub::pumpDx() {
 
 void LuaVMStub::shutdown() {
     if (!pImpl_->initialized) return;
-    ResetDffElements();
+    ResetModelAssets();
     AudioStopOwnedSounds();
     Projectiles::Reset();
     ResetSpatial();
@@ -2834,7 +2838,7 @@ static void DropResourceState(lua_State* L, const std::string& name, uint16_t ne
     AudioStopOwnedSounds(&name, netId, generation);
     GuiDropResource(name, netId, generation);
     NativeUiDropResource(name, netId, generation);
-    DropResourceDffs(generation);
+    DropResourceModelAssets(generation);
     DropResourceEnvironment(L, generation);
     Events::DropOwner(name, netId, generation);
     KeyBindsDropResource(L, name, netId, generation);
@@ -2982,8 +2986,8 @@ void ActiveVmAppendPostGuiDraw(const std::string& lines) { g_dx.postGuiFrame += 
 std::string ActiveVmResourceFile(const std::string& path) { return DxImageFile(path); }
 lua_State* ActiveVmState() { return g_dx.L; }
 
-std::string ActiveVmPump() {
-    return g_active ? g_active->pumpDx() : std::string();
+std::string ActiveVmPump(bool renderFrame) {
+    return g_active ? g_active->pumpDx(renderFrame) : std::string();
 }
 void ActiveVmScreenSize(int& width, int& height) {
     width = g_dx.screenW;

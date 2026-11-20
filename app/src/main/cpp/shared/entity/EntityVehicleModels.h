@@ -92,6 +92,17 @@ constexpr bool IsDoorlessModel(uint32_t model) {
     }
 }
 
+constexpr uint16_t kNitroUpgrade10x = 1010;
+
+constexpr bool IsNitroUpgrade(uint16_t upgrade) {
+    return upgrade >= 1008 && upgrade <= kNitroUpgrade10x;
+}
+
+// CVehicleUpgrades::IsUpgradeCompatible (50-85), for stock nitro models.
+constexpr bool SupportsNitro(uint32_t model) {
+    return IsStandardModel(model) && !IsPlaneOrHeliModel(model) && !IsNoDamageClass(model);
+}
+
 // CClientVehicleManager::HasDoors
 constexpr bool HasDoors(uint32_t model) {
     return IsStandardModel(model) && !IsNoDamageClass(model) && !IsDoorlessModel(model);

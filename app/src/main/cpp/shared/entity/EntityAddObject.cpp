@@ -66,7 +66,7 @@ bool SkipPositionRotationAnimation(Net::BitStreamReader& reader) {
 
 // Weapon-only tail. Returns false on a short read.
 bool ReadWeaponTail(Net::BitStreamReader& reader, const EntityCommon& common, WeaponSpawn& weapon,
-                    ElementKindResolver resolveKind) {
+                    const ElementKindResolver& resolveKind) {
     uint8_t targetType = kTargetFixed;
     if (!reader.ReadBits(&targetType, 3)) ENTITY_BODY_FAIL();
     weapon.targetType = targetType <= kTargetFixed ? targetType : kTargetFixed;
@@ -132,7 +132,7 @@ bool ReadWeaponTail(Net::BitStreamReader& reader, const EntityCommon& common, We
 } // namespace
 
 bool ReadEntityBodyObject(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
-                          ElementKindResolver resolveKind) {
+                          const ElementKindResolver& resolveKind) {
     const bool isWeapon = common.type == kElementWeapon;
 
     float x = 0, y = 0, z = 0;

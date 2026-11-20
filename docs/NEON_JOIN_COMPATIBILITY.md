@@ -60,8 +60,8 @@ Network validation uses loopback-only Oracle test containers with the production
 
 Live checks completed during implementation include full legacy World RPG entry (28 resource packets parsed without errors), a 900-second standard session without an adapter (final state complete, 8827 player-sync packets sent), and required Identity entry with a signed 1911-byte test ticket. The server rejected replayed tickets, invalid signatures, incorrect audiences and expired tickets. Optional mode accepted anonymous and authenticated joins and rejected an invalid supplied signature.
 
-The debug APK for device testing bundles `libGTASA.so`, `libSCAnd.so` and `libOpenAL64.so` from the local developer files and must pass the default `tools/audit_android_apk.py` audit. Do not deliver a `-PnoGameFiles` build as a drop-in replacement: the 397-file CDN manifest contains game data, not those engine libraries. Asset synchronization therefore reports data verification separately from engine readiness.
+Use `assembleDebug -PnoGameFiles` to test CDN delivery. The World RPG CDN manifest lists `libGTASA.so`, `libSCAnd.so` and `libOpenAL64.so` under `lib/`, and **Sync game assets** installs them in the active generation. The plain debug build can also bundle local developer libraries and uses the default `tools/audit_android_apk.py` audit.
 
-Release/explicit `-PnoGameFiles` builds retain the existing external-library installation policy. Audit those variants with `python3 tools/audit_android_apk.py <apk> --external-game-libraries`. Both forms require the launcher library and audit every packaged native library's ARM64 ABI and 16 KB alignment.
+Audit release and `-PnoGameFiles` builds with `python3 tools/audit_android_apk.py <apk> --external-game-libraries`. Both audits require the launcher library and check every packaged library's ARM64 ABI and 16 KB alignment.
 
 Interactive Discord/browser/Keystore checks on a phone remain necessary; no device was available over ADB during this implementation.

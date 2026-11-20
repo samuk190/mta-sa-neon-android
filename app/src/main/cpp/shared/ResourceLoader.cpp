@@ -39,6 +39,7 @@ struct TrackedFile {
 
 struct NoCacheItem {
     bool ok = false;
+    std::string filename;
     std::vector<uint8_t> source;
 };
 
@@ -211,27 +212,30 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
 }
 
 bool OnClientScripts(const uint8_t* body, size_t length, size_t bits) {
-    WorldRPG::Net::BitStreamReader reader(body, length, bits);
-    uint16_t netId = 0, count = 0;
-    if (!reader.Read(netId) || !reader.Read(count)) return false;
-
+    uint16_t netId = 0;
     std::vector<NoCacheItem> items;
-    bool wellFormed = true;
-    for (uint16_t i = 0; i < count; ++i) {
-        uint32_t length32 = 0;
-        if (!reader.Read(length32) || length32 < 4 || length32 > reader.GetRemainingBits() / 8) {
-            wellFormed = false;
-            break;
+    // Desktop Packet_ResourceClientScripts (5710-5750) reads a filename before
+    // each compressed chunk. The legacy mobile packet contains only the chunks.
+    const auto readItems = [&](bool named) {
+        WorldRPG::Net::BitStreamReader reader(body, length, bits);
+        uint16_t count = 0;
+        if (!reader.Read(netId) || !reader.Read(count)) return false;
+        items.clear();
+        for (uint16_t i = 0; i < count; ++i) {
+            NoCacheItem item;
+            if (named && (!reader.ReadString(item.filename, 4096) || item.filename.empty() ||
+                          std::any_of(item.filename.begin(), item.filename.end(),
+                                      [](unsigned char ch) { return ch < 32 || ch == 127; }))) return false;
+            uint32_t size = 0;
+            if (!reader.Read(size) || size < 4 || size > reader.GetRemainingBits() / 8) return false;
+            std::vector<uint8_t> blob(size);
+            if (!reader.ReadBytes(blob.data(), size)) return false;
+            item.ok = InflateItem(blob.data(), size, item.source);
+            items.push_back(std::move(item));
         }
-        std::vector<uint8_t> blob(length32);
-        if (!reader.ReadBytes(blob.data(), length32)) {
-            wellFormed = false;
-            break;
-        }
-        NoCacheItem item;
-        item.ok = InflateItem(blob.data(), length32, item.source);
-        items.push_back(std::move(item));
-    }
+        return reader.GetRemainingBits() == 0;
+    };
+    if (!readItems(true) && !readItems(false)) return false;
 
     std::lock_guard<std::mutex> lock(g_mutex);
     if (Entry* entry = FindByNetId(netId)) {
@@ -248,7 +252,7 @@ bool OnClientScripts(const uint8_t* body, size_t length, size_t bits) {
                      static_cast<unsigned>(netId), held.size());
         }
     }
-    return wellFormed;
+    return true;
 }
 
 bool RequestFile(std::string_view path, uint32_t callerGeneration) {
@@ -327,7 +331,9 @@ std::vector<ResourceLoadJob> Pump(std::vector<FileDownloadEvent>& events) {
         unsigned index = 0;
         for (NoCacheItem& item : entry.noCache) {
             ResourceScript script;
-            script.chunkName = entry.name + "/no-cache-" + std::to_string(++index);
+            ++index;
+            script.chunkName = item.filename.empty() ? entry.name + "/no-cache-" + std::to_string(index)
+                                                     : std::move(item.filename);
             script.source = std::move(item.source);
             job.noCacheScripts.push_back(std::move(script));
         }
