@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Docs — 16 KB audit result recorded (2026-11-20)
+
+- `README.md`: the Step E roadmap row claimed the 16 KB ELF audit fails and blamed `libc++_shared.so`. That library is not packaged (the build links the static STL), and `python3 tools/audit_android_apk.py app/build/outputs/apk/debug/app-debug.apk --external-game-libraries` exits 0 on a current `-PnoGameFiles` build: `libWorldRPGNeon.so` LOAD alignment 16384, compressed and extracted at install. The row now records the measured result and keeps the unverified part (installing on a 16 KB-page device) as open.
+
 ### Current Neon gameplay protocol
 
 - Server spawn packets schedule local player placement on the game thread, using the same path as server position updates.

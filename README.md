@@ -224,7 +224,7 @@ To set up and host your own compatible game server, clone and build the San Andr
 - [ ] **Touch control customization**: virtual joystick sensitivity and touch button mapping.
 - [ ] **Custom asset streaming**: server-side DFF/TXD download and RenderWare memory streaming.
 - [ ] **Engine optimization**: frame pacing, memory compaction and ARM64 anti-crash guardrails.
-- [ ] **16 KB ELF alignment** for `libc++_shared.so` (Samsung compatibility warning on install; repo audit fails).
+- [~] **16 KB ELF alignment**: the static STL (`ANDROID_STL=c++_static`) means no `libc++_shared.so` is packaged, and `tools/audit_android_apk.py` passes on a current `-PnoGameFiles` build (`libWorldRPGNeon.so` LOAD alignment 16384, compressed and extracted at install; audit run 2026-11-20). Installing on a 16 KB-page device is still unverified.
 
 - [ ] **Object sync** (`OBJECT_SYNC`, `OBJECT_STARTSYNC`, `OBJECT_STOPSYNC`): world objects owned by a syncer, with their start and stop packets.
 - [ ] **Light sync** (`LIGHTSYNC`) and **camera sync** (`CAMERA_SYNC`): world lights and remote camera state.
