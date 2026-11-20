@@ -31,7 +31,7 @@ int g_nextFile = 1;
 
 fs::path Root() {
 #if defined(__ANDROID__)
-    return "/data/data/com.worldrpg.neonlauncher/files/lua";
+    return "/data/data/com.saonline.neonlauncher/files/lua";
 #else
     return "/tmp/neon-lua-files";
 #endif

@@ -15,7 +15,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     fixtures = root / "tools/headless/java/render_stubs"
-    game = root / "app/src/main/java/com/worldrpg/neonlauncher/game"
+    game = root / "app/src/main/java/com/saonline/neonlauncher/game"
     product = args.build_dir / "product"
     doubles = args.build_dir / "doubles"
     product.mkdir(parents=True, exist_ok=True)
@@ -31,7 +31,7 @@ def main():
     subprocess.run([args.javac, "-cp", os.pathsep.join(map(str, (product, args.android_jar))),
                     "-d", str(doubles), *map(str, source)], check=True)
     subprocess.run([args.java, "-cp", os.pathsep.join(map(str, (doubles, product, args.android_jar))),
-                    "com.worldrpg.neonlauncher.game.DxViewRegressionTest"], check=True)
+                    "com.saonline.neonlauncher.game.DxViewRegressionTest"], check=True)
 
 
 if __name__ == "__main__":

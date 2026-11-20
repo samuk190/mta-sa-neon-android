@@ -38,6 +38,10 @@ The APK on the Releases page includes the launcher and the MTA loading images. F
 
 Download `mta-sa-neon-android-<version>.apk` from the Releases page and install it. Open it once, then close it: Android creates the app's folder on the first start.
 
+The launcher uses the Android application ID `com.saonline.neonlauncher`. Android installs it alongside older World RPG packages and gives it a new game-data directory and install key.
+
+For servers using Neon Identity transport credentials, the official launcher obtains its publisher's public Play Integrity project number from Neon Identity. Players and server hosts do not configure Google projects. Independently signed builds can use their own publisher and issuer. Access to a publisher's servers depends on which releases that issuer recognizes.
+
 ### 2. Get the files from your copy of the game
 
 GTA San Andreas for Android keeps its files in two places. Both are ZIP archives that any unzip tool opens:
@@ -52,7 +56,7 @@ GTA San Andreas for Android keeps its files in two places. Both are ZIP archives
 The default game folder is:
 
 ```text
-/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 Arrange the files like this (the three libraries go in `lib/`, everything else at the top):
@@ -77,7 +81,7 @@ game_assets/
 With adb, after extracting both archives into one folder `gta_sa/` on your PC (with the libraries in `gta_sa/lib/`):
 
 ```bash
-adb push gta_sa/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+adb push gta_sa/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 ### 4. Play
@@ -89,7 +93,7 @@ The fourteen MTA desktop loading images (`MTA/cgui/images/loadscreens/loadsc1.jp
 For CDN builds, publish image overrides and the font under `game_files_android_mta/MTA/cgui/` and list their sizes and SHA-256 hashes in `manifest_android_mta.json`, then sync again. Copying them into an external backup folder does not update the installed CDN generation. The bundled loading images work before that sync.
 
 > [!NOTE]
-> Uninstalling the app deletes `Android/data/com.worldrpg.neonlauncher/`, including the game folder. Keep your extracted copy on the PC.
+> Uninstalling the app deletes `Android/data/com.saonline.neonlauncher/`, including the game folder. Keep your extracted copy on the PC.
 
 ---
 
@@ -127,12 +131,7 @@ This mobile client is designed to connect to servers running the **MTA Neon** / 
 
 To set up and host your own compatible game server, clone and build the San Andreas Online server repository following its instructions.
 
-> [!WARNING]
-> **MTA Anti-Cheat Compatibility Notice**
->
-> Standard Multi Theft Auto proprietary Anti-Cheat (`net.dll` / MTA AC server checks) **does NOT work** with this mobile client.
->
-> Because this client uses a custom packet architecture, mobile-tailored bitstreams, and an ARM64-optimized native cipher for network transport, traditional desktop MTA anti-cheat modules will reject the connection. The server must be run using [San Andreas Online (MTA Neon)](https://github.com/Dryxio/san-andreas-online) or have standard anti-cheat verification modules disabled.
+Classic game connections use the server's stock network module and anticheat. Keep the default settings for mixed PC and Android play. The stock module may reject a mobile connection with AC #4 before the game records a join. Play Integrity enrollment supplies a client credential for servers that implement QUIC gameplay.
 
 ---
 
@@ -270,7 +269,7 @@ DEFAULT_PLAYER_NICK=Player
 GAME_ASSETS_DIR=./game_assets
 
 # Storage path on your Android device (where assets will be loaded from):
-DEVICE_ASSETS_PATH=/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets
+DEVICE_ASSETS_PATH=/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets
 
 # Optional: Custom CDN or Local HTTP Server URL if serving assets over network
 CDN_ROOT_URL=
@@ -334,7 +333,7 @@ bash tools/sync_local_assets.sh
 
 Alternatively, copy the contents of `game_assets/` to your device storage manually:
 ```bash
-adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+adb push game_assets/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 ---

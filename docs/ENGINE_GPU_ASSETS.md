@@ -73,10 +73,10 @@ Run the host regression suite against the production Java classes:
 
 ```sh
 javac -d /tmp/neon-startup-tests \
-  app/src/main/java/com/worldrpg/neonlauncher/game/GpuTextureSupport.java \
-  app/src/main/java/com/worldrpg/neonlauncher/game/NativeCrashTrace.java \
+  app/src/main/java/com/saonline/neonlauncher/game/GpuTextureSupport.java \
+  app/src/main/java/com/saonline/neonlauncher/game/NativeCrashTrace.java \
   tools/headless/java/EngineStartupRegressionTest.java
-java -cp /tmp/neon-startup-tests com.worldrpg.neonlauncher.game.EngineStartupRegressionTest
+java -cp /tmp/neon-startup-tests com.saonline.neonlauncher.game.EngineStartupRegressionTest
 ```
 
 This exercises format priority, exact extension matching, a DXT-only installation

@@ -882,7 +882,7 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
         RawData result = new RawData();
         result.data = new byte[0];
         try {
-            result.data = com.worldrpg.engine.EngineAssetLoader.read(this, engineDataDirectory(), name);
+            result.data = com.saonline.engine.EngineAssetLoader.read(this, engineDataDirectory(), name);
             result.length = result.data.length;
         } catch (java.io.IOException error) {
             android.util.Log.e("WorldRPG.engine", "Could not load engine file: " + name, error);
@@ -894,7 +894,7 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
         RawTexture result = new RawTexture();
         result.data = new byte[0];
         android.graphics.Bitmap bitmap = null;
-        try (java.io.InputStream input = com.worldrpg.engine.EngineAssetLoader.open(this, engineDataDirectory(), name)) {
+        try (java.io.InputStream input = com.saonline.engine.EngineAssetLoader.open(this, engineDataDirectory(), name)) {
             bitmap = android.graphics.BitmapFactory.decodeStream(input);
             if (bitmap == null) throw new java.io.IOException("Asset is not a supported bitmap");
             int width = bitmap.getWidth();
@@ -1364,9 +1364,9 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
 
     public boolean systemInit() {
         java.lang.System.out.println("ln systemInit");
-        setContentView(com.worldrpg.neonlauncher.R.layout.game_screen);
+        setContentView(com.saonline.neonlauncher.R.layout.game_screen);
         android.view.SurfaceView surfaceView = new android.view.SurfaceView(this);
-        ((android.widget.FrameLayout) findViewById(com.worldrpg.neonlauncher.R.id.game_layout)).addView(surfaceView, new android.view.ViewGroup.LayoutParams(-1, -1));
+        ((android.widget.FrameLayout) findViewById(com.saonline.neonlauncher.R.id.game_layout)).addView(surfaceView, new android.view.ViewGroup.LayoutParams(-1, -1));
         surfaceView.setZ(1.0f);
         this.view = surfaceView;
         android.view.SurfaceHolder holder = surfaceView.getHolder();
@@ -1376,7 +1376,7 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
         this.view.setFocusableInTouchMode(true);
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             this.view.setDefaultFocusHighlightEnabled(false);
-            findViewById(com.worldrpg.neonlauncher.R.id.game_layout).setDefaultFocusHighlightEnabled(false);
+            findViewById(com.saonline.neonlauncher.R.id.game_layout).setDefaultFocusHighlightEnabled(false);
             getWindow().getDecorView().setDefaultFocusHighlightEnabled(false);
         }
         DoResumeEvent();

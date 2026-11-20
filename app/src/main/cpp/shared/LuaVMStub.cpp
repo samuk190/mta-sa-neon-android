@@ -408,13 +408,13 @@ bool ActiveVmRunCommand(const char* name, const char* args) {
 // Device testing without a server change: after the join, the script
 // files/neon_selftest.lua in the app's private directory runs once per VM as the resource
 // "neon_selftest". Put it there with
-//   adb shell run-as com.worldrpg.neonlauncher sh -c 'cat > files/neon_selftest.lua' < test.lua
+//   adb shell run-as com.saonline.neonlauncher sh -c 'cat > files/neon_selftest.lua' < test.lua
 // No file, no effect. Its print() lines go to logcat.
 static void RunDeviceSelfTest() {
 #ifdef __ANDROID__
     if (g_dx.selfTestRan || !g_dx.L || WorldRPG::ServerWorld::LocalPlayer() == 0) return;
     g_dx.selfTestRan = true;
-    const char* path = "/data/data/com.worldrpg.neonlauncher/files/neon_selftest.lua";
+    const char* path = "/data/data/com.saonline.neonlauncher/files/neon_selftest.lua";
     std::FILE* probe = std::fopen(path, "rb");
     if (!probe) return;
     std::fclose(probe);

@@ -183,19 +183,19 @@ if(Java_FOUND)
     add_custom_target(neon_dx_text_tests
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/dx-text-java"
         COMMAND "${Java_JAVAC_EXECUTABLE}" -d "${CMAKE_CURRENT_BINARY_DIR}/dx-text-java"
-            "${NATIVE_DIR}/../java/com/worldrpg/neonlauncher/game/DxTextLayout.java"
+            "${NATIVE_DIR}/../java/com/saonline/neonlauncher/game/DxTextLayout.java"
             "${HEADLESS_DIR}/java/DxTextLayoutTest.java"
         COMMAND "${Java_JAVA_EXECUTABLE}" -cp "${CMAKE_CURRENT_BINARY_DIR}/dx-text-java"
-            com.worldrpg.neonlauncher.game.DxTextLayoutTest
+            com.saonline.neonlauncher.game.DxTextLayoutTest
         VERBATIM)
     add_custom_target(neon_dx_state_tests
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/dx-state-java"
         COMMAND "${Java_JAVAC_EXECUTABLE}" -d "${CMAKE_CURRENT_BINARY_DIR}/dx-state-java"
-            "${NATIVE_DIR}/../java/com/worldrpg/neonlauncher/game/DxFrameQueue.java"
-            "${NATIVE_DIR}/../java/com/worldrpg/neonlauncher/game/DxFontCache.java"
+            "${NATIVE_DIR}/../java/com/saonline/neonlauncher/game/DxFrameQueue.java"
+            "${NATIVE_DIR}/../java/com/saonline/neonlauncher/game/DxFontCache.java"
             "${HEADLESS_DIR}/java/DxRenderStateTest.java"
         COMMAND "${Java_JAVA_EXECUTABLE}" -cp "${CMAKE_CURRENT_BINARY_DIR}/dx-state-java"
-            com.worldrpg.neonlauncher.game.DxRenderStateTest
+            com.saonline.neonlauncher.game.DxRenderStateTest
         VERBATIM)
     set(NEON_DX_ANDROID_JAR "" CACHE FILEPATH "Android SDK android.jar for DX view regression tests")
     if(NEON_DX_ANDROID_JAR)

@@ -21,16 +21,16 @@ val defaultServerLogoUrl = envProperties.getProperty("DEFAULT_SERVER_LOGO_URL", 
 val uiDisconnectUrl = envProperties.getProperty("UI_DISCONNECT_URL", "")
 val defaultPlayerNick = envProperties.getProperty("DEFAULT_PLAYER_NICK", "Player")
 val gameAssetsDir = envProperties.getProperty("GAME_ASSETS_DIR", "./game_assets")
-val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets")
+val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets")
 val cdnRootUrl = envProperties.getProperty("CDN_ROOT_URL", "")
 
 android {
-    namespace = "com.worldrpg.neonlauncher"
+    namespace = "com.saonline.neonlauncher"
     compileSdk = 34
     ndkVersion = "25.1.8937393"
 
     defaultConfig {
-        applicationId = "com.worldrpg.neonlauncher"
+        applicationId = "com.saonline.neonlauncher"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -154,6 +154,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("com.google.android.play:integrity:1.6.0")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
