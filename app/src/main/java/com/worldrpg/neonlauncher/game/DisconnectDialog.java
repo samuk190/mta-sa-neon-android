@@ -15,9 +15,11 @@ import android.webkit.WebViewClient;
 import com.worldrpg.neonlauncher.BuildConfig;
 
 /**
- * Connection-lost dialog with Retry and Quit (P3.1). The markup is the desktop
- * style: a web view loaded from the server (UI_DISCONNECT_URL), with the bundled
- * assets/ui/disconnect.html as the fallback.
+ * The error popup for every refusal, timeout and drop, with Reconnect and Close (P3.1).
+ * Title and text are the desktop error box (net/DisconnectMessages, CCore::ShowErrorMessageBox);
+ * the bundled assets/ui/disconnect.html draws it as the Neon desktop web menu's system modal
+ * (Tools/server-browser-prototype NativeMessageModal + index.css .modal--system.modal--error).
+ * A server page (UI_DISCONNECT_URL) replaces it when set; it receives the same setDialog call.
  */
 final class DisconnectDialog {
     interface Actions {
@@ -28,14 +30,18 @@ final class DisconnectDialog {
     private static final String BUNDLED = "file:///android_asset/ui/disconnect.html";
 
     private final Activity activity;
+    private final String title;
     private final String message;
+    private final String gameDirectory;
     private final Actions actions;
     private Dialog dialog;
     private boolean fellBack = false;
 
-    DisconnectDialog(Activity activity, String message, Actions actions) {
+    DisconnectDialog(Activity activity, String title, String message, String gameDirectory, Actions actions) {
         this.activity = activity;
+        this.title = title;
         this.message = message;
+        this.gameDirectory = gameDirectory;
         this.actions = actions;
     }
 
@@ -43,6 +49,8 @@ final class DisconnectDialog {
         WebView web = new WebView(activity);
         web.setBackgroundColor(Color.TRANSPARENT);
         web.getSettings().setJavaScriptEnabled(true);
+        // The desktop modal font (SA Bank Gothic, MTA/cgui/sabankgothic.ttf) is read from the game folder.
+        web.getSettings().setAllowFileAccess(true);
         web.addJavascriptInterface(new Bridge(), "Neon");
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -55,7 +63,12 @@ final class DisconnectDialog {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                view.evaluateJavascript("if (window.setMessage) window.setMessage(" + quote(message) + ");", null);
+                java.io.File font = gameDirectory == null ? null
+                        : new java.io.File(gameDirectory, "MTA/cgui/sabankgothic.ttf");
+                String fontUrl = font != null && font.isFile() ? "file://" + font.getAbsolutePath() : "";
+                view.evaluateJavascript("if (window.setDialog) window.setDialog(" + quote(title) + "," + quote(message)
+                        + "," + quote(fontUrl) + "); else if (window.setMessage) window.setMessage(" + quote(message) + ");",
+                        null);
             }
         });
 
@@ -68,7 +81,16 @@ final class DisconnectDialog {
         dialog.setContentView(web);
         dialog.show();
         if (dialog.getWindow() != null) {
-            dialog.getWindow().setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            Window window = dialog.getWindow();
+            // Full screen, cutout included: the page draws its own dimmed backdrop.
+            window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                android.view.WindowManager.LayoutParams attrs = window.getAttributes();
+                attrs.layoutInDisplayCutoutMode =
+                        android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                window.setAttributes(attrs);
+            }
+            window.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT);
         }
     }
@@ -80,7 +102,7 @@ final class DisconnectDialog {
 
     private static String quote(String text) {
         String safe = text == null ? "" : text;
-        return "\"" + safe.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ") + "\"";
+        return "\"" + safe.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"";
     }
 
     private final class Bridge {

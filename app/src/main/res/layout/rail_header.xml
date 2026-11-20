@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.imageview.ShapeableImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/railLogo"
+    android:layout_width="@dimen/rail_logo_size"
+    android:layout_height="@dimen/rail_logo_size"
+    android:layout_marginTop="16dp"
+    android:layout_marginBottom="8dp"
+    android:contentDescription="@string/server_logo"
+    android:scaleType="centerCrop"
+    app:shapeAppearanceOverlay="@style/ShapeAppearance.WorldRPGNeon.Logo" />

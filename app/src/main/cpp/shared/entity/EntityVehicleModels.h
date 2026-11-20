@@ -51,6 +51,21 @@ constexpr bool IsTrainModel(uint32_t model) {
     return model == 449 || model == 537 || model == 538 || model == 569 || model == 590 || model == 570;
 }
 
+// VEHICLE_HELI and VEHICLE_PLANE entries of the server's gs_vehicleTypes (Server/mods/deathmatch/logic/
+// CVehicleManager.cpp 53-86), which CKeysyncPacket::Read uses to decide whether the two look bits follow.
+constexpr bool IsPlaneOrHeliModel(uint32_t model) {
+    switch (model) {
+        // helicopters
+        case 417: case 425: case 447: case 465: case 469: case 487: case 488: case 497: case 501: case 548: case 563:
+        // planes
+        case 460: case 464: case 476: case 511: case 512: case 513: case 519: case 520: case 539: case 553: case 577:
+        case 592: case 593:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Models whose GTA class has no damage model (boats, bikes, BMX, trains). HasDamageModel is false for them.
 constexpr bool IsNoDamageClass(uint32_t model) {
     switch (model) {

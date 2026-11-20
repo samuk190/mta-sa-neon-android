@@ -20,6 +20,7 @@ public:
     // 1 = datagram, 0 = timeout, -1 = socket error. Truncation is an error.
     int Receive(std::vector<std::uint8_t>& bytes, int timeoutMs);
     void Close();
+    std::string Endpoint() const;
     const std::string& Error() const { return error_; }
 private:
     int fd_ = -1;

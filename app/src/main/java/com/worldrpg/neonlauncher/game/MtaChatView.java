@@ -48,6 +48,9 @@ public final class MtaChatView extends View {
     private float accumulatedDrag = 0f;
     private boolean isDragging = false;
     private boolean chatVisible = true;
+    private boolean chatTouchEnabled = true;
+    private boolean bottomAnchor;
+    private float configuredLineHeight;
 
     public MtaChatView(Context context) {
         super(context);
@@ -67,6 +70,25 @@ public final class MtaChatView extends View {
 
     public boolean isChatVisible() {
         return chatVisible;
+    }
+
+    void setLayoutOptions(float lineHeight, boolean touchEnabled, boolean bottom) {
+        configuredLineHeight = lineHeight;
+        bottomAnchor = bottom;
+        if (chatTouchEnabled && !touchEnabled) {
+            isDragging = false;
+            scrollOffset = 0;
+            removeCallbacks(scrollResetRunnable);
+            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+        }
+        chatTouchEnabled = touchEnabled;
+        setClickable(touchEnabled);
+        invalidate();
+    }
+
+    private float lineHeight() {
+        return configuredLineHeight > 0f ? configuredLineHeight
+                : Math.max(22f, getResources().getDisplayMetrics().heightPixels / 720f * 22f);
     }
 
     public void clearLines() {
@@ -130,9 +152,9 @@ public final class MtaChatView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (!chatVisible) return super.onTouchEvent(event);
+        if (!chatVisible || !chatTouchEnabled) return false;
 
-        float lineHeight = Math.max(22f, getResources().getDisplayMetrics().heightPixels / 720f * 22f);
+        float lineHeight = lineHeight();
         int total;
         synchronized (lines) {
             total = lines.size();
@@ -206,6 +228,7 @@ public final class MtaChatView extends View {
 
     @Override
     public boolean performClick() {
+        if (!chatTouchEnabled) return false;
         super.performClick();
         return true;
     }
@@ -244,7 +267,7 @@ public final class MtaChatView extends View {
         super.onDraw(canvas);
         int width = getWidth();
         if (width <= 0) return;
-        float lineHeight = Math.max(22f, getResources().getDisplayMetrics().heightPixels / 720f * 22f);
+        float lineHeight = lineHeight();
         paint.setTextSize(lineHeight * 0.72f);
         long now = System.currentTimeMillis();
 
@@ -272,12 +295,13 @@ public final class MtaChatView extends View {
             }
         }
 
+        float firstLineY = bottomAnchor ? Math.max(0f, getHeight() - shown * lineHeight) : 0f;
         if (shown > 0) {
             bar.setAlpha(160);
-            canvas.drawRect(0, 0, width, shown * lineHeight, bar);
+            canvas.drawRect(0, firstLineY, width, firstLineY + shown * lineHeight, bar);
         }
 
-        float y = 0f;
+        float y = firstLineY;
         for (Line line : drawList) {
             int alpha;
             if (currentOffset > 0) {
@@ -301,7 +325,7 @@ public final class MtaChatView extends View {
             paint.setColor(Color.argb(220, 255, 200, 80));
             String indicator = "▲ +" + currentOffset;
             float textWidth = paint.measureText(indicator);
-            canvas.drawText(indicator, width - textWidth - dp(12), lineHeight * 0.8f, paint);
+            canvas.drawText(indicator, width - textWidth - dp(12), firstLineY + lineHeight * 0.8f, paint);
         }
     }
 

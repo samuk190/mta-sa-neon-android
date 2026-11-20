@@ -32,30 +32,10 @@ constexpr float kPi = 3.14159265f;
         }                                                                               \
     } while (0)
 
-// MTA NetBitStream::ReadNormVector encoding: x sign flag, y and z zero flags, then 16-bit
-// components for y and z (when not zero); x is rebuilt from the unit-length constraint.
-// Same encoding as ReadMtaNorm in PacketHandler.cpp, which the phone already uses for players.
+// MTA NetBitStream::ReadNormVector encoding, now BitStreamReader::ReadNormVector:
+// x sign flag, y and z zero flags, then 16-bit components. x is rebuilt from the unit length.
 bool ReadNormVector(Reader& r, Vec3& out) {
-    bool xNeg = false, yZero = false, zZero = false;
-    VS_TRY(ReadFlag(r, xNeg) && ReadFlag(r, yZero));
-    float y = 0.0f, z = 0.0f;
-    if (!yZero) {
-        uint16_t raw = 0;
-        VS_TRY(r.Read(raw));
-        y = (static_cast<float>(raw) / 32767.5f) - 1.0f;
-    }
-    VS_TRY(ReadFlag(r, zZero));
-    if (!zZero) {
-        uint16_t raw = 0;
-        VS_TRY(r.Read(raw));
-        z = (static_cast<float>(raw) / 32767.5f) - 1.0f;
-    }
-    const float rest = 1.0f - y * y - z * z;
-    float x = rest > 0.0f ? std::sqrt(rest) : 0.0f;
-    if (xNeg) x = -x;
-    out.x = x;
-    out.y = y;
-    out.z = z;
+    VS_TRY(r.ReadNormVector(out.x, out.y, out.z));
     return true;
 }
 
@@ -359,23 +339,9 @@ void WriteVec3Rotation(Writer& w, const Vec3& in) {
     WriteRotationAxis(w, in.z);
 }
 
-// Inverse of the 16-bit norm component used by ReadNormVector: (c + 1) * 32767.5 over [-1, 1].
-uint16_t QuantizeNormComponent(float c) {
-    const double scaled = std::isfinite(c) ? std::clamp(static_cast<double>(c), -1.0, 1.0) : 0.0;
-    const long raw = std::lround((scaled + 1.0) * 32767.5);
-    return static_cast<uint16_t>(std::clamp(raw, 0L, 65535L));
-}
-
-// Inverse of ReadNormVector: x sign flag, y zero flag and value, z zero flag and value.
-// x is not sent; the reader rebuilds its magnitude from the unit length.
+// Inverse of ReadNormVector. Bytes come from BitStreamWriter::WriteNormVector.
 void WriteNormVector(Writer& w, const Vec3& in) {
-    WriteFlag(w, in.x < 0.0f);
-    const bool yZero = in.y == 0.0f;
-    WriteFlag(w, yZero);
-    if (!yZero) w.Write(QuantizeNormComponent(in.y));
-    const bool zZero = in.z == 0.0f;
-    WriteFlag(w, zZero);
-    if (!zZero) w.Write(QuantizeNormComponent(in.z));
+    w.WriteNormVector(in.x, in.y, in.z);
 }
 
 // Inverse of ReadVelocity (SVelocitySync): moving flag, then module float and norm vector.
@@ -588,6 +554,59 @@ bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
     // OnFire bit (CNetAPI 1826; reader 585). Not sampled on Android, so false.
     WriteFlag(w, false);
     return true;
+}
+
+// Client-to-server keysync while driving. Desktop CNetAPI::WriteKeysync (CNetAPI.cpp 729-828); server reader
+// CKeysyncPacket::Read (Server/.../packets/CKeysyncPacket.cpp 29-171).
+void WriteDriverKeysync(Writer& w, const DriverKeysyncIn& in) {
+    const uint32_t model = static_cast<uint32_t>(in.model);
+
+    // WriteSmallKeysync (CNetAPI 1862-1880): SSmallKeysyncSync has the wire layout of SFullKeysyncSync
+    // (SyncStructures.h 1351-1375 against 939-): 8 key bits, optional analog square and cross, two stick bytes.
+    WriteFullKeys(w, in.keys);
+
+    // SKeysyncRotation (SyncStructures.h 696-725): player and camera rotation, 12 bits each over -pi..pi, wrapped.
+    auto wrapPi = [](float value) {
+        constexpr float kPi = 3.14159265f;
+        if (!std::isfinite(value)) return 0.f;
+        while (value > kPi) value -= 2.f * kPi;
+        while (value < -kPi) value += 2.f * kPi;
+        return value;
+    };
+    constexpr float kPi = 3.14159265f;
+    WriteFloatAsBits(w, 12, -kPi, kPi, wrapPi(in.playerRotation));
+    WriteFloatAsBits(w, 12, -kPi, kPi, wrapPi(in.cameraRotation));
+
+    // SKeysyncFlags, 4 bits (SyncStructures.h 920-937): ducked, choking, akimbo target up, syncing vehicle.
+    // Only bSyncingVehicle is set: the driver is in seat 0 (CNetAPI 748).
+    WriteBitsValue(w, 0x8u, 4);
+
+    // Weapon block when fire or aim/handbrake is held (CNetAPI 754-797; reader 56-134). The phone has no local weapon
+    // source, so the weapon is written as fists, as the on-foot keysync does: has-weapon bit, type 0, slot 0 (4 bits).
+    // Slot 0 has no ammo, so nothing else follows.
+    if (in.keys.buttonCircle || in.keys.rightShoulder1) {
+        WriteFlag(w, true);
+        w.Write(static_cast<uint8_t>(0));
+        WriteBitsValue(w, 0, 4);
+    }
+
+    // WriteSmallVehicleSpecific (CNetAPI 1952-1963; reader 138-141): SVehicleTurretSync for turret models. The turret
+    // angle is not sampled, so 0 (centred), as in WriteDriverPuresync.
+    if (VM::HasTurret(model)) {
+        w.Write(static_cast<uint16_t>(0));
+        w.Write(static_cast<uint16_t>(0));
+    }
+
+    // Hydraulics (CNetAPI 814-818; reader 143-151): RightStickX and RightStickY as two shorts when the vehicle has
+    // upgrade 1087. DIAG gap: the phone does not track vehicle upgrades (ENTITY_ADD skips the upgrade list) and has no
+    // right-stick sample, so the two shorts are not written. For a car with hydraulics the server's read comes up
+    // short and it drops this keysync; the next puresync still carries the keys.
+
+    // Look left / right for planes and helicopters (CNetAPI 820-824; reader 153-161).
+    if (VM::IsPlaneOrHeliModel(model)) {
+        WriteFlag(w, in.lookLeft);
+        WriteFlag(w, in.lookRight);
+    }
 }
 
 bool ReadOccupiedSync(Reader& r, uint8_t seat, OccupiedSync& o) {

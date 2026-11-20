@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Default bucket: a phone held in landscape (about 640-850 dp wide, 320-410 dp tall). -->
+    <dimen name="screen_padding">16dp</dimen>
+    <dimen name="pane_gap">16dp</dimen>
+    <dimen name="card_corner">20dp</dimen>
+    <dimen name="card_padding">16dp</dimen>
+    <dimen name="rail_logo_size">40dp</dimen>
+    <dimen name="row_logo_size">44dp</dimen>
+    <dimen name="row_logo_corner">12dp</dimen>
+    <dimen name="play_button_height">56dp</dimen>
+    <dimen name="content_max_width">1100dp</dimen>
+    <dimen name="join_logo_size">72dp</dimen>
+</resources>

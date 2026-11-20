@@ -45,13 +45,22 @@ bool ReadEntityBodyMarker(Net::BitStreamReader& reader, const EntityCommon& comm
     if (type == kMarkerCheckpoint || type == kMarkerRing) {
         bool hasTarget = false;
         if (!ReadFlag(reader, hasTarget)) ENTITY_BODY_FAIL();
+        visual.markerHasTarget = hasTarget;
         if (hasTarget) {
             float tx = 0, ty = 0, tz = 0;
             if (!ReadPosition(reader, tx, ty, tz)) ENTITY_BODY_FAIL();
+            visual.markerTargetX = tx;
+            visual.markerTargetY = ty;
+            visual.markerTargetZ = tz;
             if (type == kMarkerCheckpoint) {
                 uint8_t arrow[4] = {};
                 float arrowSize = 0;
                 if (!reader.ReadBits(arrow, 32) || !reader.Read(arrowSize)) ENTITY_BODY_FAIL();
+                visual.markerArrowR = arrow[0];
+                visual.markerArrowG = arrow[1];
+                visual.markerArrowB = arrow[2];
+                visual.markerArrowA = arrow[3];
+                visual.markerArrowSize = arrowSize;
             }
         }
     }
@@ -59,6 +68,7 @@ bool ReadEntityBodyMarker(Net::BitStreamReader& reader, const EntityCommon& comm
     // Alpha-limit override flag.
     bool ignoreAlphaLimits = false;
     if (!ReadFlag(reader, ignoreAlphaLimits)) ENTITY_BODY_FAIL();
+    visual.markerIgnoreAlpha = ignoreAlphaLimits;
     DIAG("ENTITY_ADD marker id=%u mtype=%u size=%.2f bit=%zu", common.id, static_cast<unsigned>(type), static_cast<double>(visual.size), reader.GetReadOffsetBits());
     return true;
 }

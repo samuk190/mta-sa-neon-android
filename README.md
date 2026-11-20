@@ -1,10 +1,15 @@
 # MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
 ---
+
+## Neon server compatibility
+
+The standard connection uses Neon gameplay protocol `0x41E7` and the mobile bitstream layout `0x0030`. Use the server’s default gameplay protocol. For verified Android admission, the launcher must trust the server operator’s HTTPS issuer, and the issuer must authorize the APK’s package ID and signing certificate.
 
 ## Important Notice & Prerequisites
 
@@ -17,12 +22,85 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 
 ---
 
+## Install the Release APK (players)
+
+When the build has `CDN_ROOT_URL` configured, use **Settings → Sync game assets** before playing or using **Test GTA**. The app downloads and verifies the CDN manifest into private storage. It does not use external folders such as `Download/WorldRPG_backup`, even when those folders are present. The manual installation instructions below apply only to builds without a configured CDN.
+
+The APK on the [Releases page](https://github.com/samuk190/mta-sa-neon-android/releases) includes the launcher and the MTA loading images, without GTA San Andreas files. You copy those from your own copy of the game into one folder on the phone, and the app runs the game from there.
+
+### What you need
+
+- An ARM64 (aarch64) Android phone, Android 8.0 or newer.
+- Your own, legally purchased **GTA San Andreas for Android, version 2.10** (Google Play), installed on the phone or on a PC.
+- A PC with [adb](https://developer.android.com/tools/releases/platform-tools) (recommended), or a file manager that can write to `Android/data`.
+
+### 1. Install the APK
+
+Download `mta-sa-neon-android-<version>.apk` from the Releases page and install it. Open it once, then close it: Android creates the app's folder on the first start.
+
+### 2. Get the files from your copy of the game
+
+GTA San Andreas for Android keeps its files in two places. Both are ZIP archives that any unzip tool opens:
+
+| Source | Where it is | What to take |
+|---|---|---|
+| Game APK | `adb shell pm path com.rockstargames.gtasa`, then `adb pull` that `base.apk` | `lib/arm64-v8a/libGTASA.so`, `libSCAnd.so`, `libOpenAL64.so`, and everything inside `assets/` |
+| OBB data | `Android/obb/com.rockstargames.gtasa/*.obb` | everything inside (`anim/`, `audio/`, `data/`, `models/`, `texdb/`, ...) |
+
+### 3. Put them in the game folder
+
+The default game folder is:
+
+```text
+/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+```
+
+Arrange the files like this (the three libraries go in `lib/`, everything else at the top):
+
+```text
+game_assets/
+├── lib/
+│   ├── libGTASA.so          <-- from the game APK, lib/arm64-v8a/
+│   ├── libSCAnd.so
+│   └── libOpenAL64.so
+├── anim/  audio/  models/  Text/  Textures/
+├── data/
+│   ├── gta.dat              <-- required
+│   └── handling.cfg         <-- required
+├── texdb/
+│   ├── gta3.img             <-- required
+│   └── menu/menu.pvr.dat    <-- required
+├── assetfile.txt
+└── scache.txt  scache_small.txt  scache_small_low.txt
+```
+
+With adb, after extracting both archives into one folder `gta_sa/` on your PC (with the libraries in `gta_sa/lib/`):
+
+```bash
+adb push gta_sa/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+```
+
+### 4. Play
+
+Open the app, pick a server, tap **Join**, enter your nickname and tap **Play**. If the three libraries are missing, the app names them and the folder it expects them in. If a required data file is missing (`data/gta.dat`, `data/handling.cfg`, `texdb/gta3.img`, `texdb/menu/menu.pvr.dat`), the game does not start: check the layout above.
+
+The fourteen MTA desktop loading images (`MTA/cgui/images/loadscreens/loadsc1.jpg` ... `loadsc14.jpg`) are bundled in the APK. An image in the installed game folder takes precedence; if it is missing or cannot be decoded, the bundled image is used. The optional desktop font, `MTA/cgui/sabankgothic.ttf`, is read from that folder, with a bold system font as fallback.
+
+For CDN builds, publish image overrides and the font under `game_files_android_mta/MTA/cgui/` and list their sizes and SHA-256 hashes in `manifest_android_mta.json`, then sync again. Copying them into an external backup folder does not update the installed CDN generation. The bundled loading images work before that sync.
+
+> [!NOTE]
+> Uninstalling the app deletes `Android/data/com.worldrpg.neonlauncher/`, including the game folder. Keep your extracted copy on the PC.
+
+---
+
 ## Architecture Highlights
 
 - **Platform:** Android 8.0+ (API level 26 minimum, Target API 34).
 - **ABI:** `arm64-v8a` (aarch64) exclusively.
 - **Native Engine:** C++20 standard, ARM NEON acceleration, custom Lua 5.3 runtime, Opus audio codec, and RenderWare graphics pipeline.
 - **Networking:** MTA Neon transport protocol with native handshake, cipher, and bitstream serialization.
+
+The `fetchRemote` HTTP queue behavior and the network-stats shape were ported onto the Neon RakNet transport, using [mta-network](https://github.com/vaxeus/mta-network) by vaxeus as the reference. The phone still uses Neon RakNet; it did not vendor that project's ENet `net.dll` / `netc.dll` and did not switch to ENet.
 
 ---
 
@@ -31,33 +109,13 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 - [x] **Game Log-in** — Working (handshake, OPEN51 datagram, cipher negotiation, and session init)
 - [x] **Character Sync** — Working *(with bugs)* (remote `CPlayerPed` creation, pure sync, keysync, health updates)
 - [x] **Peds** — Working *(with bugs)* (`ENTITY_ADD`, `PED_SYNC`, wander tasks; pathfinding and collision tuning in progress)
-- [x] **Sound / Chat** — Working (Opus voice stream, text chat send/receive, and on-screen overlay)
+- [x] **Sound / Chat** — MediaPlayer playback, text chat, and on-screen overlay. Voice codecs are available. In-game voice capture and playback still need integration.
 
 ---
 
-## Client Lua API Parity & Conversion Catalog
+## Client Lua API Conversion Catalog
 
-A complete line-by-line conversion catalog comparing all 1,581 desktop MTA client Lua functions (`mta_neon_source`) against the Android client is maintained in [`docs/lua-functions/`](docs/lua-functions/README.md).
-
-### Parity Breakdown by Category
-
-| Category | Documentation File | Total | Implemented | Stub | Missing | Parity % |
-|---|---|---|---|---|---|---|
-| **Vehicles (CLuaVehicleDefs)** | [VEHICLES.md](docs/lua-functions/VEHICLES.md) | 165 | 0 | 23 | 142 | 0.0% |
-| **Peds & Players (CLuaPedDefs, CLuaPlayerDefs)** | [PEDS_AND_PLAYERS.md](docs/lua-functions/PEDS_AND_PLAYERS.md) | 206 | 8 | 82 | 116 | 3.9% |
-| **World, Objects & Environment** | [WORLD_AND_OBJECTS.md](docs/lua-functions/WORLD_AND_OBJECTS.md) | 227 | 2 | 15 | 210 | 0.9% |
-| **Element Tree & Data (CLuaElementDefs)** | [ELEMENTS.md](docs/lua-functions/ELEMENTS.md) | 81 | 10 | 24 | 47 | 12.3% |
-| **GUI & 2D/3D Drawing (DX & CEGUI)** | [GUI_AND_DX.md](docs/lua-functions/GUI_AND_DX.md) | 199 | 22 | 6 | 171 | 11.1% |
-| **Engine & Model Replacement (DFF, TXD, COL)** | [ENGINE_AND_MODELS.md](docs/lua-functions/ENGINE_AND_MODELS.md) | 125 | 1 | 15 | 109 | 0.8% |
-| **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](docs/lua-functions/AUDIO_AND_VOICE.md) | 57 | 0 | 8 | 49 | 0.0% |
-| **Camera & Viewport (CLuaCameraDefs)** | [CAMERA.md](docs/lua-functions/CAMERA.md) | 47 | 1 | 5 | 41 | 2.1% |
-| **Weapons & Projectiles (CLuaWeaponDefs, CLuaProjectileDefs)** | [WEAPONS_AND_COMBAT.md](docs/lua-functions/WEAPONS_AND_COMBAT.md) | 31 | 0 | 0 | 31 | 0.0% |
-| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](docs/lua-functions/CORE_AND_UTILITY.md) | 195 | 16 | 15 | 164 | 8.2% |
-| **Markers, Blips, ColShapes & Spatial** | [MARKERS_AND_SPATIAL.md](docs/lua-functions/MARKERS_AND_SPATIAL.md) | 145 | 0 | 3 | 142 | 0.0% |
-| **Web Browser & Compatibility (CEF / Discord)** | [BROWSER_AND_COMPATIBILITY.md](docs/lua-functions/BROWSER_AND_COMPATIBILITY.md) | 103 | 0 | 0 | 103 | 0.0% |
-| **TOTAL** | **All Categories** | **1581** | **60** | **196** | **1325** | **3.8%** |
-
-*Full machine-generated parity matrix: [`docs/PARITY_MATRIX.md`](docs/PARITY_MATRIX.md)*
+The catalog covers 1,581 desktop MTA client Lua functions. It records Android binding coverage, desktop references, and known engine limitations. See the [category breakdown](docs/lua-functions/README.md) and [generated compatibility matrix](docs/PARITY_MATRIX.md).
 
 ---
 
@@ -85,6 +143,8 @@ To set up and host your own compatible game server, clone and build the San Andr
 > Peer bitstream: the phone is pinned to `0x0030`. Items that only exist from `0x0031` or `0x003D` are marked. Verified on device means logged on a real phone against the live server.
 
 **Legend:** `[x]` verified on device. `[~]` implemented in code, not verified on device. `[ ]` not started or log-only.
+
+- [ ] Non-traffic peds (remote players and script/synced peds, not native-ped-traffic) are still bugged: they do not move correctly; work already in the tree is recorded in [`docs/PEDS_SYNC_STATUS.md`](docs/PEDS_SYNC_STATUS.md).
 
 ### 0. Session, join and world state (prerequisite)
 - [x] **Join handshake** (`NeonJoinProtocol`): RakNet connect, `MOD_NAME`, `PLAYER_JOINDATA`, `PLAYER_INGAME_NOTICE`, `SERVER_JOINEDGAME` (reference `CNetAPI`, join path).
@@ -160,6 +220,7 @@ To set up and host your own compatible game server, clone and build the San Andr
 ### 5. Step E — Scripting engine, touch UI and optimization
 - [~] **Lua 5.3 client VM**: `addEventHandler`, `triggerServerEvent`, timers and about 60 ped natives defined; `getAmbientPedPopulationProfile` shim relies on them.
 - [ ] **DirectX / RenderWare 2D GUI**: DX primitives, radar blips and HUD overlays for remote entities.
+- [ ] **Registration wardrobe preview** ([docs/ROADMAP_WARDROBE_PREVIEW.md](docs/ROADMAP_WARDROBE_PREVIEW.md)): `createPed` (model 0 stays CJ), `setTime`, `setWeather`, `setCameraMatrix`, `setCameraTarget`, `addPedClothes`, `removePedClothes`, `setElementRotation`, in that order. The DX menu already draws.
 - [ ] **Touch control customization**: virtual joystick sensitivity and touch button mapping.
 - [ ] **Custom asset streaming**: server-side DFF/TXD download and RenderWare memory streaming.
 - [ ] **Engine optimization**: frame pacing, memory compaction and ARM64 anti-crash guardrails.
@@ -255,10 +316,9 @@ mta-sa-neon-android/
 
 1. Open your GTA SA Mobile 2.10 APK as a ZIP archive.
 2. Navigate to `lib/arm64-v8a/`.
-3. Copy `libGTASA.so` (and optional companion libraries `libSCAnd.so`, `libOpenAL64.so`) into:
-   ```text
-   app/src/main/jniLibs/arm64-v8a/libGTASA.so
-   ```
+3. Copy `libGTASA.so`, `libSCAnd.so` and `libOpenAL64.so` into the game folder on the device, under `lib/` (`game_assets/lib/`), as in [Install the Release APK](#install-the-release-apk-players). The app copies them into its private storage and loads them from there (`GameLibraries.java`).
+
+A debug build also packages them when they are in `app/src/main/jniLibs/arm64-v8a/` (git-ignored); that copy is used first. The release build never packages them, nor the game files in `app/src/main/assets/` (`american.gxt`, fonts, `mainV1.scm`, `menu.pvr`, `scache*.txt`); the engine reads those from the game folder first. To test a debug build exactly as the release behaves, build with `./gradlew assembleDebug -PnoGameFiles`.
 
 ### 4. Transferring Assets to Device
 
@@ -294,6 +354,13 @@ adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game
 # Debug build (generates APK in app/build/outputs/apk/debug/)
 ./gradlew assembleDebug
 
+# Release build (app/build/outputs/apk/release/), signed with keystore.properties when present:
+#   storeFile=/path/to/release.jks
+#   storePassword=...
+#   keyAlias=...
+#   keyPassword=...
+./gradlew assembleRelease
+
 # Install directly to connected device
 ./gradlew installDebug
 ```
@@ -304,6 +371,7 @@ adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game
 
 Detailed architectural and protocol references are preserved in the `docs/` directory:
 
+- [Wardrobe preview port](docs/ROADMAP_WARDROBE_PREVIEW.md)
 - [Lua Functions Conversion Catalog](docs/lua-functions/README.md)
 - [Client Parity Matrix](docs/PARITY_MATRIX.md)
 - [Protocol Reference](docs/PROTOCOL_REFERENCE.md)
@@ -319,8 +387,10 @@ Detailed architectural and protocol references are preserved in the `docs/` dire
 Join our community to discuss development, report findings, test builds, and collaborate:
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
-👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)
+👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)  
+☕ **Support on Ko-fi:** [https://ko-fi.com/samuk190](https://ko-fi.com/samuk190)
 
 ---
 

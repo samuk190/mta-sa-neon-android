@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="add_favorite">Adicionar servidor favorito</string>
+    <string name="add_server">Adicionar</string>
+    <string name="server_host">Endereço IP ou hostname</string>
+    <string name="server_port">Porta</string>
+    <string name="server_host_invalid">Digite um endereço IPv4 ou hostname válido.</string>
+    <string name="server_port_invalid">Digite uma porta de 1 a 65535.</string>
+    <string name="server_already_favorite">Este servidor já está nos favoritos.</string>
+    <string name="no_favorites_hint">Toque em + para adicionar um endereço, ou na estrela de um servidor.</string>
+    <string name="neon_registry_unavailable">Não foi possível atualizar a lista do Neon. Mostrando os servidores disponíveis.</string>
+    <string name="section_interface">Interface</string>
+    <string name="interface_scale">Escala da interface (DPI)</string>
+    <string name="interface_scale_description">Tamanho dos textos, janelas e botões do servidor. 100% é o padrão para celular.</string>
+    <string name="interface_scale_default">Padrão</string>
+    <string name="interface_scale_save_failed">Não foi possível salvar a escala da interface.</string>
+    <string name="engine_debug">Debug da engine</string>
+    <string name="engine_debug_description">Captura os logs do jogo e abre uma janela após uma falha da engine. Aplicado na próxima sessão do jogo.</string>
+    <string name="connection_mode">Modo de conexão</string>
+    <string-array name="connection_modes">
+        <item>Automático</item>
+        <item>Padrão</item>
+        <item>Legado</item>
+    </string-array>
+</resources>

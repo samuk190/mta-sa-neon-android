@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.worldrpg.neonlauncher.BuildConfig
 import com.worldrpg.neonlauncher.databinding.ActivityGameBinding
 import com.worldrpg.neonlauncher.network.ConnectionManager
+import com.worldrpg.neonlauncher.network.JoinProtocolSettings
 import com.worldrpg.neonlauncher.utils.NativeAssetBridge
 import com.worldrpg.neonlauncher.utils.PreferencesManager
 import kotlinx.coroutines.launch
@@ -39,6 +40,7 @@ class GameActivity : AppCompatActivity() {
     private var serverIp: String = ""
     private var serverPort: Int = BuildConfig.DEFAULT_SERVER_PORT
     private var nativeInitialized = false // GL thread only
+    private var nativeLibraryLoaded = false
     @Volatile private var closing = false
     // True once the session reached Connected. A drop after that offers Retry / Quit (P3.1).
     private var joinedOnce = false
@@ -58,8 +60,13 @@ class GameActivity : AppCompatActivity() {
      * @param ip Server IP address (ASCII)
      * @param port Server UDP port
      * @param nickname Player nickname (ASCII-only)
+     * @param joinProfile The selected mode for this connection and its retries
      */
-    private external fun nativeConnect(ip: String, port: Int, nickname: String): Boolean
+    private external fun nativeConnect(ip: String, port: Int, nickname: String, joinProfile: Int): Boolean
+
+    private fun connectToServer(): Boolean = nativeConnect(
+        serverIp, serverPort, prefsManager.username, intent.getIntExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, 0)
+    )
 
     /** Coordinates are pixels in the client surface. */
     private external fun nativeOnTouch(x: Float, y: Float, action: Int, pointerId: Int)
@@ -82,6 +89,9 @@ class GameActivity : AppCompatActivity() {
      * Process incoming network packets. Must be called every frame.
      */
     private external fun nativePulse()
+
+    /** Desktop CCore::IsFocused. Any thread; the VM applies it on the next pulse. */
+    private external fun nativeWindowFocus(focused: Boolean)
 
     /**
      * Releases the client state owned by this Activity.
@@ -192,7 +202,7 @@ class GameActivity : AppCompatActivity() {
 
     private fun retryConnection() {
         connectionManager.setConnecting(serverIp, serverPort)
-        if (!nativeConnect(serverIp, serverPort, prefsManager.username)) {
+        if (!connectToServer()) {
             connectionManager.setError("Falha ao reconectar.")
             showConnectionLostDialog()
         }
@@ -217,6 +227,7 @@ class GameActivity : AppCompatActivity() {
         try {
 // libc++ is linked statically into WorldRPGNeon (c++_static); no shared runtime to preload.
             System.loadLibrary("WorldRPGNeon")
+            nativeLibraryLoaded = true
         } catch (error: UnsatisfiedLinkError) {
             android.util.Log.e("GameActivity", "Falha ao carregar WorldRPGNeon", error)
             Toast.makeText(this, "Falha ao carregar o cliente nativo.", Toast.LENGTH_LONG).show()
@@ -269,6 +280,8 @@ class GameActivity : AppCompatActivity() {
                 override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
                     if (closing || nativeInitialized) return
 
+                    // Sample before the VM is created so its constructor sees the real focus.
+                    nativeWindowFocus(hasWindowFocus())
                     if (!nativeInit()) {
                         connectionManager.setError("Falha ao iniciar o cliente nativo.")
                         return
@@ -293,7 +306,7 @@ class GameActivity : AppCompatActivity() {
                     }
 
                     connectionManager.setConnecting(serverIp, serverPort)
-                    if (!nativeConnect(serverIp, serverPort, prefsManager.username)) {
+                    if (!connectToServer()) {
                         connectionManager.setError("Falha ao iniciar a conexao.")
                     }
                 }
@@ -391,6 +404,11 @@ class GameActivity : AppCompatActivity() {
                 for (pointer in pointers) nativeOnTouch(0f, 0f, MotionEvent.ACTION_CANCEL, pointer)
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (nativeLibraryLoaded && !closing) nativeWindowFocus(hasFocus)
     }
 
     override fun onPause() {

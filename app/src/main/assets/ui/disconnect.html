@@ -1,33 +1,77 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Conexao perdida</title>
+<title>Error</title>
+<!--
+  The Neon desktop system message box, error severity:
+  Tools/server-browser-prototype/src/components/Modals.tsx NativeMessageModal and
+  src/index.css (.overlay--system, .modal--system, .modal--error, .modal__title,
+  .modal__error, .modal--system .modal__btn). Colors are its :root tokens.
+-->
 <style>
-  html, body { margin: 0; height: 100%; background: rgba(0,0,0,0.6); font-family: Roboto, Arial, sans-serif; color: #fff; }
-  .panel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, 88vw);
-           background: #1f1f1f; border-radius: 10px; overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,0.6); }
-  .header { background: #1c5e20; padding: 18px 22px; font-size: 20px; font-weight: 700; letter-spacing: .3px; }
-  .body { padding: 20px 22px 8px; font-size: 16px; line-height: 1.45; color: #e6e6e6; }
-  .actions { display: flex; gap: 12px; padding: 16px 22px 22px; }
-  button { flex: 1; border: 0; border-radius: 6px; padding: 14px 10px; font-size: 16px; font-weight: 700;
-           letter-spacing: 1px; color: #1c1c1c; background: #ff6f00; }
-  button.secondary { background: #3a3a3a; color: #fff; }
-  button:active { opacity: .85; }
+  :root {
+    --paper: #f6f4ed; --paper-dim: #d7d8d3; --blue: #b6d4fb; --cream: #f0d98d; --danger: #d07970;
+    --font-menu: 'SA Bank Gothic', 'Arial Narrow', 'Noto Sans', Arial, sans-serif;
+    --font-ui: 'Segoe UI', Roboto, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    display: grid; place-items: center; padding: 24px; font-family: var(--font-ui); color: var(--paper);
+    background:
+      linear-gradient(90deg, rgba(0, 0, 0, 0.97), rgba(5, 7, 7, 0.82) 50%, rgba(0, 0, 0, 0.94)),
+      rgba(0, 0, 0, 0.72);
+  }
+  .modal {
+    width: min(620px, 100%); max-height: min(78vh, 680px); overflow: auto; padding: 36px 40px 32px;
+    border: 1px solid rgba(228, 210, 159, 0.24); border-left: 4px solid var(--danger);
+    background: rgba(3, 5, 5, 0.98); box-shadow: 18px 18px 0 rgba(0, 0, 0, 0.58);
+    animation: enter 180ms ease-out backwards;
+  }
+  @keyframes enter { from { opacity: 0; transform: translateY(6px); } }
+  .modal__title {
+    margin-bottom: 15px; display: flex; align-items: center; gap: 10px; color: var(--blue);
+    font-family: var(--font-menu); font-weight: normal; font-size: clamp(25px, 2vw, 32px); line-height: 1.15;
+    letter-spacing: 0.045em; text-transform: uppercase;
+  }
+  .modal__title svg { flex: none; width: 16px; height: 16px; stroke: currentColor; stroke-width: 2.4; fill: none; stroke-linecap: round; }
+  .modal__error {
+    margin-bottom: 16px; color: var(--danger); font-size: 13px; line-height: 1.55;
+    max-height: 42vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .modal__actions { margin-top: 20px; display: flex; justify-content: flex-end; gap: 18px; }
+  .modal__btn {
+    min-width: 112px; height: 40px; padding: 0 18px; border: 1px solid rgba(228, 210, 159, 0.46);
+    background: rgba(182, 212, 251, 0.05); color: var(--paper); font-family: var(--font-ui); font-size: 13px;
+    font-weight: 700; line-height: 38px; letter-spacing: 0.09em; text-transform: uppercase; cursor: pointer;
+  }
+  .modal__btn--primary, .modal__btn:active { border-color: var(--cream); background: rgba(182, 212, 251, 0.12); color: var(--blue); }
 </style>
 </head>
 <body>
-  <div class="panel">
-    <div class="header">Conexao perdida</div>
-    <div class="body" id="msg">O servidor encerrou a sessao.</div>
-    <div class="actions">
-      <button onclick="Neon.retry()">TENTAR NOVAMENTE</button>
-      <button class="secondary" onclick="Neon.quit()">SAIR</button>
+  <section class="modal" role="alertdialog" aria-modal="true" aria-labelledby="t" aria-describedby="m">
+    <h2 class="modal__title" id="t">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      <span id="title">Disconnected</span>
+    </h2>
+    <p class="modal__error" id="m">Disconnected from the server.</p>
+    <div class="modal__actions">
+      <button type="button" class="modal__btn" onclick="Neon.quit()">Close</button>
+      <button type="button" class="modal__btn modal__btn--primary" onclick="Neon.retry()">Reconnect</button>
     </div>
-  </div>
+  </section>
   <script>
-    window.setMessage = function (text) { document.getElementById('msg').textContent = text; };
+    window.setDialog = function (title, text, fontUrl) {
+      if (fontUrl) {
+        var face = new FontFace('SA Bank Gothic', 'url("' + fontUrl + '")');
+        face.load().then(function (f) { document.fonts.add(f); }).catch(function () {});
+      }
+      document.getElementById('title').textContent = title || 'Error';
+      document.getElementById('m').textContent = text || '';
+    };
+    window.setMessage = function (text) { window.setDialog('Disconnected', text, ''); };
   </script>
 </body>
 </html>

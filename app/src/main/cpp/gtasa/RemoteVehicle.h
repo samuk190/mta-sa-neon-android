@@ -16,6 +16,15 @@ namespace WorldRPG::RemoteVehicle {
 void SetOccupant(uint32_t playerId, uint32_t vehicleId, uint8_t seat);
 void ClearOccupant(uint32_t playerId);
 bool FindOccupant(uint32_t playerId, uint32_t& vehicleId, uint8_t& seat);
+// An element left the session (PLAYER_QUIT or ENTITY_REMOVE): drops its own seat, and every seat of
+// it when it is a vehicle. A reused ElementID then starts with no occupancy (desktop: the
+// CClientPed / CClientVehicle destructors clear both sides).
+void ForgetElement(uint32_t id);
+// The ped stored in this seat of the vehicle (desktop CClientVehicle::GetOccupant). Read only.
+bool FindSeatOccupant(uint32_t vehicleId, uint8_t seat, uint32_t& playerId);
+
+// Reconnect: drops every stored vehicle state and occupant of the old session.
+void ResetSession();
 
 // Packet 56, one entry. Skips vehicles this client hosts (ServerWorld::ActorHosted).
 void ApplyUnoccupied(const VehicleSync::UnoccupiedUpdate& update);

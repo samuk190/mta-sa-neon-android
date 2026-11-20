@@ -1,0 +1,1 @@
+package android.graphics; public class PorterDuff { public enum Mode { ADD,SRC,SRC_OVER,MULTIPLY } }

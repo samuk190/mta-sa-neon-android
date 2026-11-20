@@ -11,7 +11,7 @@ fi
 printf -v rsync_ssh 'ssh -o IPQoS=none -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i %q' "$ssh_key"
 # Keep this workspace separate from the earlier Android project and the MTA server.
 rsync -a --timeout=45 --delete --exclude='.git' --exclude='.gradle' --exclude='.cxx' \
-    --exclude='app/build' --exclude='outputs' --exclude='local.properties' \
+    --exclude='build' --exclude='app/build' --exclude='outputs' --exclude='local.properties' \
     --exclude='*.apk' --exclude='*.idsig' --exclude='*.jks' --exclude='*.keystore' \
     --exclude='libGTASA_v210.so' --exclude='nul' \
     -e "$rsync_ssh" "$project_dir/" "$oracle_host:$remote_dir/workspace/"

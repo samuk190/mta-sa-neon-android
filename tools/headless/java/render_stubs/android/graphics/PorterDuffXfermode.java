@@ -1,0 +1,1 @@
+package android.graphics; public class PorterDuffXfermode extends Xfermode { public PorterDuff.Mode mode; public PorterDuffXfermode(PorterDuff.Mode m){mode=m;} }

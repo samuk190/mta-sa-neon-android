@@ -1,11 +1,14 @@
 #include "NeonJoinProtocol.h"
+#include "DisconnectMessages.h"
 #include "../gtasa/GameEngine.h"
 #include "../shared/CombatSync.h"
+#include "../shared/ConnectionLoading.h"
 #include "../shared/ServerWorld.h"
 #include "../shared/VehicleSync.h"
 #include "../shared/entity/EntityVehicleModels.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 #include <chrono>
@@ -29,6 +32,7 @@ namespace WorldRPG::Net {
 
 namespace {
 RakNetWrapper* g_joinedNet = nullptr;
+std::atomic<uint64_t> g_identitySequence{0};
 
 uint32_t NowMs() {
     return static_cast<uint32_t>(
@@ -67,53 +71,14 @@ bool ReadBit(BitStreamReader& r, bool& out) {
     return true;
 }
 
-// RakNet BitStream::WriteCompressed(unsigned int) — variable-length encoding:
-// a 1-bit per all-zero high byte, then either a 1-bit + 4 low bits (when the
-// final byte's high nibble is zero) or a 0-bit + the whole final byte.
+// RakNet BitStream::WriteCompressed(unsigned int). The bytes are produced by
+// BitStreamWriter::WriteCompressed so this helper cannot drift from the class.
 [[maybe_unused]] void WriteCompressedU32(BitStreamWriter& w, uint32_t value) {
-    uint8_t bytes[4];
-    memcpy(bytes, &value, 4);
-    for (int currentByte = 3; currentByte > 0; --currentByte) {
-        if (bytes[currentByte] == 0) {
-            WriteBit(w, true);
-        } else {
-            WriteBit(w, false);
-            w.WriteBits(bytes, static_cast<size_t>(currentByte + 1) * 8);
-            return;
-        }
-    }
-    if ((bytes[0] & 0xF0) == 0) {
-        WriteBit(w, true);
-        w.WriteBits(bytes, 4);
-    } else {
-        WriteBit(w, false);
-        w.WriteBits(bytes, 8);
-    }
+    w.WriteCompressed(value, 4);
 }
 
 bool ReadCompressedU32(BitStreamReader& r, uint32_t& out) {
-    uint8_t bytes[4] = {0, 0, 0, 0};
-    for (int currentByte = 3; currentByte > 0; --currentByte) {
-        bool flag = false;
-        if (!ReadBit(r, flag)) return false;
-        if (flag) {
-            bytes[currentByte] = 0;
-        } else {
-            if (!r.ReadBits(bytes, static_cast<size_t>(currentByte + 1) * 8)) return false;
-            memcpy(&out, bytes, 4);
-            return true;
-        }
-    }
-    bool half = false;
-    if (!ReadBit(r, half)) return false;
-    if (half) {
-        if (!r.ReadBits(bytes, 4)) return false;
-        bytes[0] &= 0x0F;
-    } else {
-        if (!r.ReadBits(bytes, 8)) return false;
-    }
-    memcpy(&out, bytes, 4);
-    return true;
+    return r.ReadCompressed(out, 4);
 }
 
 // ElementID: 17 significant bits (NumberOfSignificantBits(131072-1));
@@ -160,6 +125,7 @@ const char* JoinStateName(JoinState state) {
         case JoinState::Idle: return "idle";
         case JoinState::WaitingRakNet: return "waiting-raknet";
         case JoinState::WaitingModName: return "waiting-mod-name";
+        case JoinState::WaitingIdentity: return "waiting-identity";
         case JoinState::JoinDataSent: return "joindata-sent";
         case JoinState::ServerJoinComplete: return "server-join-complete";
         case JoinState::InGameNoticeSent: return "ingame-notice-sent";
@@ -175,28 +141,47 @@ struct NeonJoinClient::Impl {
     JoinState state = JoinState::Idle;
     NeonJoinInfo info;
     StateCallback callback;
+    IdentityCallback identityCallback;
+    uint64_t identityRequestId = 0;
     std::string nickname;
+    std::string password;
+    std::string identityTicket;
     uint32_t deadlineMs = 0;
 
     void SetState(JoinState next, const char* detail) {
         state = next;
-        deadlineMs = NowMs() + JOIN_STEP_TIMEOUT_MS;
+        deadlineMs = NowMs() + (next == JoinState::WaitingIdentity ? 20000 : JOIN_STEP_TIMEOUT_MS);
         JOIN_LOGI("NeonJoin: state -> %s (%s)", JoinStateName(next), detail ? detail : "");
         if (callback) callback(next, detail ? detail : "");
     }
 
-    void Fail(const std::string& reason) {
+    // reason goes to the log; box is the desktop error box the player sees (DisconnectMessages).
+    void Fail(const std::string& reason, const DisconnectMessages::Box& box) {
         g_confirmedVehicle = 0xFFFFFFFFu;
-        info.lastError = reason;
-        JOIN_LOGE("NeonJoin: FAILED: %s", reason.c_str());
+        info.lastError = box.text;
+        JOIN_LOGE("NeonJoin: FAILED: %s -> %s: %s", reason.c_str(), box.title.c_str(), box.text.c_str());
         state = JoinState::Failed;
-        if (callback) callback(JoinState::Failed, reason.c_str());
+        const std::string packed = DisconnectMessages::Pack(box);
+        if (callback) callback(JoinState::Failed, packed.c_str());
     }
 
     uint32_t lastSyncMs = 0;
     uint32_t lastKeyMs = 0;
     uint32_t lastPedMs = 0;
     uint32_t lastUnoccupiedMs = 0;
+    // Last values written by SendPedSync (desktop CClientPed::m_LastSyncedData, SLastSyncedPedData).
+    struct PedLastSynced {
+        float x = 0, y = 0, z = 0;
+        float vx = 0, vy = 0, vz = 0;
+        float rotation = 0;
+        float health = 0;
+        float armor = 0;
+        bool onFire = false;
+        bool inWater = false;
+        bool reloading = false;
+        float camera = 0;
+    };
+    std::unordered_map<uint32_t, PedLastSynced> lastPed;
     // Last synced values per hosted vehicle (desktop CDeathmatchVehicle::m_LastSyncedData).
     struct UnoccupiedLastSynced {
         WorldRPG::VehicleSync::Vec3 position, rotation, velocity, turnVelocity;
@@ -204,6 +189,7 @@ struct NeonJoinClient::Impl {
     };
     std::unordered_map<uint32_t, UnoccupiedLastSynced> lastUnoccupied;
     float lastKeyHeading = 0.f;
+    bool lastKeyFire = false;
     std::string pendingChat;
 
     // PLAYER_VEHICLE_PURESYNC (packet 33), driver form. Desktop CNetAPI::DoPulse (279-380) sends
@@ -211,9 +197,10 @@ struct NeonJoinClient::Impl {
     // ported. Driving keys come from the local pad (CopyLocalCar, sampled in WatchLocalVehicle). Fire, action,
     // enter/exit and walk keys stay zero: no source yet. Player health comes from the CopyBody sample (armor has no
     // source, so 0, as on foot). The camera is assumed to look along the car heading, level pitch (no camera sample).
-    void SendDriverPuresync(const WorldRPG::Game::LocalCarState& car) {
+    // Returns false when the packet cannot be written (train models), so the caller can send the on-foot form.
+    bool SendDriverPuresync(const WorldRPG::Game::LocalCarState& car) {
         // Train block is not ported. Return before ConsumeDamage so a pending hit is not lost.
-        if (WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(car.model))) return;
+        if (WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(car.model))) return false;
 
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
         WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
@@ -258,7 +245,7 @@ struct NeonJoinClient::Impl {
 
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(33));          // PLAYER_VEHICLE_PURESYNC
-        if (!WorldRPG::VehicleSync::WriteDriverPuresync(w, in)) return;
+        if (!WorldRPG::VehicleSync::WriteDriverPuresync(w, in)) return false;
         if (net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                             PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) {
             static int reports = 0;
@@ -268,12 +255,120 @@ struct NeonJoinClient::Impl {
                           car.vehicleId, car.model, car.x, car.y, car.z);
             }
         }
+        return true;
+    }
+
+    // PLAYER_KEYSYNC (packet 31) while the server has the local ped seated as driver. Desktop CNetAPI::DoPulse (385-397)
+    // sends WriteKeysync when no puresync went out on this pulse and IsSmallKeySyncNeeded (CNetAPI.cpp 462-547) sees a
+    // change against the last sent controller state. WriteKeysync (729-828) then sets bSyncingVehicle and writes the
+    // vehicle tail. The on-foot writer below was used here before, which relayed accelerate and brake as released
+    // between two packets 33.
+    WorldRPG::VehicleSync::FullKeys lastSentDriverKeys;  // desktop m_LastSentControllerState (SetLastSentControllerState)
+    bool lastSentLookLeft = false;
+    bool lastSentLookRight = false;
+    bool pureSyncSentThisPulse = false;
+    // Last on-foot sticks written by packet 32 or 31 (wire bytes, -127..127).
+    // A change from non-zero to the pad's 0 is the release edge.
+    int lastOnFootStickX = 0;
+    int lastOnFootStickY = 0;
+    // Keysync saw the release between pure-sync samples. The next packet 32 writes a zero SVelocitySync.
+    bool pendingZeroVelocity = false;
+    void SendDriverKeySync(const WorldRPG::Game::LocalCarState& car) {
+        // Desktop DoPulse: keysync is the else branch of the puresync send.
+        if (pureSyncSentThisPulse) return;
+
+        WorldRPG::VehicleSync::DriverKeysyncIn in;
+        // The same pad sample and mapping as SendDriverPuresync.
+        in.keys.stickX = car.steering;
+        in.keys.analogCross = car.accelerate;
+        in.keys.buttonCross = car.accelerate != 0;
+        in.keys.analogSquare = car.brake;
+        in.keys.buttonSquare = car.brake != 0;
+        in.keys.rightShoulder1 = car.handBrake;
+        in.keys.shockButtonL = car.horn;
+        in.lookLeft = car.lookLeft;
+        in.lookRight = car.lookRight;
+        in.model = car.model;
+
+        // IsSmallKeySyncNeeded, the parts the phone samples. LeftShoulder1, ButtonCircle, ButtonTriangle and m_bPedWalk
+        // have no source in a car and stay 0 on both sides of the compare.
+        const WorldRPG::VehicleSync::FullKeys& last = lastSentDriverKeys;
+        const bool aircraft = WorldRPG::Entity::VehicleModels::IsPlaneOrHeliModel(static_cast<uint32_t>(car.model));
+        bool needed = aircraft && (in.lookLeft != lastSentLookLeft || in.lookRight != lastSentLookRight);
+        needed = needed || in.keys.rightShoulder1 != last.rightShoulder1 || in.keys.analogSquare != last.analogSquare ||
+                 in.keys.analogCross != last.analogCross || in.keys.shockButtonL != last.shockButtonL;
+        // Stick: a change of more than 32 on either axis. LeftStickY is 0 in a car, so the desktop's analog-move rate
+        // limit (both axes inside 1..127 or -127..-1) never applies and the change is sent at once.
+        needed = needed || std::abs(static_cast<int>(in.keys.stickX) - static_cast<int>(last.stickX)) > 32;
+        // The camera-orbit and aim checks need iKeySyncRotation < iPureSync; both are 100 ms here (the pulse above),
+        // so the desktop skips them too.
+        if (!needed) return;
+
+        float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
+        WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+        in.playerRotation = heading;                       // pPlayerModel->GetCurrentRotation()
+        in.cameraRotation = -car.rotZ * 3.14159265f / 180.f;  // as SendDriverPuresync: the camera looks along the car
+
+        BitStreamWriter w;
+        w.Write(static_cast<uint8_t>(31));  // PLAYER_KEYSYNC
+        WorldRPG::VehicleSync::WriteDriverKeysync(w, in);
+        if (!net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                             PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) return;
+        lastSentDriverKeys = in.keys;
+        lastSentLookLeft = in.lookLeft;
+        lastSentLookRight = in.lookRight;
+        static int reports = 0;
+        if (reports < 4) {
+            ++reports;
+            JOIN_LOGI("NeonJoin: sending PLAYER_KEYSYNC (vehicle form) vehicle %u steer %d accel %u brake %u handbrake %d",
+                      car.vehicleId, static_cast<int>(car.steering), static_cast<unsigned>(car.accelerate),
+                      static_cast<unsigned>(car.brake), car.handBrake ? 1 : 0);
+        }
     }
 
     // PLAYER_BULLETSYNC (packet 98). Desktop CNetAPI::SendBulletSyncFire (CNetAPI.cpp 2391-2414), called from
     // CClientGame::PostWeaponFire (CClientGame.cpp 6024-6026). One reliable packet per shot queued by the CWeapon::Fire
     // hook (PlayerPedPort.cpp InstallLocalBulletFireHook). Body after the id: weapon u8, start 3 floats, end 3 floats,
     // order u8, hit bit. Only the no-damage form is sent (CNetAPI.cpp 2409-2412); hit reports are not ported yet.
+    // CClientGame::SendPedWastedPacket (CClientGame.cpp 6531-6578) for a ped this phone hosts: WriteCompressed animGroup,
+    // WriteCompressed animID, damager ElementID, SWeaponTypeSync (6 bits), SBodypartSync (3 bits), SPositionSync(false),
+    // ped ElementID, SWeaponAmmoSync(weapon, total=true, clip=false) = WriteCompressed(ushort total). Total ammo is 0
+    // here (the hosted ped's weapon is not read). PACKET_PRIORITY_HIGH, RELIABLE_ORDERED.
+    void SendPedWasted() {
+        if (!net || !net->IsConnected()) return;
+        WorldRPG::Game::HostedWasted dead;
+        while (WorldRPG::Game::ConsumeHostedWasted(dead)) {
+            if (!WorldRPG::ServerWorld::ActorHosted(dead.id)) continue;  // IsSyncing
+            auto low = [](BitStreamWriter& w, uint32_t value, int bits) {
+                uint8_t bytes[4] = {};
+                for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (8 * i)) & 0xFF);
+                w.WriteBits(bytes, static_cast<size_t>(bits));
+            };
+            auto fixed24 = [&](BitStreamWriter& w, float coord) {
+                int32_t fixed = static_cast<int32_t>(std::lround(static_cast<double>(coord) * 1024.0));
+                fixed = std::clamp(fixed, -8388608, 8388607);
+                low(w, static_cast<uint32_t>(fixed) & 0xFFFFFFu, 24);
+            };
+            auto element = [&](BitStreamWriter& w, uint32_t id) { low(w, id == 0xFFFFFFFFu ? 0x1FFFFu : id, 17); };
+            BitStreamWriter w;
+            w.Write(static_cast<uint8_t>(64));  // PED_WASTED
+            w.WriteCompressed(static_cast<uint32_t>(dead.animGroup), 4);
+            w.WriteCompressed(static_cast<uint32_t>(dead.animId), 4);
+            element(w, dead.damager);
+            low(w, static_cast<uint32_t>(dead.weapon) & 0x3Fu, 6);
+            low(w, static_cast<uint32_t>(dead.bodyPart) & 0x7u, 3);
+            fixed24(w, dead.x);
+            fixed24(w, dead.y);
+            w.Write(dead.z);
+            element(w, dead.id);
+            w.WriteCompressed(0u, 2);
+            const bool sent = net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w, PacketPriority::HIGH,
+                                              PacketReliability::RELIABLE_ORDERED);
+            JOIN_LOGI("NeonJoin: PED_WASTED id=%u damager=%u weapon=%d anim=%d/%d %s", dead.id, dead.damager, dead.weapon,
+                      dead.animGroup, dead.animId, sent ? "sent" : "send failed");
+        }
+    }
+
     uint8_t bulletOrder = 0;  // desktop m_ucBulletSyncOrderCounter (CNetAPI.cpp 2398)
     void SendBulletSync() {
         if (!net || !net->IsConnected()) return;
@@ -306,28 +401,39 @@ struct NeonJoinClient::Impl {
     }
 
     // Bitstream 0x0030, the version the join hook stores for this client:
-    // no extended positions and no native-task block. Time context 0 is
-    // accepted by CanUpdateSync. Without this packet the server never
-    // relays a position, so a desktop client has no ped to draw.
+    // no extended positions and no native-task block. Suppress sync while
+    // a server position is waiting to be applied to the local body.
     void SendPureSync() {
-        if (!net || !net->IsConnected()) return;
+        pureSyncSentThisPulse = false;
+        if (!net || !net->IsConnected() || WorldRPG::Game::LocalPlacementPending()) return;
         const uint32_t now = NowMs();
         if (now - lastSyncMs < 100) return;
         lastSyncMs = now;
+        pureSyncSentThisPulse = true;
         // In a mapped car the driver sends packet 33 instead (SendDriverPuresync); on foot, packet 32 below.
         WorldRPG::Game::LocalCarState car;
         if (WorldRPG::Game::CopyLocalCar(car)) {
             // Only the car the server seated us in. GTA can place the ped in a car before the server confirms it
             // (request pending, refused or jacked); the desktop sends the on-foot sync then.
             if (car.vehicleId == g_confirmedVehicle) {
-                SendDriverPuresync(car);
-                return;
-            }
-            static int unconfirmedReports = 0;
-            if (unconfirmedReports < 4) {
-                ++unconfirmedReports;
-                JOIN_LOGI("NeonJoin: GTA car %u is not server-confirmed (confirmed %u); sending on-foot PURESYNC",
-                          car.vehicleId, g_confirmedVehicle);
+                if (SendDriverPuresync(car)) return;
+                // DIAG: the driver form could not be written (train block not ported: no hook samples the train
+                // position, track, direction and speed). The on-foot form below goes out instead of nothing. The
+                // server does not relay it for a seated player (CGame::Packet_PlayerPuresync) but still answers with
+                // return sync. SendVehicleInOut does not request a seat in a train, so this is not reached normally.
+                static int trainReports = 0;
+                if (trainReports < 4) {
+                    ++trainReports;
+                    JOIN_LOGI("DIAG NeonJoin: no driver PURESYNC for vehicle %u model %d (train block missing); sending on-foot PURESYNC",
+                              car.vehicleId, car.model);
+                }
+            } else {
+                static int unconfirmedReports = 0;
+                if (unconfirmedReports < 4) {
+                    ++unconfirmedReports;
+                    JOIN_LOGI("NeonJoin: GTA car %u is not server-confirmed (confirmed %u); sending on-foot PURESYNC",
+                              car.vehicleId, g_confirmedVehicle);
+                }
             }
         }
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
@@ -338,6 +444,8 @@ struct NeonJoinClient::Impl {
         const auto rotationBits = static_cast<uint32_t>(std::lround(65535.0 * ((heading + pi) / (2.0 * pi))));
         WorldRPG::Game::OnFootKeys foot;
         WorldRPG::Game::CopyOnFoot(heading, vx, vy, foot);
+        if (foot.jump) WorldRPG::Game::ConsumeLocalJump();
+        if (foot.fire) WorldRPG::Game::ConsumeLocalAttack();
         const auto cameraBits = static_cast<uint32_t>(std::lround(4095.0 * ((foot.camera + pi) / (2.0 * pi)))) & 0xFFFu;
         auto low = [](BitStreamWriter& w, uint32_t value, int bits) {
             uint8_t bytes[4] = {};
@@ -359,7 +467,8 @@ struct NeonJoinClient::Impl {
         lastY = y;
         const float move = std::sqrt(moveX * moveX + moveY * moveY);
         float speed = std::sqrt(vx * vx + vy * vy);
-        if (speed < 0.02f && move > 0.04f) {
+        // A released pad must not be rebuilt from leftover CPhysical+0x68 or from the position step.
+        if (!foot.padStickZero && speed < 0.02f && move > 0.04f) {
             const float scale = move > 0.25f ? 0.20f : 0.09f;
             const float inv = 1.f / move;
             vx = moveX * inv * scale;
@@ -367,17 +476,39 @@ struct NeonJoinClient::Impl {
             vz = 0.f;
             speed = scale;
         }
-        const bool moving = speed > 0.02f;
+        if (!foot.padStickZero) pendingZeroVelocity = false;
+        const bool moving = !foot.padStickZero && speed > 0.02f;
+        // Falling edge, or the keysync that already announced it: bSyncingVelocity with a zero
+        // SVelocitySync so ReadPlayerPuresync calls SetMoveSpeed(0) (CNetAPI.cpp 891-896).
+        const bool releaseVelocity = foot.padStickZero &&
+            (pendingZeroVelocity || lastOnFootStickX != 0 || lastOnFootStickY != 0);
         const int stickX = foot.stickX;
         const int stickY = foot.stickY;
         uint8_t keys = 0;
         if (foot.fire) keys |= 0x10;
         if (foot.duck) keys |= 0x40;
-        if (moving && speed <= 0.16f) keys |= 0x80;
-        uint32_t syncFlags = moving ? 0x0402u : 0x0002u;
+        // SFullKeysyncSync bButtonCross (0x08, sprint) and bButtonSquare (0x04, jump); SyncStructures.h 1004-1012.
+        if (foot.sprint) keys |= 0x08;
+        if (foot.jump) keys |= 0x04;
+        // m_bPedWalk (0x80) is the PC walk key in GetCurrentControllerState. A touch phone has no walk key (slow walking
+        // is a small stick), so the bit stays clear. It used to be set for any speed up to 0.16, which made desktop
+        // observers play the walk cycle while the phone player ran (device 2026-11-14).
+        uint32_t syncFlags = (moving || releaseVelocity) ? 0x0402u : 0x0002u;
         if (foot.duck) syncFlags |= 0x0008u;
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(32));          // PLAYER_PURESYNC
+        // CNetAPI::WritePlayerPuresync writes GetSyncTimeContext (CNetAPI.cpp 1119).
+        // The mobile client doesn't process every RPC that can change the local context.
+        static bool loggedContext = false;
+        if (!loggedContext) {
+            loggedContext = true;
+            JOIN_LOGI("DIAG PLAYER_PURESYNC skipped at bitstream 0x0030: "
+                      "SNativeTaskLocomotionSync (NativeTaskLocomotionPresentation 0x3C). "
+                      "Not read, so those bits stay clear: HasJetPack, GetContactEntity, GetWeapon / aim, "
+                      "IsOnGround (bIsOnGround stays set), GetArmor (SPlayerArmorSync stays 0). "
+                      "WriteCameraOrientation (CNetAPI.cpp 1023-1114) has no camera matrix; "
+                      "the 8-bit yaw below reuses GetCameraRotation and pitch stays level.");
+        }
         w.Write(static_cast<uint8_t>(0));           // time context
         w.Write(keys);
         low(w, 0, 1);                               // no analog square
@@ -389,7 +520,11 @@ struct NeonJoinClient::Impl {
         fixed24(w, y);
         w.Write(z);
         low(w, rotationBits, 16);
-        if (moving) {
+        if (releaseVelocity) {
+            // SVelocitySync::Write with modulus 0 (SyncStructures.h 582-587): one clear bit.
+            uint8_t zeroBit = 0;
+            w.WriteBits(&zeroBit, 1);
+        } else if (moving) {
             const float modulus = std::max(speed, 0.001f);
             float nx = vx / modulus, ny = vy / modulus, nz = vz / modulus;
             auto writeNorm = [&](BitStreamWriter& out) {
@@ -422,10 +557,20 @@ struct NeonJoinClient::Impl {
             w.Write(modulus);
             writeNorm(w);
         }
-        const int healthByte = std::clamp(static_cast<int>(std::lround(health)), 0, 200);
-        w.Write(static_cast<uint8_t>(healthByte));
-        w.Write(static_cast<uint8_t>(0));           // armor
-        low(w, cameraBits, 12);                     // camera faces the ped heading
+        // SPlayerHealthSync: SFloatAsBitsSync<8>(0, 255, preserveGreaterThanMin) (SyncStructures.h 189-193).
+        // A raw clamp to 200 drops health above 200 and a value in (0, 0.5) to 0.
+        auto playerHealthByte = [](float value) -> uint8_t {
+            if (!std::isfinite(value) || value <= 0.f) return 0;
+            float alpha = value / 255.f;
+            if (alpha > 1.f) alpha = 1.f;
+            int byte = static_cast<int>(std::lround(static_cast<double>(alpha) * 255.0));
+            if (byte <= 0) return 1;
+            if (byte > 255) return 255;
+            return static_cast<uint8_t>(byte);
+        };
+        w.Write(playerHealthByte(health));
+        w.Write(static_cast<uint8_t>(0));           // armor (GetArmor not written; see DIAG above)
+        low(w, cameraBits, 12);                     // SCameraRotationSync = GetCameraRotation
         const auto camZ = static_cast<uint8_t>(std::lround(255.0 * ((foot.camera + pi) / (2.0 * pi))) & 0xFF);
         w.Write(camZ);
         w.Write(static_cast<uint8_t>(128));         // camera rot X, level
@@ -449,6 +594,9 @@ struct NeonJoinClient::Impl {
         }
         if (net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                             PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) {
+            lastOnFootStickX = stickX;
+            lastOnFootStickY = stickY;
+            if (releaseVelocity) pendingZeroVelocity = false;
             static float loggedX = 0, loggedY = 0;
             static int reports = 0;
             const float dx = x - loggedX;
@@ -462,13 +610,21 @@ struct NeonJoinClient::Impl {
         }
     }
 
-    // CNetAPI::WriteKeysync for an on-foot player who is not aiming.
-    // Sent between pure-sync samples when the heading changes, which is
-    // what the desktop uses to turn the remote ped.
+    // CNetAPI::WriteKeysync (CNetAPI.cpp 729-828) for an on-foot player who is not aiming.
+    // CNetAPI::DoPulse (381-397) sends this only when that pulse did not send puresync.
+    // A pad release (IsSmallKeySyncNeeded 507: the stick left the analog band) is sent at once.
     void SendKeySync() {
-        if (!net || !net->IsConnected()) return;
-        const uint32_t now = NowMs();
-        if (now - lastSyncMs < 40 || now - lastKeyMs < 50) return;
+        if (!net || !net->IsConnected() || WorldRPG::Game::LocalPlacementPending()) return;
+        // Driving a server-confirmed car: the vehicle form (SendDriverKeySync), as SendPureSync switches to packet 33.
+        // The on-foot release below does not run in the driver branch.
+        {
+            WorldRPG::Game::LocalCarState car;
+            if (WorldRPG::Game::CopyLocalCar(car) && car.vehicleId == g_confirmedVehicle) {
+                SendDriverKeySync(car);
+                return;
+            }
+        }
+        if (pureSyncSentThisPulse) return;
         float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 100.f;
         WorldRPG::Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
         (void)x; (void)y; (void)z; (void)health;
@@ -481,8 +637,17 @@ struct NeonJoinClient::Impl {
         const float speed = std::sqrt(vx * vx + vy * vy);
         WorldRPG::Game::OnFootKeys foot;
         WorldRPG::Game::CopyOnFoot(heading, vx, vy, foot);
-        if (std::fabs(turn) < 0.05f && speed < 0.02f && !foot.fire && !foot.duck) return;
+        const bool release = foot.padStickZero && (lastOnFootStickX != 0 || lastOnFootStickY != 0);
+        const uint32_t now = NowMs();
+        if (!release) {
+            if (now - lastSyncMs < 40 || now - lastKeyMs < 50) return;
+            // A fire release is sent too, so desktop sees separate presses (combos start on the press edge).
+            if (std::fabs(turn) < 0.05f && speed < 0.02f && !foot.fire && !lastKeyFire && !foot.duck && !foot.jump) return;
+        }
         lastKeyMs = now;
+        lastKeyFire = foot.fire;
+        if (foot.fire) WorldRPG::Game::ConsumeLocalAttack();
+        if (foot.jump) WorldRPG::Game::ConsumeLocalJump();
         lastKeyHeading = heading;
         auto low = [](BitStreamWriter& w, uint32_t value, int bits) {
             uint8_t bytes[4] = {};
@@ -494,7 +659,10 @@ struct NeonJoinClient::Impl {
         uint8_t keys = 0;
         if (foot.fire) keys |= 0x10;
         if (foot.duck) keys |= 0x40;
-        if (speed > 0.02f && speed <= 0.16f) keys |= 0x80;
+        // SFullKeysyncSync bButtonCross (0x08, sprint) and bButtonSquare (0x04, jump); SyncStructures.h 1004-1012.
+        if (foot.sprint) keys |= 0x08;
+        if (foot.jump) keys |= 0x04;
+        // m_bPedWalk stays clear (see SendPureSync).
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(31));
         w.Write(keys);
@@ -510,69 +678,183 @@ struct NeonJoinClient::Impl {
             w.Write(static_cast<uint8_t>(0));
             low(w, 0, 4);
         }
-        net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
-                        PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED);
+        if (net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                            PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED)) {
+            lastOnFootStickX = foot.stickX;
+            lastOnFootStickY = foot.stickY;
+            if (release) pendingZeroVelocity = true;
+        }
     }
 
+    // CPedSync::DoPulse (CPedSync.cpp 125-165) calls Update every iPedSync milliseconds
+    // (CTickRateSettings.h 19, default 400). Update (733-767) writes one PED_SYNC for the
+    // hosted list. WritePedInformation (924-1133) sets a flag only when that field changed
+    // and returns without bytes when both flag bytes are 0.
+    // Bitstream stays 0x0030. NativeTaskLocomotionPresentation is 0x3C and
+    // NativeTaskWeaponPresentation is 0x3D (bitstream.h), so flags2 0x02 and 0x04 are not set.
+    // UpdateNativeTaskAnimationPresentation returns immediately at this version for the same reason.
     void SendPedSync() {
         if (!net || !net->IsConnected()) return;
         const uint32_t now = NowMs();
         if (now - lastPedMs < 400) return;
-        WorldRPG::Game::HostedPed peds[16];
-        const int count = WorldRPG::Game::CopyHostedPeds(peds, 16);
-        if (count <= 0) return;
         lastPedMs = now;
-        auto low = [](BitStreamWriter& w, uint32_t value, int bits) {
-            uint8_t bytes[4] = {};
-            for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (8 * i)) & 0xFF);
-            w.WriteBits(bytes, static_cast<size_t>(bits));
+        static bool loggedGaps = false;
+        if (!loggedGaps) {
+            loggedGaps = true;
+            JOIN_LOGI("DIAG PED_SYNC: flags2 0x02/0x04 stay clear at bitstream 0x0030 "
+                      "(NativeTaskLocomotionPresentation 0x3C, NativeTaskWeaponPresentation 0x3D). "
+                      "flags2 0x01 needs GetCameraRotation (TheCamera yaw is not hooked). "
+                      "ucFlags 0x20 needs CPedSA::IsOnFire (pFireOnPed), 0x40 needs CPedSA::IsInWater "
+                      "(TASK_COMPLEX_IN_WATER), 0x60 needs IsReloadingWeapon, 0x80 needs HasSyncedAnim. "
+                      "Those reads are missing, so the flags stay clear. "
+                      "Sync time context is the ENTITY_ADD byte; CPedRPCs/CElementRPCs SetSyncTimeContext "
+                      "is not applied. The interval stays 400 ms; CWorldRPCs does not update iPedSync. "
+                      "fCurrentRotation is not located; rotation is the matrix heading ReadBodyPos samples.");
+        }
+        // Same cap as the ped body quota. Update walks the whole sync list; the phone has at most 48 bodies.
+        WorldRPG::Game::HostedPed peds[48];
+        const int count = WorldRPG::Game::CopyHostedPeds(peds, 48);
+        constexpr float kFloatEpsilon = 0.0001f;  // CVector::FLOAT_EPSILON (CVector.h 26, operator== 282-284)
+        constexpr float kPi = 3.14159265f;
+        constexpr float kSyncPositionLimit = 100000.f;  // SYNC_POSITION_LIMIT (SyncStructures.h 28)
+        auto vectorChanged = [kFloatEpsilon](float ax, float ay, float az, float bx, float by, float bz) {
+            return std::fabs(ax - bx) >= kFloatEpsilon || std::fabs(ay - by) >= kFloatEpsilon ||
+                   std::fabs(az - bz) >= kFloatEpsilon;
         };
-        auto fixed24 = [&](BitStreamWriter& w, float coord) {
+        auto fixed24 = [](BitStreamWriter& w, float coord) {
+            // SFloatSync<14, 10> at bitstream 0x0030 (SPositionComponentSync): value * 1024, 24 bits.
             int32_t fixed = static_cast<int32_t>(std::lround(static_cast<double>(coord) * 1024.0));
             if (fixed > 8388607) fixed = 8388607;
             if (fixed < -8388608) fixed = -8388608;
-            low(w, static_cast<uint32_t>(fixed) & 0xFFFFFFu, 24);
+            WriteFieldLsb(w, static_cast<uint32_t>(fixed) & 0xFFFFFFu, 24);
         };
-        const float pi = 3.14159265f;
+        // SPedRotationSync (SyncStructures.h 651-662): one wrap into [-pi, pi], then 16-bit unlerp.
+        auto writeRotation16 = [kPi](BitStreamWriter& w, float rotation) {
+            if (rotation < -kPi) rotation += kPi * 2.f;
+            else if (rotation > kPi) rotation -= kPi * 2.f;
+            float alpha = (rotation + kPi) / (kPi * 2.f);
+            if (alpha < 0.f) alpha = 0.f;
+            if (alpha > 1.f) alpha = 1.f;
+            const auto bits = static_cast<uint32_t>(std::lround(65535.0 * static_cast<double>(alpha)));
+            WriteFieldLsb(w, bits > 65535u ? 65535u : bits, 16);
+        };
+        // SCameraRotationSync (SyncStructures.h 683-687): SFloatAsBitsSync<12>(-pi, pi, false, true).
+        auto writeCamera12 = [kPi](BitStreamWriter& w, float rotation) {
+            const float size = kPi * 2.f;
+            rotation = rotation - size * std::floor((rotation + kPi) / size);
+            float alpha = (rotation + kPi) / size;
+            if (alpha < 0.f) alpha = 0.f;
+            if (alpha > 1.f) alpha = 1.f;
+            const auto bits = static_cast<uint32_t>(std::lround(4095.0 * static_cast<double>(alpha)));
+            WriteFieldLsb(w, bits > 4095u ? 4095u : bits, 12);
+        };
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(63));
+        bool wrote = false;
+        std::unordered_map<uint32_t, PedLastSynced> next;
         for (int i = 0; i < count; ++i) {
             const auto& ped = peds[i];
-            float heading = ped.heading;
-            while (heading < -pi) heading += 2.f * pi;
-            while (heading > pi) heading -= 2.f * pi;
-            const float speed = std::sqrt(ped.vx * ped.vx + ped.vy * ped.vy + ped.vz * ped.vz);
-            low(w, ped.id & 0x1FFFFu, 17);
-            w.Write(static_cast<uint8_t>(0));
-            w.Write(static_cast<uint8_t>(speed > 0.001f ? 0x07 : 0x03));
-            w.Write(static_cast<uint8_t>(0));
-            fixed24(w, ped.x);
-            fixed24(w, ped.y);
-            w.Write(ped.z);
-            const auto rotationBits = static_cast<uint32_t>(std::lround(65535.0 * ((heading + pi) / (2.0 * pi))));
-            low(w, rotationBits, 16);
-            if (speed > 0.001f) {
-                uint8_t one = 1;
-                w.WriteBits(&one, 1);
-                w.Write(speed);
-                float nx = ped.vx / speed, ny = ped.vy / speed, nz = ped.vz / speed;
-                auto bit = [&](bool on) {
-                    uint8_t value = on ? 1u : 0u;
-                    w.WriteBits(&value, 1);
-                };
-                bit(nx < 0.f);
-                if (ny == 0.f) bit(true);
-                else {
-                    bit(false);
-                    w.Write(static_cast<uint16_t>(std::lround((ny + 1.f) * 32767.5f)));
+            const auto found = lastPed.find(ped.id);
+            const bool firstSeen = found == lastPed.end();
+            PedLastSynced last = firstSeen ? PedLastSynced{} : found->second;
+            // HasSyncedAnim is not hooked, so the synced-animation transform lock (931-936) stays off
+            // and ucFlags 0x80 stays clear.
+            const bool lockSyncedAnimationTransform = false;
+            // The reads are not hooked, so these stay at the unset state. A later hook replaces the constants.
+            const bool onFire = false;       // CPedSA::IsOnFire (pFireOnPed)
+            const bool inWater = false;      // CPedSA::IsInWater (TASK_COMPLEX_IN_WATER)
+            const bool reloading = false;    // CClientPed::IsReloadingWeapon
+            const float camera = 0.f;        // CClientPed::GetCameraRotation
+            uint8_t ucFlags = 0;
+            if (!lockSyncedAnimationTransform && vectorChanged(ped.x, ped.y, ped.z, last.x, last.y, last.z))
+                ucFlags |= 0x01;
+            if (!lockSyncedAnimationTransform && ped.heading != last.rotation)
+                ucFlags |= 0x02;
+            if (!lockSyncedAnimationTransform && vectorChanged(ped.vx, ped.vy, ped.vz, last.vx, last.vy, last.vz))
+                ucFlags |= 0x04;
+            // Last health and armour start at 0. A body whose value is also 0 would not count as a
+            // change, so the first sample is published anyway (desktop's first compare is against
+            // an uninitialized SLastSyncedPedData).
+            if (ped.bodyVitals && (firstSeen || ped.health != last.health))
+                ucFlags |= 0x08;
+            if (ped.bodyVitals && (firstSeen || ped.armor != last.armor))
+                ucFlags |= 0x10;
+            if (onFire != last.onFire)
+                ucFlags |= 0x20;
+            if (inWater != last.inWater)
+                ucFlags |= 0x40;
+            if (reloading != last.reloading)
+                ucFlags |= 0x60;
+            uint8_t flags2 = 0;
+            // IsNearlyEqual(GetCameraRotation(), last, numeric_limits<float>::epsilon()). No yaw hook, so no bit.
+            if (!lockSyncedAnimationTransform && camera != last.camera)
+                flags2 |= 0x01;
+            if (ucFlags != 0 || flags2 != 0) {
+                wrote = true;
+                WriteFieldLsb(w, ped.id & 0x1FFFFu, 17);
+                w.Write(WorldRPG::ServerWorld::SyncTimeContext(ped.id));
+                w.Write(ucFlags);
+                w.Write(flags2);
+                if (ucFlags & 0x01) {
+                    fixed24(w, ped.x);
+                    fixed24(w, ped.y);
+                    float z = ped.z;
+                    if (z > kSyncPositionLimit - 1.f) z = kSyncPositionLimit - 1.f;
+                    if (z < -kSyncPositionLimit + 1.f) z = -kSyncPositionLimit + 1.f;
+                    w.Write(z);
+                    last.x = ped.x;
+                    last.y = ped.y;
+                    last.z = ped.z;
                 }
-                if (nz == 0.f) bit(true);
-                else {
-                    bit(false);
-                    w.Write(static_cast<uint16_t>(std::lround((nz + 1.f) * 32767.5f)));
+                if (ucFlags & 0x02) {
+                    writeRotation16(w, ped.heading);
+                    last.rotation = ped.heading;
+                }
+                if (ucFlags & 0x04) {
+                    const float speed = std::sqrt(ped.vx * ped.vx + ped.vy * ped.vy + ped.vz * ped.vz);
+                    if (speed == 0.f) {
+                        WriteBit(w, false);
+                    } else {
+                        WriteBit(w, true);
+                        w.Write(speed);
+                        w.WriteNormVector(ped.vx / speed, ped.vy / speed, ped.vz / speed);
+                    }
+                    last.vx = ped.vx;
+                    last.vy = ped.vy;
+                    last.vz = ped.vz;
+                }
+                if (ucFlags & 0x08) {
+                    w.Write(ped.health);
+                    last.health = ped.health;
+                }
+                if (ucFlags & 0x10) {
+                    w.Write(ped.armor);
+                    last.armor = ped.armor;
+                }
+                if (flags2 & 0x01) {
+                    writeCamera12(w, camera);
+                    last.camera = camera;
+                }
+                if (ucFlags & 0x20) {
+                    WriteBit(w, onFire);
+                    last.onFire = onFire;
+                }
+                if (ucFlags & 0x40) {
+                    WriteBit(w, inWater);
+                    last.inWater = inWater;
+                }
+                if (ucFlags & 0x60) {
+                    WriteBit(w, reloading);
+                    last.reloading = reloading;
                 }
             }
+            next.emplace(ped.id, last);
         }
+        lastPed.swap(next);
+        // Update sends the packet whenever the sync list is non-empty, including when every ped
+        // returned early. CPedSyncPacket::Read then returns false (m_Syncs empty) and
+        // CPacketTranslator.cpp 251-254 drops it. The phone sends only when a ped wrote bytes.
+        if (!wrote) return;
         net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                         PacketPriority::MEDIUM, PacketReliability::UNRELIABLE_SEQUENCED);
     }
@@ -691,6 +973,17 @@ struct NeonJoinClient::Impl {
         if (!net || !net->IsConnected() || info.localPlayerId == 0xFFFFFFFFu) return;
         WorldRPG::Game::LocalVehicleEvent ev;
         while (WorldRPG::Game::ConsumeLocalVehicleEvent(ev)) {
+            // DIAG: trains are not requested. Once the server seats the ped it expects packet 33 with the train block
+            // (CNetAPI::WriteVehiclePuresync, CNetAPI.cpp 1643-1654: train position, direction, speed, track), and no
+            // hook samples those from CTrain yet. A seated ped without packet 33 sends nothing the server relays, so
+            // other players would see it frozen where it boarded. Unrequested, the server keeps the ped on foot and
+            // relays the on-foot sync that SendPureSync falls back to. The leave is skipped too: no seat was taken.
+            const int evModel = WorldRPG::ServerWorld::ModelOf(ev.vehicleId);
+            if (evModel >= 0 && WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(evModel))) {
+                JOIN_LOGI("DIAG VehInOut: %s train veh=%u model=%d not sent (train puresync block missing)",
+                          ev.entered ? "request_in for" : "request_out for", ev.vehicleId, evModel);
+                continue;
+            }
             BitStreamWriter w;
             w.Write(static_cast<uint8_t>(58));  // PACKET_ID_VEHICLE_INOUT (Shared/sdk/net/Packets.h:96)
             WriteFieldLsb(w, info.localPlayerId & 0x1FFFFu, NEON_ELEMENT_ID_BITS);
@@ -723,44 +1016,23 @@ struct NeonJoinClient::Impl {
                                PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
     }
 
-    // The Oracle net.so hook only finishes a join when it sees game packet 19
-    // (PACKET_ID_MTA_RESERVED_13) of at least 700 bytes with the bytes
-    // "1.6.0-" between offsets 650 and 699. It then rewrites the 8 bytes
-    // before that marker into PLAYER_JOINDATA. A compact packet 4 is logged
-    // and dropped, and net.so closes the socket.
     bool SendJoinData() {
         BitStreamWriter w;
-        w.Write(static_cast<uint8_t>(19));
-        // Known-good mobile blob is 763 bytes with the marker at offset 676
-        // and a 95-byte join body at offset 668. 667 zero bytes put that
-        // body there when the packet id occupies byte 0.
-        const std::vector<uint8_t> pad(667, 0);
-        w.WriteBytes(pad.data(), pad.size());
-
-        w.Write(NEON_NETCODE_VERSION);      // ushort, overwritten by the hook
-        w.Write(NEON_MTA_VERSION);          // ushort
-        w.Write(NEON_BITSTREAM_VERSION);    // ushort, overwritten to 0x0030
-
-        // 15 characters, so the hook's in-place rewrite to
-        // "1.7.0-9.29999.0" keeps the length prefix valid. With the id and
-        // the 667-byte pad, the marker lands at offset 676.
-        WriteStringRaw(w, "1.6.0-9.29999.0");
-
-        WriteBit(w, false);                 // optional update info required
-        w.Write(NEON_GAME_VERSION);         // uchar game version
-
-        const std::string nick = NormalizeAscii(nickname);
-        WriteFixedRaw(w, nick, NEON_MAX_PLAYER_NICK_LENGTH);
-
-        const uint8_t emptyPasswordMd5[16] = {0};
-        w.WriteBytes(emptyPasswordMd5, 16); // MD5 of empty password is zeros
-
-        WriteFixedRaw(w, std::string(), NEON_MAX_SERIAL_LENGTH); // legacy community field
-
-        // No trailing ticket. The 95-byte body captured from the working
-        // mobile client ends on the 32-byte legacy field. Neon reads a
-        // ticket only when another length prefix is present.
+        const bool valid = BuildJoinData(info.joinProfile, nickname, password, identityTicket, w);
+        identityTicket.clear(); // Tickets are consumed once, including failed sends.
+        if (!valid) return false;
+        JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s platform=android bitstream=0x30",
+                  static_cast<unsigned>(w.GetData()[0]),
+                  info.joinProfile == JoinProfile::LegacyMobile ? "legacy-mobile" : "standard");
         return SendUpe(w);
+    }
+
+    void FinishJoinData() {
+        if (!SendJoinData()) {
+            Fail("failed to send PLAYER_JOINDATA", DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false));
+            return;
+        }
+        SetState(JoinState::JoinDataSent, "PLAYER_JOINDATA sent");
     }
 
     // [99][RPC][uchar rpcId] — CNetAPI::RPC envelope, no arguments for the
@@ -779,7 +1051,7 @@ struct NeonJoinClient::Impl {
         uint16_t bsVersion = 0;
         std::string modName;
         if (!r.Read(bsVersion) || !r.ReadString(modName, 64)) {
-            Fail("MOD_NAME truncated");
+            Fail("MOD_NAME truncated", DisconnectMessages::ProtocolError(1));
             return;
         }
         info.serverBitStreamVersion = bsVersion;
@@ -788,35 +1060,36 @@ struct NeonJoinClient::Impl {
         if (r.GetRemainingBits() >= 8) {
             uint8_t mode = 0;
             if (!r.Read(mode) || mode > 2) {
-                Fail("MOD_NAME bad neon auth mode");
+                Fail("MOD_NAME bad neon auth mode", DisconnectMessages::ProtocolError(1));
                 return;
             }
             info.authMode = static_cast<NeonAuthMode>(mode);
             if (info.authMode != NeonAuthMode::Disabled) {
                 if (!r.ReadString(info.neonServerId, 128)) {
-                    Fail("MOD_NAME truncated neon server id");
+                    Fail("MOD_NAME truncated neon server id", DisconnectMessages::ProtocolError(1));
                     return;
                 }
             }
         }
 
         if (modName != "deathmatch") {
-            Fail("unsupported mod '" + modName + "'");
+            Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
+            return;
+        }
+        WorldRPG::ServerWorld::SetCurrentWaterFlags(info.joinProfile == JoinProfile::Standard);
+        JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
+                  modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
+        if (info.authMode != NeonAuthMode::Disabled && identityCallback) {
+            identityRequestId = ++g_identitySequence;
+            SetState(JoinState::WaitingIdentity, "authorizing SA:O server connection");
+            identityCallback(identityRequestId, info.neonServerId, net->GetPeerEndpoint(), info.authMode);
             return;
         }
         if (info.authMode == NeonAuthMode::Required) {
-            Fail("server requires SA:O (Neon Identity) sign-in; not implemented");
+            Fail("SA:O identity callback unavailable", DisconnectMessages::Plain("SA:O account", "Sign in to your SA:O account before connecting to this server."));
             return;
         }
-
-        JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
-                  modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
-
-        if (!SendJoinData()) {
-            Fail("failed to send PLAYER_JOINDATA");
-            return;
-        }
-        SetState(JoinState::JoinDataSent, "PLAYER_JOINDATA sent");
+        FinishJoinData();
     }
 
     // SERVER_JOIN_COMPLETE: [String connText][String versionSortable]
@@ -833,14 +1106,16 @@ struct NeonJoinClient::Impl {
         const bool enveloped = bitLength >= 1024 + 16 && length > 128;
         if (!ReadJoinCompleteStrings(body, length, bitLength) &&
             !(enveloped && ReadJoinCompleteStrings(body + 128, length - 128, bitLength - 1024))) {
-            Fail("SERVER_JOIN_COMPLETE version field truncated");
+            Fail("SERVER_JOIN_COMPLETE version field truncated", DisconnectMessages::ProtocolError(1));
             return;
         }
         JOIN_LOGI("NeonJoin: SERVER_JOIN_COMPLETE [%s] sortable=[%s]",
                   info.serverVersionText.c_str(), info.serverVersionSortable.c_str());
+        // Desktop CPacketHandler::Packet_ServerConnected (CPacketHandler.cpp:344) opens the loading screen here.
+        WorldRPG::ConnectionLoading::Begin("Starting San Andreas");
 
         if (!SendRpc(NeonServerRPC::PLAYER_INGAME_NOTICE)) {
-            Fail("failed to send RPC PLAYER_INGAME_NOTICE");
+            Fail("failed to send RPC PLAYER_INGAME_NOTICE", DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false));
             return;
         }
         SetState(JoinState::InGameNoticeSent, "RPC PLAYER_INGAME_NOTICE sent");
@@ -852,6 +1127,8 @@ struct NeonJoinClient::Impl {
     // CompressedU32 bitrate, bit fakelag, int32 httpMaxConn, u8 httpType,
     // [u16 port | u16 port + String url], String serverName.
     void HandleServerJoinedGame(const uint8_t* body, size_t length, size_t bitLength = 0) {
+        // Desktop CPacketHandler::Packet_ServerJoined (CPacketHandler.cpp:399).
+        WorldRPG::ConnectionLoading::Update(WorldRPG::ConnectionLoading::Phase::World, "Preparing server data");
         BitStreamReader r(body, length, bitLength);
         uint8_t numPlayers = 0;
         uint8_t sampleRate = 0;
@@ -904,7 +1181,7 @@ struct NeonJoinClient::Impl {
             fakelag = false;
         }
         if (!ok) {
-            Fail("SERVER_JOINEDGAME truncated");
+            Fail("SERVER_JOINEDGAME truncated", DisconnectMessages::ProtocolError(3));
             return;
         }
         info.voiceEnabled = voice;
@@ -914,69 +1191,93 @@ struct NeonJoinClient::Impl {
         info.fakeLagCommand = fakelag;
         info.httpDownloadType = httpType;
         // This join id is the local ped for the whole session. PacketHandler accepts a PLAYER_SPAWN only for it.
-        if (info.localPlayerId != 0xFFFFFFFFu) WorldRPG::ServerWorld::SetLocalPlayer(info.localPlayerId);
+        if (info.localPlayerId != 0xFFFFFFFFu) {
+            WorldRPG::ServerWorld::SetLocalPlayer(info.localPlayerId);
+            WorldRPG::ServerWorld::NotePlayerNick(info.localPlayerId, nickname);
+        }
 
         JOIN_LOGI("NeonJoin: SERVER_JOINEDGAME id=%u root=%u name=[%s] http=%u port=%u",
                   info.localPlayerId, info.rootElementId, info.serverName.c_str(),
                   httpType, info.httpPort);
 
         if (!SendRpc(NeonServerRPC::INITIAL_DATA_STREAM)) {
-            Fail("failed to send RPC INITIAL_DATA_STREAM");
+            Fail("failed to send RPC INITIAL_DATA_STREAM", DisconnectMessages::TransportFailure(DisconnectMessages::Transport::Other, false));
             return;
         }
         net->MarkSessionAccepted();
         SetState(JoinState::Complete, "joined; waiting initial data stream");
     }
 
-    // SERVER_DISCONNECTED: [5b type][String duration when banned][String reason]
+    // SERVER_DISCONNECTED, desktop CPacketHandler::Packet_ServerDisconnected (CPacketHandler.cpp:545-750):
+    // [5b type][String duration for BANNED_SERIAL, BANNED_IP, BAN][String message][String trouble link].
+    // INVALID_PASSWORD reads nothing more on desktop (it opens the password window instead).
     void HandleServerDisconnected(const uint8_t* body, size_t length, size_t bitLength = 0) {
         BitStreamReader r(body, length, bitLength);
         uint8_t type = 0;
         if (r.ReadBits(&type, 5)) {
             info.disconnectType = type & 0x1F;
         }
-        // BANNED_SERIAL=3, BANNED_IP=4 carry a duration string first.
-        if (info.disconnectType == 3 || info.disconnectType == 4) {
-            std::string duration;
-            r.ReadString(duration, 64);
+        std::string duration;
+        if (DisconnectMessages::HasDuration(info.disconnectType)) r.ReadString(duration, 64);
+        std::string troubleLink;
+        if (info.disconnectType != DisconnectMessages::INVALID_PASSWORD) {
+            r.ReadString(info.disconnectReason, 256);
+            r.ReadString(troubleLink, 256);
         }
-        r.ReadString(info.disconnectReason, 256);
-        const char* typeName = "refused";
-        switch (info.disconnectType) {
-            case 1: typeName = "invalid password"; break;
-            case 2: typeName = "invalid nickname"; break;
-            case 7: typeName = "join flood"; break;
-            case 10: typeName = "bad version"; break;
-            case 13: typeName = "nickname already in use"; break;
-            case 16: typeName = "serial verification failed"; break;
-            case 22: typeName = "serial already in use"; break;
-            default: break;
-        }
-        Fail(std::string("server refused connection (") + typeName + "): " +
-             (info.disconnectReason.empty() ? std::string("no reason") : info.disconnectReason));
+        const DisconnectMessages::Box box =
+            DisconnectMessages::ServerDisconnected(info.disconnectType, info.disconnectReason, duration);
+        Fail("SERVER_DISCONNECTED type " + std::to_string(info.disconnectType) + ": " + info.disconnectReason, box);
     }
 };
 
 NeonJoinClient::NeonJoinClient() : pImpl_(std::make_unique<Impl>()) {}
 NeonJoinClient::~NeonJoinClient() = default;
 
-bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password) {
-    if (!password.empty()) {
-        // Empty password hashes to 16 zero bytes, which matches the server's
-        // expectation for unpassworded servers. A real password needs MD5;
-        // refuse explicitly instead of sending a wrong hash.
-        pImpl_->Fail("password-protected servers not supported yet (MD5 pending)");
-        return false;
-    }
+bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password,
+                           JoinProfile profile) {
     const std::string normalized = NormalizeAscii(nickname);
     if (normalized.empty() || normalized.size() > NEON_MAX_PLAYER_NICK_LENGTH) {
-        pImpl_->Fail("invalid nickname length");
+        pImpl_->Fail("invalid nickname length", DisconnectMessages::InvalidNick());
         return false;
     }
     pImpl_->net = &net;
     pImpl_->nickname = normalized;
+    pImpl_->password = password;
+    pImpl_->identityTicket.clear();
+    pImpl_->identityRequestId = 0;
     pImpl_->info = NeonJoinInfo{};
+    pImpl_->info.joinProfile = SelectJoinProfile(profile);
     pImpl_->SetState(JoinState::WaitingRakNet, "waiting for RakNet connect");
+    return true;
+}
+
+void NeonJoinClient::SetIdentityCallback(IdentityCallback callback) {
+    pImpl_->identityCallback = std::move(callback);
+}
+
+bool NeonJoinClient::CancelIdentityRequest(uint64_t requestId) {
+    if (!requestId || pImpl_->state != JoinState::WaitingIdentity || pImpl_->identityRequestId != requestId) return false;
+    pImpl_->identityRequestId = 0;
+    pImpl_->identityTicket.clear();
+    pImpl_->state = JoinState::Idle;
+    return true;
+}
+
+bool NeonJoinClient::ProvideIdentityTicket(uint64_t requestId, const std::string& ticket, const std::string& error) {
+    Impl& d = *pImpl_;
+    if (d.state != JoinState::WaitingIdentity || !requestId || d.identityRequestId != requestId) return false;
+    if (!error.empty()) {
+        d.Fail("Neon Identity authorization failed", DisconnectMessages::Plain("SA:O account", error));
+    } else if (ticket.size() > 4096 || ticket.find('\0') != std::string::npos) {
+        d.Fail("invalid Neon ticket length", DisconnectMessages::Plain("SA:O account", "The account service returned an invalid connection ticket."));
+    } else if (ticket.empty() && d.info.authMode == NeonAuthMode::Required) {
+        d.Fail("required Neon ticket missing", DisconnectMessages::Plain("SA:O account", "Sign in to your SA:O account before connecting to this server."));
+    } else if (!ticket.empty() && d.info.joinProfile == JoinProfile::LegacyMobile) {
+        d.Fail("legacy bridge cannot carry Neon ticket", DisconnectMessages::Plain("SA:O account", "This server's legacy mobile bridge cannot carry SA:O tickets. Select Standard connection mode or ask the server owner to update the bridge."));
+    } else {
+        d.identityTicket = ticket;
+        d.FinishJoinData();
+    }
     return true;
 }
 
@@ -985,7 +1286,7 @@ bool SendChatLine(RakNetWrapper& net, const std::string& command);
 }
 
 void NeonJoinClient::ForceConnectionLost() {
-    if (pImpl_->state == JoinState::Complete) pImpl_->Fail("Connection lost");
+    if (pImpl_->state == JoinState::Complete) pImpl_->Fail("Connection lost (local /disconnect)", DisconnectMessages::Plain("Disconnected", "You disconnected from the server."));
 }
 
 void NeonJoinClient::Pulse() {
@@ -1000,21 +1301,32 @@ void NeonJoinClient::Pulse() {
                 // The desktop waits for MOD_NAME; it sends no application join.
                 d.SetState(JoinState::WaitingModName, "transport ready; waiting MOD_NAME");
             } else if (NowMs() > d.deadlineMs) {
-                d.Fail("timeout waiting for RakNet connect");
+                d.Fail("timeout waiting for RakNet connect", DisconnectMessages::ConnectTimedOut());
             }
             break;
         case JoinState::WaitingModName:
+        case JoinState::WaitingIdentity:
         case JoinState::JoinDataSent:
-        case JoinState::InGameNoticeSent:
             if (NowMs() > d.deadlineMs) {
-                d.Fail(std::string("timeout in state ") + JoinStateName(d.state));
+                d.Fail(std::string("timeout in state ") + JoinStateName(d.state), DisconnectMessages::JoinTimedOut());
+            }
+            break;
+        case JoinState::InGameNoticeSent:
+            if (d.net && d.net->IsRakNetConnected()) {
+                const uint32_t now = NowMs();
+                if (now - d.lastSyncMs >= 1000) {
+                    d.SendPureSync();
+                }
+            }
+            if (NowMs() > d.deadlineMs) {
+                d.Fail(std::string("timeout in state ") + JoinStateName(d.state), DisconnectMessages::JoinTimedOut());
             }
             break;
         case JoinState::Complete:
             if (!d.net->IsRakNetConnected()) {
                 // The transport dropped after the join. Surface it so the launcher
                 // can offer Retry / Quit (P3.1).
-                d.Fail("Connection lost");
+                d.Fail("transport dropped after join", DisconnectMessages::ConnectionLost());
                 break;
             }
             d.SendPureSync();
@@ -1023,6 +1335,7 @@ void NeonJoinClient::Pulse() {
             d.SendUnoccupiedVehicleSync();
             d.SendVehicleInOut();
             d.SendBulletSync();
+            d.SendPedWasted();
             if (!d.pendingChat.empty() && SendChatLine(*d.net, d.pendingChat)) d.pendingChat.clear();
             break;
         default:
@@ -1110,8 +1423,44 @@ void ClearVehicleInOutConfirmed() {
 
 void NeonJoinClient::OnTransportFailure(const std::string& reason) {
     if (pImpl_->state == JoinState::Idle || pImpl_->state == JoinState::Failed) return;
-    pImpl_->Fail(reason.empty() ? "Transport connection failed" : reason);
+    pImpl_->Fail(reason.empty() ? "Transport connection failed" : reason,
+                 DisconnectMessages::TransportFailure(DisconnectMessages::ClassifyTransport(reason), pImpl_->state == JoinState::Complete));
 }
+
+namespace {
+
+// Ids CNetAPI::ProcessPacket returns true for with no m_Status check
+// (CNetAPI.cpp:39-226), plus the ped and unoccupied ids CPacketHandler
+// consumes the same way (CPedSync.cpp:99-122, CUnoccupiedVehicleSync.cpp:31-54).
+// CConnectManager aborts every other id while it is still the handler
+// (CConnectManager.cpp:687-698), so these are not ignored before MOD_NAME.
+bool IgnoredInboundSyncWhileJoining(uint8_t gameId, const char*& name) {
+    switch (gameId) {
+        case 31: name = "PLAYER_KEYSYNC"; return true;
+        case 32: name = "PLAYER_PURESYNC"; return true;
+        case 33: name = "PLAYER_VEHICLE_PURESYNC"; return true;
+        case 34: name = "LIGHTSYNC"; return true;
+        case 35: name = "VEHICLE_RESYNC"; return true;
+        case 36: name = "RETURN_SYNC"; return true;
+        case 54: name = "UNOCCUPIED_VEHICLE_STARTSYNC"; return true;
+        case 55: name = "UNOCCUPIED_VEHICLE_STOPSYNC"; return true;
+        case 56: name = "UNOCCUPIED_VEHICLE_SYNC"; return true;
+        case 61: name = "PED_STARTSYNC"; return true;
+        case 62: name = "PED_STOPSYNC"; return true;
+        case 63: name = "PED_SYNC"; return true;
+        case 98: name = "PLAYER_BULLETSYNC"; return true;
+        case 100: name = "WEAPON_BULLETSYNC"; return true;
+        default: return false;
+    }
+}
+
+// Deathmatch's handler is installed only after MOD_NAME. JoinDataSent is
+// STATUS_CONNECTING; InGameNoticeSent is STATUS_JOINING until packet 22.
+bool DesktopConsumesSyncInJoinState(JoinState state) {
+    return state == JoinState::JoinDataSent || state == JoinState::InGameNoticeSent;
+}
+
+}  // namespace
 
 bool NeonJoinClient::ProcessGamePacket(uint8_t gameId, const uint8_t* body, size_t length, size_t bitLength) {
     Impl& d = *pImpl_;
@@ -1153,6 +1502,10 @@ bool NeonJoinClient::ProcessGamePacket(uint8_t gameId, const uint8_t* body, size
                 d.HandleServerJoinComplete(body, length, bitLength);
                 return true;
             }
+            if (gameId == static_cast<uint8_t>(NeonPacketID::PLAYER_JOINDATA) || gameId == 103) {
+                JOIN_LOGI("NeonJoin: ignoring packet %u in state JoinDataSent", static_cast<unsigned>(gameId));
+                return true;
+            }
             break;
         case JoinState::InGameNoticeSent:
             if (gameId == static_cast<uint8_t>(NeonPacketID::SERVER_JOINEDGAME)) {
@@ -1164,10 +1517,23 @@ bool NeonJoinClient::ProcessGamePacket(uint8_t gameId, const uint8_t* body, size
             return false;
     }
 
+    // CNetAPI::ProcessPacket and the ped/unoccupied handlers consume these
+    // during STATUS_CONNECTING and STATUS_JOINING and do not fail the session.
+    // The body is not applied: PacketHandler runs only after JoinState::Complete.
+    const char* syncName = nullptr;
+    if (DesktopConsumesSyncInJoinState(d.state) && IgnoredInboundSyncWhileJoining(gameId, syncName)) {
+        JOIN_LOGI("NeonJoin: ignoring %s (%u) in state %s", syncName, static_cast<unsigned>(gameId),
+                  JoinStateName(d.state));
+        return true;
+    }
+
     // Strict on purpose: any other application packet while joining is a
     // protocol divergence that must surface instead of being silently dropped
-    // (Plano 22 P1B acceptance rule).
-    d.Fail("unexpected packet id " + std::to_string(gameId) + " in state " + JoinStateName(d.state));
+    // (Plano 22 P1B acceptance rule). CConnectManager still aborts these sync
+    // ids before MOD_NAME, and CPacketHandler raises a protocol error for
+    // PLAYER_LIST, PLAYER_QUIT, nick changes, pickups and text items before
+    // STATUS_JOINED, so those keep failing here.
+    d.Fail("unexpected packet id " + std::to_string(gameId) + " in state " + JoinStateName(d.state), DisconnectMessages::ProtocolError(4));
     return true;
 }
 
@@ -1220,7 +1586,11 @@ void NeonJoinClient::Reset() {
     pImpl_->state = JoinState::Idle;
     pImpl_->info = NeonJoinInfo{};
     pImpl_->nickname.clear();
+    pImpl_->password.clear();
+    pImpl_->identityTicket.clear();
+    pImpl_->identityRequestId = 0;
     pImpl_->callback = {};
+    pImpl_->identityCallback = {};
 }
 
 } // namespace WorldRPG::Net

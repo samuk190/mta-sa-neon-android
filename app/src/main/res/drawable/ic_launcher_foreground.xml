@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon foreground: a rounded play mark inside the 72dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#7DDC7A"
+        android:pathData="M54,30a24,24 0,1 0,0.01 0z" />
+    <path
+        android:fillColor="#00390A"
+        android:pathData="M47,42.5C47,40.9 48.8,39.9 50.1,40.8L66.4,51.6C67.6,52.4 67.6,54.1 66.4,54.9L50.1,65.7C48.8,66.6 47,65.6 47,64Z" />
+</vector>

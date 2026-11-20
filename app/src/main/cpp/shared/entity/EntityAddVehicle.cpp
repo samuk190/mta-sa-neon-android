@@ -201,6 +201,11 @@ bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& com
     visual.y = y;
     visual.z = z;
     visual.heading = rotZ * (kPi / 180.f);
+    // Desktop CPacketHandler::Packet_EntityAdd, vehicle case: SetRotationDegrees(rotation) and SetHealth(health).
+    // Kept so the body can be seeded with them (GameEngine.cpp ApplyCarSeed).
+    visual.rotX = rotX;
+    visual.rotY = rotY;
+    visual.health = health;
 
     DIAG("vehicle stored id=%u model=%u pos=%.2f,%.2f,%.2f health=%.1f blow=%u paint=%u rot=%.1f",
          common.id, static_cast<unsigned>(model), x, y, z, health, static_cast<unsigned>(blowState),

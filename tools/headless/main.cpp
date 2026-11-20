@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <string>
 #include <thread>
@@ -84,6 +85,8 @@ struct Options {
     std::string nickname = "HeadlessBot";
     int seconds = 60;
     WorldRPG::Headless::Mode mode = WorldRPG::Headless::Mode::Observer;
+    WorldRPG::Net::JoinProfile profile = WorldRPG::Net::JoinProfile::Automatic;
+    std::string identityTicketFile;
 };
 
 // First three RESOURCE_START (82) bodies: full hex to resource_start_dumps.txt, one line to stdout.
@@ -111,6 +114,9 @@ Options ParseArgs(int argc, char** argv) {
     if (argc > 3) o.nickname = argv[3];
     if (argc > 4) o.seconds = std::atoi(argv[4]);
     if (argc > 5 && std::string(argv[5]) == "driver") o.mode = WorldRPG::Headless::Mode::Driver;
+    if (argc > 6 && std::string(argv[6]) == "standard") o.profile = WorldRPG::Net::JoinProfile::Standard;
+    if (argc > 6 && std::string(argv[6]) == "legacy") o.profile = WorldRPG::Net::JoinProfile::LegacyMobile;
+    if (argc > 7) o.identityTicketFile = argv[7];
     return o;
 }
 
@@ -239,6 +245,20 @@ int main(int argc, char** argv) {
     RakNetWrapper net;
     NeonJoinClient join;
     bool reachedComplete = false;
+    join.SetIdentityCallback([&](uint64_t id, const std::string&, const std::string&, WorldRPG::Net::NeonAuthMode) {
+        std::string ticket;
+        if (!opt.identityTicketFile.empty()) {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(opt.identityTicketFile,error);
+            if (error || size > 4096) {
+                join.ProvideIdentityTicket(id,"","Invalid test ticket file.");
+                return;
+            }
+            std::ifstream input(opt.identityTicketFile,std::ios::binary);
+            ticket.assign(std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>());
+        }
+        join.ProvideIdentityTicket(id,ticket,"");
+    });
 
     // Client subsystems exactly as JNI nativeInit builds them.
     WorldRPG::Sync::ElementManager elements;
@@ -305,7 +325,7 @@ int main(int argc, char** argv) {
 
     // nativeConnect: transport first, then the join attempt.
     if (!net.StartNetwork(opt.host.c_str(), opt.port) ||
-        !join.Begin(net, opt.nickname, "")) {
+        !join.Begin(net, opt.nickname, "", opt.profile)) {
         std::printf("neon_headless: could not start the join attempt\n");
         net.StopNetwork();
         return 1;

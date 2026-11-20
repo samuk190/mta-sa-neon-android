@@ -10,8 +10,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.worldrpg.neonlauncher.BuildConfig
+import com.worldrpg.neonlauncher.R
 import com.worldrpg.neonlauncher.databinding.FragmentSettingsBinding
 import com.worldrpg.neonlauncher.game.EngineHostActivity
+import com.worldrpg.neonlauncher.game.EngineDiagnostics
+import com.worldrpg.neonlauncher.game.InterfaceScale
+import com.worldrpg.neonlauncher.game.InterfaceScaleSettings
 import com.worldrpg.neonlauncher.utils.NativeAssetBridge
 import com.worldrpg.neonlauncher.utils.PreferencesManager
 import kotlinx.coroutines.launch
@@ -24,10 +28,11 @@ class SettingsFragment : Fragment() {
     private lateinit var prefsManager: PreferencesManager
     private lateinit var nativeAssetBridge: NativeAssetBridge
     private var syncingAssets = false
+    private var identityUi: NeonIdentityUi? = null
+    private var savedInterfaceScale = InterfaceScale.DEFAULT_PERCENT
 
-    private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val error = result.data?.getStringExtra(EngineHostActivity.EXTRA_BOOT_ERROR)
-        if (error != null) context?.let { Toast.makeText(it, error, Toast.LENGTH_LONG).show() }
+    private val engineTest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
+        // MainActivity presents stored failures, including native crashes with no Activity result.
         updateEngineTestButton()
     }
 
@@ -45,29 +50,80 @@ class SettingsFragment : Fragment() {
 
         prefsManager = PreferencesManager(requireContext())
         nativeAssetBridge = NativeAssetBridge(requireContext())
+        identityUi = NeonIdentityUi(requireActivity())
+        binding.btnNeonAccount.setOnClickListener {
+            val identity = identityUi ?: return@setOnClickListener
+            if (identity.isSignedIn()) {
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.neon_account_sign_out)
+                    .setMessage("Sign out of your SA:O account on this device?")
+                    .setPositiveButton(R.string.neon_account_sign_out) { _, _ ->
+                        identity.signOut({ updateIdentity() }, { message ->
+                            context?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() }
+                        })
+                    }
+                    .setNegativeButton(android.R.string.cancel, null).show()
+            } else {
+                identity.signIn({ updateIdentity() }, { message ->
+                    context?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() }
+                    updateIdentity()
+                })
+            }
+        }
+        updateIdentity()
 
         loadCurrentSettings()
+        binding.switchEngineDebug.isChecked = EngineDiagnostics.isEnabled(requireContext())
+        binding.switchEngineDebug.setOnCheckedChangeListener { button, enabled ->
+            if (enabled != EngineDiagnostics.isEnabled(requireContext()) &&
+                !EngineDiagnostics.setEnabled(requireContext(), enabled)) {
+                Toast.makeText(context, "Unable to save engine debug setting.", Toast.LENGTH_LONG).show()
+                button.isChecked = EngineDiagnostics.isEnabled(requireContext())
+            }
+        }
+        setupValueLabels()
+        binding.btnResetInterfaceScale.setOnClickListener {
+            binding.sliderInterfaceScale.value = InterfaceScale.DEFAULT_PERCENT.toFloat()
+        }
         setupSaveButton()
         setupAssetSyncButton()
         setupEngineTestButton()
     }
 
     private fun loadCurrentSettings() {
-        // Username
-        binding.editUsername.setText(prefsManager.username)
+        // The nickname is edited on the server screen, next to the play button.
 
         // Graphics Quality
-        when (prefsManager.graphicsQuality) {
-            0 -> binding.radioLow.isChecked = true
-            1 -> binding.radioMedium.isChecked = true
-            2 -> binding.radioHigh.isChecked = true
-        }
+        binding.graphicsToggle.check(
+            when (prefsManager.graphicsQuality) {
+                0 -> R.id.btnGraphicsLow
+                2 -> R.id.btnGraphicsHigh
+                else -> R.id.btnGraphicsMedium
+            }
+        )
 
         // Audio Volume
         binding.sliderVolume.value = prefsManager.audioVolume.toFloat()
 
         // Touch Sensitivity
         binding.sliderTouchSensitivity.value = prefsManager.touchSensitivity.toFloat()
+        savedInterfaceScale = InterfaceScaleSettings.read(requireContext())
+        binding.sliderInterfaceScale.value = savedInterfaceScale.toFloat()
+    }
+
+    private fun setupValueLabels() {
+        binding.volumeValue.text = "${binding.sliderVolume.value.toInt()}%"
+        binding.touchValue.text = "${binding.sliderTouchSensitivity.value.toInt()}"
+        binding.interfaceScaleValue.text = "${binding.sliderInterfaceScale.value.toInt()}%"
+        binding.sliderInterfaceScale.addOnChangeListener { _, value, _ ->
+            binding.interfaceScaleValue.text = "${value.toInt()}%"
+        }
+        binding.sliderVolume.addOnChangeListener { _, value, _ ->
+            binding.volumeValue.text = "${value.toInt()}%"
+        }
+        binding.sliderTouchSensitivity.addOnChangeListener { _, value, _ ->
+            binding.touchValue.text = "${value.toInt()}"
+        }
     }
 
     private fun setupSaveButton() {
@@ -78,25 +134,28 @@ class SettingsFragment : Fragment() {
 
     private fun setupAssetSyncButton() {
         val button = binding.btnSyncAssets
-        val idleText = button.text
         button.setOnClickListener {
             button.isEnabled = false
             syncingAssets = true
             updateEngineTestButton()
+            showAssetProgress(getString(R.string.downloading_assets), null)
             viewLifecycleOwner.lifecycleScope.launch {
                 try {
                     nativeAssetBridge.syncAssets().collect { state ->
                         when (state) {
                             NativeAssetBridge.DownloadState.FetchingManifest ->
-                                button.text = "Fetching game asset manifest..."
+                                showAssetProgress("Fetching game asset manifest...", null)
                             is NativeAssetBridge.DownloadState.Verifying ->
-                                button.text = "Verifying game assets ${state.current}/${state.total}"
-                            is NativeAssetBridge.DownloadState.Downloading ->
-                                button.text = "Downloading ${state.fileName}: ${state.percent}%"
+                                showAssetProgress(
+                                    "Verifying game assets ${state.current}/${state.total}",
+                                    if (state.total > 0) state.current * 100 / state.total else null
+                                )
+                            is NativeAssetBridge.DownloadState.Syncing ->
+                                showAssetProgress("Syncing game assets ${state.current}/${state.total}", state.percent)
                             is NativeAssetBridge.DownloadState.Complete ->
                                 Toast.makeText(
                                     context,
-                                    "${state.fileCount} game files verified and ready",
+                                    "${state.fileCount} game data files verified",
                                     Toast.LENGTH_LONG
                                 ).show()
                             is NativeAssetBridge.DownloadState.Error ->
@@ -104,12 +163,33 @@ class SettingsFragment : Fragment() {
                         }
                     }
                 } finally {
-                    button.text = idleText
-                    button.isEnabled = true
+                    _binding?.let { b ->
+                        b.assetStatus.visibility = View.GONE
+                        b.assetProgress.visibility = View.GONE
+                        b.btnSyncAssets.isEnabled = true
+                    }
                     syncingAssets = false
                     updateEngineTestButton()
                 }
             }
+        }
+    }
+
+    /** [percent] null shows an indeterminate bar. */
+    private fun showAssetProgress(status: String, percent: Int?) {
+        val b = _binding ?: return
+        b.assetStatus.visibility = View.VISIBLE
+        b.assetStatus.text = status
+        b.assetProgress.visibility = View.VISIBLE
+        if (percent == null) {
+            if (!b.assetProgress.isIndeterminate) {
+                b.assetProgress.visibility = View.INVISIBLE
+                b.assetProgress.isIndeterminate = true
+                b.assetProgress.visibility = View.VISIBLE
+            }
+        } else {
+            b.assetProgress.isIndeterminate = false
+            b.assetProgress.setProgressCompat(percent.coerceIn(0, 100), true)
         }
     }
 
@@ -140,19 +220,26 @@ class SettingsFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         updateEngineTestButton()
+        updateIdentity()
+        _binding?.let {
+            val current = InterfaceScaleSettings.read(requireContext())
+            if (it.sliderInterfaceScale.value.toInt() == savedInterfaceScale)
+                it.sliderInterfaceScale.value = current.toFloat()
+            savedInterfaceScale = current
+        }
     }
 
     private fun saveSettings() {
-        // Save username (ASCII-only validation)
-        val username = binding.editUsername.text.toString().trim()
-        if (username.isNotEmpty()) {
-            prefsManager.username = username
+        val scale = binding.sliderInterfaceScale.value.toInt()
+        if (!InterfaceScaleSettings.save(requireContext(), scale)) {
+            Toast.makeText(context, R.string.interface_scale_save_failed, Toast.LENGTH_SHORT).show()
+            return
         }
-
+        savedInterfaceScale = scale
         // Save graphics quality
-        prefsManager.graphicsQuality = when {
-            binding.radioLow.isChecked -> 0
-            binding.radioHigh.isChecked -> 2
+        prefsManager.graphicsQuality = when (binding.graphicsToggle.checkedButtonId) {
+            R.id.btnGraphicsLow -> 0
+            R.id.btnGraphicsHigh -> 2
             else -> 1
         }
 
@@ -162,11 +249,20 @@ class SettingsFragment : Fragment() {
         // Save touch sensitivity
         prefsManager.touchSensitivity = binding.sliderTouchSensitivity.value.toInt()
 
-        Toast.makeText(context, "Settings saved", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, R.string.settings_saved, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroyView() {
+        identityUi?.close()
+        identityUi = null
         super.onDestroyView()
         _binding = null
+    }
+
+    private fun updateIdentity() {
+        val b = _binding ?: return
+        val connected = identityUi?.isSignedIn() == true
+        b.neonAccountStatus.setText(if (connected) R.string.neon_account_connected else R.string.neon_account_disconnected)
+        b.btnNeonAccount.setText(if (connected) R.string.neon_account_sign_out else R.string.neon_account_sign_in)
     }
 }

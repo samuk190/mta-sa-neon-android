@@ -34,7 +34,7 @@ def audit_elf(data, name):
     return min(alignments)
 
 
-def audit(path):
+def audit(path, external_game_libraries=False):
     libraries = {}
     with zipfile.ZipFile(path) as apk, path.open("rb") as archive:
         for entry in apk.infolist():
@@ -61,7 +61,8 @@ def audit(path):
                 "packaging": packaging,
                 "sha256": hashlib.sha256(native).hexdigest(),
             }
-        if missing := REQUIRED - libraries.keys():
+        required = REQUIRED - {"libGTASA.so", "libOpenAL64.so", "libSCAnd.so"} if external_game_libraries else REQUIRED
+        if missing := required - libraries.keys():
             raise ValueError(f"Missing required libraries: {', '.join(sorted(missing))}")
         if any(name.lower().endswith(".dll") for name in apk.namelist()):
             raise ValueError("Windows DLL found in the native Android APK")
@@ -69,6 +70,7 @@ def audit(path):
         "apk": str(path),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "libraries": libraries,
+        "external_game_libraries": external_game_libraries,
         "scope": "APK packaging only; execution requires device validation",
     }
 
@@ -76,8 +78,10 @@ def audit(path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk", type=Path)
+    parser.add_argument("--external-game-libraries", action="store_true",
+                        help="Audit release/-PnoGameFiles APKs whose GTA libraries are verified in the game folder at startup")
     args = parser.parse_args()
     try:
-        print(json.dumps(audit(args.apk), indent=2))
+        print(json.dumps(audit(args.apk, args.external_game_libraries), indent=2))
     except (OSError, ValueError, struct.error, zipfile.BadZipFile) as error:
         parser.exit(1, str(error) + "\n")

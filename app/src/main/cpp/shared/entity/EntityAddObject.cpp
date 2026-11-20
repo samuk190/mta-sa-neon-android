@@ -65,23 +65,30 @@ bool SkipPositionRotationAnimation(Net::BitStreamReader& reader) {
 }
 
 // Weapon-only tail. Returns false on a short read.
-bool SkipWeaponTail(Net::BitStreamReader& reader, const EntityCommon& common) {
+bool ReadWeaponTail(Net::BitStreamReader& reader, const EntityCommon& common, WeaponSpawn& weapon,
+                    ElementKindResolver resolveKind) {
     uint8_t targetType = kTargetFixed;
     if (!reader.ReadBits(&targetType, 3)) ENTITY_BODY_FAIL();
+    weapon.targetType = targetType <= kTargetFixed ? targetType : kTargetFixed;
 
     switch (targetType) {
         case kTargetVector: {
-            float vx = 0, vy = 0, vz = 0;
-            if (!reader.Read(vx) || !reader.Read(vy) || !reader.Read(vz)) ENTITY_BODY_FAIL();
+            if (!reader.Read(weapon.targetX) || !reader.Read(weapon.targetY) || !reader.Read(weapon.targetZ)) ENTITY_BODY_FAIL();
             break;
         }
         case kTargetEntity: {
             uint32_t targetId = 0;
             if (!ReadElementId(reader, targetId)) ENTITY_BODY_FAIL();
-            // The reference reads 8 bits for a ped target and 4 bits for a vehicle target, decided by the
-            // element type. This layer has no element table, so the sub-target is not read here.
-            DIAG("ENTITY_ADD weapon entity target not resolved id=%u target=%u bit=%zu (sub-target width unknown)",
-                 common.id, targetId, reader.GetReadOffsetBits());
+            const int kind = resolveKind ? resolveKind(targetId) : -1;
+            // Desktop resolves the target before consuming the type-dependent sub-target.
+            // Player derives from ped. Unknown targets have no sub-target read on desktop.
+            if (kind == kTypePlayer || kind == kTypePed) {
+                if (!reader.Read(weapon.subTarget)) ENTITY_BODY_FAIL();
+            } else if (kind == kTypeVehicle) {
+                if (!reader.ReadBits(&weapon.subTarget, 4)) ENTITY_BODY_FAIL();
+            }
+            if (kind >= 0) weapon.target = targetId;
+            else weapon.targetType = kTargetFixed; // SetWeaponTarget is not called for an unresolved target.
             break;
         }
         default:
@@ -90,17 +97,21 @@ bool SkipWeaponTail(Net::BitStreamReader& reader, const EntityCommon& common) {
 
     bool changed = false;
     if (!ReadFlag(reader, changed)) ENTITY_BODY_FAIL();
+    weapon.statsChanged = changed;
     if (changed) {
         uint8_t damage[2] = {};  // 12 bits per SWeapon damage
         if (!reader.ReadBits(damage, 12)) ENTITY_BODY_FAIL();
         float accuracy = 0, targetRange = 0, weaponRange = 0;
         if (!reader.Read(accuracy) || !reader.Read(targetRange) || !reader.Read(weaponRange)) ENTITY_BODY_FAIL();
+        weapon.damage = static_cast<uint16_t>(damage[0] | (damage[1] << 8));
+        weapon.accuracy = accuracy;
+        weapon.targetRange = targetRange;
+        weapon.weaponRange = weaponRange;
     }
 
     // SWeaponConfiguration: 4 flags, then 9 check flags.
     for (int i = 0; i < 13; ++i) {
-        bool flag = false;
-        if (!ReadFlag(reader, flag)) ENTITY_BODY_FAIL();
+        if (!ReadFlag(reader, weapon.flags[i])) ENTITY_BODY_FAIL();
     }
 
     uint8_t weaponState = 0;
@@ -110,12 +121,18 @@ bool SkipWeaponTail(Net::BitStreamReader& reader, const EntityCommon& common) {
 
     uint32_t ownerId = 0;
     if (!ReadElementId(reader, ownerId)) ENTITY_BODY_FAIL();
+    weapon.state = weaponState;
+    weapon.ammo = ammo;
+    weapon.clipAmmo = clipAmmo;
+    // Desktop DynamicCast<CClientPlayer> rejects non-player owners at receipt time.
+    weapon.owner = resolveKind && resolveKind(ownerId) == kTypePlayer ? ownerId : 0xFFFFFFFFu;
     return true;
 }
 
 } // namespace
 
-bool ReadEntityBodyObject(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual) {
+bool ReadEntityBodyObject(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
+                          ElementKindResolver resolveKind) {
     const bool isWeapon = common.type == kElementWeapon;
 
     float x = 0, y = 0, z = 0;
@@ -165,7 +182,12 @@ bool ReadEntityBodyObject(Net::BitStreamReader& reader, const EntityCommon& comm
     bool broken = false, respawnEnabled = false;
     if (!ReadFlag(reader, broken) || !ReadFlag(reader, respawnEnabled)) ENTITY_BODY_FAIL();
 
-    if (isWeapon && !SkipWeaponTail(reader, common)) ENTITY_BODY_FAIL();
+    if (isWeapon) {
+        auto weapon = std::make_shared<WeaponSpawn>();
+        if (!ReadWeaponTail(reader, common, *weapon, resolveKind)) ENTITY_BODY_FAIL();
+        visual.weapon = std::move(weapon);
+        DIAG("weapon native creation, configuration and firing not wired (CClientWeapon)");
+    }
 
     visual.kind = common.type;
     visual.model = static_cast<int>(objectId);

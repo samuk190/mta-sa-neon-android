@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="neon_account_title">SA:O account</string>
+    <string name="neon_account_connected">SA:O account connected</string>
+    <string name="neon_account_disconnected">Connect your Discord account for servers that require SA:O sign-in.</string>
+    <string name="neon_account_sign_in">Sign in with Discord</string>
+    <string name="neon_account_sign_out">Sign out</string>
+    <string name="connection_mode">Connection mode</string>
+    <string-array name="connection_modes">
+        <item>Automatic</item>
+        <item>Standard</item>
+        <item>Legacy mobile</item>
+    </string-array>
+</resources>

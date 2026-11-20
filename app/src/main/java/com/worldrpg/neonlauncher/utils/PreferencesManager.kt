@@ -3,6 +3,7 @@ package com.worldrpg.neonlauncher.utils
 import android.content.Context
 import android.content.SharedPreferences
 import com.worldrpg.neonlauncher.BuildConfig
+import com.worldrpg.neonlauncher.network.ServerAddress
 
 /**
  * Typed SharedPreferences wrapper for launcher settings.
@@ -40,26 +41,26 @@ class PreferencesManager(context: Context) {
         get() = prefs.getString(KEY_ASSET_STORAGE_PATH, "") ?: ""
         set(value) = prefs.edit().putString(KEY_ASSET_STORAGE_PATH, value).apply()
 
-    // --- Favorites (stored as comma-separated ip:port keys) ---
-    fun getFavorites(): Set<String> {
-        return prefs.getStringSet(KEY_FAVORITES, emptySet()) ?: emptySet()
-    }
+    // Normalize existing endpoint keys as well as new ones.
+    fun getFavorites(): Set<String> =
+        prefs.getStringSet(KEY_FAVORITES, emptySet()).orEmpty()
+            .mapNotNullTo(linkedSetOf()) { ServerAddress.fromKey(it)?.key() }
 
     fun addFavorite(key: String) {
+        val address = ServerAddress.fromKey(key) ?: return
         val current = getFavorites().toMutableSet()
-        current.add(key)
+        current.add(address.key())
         prefs.edit().putStringSet(KEY_FAVORITES, current).apply()
     }
 
     fun removeFavorite(key: String) {
+        val address = ServerAddress.fromKey(key) ?: return
         val current = getFavorites().toMutableSet()
-        current.remove(key)
+        current.remove(address.key())
         prefs.edit().putStringSet(KEY_FAVORITES, current).apply()
     }
 
-    fun isFavorite(key: String): Boolean {
-        return getFavorites().contains(key)
-    }
+    fun isFavorite(key: String): Boolean = ServerAddress.fromKey(key)?.key() in getFavorites()
 
     companion object {
         private const val PREFS_NAME = "worldrpg_neon_prefs"

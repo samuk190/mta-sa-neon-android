@@ -18,14 +18,19 @@
 #include "game_script.h"
 
 #include "gtasa/GameEngine.h"
+#include "gtasa/PlayerClothesTable.h"
+#include "shared/PedQueries.h"
 #include "shared/ServerWorld.h"
+#include "stubs/test_ped_queries.h"
 
+#include <unordered_map>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <strings.h>
 #include <deque>
 #include <map>
 #include <memory>
@@ -137,7 +142,7 @@ bool PickCar(float ox, float oy, uint32_t& id, int& model, float& x, float& y, f
     std::map<uint32_t, Candidate> candidates;
 
     static WorldRPG::ServerWorld::ActorSpawn actors[512];
-    const int actorCount = WorldRPG::ServerWorld::CopyActors(actors, 512);
+    const int actorCount = WorldRPG::ServerWorld::CopyActors(actors, 512, 0, 512);
     knownVehicles = 0;
     for (int i = 0; i < actorCount; ++i) {
         const auto& a = actors[i];
@@ -273,6 +278,19 @@ void BodyPose(float& x, float& y, float& z, float& heading, float& vx, float& vy
     heading = g_foot.heading;
 }
 
+// createPed bookkeeping for the host. The phone creates the body in GameEngine.cpp.
+// Four slots and ids from 0x300001 match that file. No GTA ped is constructed here.
+struct HostScriptPed {
+    uint32_t id = 0;
+    int model = 0;
+    bool used = false;
+    char texture[4][40]{};
+    char cloth[4][40]{};
+    bool on[4]{};
+};
+HostScriptPed g_hostPeds[4];
+uint32_t g_hostNextPed = 0x300001u;
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -280,6 +298,19 @@ void BodyPose(float& x, float& y, float& z, float& heading, float& vx, float& vy
 // ---------------------------------------------------------------------------
 
 namespace WorldRPG::Headless {
+namespace { std::unordered_map<uint32_t, PedQueries::Snapshot> queryNative; }
+void SetPedQueryNative(uint32_t id, const PedQueries::Snapshot& snapshot) { queryNative[id] = snapshot; }
+void ClearPedQueryNative() { queryNative.clear(); }
+bool CopyPedQueryNative(uint32_t id, PedQueries::Snapshot& snapshot) {
+    auto it = queryNative.find(id);
+    if (it == queryNative.end() || snapshot.generation != it->second.generation) return false;
+    snapshot.streamed = true;
+    snapshot.weapons = it->second.weapons;
+    snapshot.currentSlot = it->second.currentSlot;
+    snapshot.taskType = it->second.taskType;
+    snapshot.health = it->second.health;
+    return true;
+}
 
 void SetMode(Mode mode) { g_mode = mode; }
 
@@ -326,6 +357,8 @@ void NoteServerVehicleInOut(uint32_t vehicle, uint8_t action) {
 namespace WorldRPG::Game {
 
 bool BeginServerSession() { return false; }
+bool ServerSessionLive() { return true; }
+bool LocalPlacementPending() { return false; }
 
 void ApplyServerSpawn(float x, float y, float z) {
     g_spawn = Foot{x, y, z, 0.f};
@@ -345,20 +378,116 @@ void CopyPose(float& x, float& y, float& z, float& heading) {
     BodyPose(x, y, z, heading, vx, vy, vz);
 }
 
+float CopyRadarHeading() {
+    float x = 0, y = 0, z = 0, heading = 0;
+    CopyPose(x, y, z, heading);
+    return heading;
+}
+
 void CopyBody(float& x, float& y, float& z, float& heading,
               float& vx, float& vy, float& vz, float& health) {
     Advance();
     BodyPose(x, y, z, heading, vx, vy, vz);
     health = 100.f;
 }
+float CopyLocalArmor() { return 0.f; }
+// No libGTASA in this build, so getGroundPosition cannot query the world.
+bool FindGroundZFor3DPosition(float, float, float, float&) { return false; }
+uint32_t NoteScriptPed(int model, float x, float y, float z, float) {
+    if (model < 0 || model > 312 || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return 0;
+    for (auto& slot : g_hostPeds) {
+        if (slot.used) continue;
+        slot = {};
+        slot.used = true;
+        slot.model = model;
+        slot.id = g_hostNextPed++;
+        if (g_hostNextPed < 0x300001u) g_hostNextPed = 0x300001u;
+        PedQueries::Create(slot.id, false);
+        return slot.id;
+    }
+    return 0;
+}
+bool NoteScriptPedModel(uint32_t, int) { return false; }
+bool ReleaseScriptPed(uint32_t id) {
+    for (auto& slot : g_hostPeds) {
+        if (!slot.used || slot.id != id) continue;
+        slot.used = false;
+        PedQueries::Forget(id);
+        return true;
+    }
+    return false;
+}
+bool ScriptPedAlive(uint32_t id) {
+    for (const auto& slot : g_hostPeds)
+        if (slot.used && slot.id == id) return true;
+    return false;
+}
+void NoteScriptClothes(uint32_t id, const char* texture, const char* model, int type, bool remove) {
+    if (type < 0 || type >= 4) return;
+    if (!remove) {
+        if (type >= PlayerClothesTable::kSlots) return;
+        const auto& choices = PlayerClothesTable::kTable[type];
+        bool listed = false;
+        for (int i = 0; texture && model && i < choices.count; ++i)
+            if (strcasecmp(texture, choices.items[i].texture) == 0 && strcasecmp(model, choices.items[i].model) == 0)
+                listed = true;
+        if (!listed) return;
+    }
+    for (auto& slot : g_hostPeds) {
+        if (!slot.used || slot.id != id) continue;
+        slot.on[type] = !remove && texture && model && texture[0] && model[0];
+        if (slot.on[type]) {
+            std::snprintf(slot.texture[type], sizeof slot.texture[type], "%s", texture);
+            std::snprintf(slot.cloth[type], sizeof slot.cloth[type], "%s", model);
+        }
+        return;
+    }
+}
+bool CopyScriptClothes(uint32_t id, int type, char* texture, int textureBytes, char* model, int modelBytes) {
+    if (!texture || !model || textureBytes <= 0 || modelBytes <= 0 || type < 0 || type >= 4) return false;
+    texture[0] = 0;
+    model[0] = 0;
+    for (const auto& slot : g_hostPeds) {
+        if (!slot.used || slot.id != id || !slot.on[type]) continue;
+        std::snprintf(texture, static_cast<size_t>(textureBytes), "%s", slot.texture[type]);
+        std::snprintf(model, static_cast<size_t>(modelBytes), "%s", slot.cloth[type]);
+        return texture[0] != 0 && model[0] != 0;
+    }
+    return false;
+}
+void NoteScriptRotation(uint32_t, float) {}
+void NoteScriptFrozen(uint32_t, bool) {}
+void NoteScriptCamera(float, float, float, float, float, float) {}
+void ClearScriptCamera() {}
+bool NoteScriptTime(int, int) { return false; }
+bool NoteScriptWeather(int) { return false; }
+bool CopyScriptWeather(int&) { return false; }
+bool CopyScriptPedFacts(uint32_t id, int& model, float&, bool&) {
+    for (const auto& slot : g_hostPeds) {
+        if (!slot.used || slot.id != id) continue;
+        model = slot.model;
+        return true;
+    }
+    return false;
+}
+void NoteLocalHealth(float) {}
 
 void NoteDamage(uint32_t, float, uint8_t) {}
 bool ConsumeDamage(uint32_t&, uint8_t&) { return false; }
 void NoteRemoteAim(uint32_t, float, float, int, int, bool, bool) {}
 void NoteRemoteWeapon(uint32_t, int) {}
+bool CopySpatialScene(std::vector<Spatial::Element>&) { return false; }
+bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out) {
+    if (!PedQueries::Copy(id, out)) return false;
+    Headless::CopyPedQueryNative(id, out);
+    return true;
+}
 bool RemoteFacingLocal(uint32_t, float, float) { return false; }
 void CopyOnFoot(float, float, float, OnFootKeys& keys) { keys = {}; }
-void NoteRemotePed(uint32_t, float, float, float, float, float, float, float) {}
+void ConsumeLocalJump() {}
+void ConsumeLocalAttack() {}
+void NoteRemotePlayerSync(uint32_t, float, float, float, float, float, float, float, bool, int, int, float, bool, bool, bool, float, bool, float) {}
+void NoteRemotePed(uint32_t, float, float, float, float, float, float, float, bool) {}
 void SetPedHost(uint32_t, bool) {}
 void ForgetRemote(uint32_t) {}
 void RequestRemoteReset() {}
@@ -390,6 +519,11 @@ void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float 
     s.heading = heading;
 }
 
+// VEHICLE_STARTSYNC: the pose is recorded like any other vehicle pose; speeds and health have no body here.
+void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], const float*, const float*, float) {
+    if (!pos || !rot) return;
+    NoteRemoteVehicle(id, 0, pos[0], pos[1], pos[2], rot[2] * 3.14159265f / 180.f);
+}
 void NoteRemoteSeat(uint32_t, uint32_t, uint8_t) {}
 void NoteRemoteUnseat(uint32_t) {}
 void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}
@@ -487,9 +621,36 @@ void SetPedOnFire(uint32_t, bool) {}
 void SetPedInWater(uint32_t, bool) {}
 void KillPedAnimation(uint32_t) {}
 void LockPedHealth(uint32_t, float) {}
+bool CopyPedVitalsLock(uint32_t, bool& healthLocked, float& health, bool& armorLocked, float& armor) {
+    healthLocked = armorLocked = false;
+    health = armor = 0.f;
+    return false; // the host has no native health/armor locks
+}
 void LockPedArmor(uint32_t, float) {}
 void LockPedHealthCurrent(uint32_t) {}
 void LockPedArmorCurrent(uint32_t) {}
+void ResolvePedVitalsLockCurrent(uint32_t, float, float) {}
+void UnlockPedVitals(uint32_t) {}
+void ForgetPedNativeTaskState(uint32_t) {}
+void SetPedVitals(uint32_t, float, float) {}
+void NoteRemoteClothes(uint32_t, const std::vector<WorldRPG::Entity::PedClothes>&) {}
+void NoteRemoteButtons(uint32_t, uint8_t) {}
+void RpcSetPosition(uint32_t id, float x, float y, float z) {
+    if (id == WorldRPG::ServerWorld::LocalPlayer()) g_foot = {x, y, z, g_foot.heading};
+}
+void RpcSetFrozen(uint32_t, bool) {}
+void NoteRemoteWasted(uint32_t, int, int, int) {}
+bool ConsumeHostedWasted(HostedWasted&) { return false; }
+void NoteRemoteSpawn(uint32_t) {}
+void RpcSetRotation(uint32_t, float) {}
+void RpcSetInterior(uint32_t, uint8_t) {}
+void RpcSetHealth(uint32_t, float) {}
+void RpcSetArmor(uint32_t, float) {}
+void QueuePedRpc(uint32_t id, const PedRpcOp& op) {
+    if (op.queryGeneration && PedQueries::Current(id, op.queryGeneration)) PedQueries::WeaponRpc(id, op);
+}
+void RpcSetAlpha(uint32_t, uint8_t) {}
+void RpcSetCollisions(uint32_t, bool) {}
 
 // ---------------------------------------------------------------------------
 // GameEngine class: no libGTASA on the host, every call reports "not available".

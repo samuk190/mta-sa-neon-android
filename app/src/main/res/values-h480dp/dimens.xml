@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tall enough for a bigger logo (large phones in landscape, small tablets). -->
+    <dimen name="row_logo_size">52dp</dimen>
+    <dimen name="join_logo_size">96dp</dimen>
+</resources>
