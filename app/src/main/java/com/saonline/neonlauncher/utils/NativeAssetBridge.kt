@@ -46,7 +46,12 @@ class NativeAssetBridge(private val context: Context) {
         data class Verifying(val current: Int, val total: Int) : DownloadState
         data class Syncing(val current: Int, val total: Int, val percent: Int) : DownloadState
         data class Complete(val fileCount: Int) : DownloadState
-        data class Error(val message: String) : DownloadState
+        data class Error(val reason: SyncFailure, val detail: String? = null) : DownloadState
+    }
+
+    enum class SyncFailure {
+        ALREADY_RUNNING, LOCAL_FILES_MISSING, INSUFFICIENT_SPACE, STORAGE_UNAVAILABLE,
+        INVALID_MANIFEST, FILE_INVALID, HTTP_ERROR, IO_ERROR
     }
 
     /** Local developer installs are available only when no CDN is configured. */
@@ -95,7 +100,7 @@ class NativeAssetBridge(private val context: Context) {
 
     fun syncAssets(): Flow<DownloadState> = channelFlow {
         if (!installationLock.tryLock()) {
-            send(DownloadState.Error("Game assets are already syncing."))
+            send(DownloadState.Error(SyncFailure.ALREADY_RUNNING))
             return@channelFlow
         }
 
@@ -112,12 +117,7 @@ class NativeAssetBridge(private val context: Context) {
             if (cdnRoot.isBlank()) {
                 val expectedPath = context.getExternalFilesDir(null)?.let { File(it, "game_assets").absolutePath }
                     ?: BuildConfig.DEVICE_ASSETS_PATH
-                send(DownloadState.Error(
-                    "Local game assets not found!\n" +
-                    "Please place original GTA Mobile 2.10 files in:\n" +
-                    "$expectedPath\n" +
-                    "or configure GAME_ASSETS_DIR in .env"
-                ))
+                send(DownloadState.Error(SyncFailure.LOCAL_FILES_MISSING, expectedPath))
                 return@channelFlow
             }
 
@@ -161,7 +161,7 @@ class NativeAssetBridge(private val context: Context) {
                     }
                     ensureDirectory(target.parentFile ?: staging)
                     if (staging.usableSpace < entry.size) {
-                        throw IOException("Not enough free space for game assets.")
+                        throw SyncException(SyncFailure.INSUFFICIENT_SPACE, "Not enough free space for game assets.")
                     }
                     val partial = partials[worker]
                     val old = previous?.takeIf { previousByPath == null || previousByPath[entry.path] == entry }
@@ -198,13 +198,17 @@ class NativeAssetBridge(private val context: Context) {
             send(DownloadState.Complete(manifest.entries.size))
         } catch (error: IOException) {
             Log.w(TAG, "Game asset sync failed", error)
-            send(DownloadState.Error(error.message ?: "Game asset sync failed."))
+            send(when (error) {
+                is SyncException -> DownloadState.Error(error.reason, error.detail)
+                is AssetContentsException -> DownloadState.Error(SyncFailure.FILE_INVALID, error.path)
+                else -> DownloadState.Error(SyncFailure.IO_ERROR)
+            })
         } catch (error: SecurityException) {
             Log.w(TAG, "Cannot access game asset storage", error)
-            send(DownloadState.Error("Cannot access game asset storage."))
+            send(DownloadState.Error(SyncFailure.STORAGE_UNAVAILABLE))
         } catch (error: JSONException) {
             Log.w(TAG, "Invalid game asset manifest", error)
-            send(DownloadState.Error("Invalid game asset manifest."))
+            send(DownloadState.Error(SyncFailure.INVALID_MANIFEST))
         } finally {
             installationLock.unlock()
         }
@@ -313,13 +317,17 @@ class NativeAssetBridge(private val context: Context) {
                     val count = input.read(buffer)
                     if (count < 0) break
                     if (output.size() + count > GameAssetManifest.MAX_BYTES) {
-                        throw IOException("Game asset manifest is too large.")
+                        throw SyncException(SyncFailure.INVALID_MANIFEST, "Game asset manifest is too large.")
                     }
                     output.write(buffer, 0, count)
                 }
                 output.toString(Charsets.UTF_8.name())
             }
-            return GameAssetManifest.parseRemote(connection.getHeaderField("X-Repo-Commit"), json)
+            return try {
+                GameAssetManifest.parseRemote(connection.getHeaderField("X-Repo-Commit"), json)
+            } catch (error: IOException) {
+                throw SyncException(SyncFailure.INVALID_MANIFEST, "Invalid game asset manifest.", cause = error)
+            }
         } finally {
             connection.disconnect()
         }
@@ -353,7 +361,7 @@ class NativeAssetBridge(private val context: Context) {
 
     private fun ensureDirectory(directory: File) {
         if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
-            throw IOException("Cannot create game asset storage.")
+            throw SyncException(SyncFailure.STORAGE_UNAVAILABLE, "Cannot create game asset storage.")
         }
     }
 
@@ -394,7 +402,14 @@ class NativeAssetBridge(private val context: Context) {
         return digest.hexDigest() == entry.sha256
     }
 
-    private class AssetContentsException(message: String) : IOException(message)
+    private class SyncException(
+        val reason: SyncFailure,
+        message: String,
+        val detail: String? = null,
+        cause: Throwable? = null
+    ) : IOException(message, cause)
+
+    private class AssetContentsException(val path: String, message: String) : IOException(message)
 
     private suspend fun copyVerified(
         input: InputStream,
@@ -413,7 +428,7 @@ class NativeAssetBridge(private val context: Context) {
                 val count = input.read(buffer)
                 if (count < 0) break
                 total += count
-                if (total > entry.size) throw AssetContentsException("Unexpected size for ${entry.path}.")
+                if (total > entry.size) throw AssetContentsException(entry.path, "Unexpected size for ${entry.path}.")
                 digest.update(buffer, 0, count)
                 output.write(buffer, 0, count)
                 if (progress != null && total - reported >= reportEvery) {
@@ -423,7 +438,7 @@ class NativeAssetBridge(private val context: Context) {
             }
             val sha = digest.hexDigest()
             if (total != entry.size || (entry.sha256.isNotEmpty() && sha != entry.sha256)) {
-                throw AssetContentsException("Integrity check failed for ${entry.path}.")
+                throw AssetContentsException(entry.path, "Integrity check failed for ${entry.path}.")
             }
             output.fd.sync()
             sha
@@ -487,7 +502,9 @@ class NativeAssetBridge(private val context: Context) {
                     keepOpen = true
                     return connection
                 }
-                if (status !in REDIRECTS) throw IOException("Game assets CDN returned HTTP $status.")
+                if (status !in REDIRECTS) {
+                    throw SyncException(SyncFailure.HTTP_ERROR, "Game assets CDN returned HTTP $status.", status.toString())
+                }
                 val location = connection.getHeaderField("Location")
                     ?: throw IOException("Missing game asset redirect.")
                 val next = URL(endpoint, location)

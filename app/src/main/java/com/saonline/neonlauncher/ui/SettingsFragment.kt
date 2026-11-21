@@ -8,8 +8,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.saonline.neonlauncher.BuildConfig
 import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.databinding.FragmentSettingsBinding
@@ -20,6 +23,7 @@ import com.saonline.neonlauncher.game.InterfaceScaleSettings
 import com.saonline.neonlauncher.utils.NativeAssetBridge
 import com.saonline.neonlauncher.utils.PreferencesManager
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class SettingsFragment : Fragment() {
 
@@ -58,15 +62,15 @@ class SettingsFragment : Fragment() {
         binding.btnNeonAccount.setOnClickListener {
             val identity = identityUi ?: return@setOnClickListener
             if (identity.isSignedIn()) {
-                com.google.android.material.dialog.MaterialAlertDialogBuilder(requireContext())
+                MaterialAlertDialogBuilder(requireContext())
                     .setTitle(R.string.neon_account_sign_out)
-                    .setMessage("Sign out of your SA:O account on this device?")
+                    .setMessage(R.string.neon_account_sign_out_confirm)
                     .setPositiveButton(R.string.neon_account_sign_out) { _, _ ->
                         identity.signOut({ updateIdentity() }, { message ->
                             context?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() }
                         })
                     }
-                    .setNegativeButton(android.R.string.cancel, null).show()
+                    .setNegativeButton(R.string.cancel, null).show()
             } else {
                 identity.signIn({ updateIdentity() }, { message ->
                     context?.let { Toast.makeText(it, message, Toast.LENGTH_LONG).show() }
@@ -81,7 +85,7 @@ class SettingsFragment : Fragment() {
         binding.switchEngineDebug.setOnCheckedChangeListener { button, enabled ->
             if (enabled != EngineDiagnostics.isEnabled(requireContext()) &&
                 !EngineDiagnostics.setEnabled(requireContext(), enabled)) {
-                Toast.makeText(context, "Unable to save engine debug setting.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, R.string.engine_debug_save_failed, Toast.LENGTH_LONG).show()
                 button.isChecked = EngineDiagnostics.isEnabled(requireContext())
             }
         }
@@ -92,6 +96,40 @@ class SettingsFragment : Fragment() {
         setupSaveButton()
         setupAssetSyncButton()
         setupEngineTestButton()
+    }
+
+    private fun setupLanguagePicker() {
+        val languages = listOf(
+            "" to getString(R.string.language_system),
+            "en" to "English",
+            "pt-BR" to "Português (Brasil)",
+            "es" to "Español",
+            "de" to "Deutsch",
+            "zh-Hans" to "简体中文",
+            "ru" to "Русский"
+        )
+        val locale = AppCompatDelegate.getApplicationLocales()[0]
+        var selected = languages.indexOfFirst { (tag, _) ->
+            if (locale == null) tag.isEmpty()
+            else tag.isNotEmpty() && LocaleListCompat.matchesLanguageAndScript(Locale.forLanguageTag(tag), locale)
+        }
+        val label = languages.getOrNull(selected)?.second ?: locale?.getDisplayName(locale).orEmpty()
+        binding.btnLauncherLanguage.text = getString(R.string.language_selected, label)
+        binding.btnLauncherLanguage.setOnClickListener {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.language)
+                .setSingleChoiceItems(languages.map { it.second }.toTypedArray(), selected) { dialog, index ->
+                    dialog.dismiss()
+                    if (index != selected) {
+                        selected = index
+                        val (tag, name) = languages[index]
+                        binding.btnLauncherLanguage.text = getString(R.string.language_selected, name)
+                        AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(tag))
+                    }
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
     }
 
     private fun loadCurrentSettings() {
@@ -116,14 +154,14 @@ class SettingsFragment : Fragment() {
     }
 
     private fun setupValueLabels() {
-        binding.volumeValue.text = "${binding.sliderVolume.value.toInt()}%"
+        binding.volumeValue.text = getString(R.string.percentage, binding.sliderVolume.value.toInt())
         binding.touchValue.text = "${binding.sliderTouchSensitivity.value.toInt()}"
-        binding.interfaceScaleValue.text = "${binding.sliderInterfaceScale.value.toInt()}%"
+        binding.interfaceScaleValue.text = getString(R.string.percentage, binding.sliderInterfaceScale.value.toInt())
         binding.sliderInterfaceScale.addOnChangeListener { _, value, _ ->
-            binding.interfaceScaleValue.text = "${value.toInt()}%"
+            binding.interfaceScaleValue.text = getString(R.string.percentage, value.toInt())
         }
         binding.sliderVolume.addOnChangeListener { _, value, _ ->
-            binding.volumeValue.text = "${value.toInt()}%"
+            binding.volumeValue.text = getString(R.string.percentage, value.toInt())
         }
         binding.sliderTouchSensitivity.addOnChangeListener { _, value, _ ->
             binding.touchValue.text = "${value.toInt()}"
@@ -156,18 +194,20 @@ class SettingsFragment : Fragment() {
                 nativeAssetBridge.syncAssets().collect { state ->
                     when (state) {
                         NativeAssetBridge.DownloadState.FetchingManifest ->
-                            showAssetProgress("Fetching game asset manifest...", null)
+                            showAssetProgress(getString(R.string.assets_fetching_manifest), null)
                         is NativeAssetBridge.DownloadState.Verifying ->
                             showAssetProgress(
-                                "Verifying game assets ${state.current}/${state.total}",
+                                getString(R.string.assets_verifying, state.current, state.total),
                                 if (state.total > 0) state.current * 100 / state.total else null
                             )
                         is NativeAssetBridge.DownloadState.Syncing ->
-                            showAssetProgress("Syncing game assets ${state.current}/${state.total}", state.percent)
-                        is NativeAssetBridge.DownloadState.Complete ->
-                            Toast.makeText(context, "${state.fileCount} game files verified", Toast.LENGTH_LONG).show()
+                            showAssetProgress(getString(R.string.assets_syncing, state.current, state.total), state.percent)
+                        is NativeAssetBridge.DownloadState.Complete -> {
+                            val message = resources.getQuantityString(R.plurals.assets_verified, state.fileCount, state.fileCount)
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
                         is NativeAssetBridge.DownloadState.Error ->
-                            Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, assetSyncError(state), Toast.LENGTH_LONG).show()
                     }
                 }
             } finally {
@@ -180,6 +220,20 @@ class SettingsFragment : Fragment() {
                 updateEngineTestButton()
             }
         }
+    }
+
+    private fun assetSyncError(error: NativeAssetBridge.DownloadState.Error): String {
+        val message = when (error.reason) {
+            NativeAssetBridge.SyncFailure.ALREADY_RUNNING -> R.string.assets_already_syncing
+            NativeAssetBridge.SyncFailure.LOCAL_FILES_MISSING -> R.string.assets_local_missing
+            NativeAssetBridge.SyncFailure.INSUFFICIENT_SPACE -> R.string.assets_insufficient_space
+            NativeAssetBridge.SyncFailure.STORAGE_UNAVAILABLE -> R.string.assets_storage_unavailable
+            NativeAssetBridge.SyncFailure.INVALID_MANIFEST -> R.string.assets_invalid_manifest
+            NativeAssetBridge.SyncFailure.FILE_INVALID -> R.string.assets_file_invalid
+            NativeAssetBridge.SyncFailure.HTTP_ERROR -> R.string.assets_http_error
+            NativeAssetBridge.SyncFailure.IO_ERROR -> R.string.assets_sync_failed
+        }
+        return if (error.detail == null) getString(message) else getString(message, error.detail)
     }
 
     /** [percent] null shows an indeterminate bar. */
@@ -230,6 +284,7 @@ class SettingsFragment : Fragment() {
         updateEngineTestButton()
         updateIdentity()
         _binding?.let {
+            setupLanguagePicker()
             val current = InterfaceScaleSettings.read(requireContext())
             if (it.sliderInterfaceScale.value.toInt() == savedInterfaceScale)
                 it.sliderInterfaceScale.value = current.toFloat()

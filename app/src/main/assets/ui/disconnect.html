@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Error</title>
+<title></title>
 <!--
   The Neon desktop system message box, error severity:
   Tools/server-browser-prototype/src/components/Modals.tsx NativeMessageModal and
@@ -54,24 +54,27 @@
   <section class="modal" role="alertdialog" aria-modal="true" aria-labelledby="t" aria-describedby="m">
     <h2 class="modal__title" id="t">
       <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      <span id="title">Disconnected</span>
+      <span id="title"></span>
     </h2>
-    <p class="modal__error" id="m">Disconnected from the server.</p>
+    <p class="modal__error" id="m"></p>
     <div class="modal__actions">
-      <button type="button" class="modal__btn" onclick="Neon.quit()">Close</button>
-      <button type="button" class="modal__btn modal__btn--primary" onclick="Neon.retry()">Reconnect</button>
+      <button id="close" type="button" class="modal__btn" onclick="Neon.quit()"></button>
+      <button id="retry" type="button" class="modal__btn modal__btn--primary" onclick="Neon.retry()"></button>
     </div>
   </section>
   <script>
-    window.setDialog = function (title, text, fontUrl) {
+    window.setDialog = function (title, text, fontUrl, closeLabel, retryLabel, languageTag) {
       if (fontUrl) {
         var face = new FontFace('SA Bank Gothic', 'url("' + fontUrl + '")');
         face.load().then(function (f) { document.fonts.add(f); }).catch(function () {});
       }
-      document.getElementById('title').textContent = title || 'Error';
-      document.getElementById('m').textContent = text || '';
+      document.documentElement.lang = languageTag;
+      document.title = title;
+      document.getElementById('title').textContent = title;
+      document.getElementById('m').textContent = text;
+      document.getElementById('close').textContent = closeLabel;
+      document.getElementById('retry').textContent = retryLabel;
     };
-    window.setMessage = function (text) { window.setDialog('Disconnected', text, ''); };
   </script>
 </body>
 </html>

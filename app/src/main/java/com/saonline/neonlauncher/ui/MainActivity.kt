@@ -68,8 +68,13 @@ class MainActivity : AppCompatActivity() {
         title = BuildConfig.LAUNCHER_TITLE
         applyWindowInsets()
         setupRailHeader()
-        setupTabs(savedInstanceState == null)
+        setupTabs(savedInstanceState)
         setupNavigation()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_NAV_ITEM, binding.navigationRail.selectedItemId)
+        super.onSaveInstanceState(outState)
     }
 
     /**
@@ -101,8 +106,8 @@ class MainActivity : AppCompatActivity() {
      */
     private val tabTags = listOf("tab_servers", "tab_favorites", "tab_settings")
 
-    private fun setupTabs(fresh: Boolean) {
-        if (fresh) {
+    private fun setupTabs(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) {
             val tx = supportFragmentManager.beginTransaction().setReorderingAllowed(true)
             listOf(ServerBrowserFragment(), FavoritesFragment(), SettingsFragment()).forEachIndexed { i, f ->
                 tx.add(R.id.fragmentContainer, f, tabTags[i])
@@ -110,13 +115,12 @@ class MainActivity : AppCompatActivity() {
             tx.commitNow()
         }
         val ids = listOf(R.id.nav_servers, R.id.nav_favorites, R.id.nav_settings)
+        binding.navigationRail.selectedItemId = savedInstanceState?.getInt(STATE_NAV_ITEM, R.id.nav_servers)
+            ?: R.id.nav_servers
         showTab(ids.indexOf(binding.navigationRail.selectedItemId).coerceAtLeast(0))
     }
 
-    private var selectedTab = 0
-
     private fun showTab(index: Int) {
-        selectedTab = index
         val tx = supportFragmentManager.beginTransaction().setReorderingAllowed(true)
         tabTags.forEachIndexed { i, tag ->
             val f = supportFragmentManager.findFragmentByTag(tag) ?: return@forEachIndexed
@@ -173,11 +177,15 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.game_setup_title)
             .setMessage(R.string.game_setup_message)
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.sync_assets) { _, _ ->
                 binding.navigationRail.selectedItemId = R.id.nav_settings
                 (supportFragmentManager.findFragmentByTag(tabTags[2]) as? SettingsFragment)?.syncGameAssets()
             }
             .show()
+    }
+
+    private companion object {
+        const val STATE_NAV_ITEM = "launcher_nav_item"
     }
 }

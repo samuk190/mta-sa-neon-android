@@ -8,7 +8,10 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.text.TextPaint;
+import android.text.TextUtils;
 import android.view.View;
+
+import com.saonline.neonlauncher.R;
 
 import java.io.InputStream;
 import java.util.Locale;
@@ -30,8 +33,6 @@ public final class MtaTransferBox extends View {
     private static final float ALPHA = 0.7f;
     private static final int ICON_COUNT = 10;
     private static final long ICON_MILLIS = 50L;
-    private static final String PREFIX = "Download Progress:";
-    private static final String INFO = "Disconnect to cancel download";
 
     // Default skin: TitleBarBackground (8,8,19), TitleBarTop highlight (43,43,65), TitleBarBorder (33,33,53),
     // ProgressBarLitSegment (235,235,240). ProgressBarDimSegment is transparent.
@@ -46,6 +47,8 @@ public final class MtaTransferBox extends View {
     private final Bitmap[] icons = new Bitmap[ICON_COUNT];
     private final RectF rect = new RectF();
     private final float boxWidth;
+    private final String cancelHint;
+    private final Locale locale;
     private long done;
     private long total;
     private int iconIndex;
@@ -65,8 +68,11 @@ public final class MtaTransferBox extends View {
         info.setTypeface(Typeface.DEFAULT);
         info.setTextSize(12f * SCALE);
         info.setColor(0xFF000000);
-        String sample = PREFIX + " " + "999.99 kB of 999.99 kB";
-        boxWidth = Math.max(title.measureText(sample), info.measureText(INFO)) + PADDING;
+        locale = getResources().getConfiguration().getLocales().get(0);
+        cancelHint = context.getString(R.string.transfer_cancel_hint);
+        String sample = dataUnit(1023999);
+        String sampleTitle = context.getString(R.string.transfer_progress, sample, sample);
+        boxWidth = Math.max(title.measureText(sampleTitle), info.measureText(cancelHint)) + PADDING;
         for (int i = 0; i < ICON_COUNT; ++i) {
             try (InputStream in = context.getAssets().open("cgui/transferset/" + (i + 1) + ".png")) {
                 icons[i] = BitmapFactory.decodeStream(in);
@@ -96,22 +102,23 @@ public final class MtaTransferBox extends View {
     }
 
     /** Desktop GetDataUnit (Shared/mods/deathmatch/logic/Utils.cpp). */
-    static String dataUnit(long bytes) {
+    private String dataUnit(long bytes) {
         float value = (float) bytes;
         if (value < 1024f) return bytes + " B";
         value /= 1024f;
-        if (value < 1024f) return String.format(Locale.US, "%.2f kB", value);
+        if (value < 1024f) return String.format(locale, "%.2f kB", value);
         value /= 1024f;
-        if (value < 1024f) return String.format(Locale.US, "%.2f MB", value);
+        if (value < 1024f) return String.format(locale, "%.2f MB", value);
         value /= 1024f;
-        return String.format(Locale.US, "%.2f GB", value);
+        return String.format(locale, "%.2f GB", value);
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         if (total <= 0) return;
-        float left = getWidth() * 0.5f - boxWidth * 0.5f;
+        float width = Math.min(boxWidth, getWidth() - SPACER);
+        float left = (getWidth() - width) * 0.5f;
         float top = getHeight() * 0.85f - HEIGHT * 0.5f;
         int alpha = Math.round(255 * ALPHA);
 
@@ -119,22 +126,23 @@ public final class MtaTransferBox extends View {
         fill.setStyle(Paint.Style.FILL);
         fill.setColor(COLOR_WINDOW);
         fill.setAlpha(alpha);
-        canvas.drawRect(left, top, left + boxWidth, top + HEIGHT, fill);
+        canvas.drawRect(left, top, left + width, top + HEIGHT, fill);
         fill.setColor(COLOR_HIGHLIGHT);
         fill.setAlpha(alpha);
-        canvas.drawRect(left, top, left + boxWidth, top + (1.5f * SCALE), fill);
+        canvas.drawRect(left, top, left + width, top + (1.5f * SCALE), fill);
         fill.setStyle(Paint.Style.STROKE);
         fill.setStrokeWidth(1.5f * SCALE);
         fill.setColor(COLOR_BORDER);
         fill.setAlpha(alpha);
-        canvas.drawRect(left, top, left + boxWidth, top + HEIGHT, fill);
+        canvas.drawRect(left, top, left + width, top + HEIGHT, fill);
         fill.setStyle(Paint.Style.FILL);
 
         // Title: "Download Progress: X of Y", centred in the title bar.
-        String text = PREFIX + " " + dataUnit(done) + " of " + dataUnit(total);
+        String progressText = getContext().getString(R.string.transfer_progress, dataUnit(done), dataUnit(total));
+        String text = TextUtils.ellipsize(progressText, title, width - SPACER, TextUtils.TruncateAt.END).toString();
         title.setAlpha(alpha);
         float titleY = top + (Y_START - (title.descent() + title.ascent())) * 0.5f;
-        canvas.drawText(text, left + (boxWidth - title.measureText(text)) * 0.5f, titleY, title);
+        canvas.drawText(text, left + (width - title.measureText(text)) * 0.5f, titleY, title);
 
         // Progress bar: lit part only (the dim part is transparent in the skin).
         float barTop = top + Y_START;
@@ -142,13 +150,14 @@ public final class MtaTransferBox extends View {
         float progress = (float) ((double) done / (double) total);
         fill.setColor(COLOR_LIT);
         fill.setAlpha(alpha);
-        rect.set(left, barTop, left + boxWidth * progress, barTop + barHeight);
+        rect.set(left, barTop, left + width * progress, barTop + barHeight);
         canvas.drawRect(rect, fill);
 
         // Icon and label, centred together inside the bar.
-        float infoWidth = info.measureText(INFO);
         float iconTextGap = 6f * SCALE;
-        float start = left + (boxWidth - infoWidth - ICON - iconTextGap) * 0.5f;
+        float hintWidth = Math.max(0, width - ICON - iconTextGap - SPACER);
+        String hint = TextUtils.ellipsize(cancelHint, info, hintWidth, TextUtils.TruncateAt.END).toString();
+        float start = left + (width - info.measureText(hint) - ICON - iconTextGap) * 0.5f;
         long now = android.os.SystemClock.uptimeMillis();
         if (now - iconTime >= ICON_MILLIS) {
             iconTime = now;
@@ -163,7 +172,7 @@ public final class MtaTransferBox extends View {
         }
         info.setAlpha(alpha);
         float infoY = barTop + (barHeight - (info.descent() + info.ascent())) * 0.5f;
-        canvas.drawText(INFO, start + ICON + iconTextGap, infoY, info);
+        canvas.drawText(hint, start + ICON + iconTextGap, infoY, info);
 
         // Keep the icon moving while the box is up (desktop DoPulse, every 50 ms).
         postInvalidateDelayed(ICON_MILLIS);

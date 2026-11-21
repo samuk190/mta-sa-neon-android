@@ -136,9 +136,14 @@ final class DisconnectDialog {
                 java.io.File font = gameDirectory == null ? null
                         : new java.io.File(gameDirectory, "MTA/cgui/sabankgothic.ttf");
                 String fontUrl = font != null && font.isFile() ? "file://" + font.getAbsolutePath() : "";
-                view.evaluateJavascript("if (window.setDialog) window.setDialog(" + quote(title) + "," + quote(message)
-                        + "," + quote(fontUrl) + "); else if (window.setMessage) window.setMessage(" + quote(message) + ");",
-                        null);
+                String args = quote(title) + "," + quote(message) + "," + quote(fontUrl);
+                if (BUNDLED.equals(url)) {
+                    String locale = activity.getResources().getConfiguration().getLocales().get(0).toLanguageTag();
+                    args += "," + quote(activity.getString(R.string.disconnect_close))
+                            + "," + quote(activity.getString(R.string.disconnect_retry)) + "," + quote(locale);
+                }
+                view.evaluateJavascript("if (window.setDialog) window.setDialog(" + args
+                        + "); else if (window.setMessage) window.setMessage(" + quote(message) + ");", null);
             }
         });
 

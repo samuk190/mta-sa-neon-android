@@ -2,6 +2,7 @@ package com.saonline.neonlauncher.game;
 
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.content.Context;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -33,8 +34,10 @@ import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
+import androidx.core.content.ContextCompat;
+
 import com.saonline.neonlauncher.BuildConfig;
+import com.saonline.neonlauncher.R;
 import com.saonline.neonlauncher.network.JoinProtocolSettings;
 import com.saonline.neonlauncher.utils.PreferencesManager;
 import com.rockstargames.gtasa.GTASA;
@@ -124,15 +127,15 @@ public final class EngineHostActivity extends GTASA {
                 if (loadingView != null) loadingView.end();
                 hideDownload();
                 new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                    .setTitle("SA:O account")
-                    .setMessage("This server requires SA:O sign-in. Connect your Discord account to continue.")
-                    .setPositiveButton("Sign in with Discord", (dialog, which) -> identityUi.signIn(() -> {
+                    .setTitle(R.string.neon_account_title)
+                    .setMessage(R.string.neon_account_server_requires_sign_in)
+                    .setPositiveButton(R.string.neon_account_sign_in, (dialog, which) -> identityUi.signIn(() -> {
                         if (!connectToServer()) {
-                            showDisconnectDialog("SA:O account", "Unable to restart the server connection. Please retry.");
+                            showDisconnectDialog(getString(R.string.neon_account_title), getString(R.string.reconnect_failed));
                         }
-                    }, message -> showDisconnectDialog("SA:O account", message)))
-                    .setNegativeButton(android.R.string.cancel, (dialog, which) ->
-                        showDisconnectDialog("SA:O account", "Sign in to your SA:O account before connecting to this server."))
+                    }, message -> showDisconnectDialog(getString(R.string.neon_account_title), message)))
+                    .setNegativeButton(R.string.cancel, (dialog, which) ->
+                        showDisconnectDialog(getString(R.string.neon_account_title), getString(R.string.neon_account_sign_in_required)))
                     .setCancelable(false).show();
                 return;
             }
@@ -227,6 +230,11 @@ public final class EngineHostActivity extends GTASA {
     }
 
     @Override
+    protected void attachBaseContext(Context base) {
+        super.attachBaseContext(ContextCompat.getContextForLanguage(base));
+    }
+
+    @Override
     public void onCreate(Bundle savedInstanceState) {
         NativeAssetBridge assets = new NativeAssetBridge(this);
         String installed = findReadyGameDirectory(this, assets);
@@ -243,7 +251,12 @@ public final class EngineHostActivity extends GTASA {
             EngineDiagnostics.noteGpu(this, gpu);
             EngineCaseAliases.prepare(generation);
             validateGameText(assets.usesCdn());
-            gpu.validate(generation);
+            try {
+                gpu.validate(generation);
+            } catch (GpuTextureSupport.MissingTextures error) {
+                throw new IOException(getString(R.string.engine_textures_missing, gpu.label(),
+                        gpu.format.toUpperCase(java.util.Locale.ROOT), String.join("\n", error.paths)), error);
+            }
             validateLevelDefinitions(generation);
             // The VM calls the engine's JNI_OnLoad and registers the native
             // NvEventQueueActivity methods. A plain dlopen does not do this.
@@ -253,7 +266,7 @@ public final class EngineHostActivity extends GTASA {
             System.loadLibrary("WorldRPGNeon");
             Log.i(TAG, "Native GTA host prepared with generation " + generation.getName());
         } catch (IOException | LinkageError | SecurityException error) {
-            bootError = error.getMessage() == null ? "Nao foi possivel preparar a engine GTA." : error.getMessage();
+            bootError = error.getMessage() == null ? getString(R.string.gta_engine_load_failed) : error.getMessage();
             EngineDiagnostics.failure(this, bootError);
             setResult(RESULT_CANCELED, new Intent().putExtra(EXTRA_BOOT_ERROR, bootError));
             Log.e(TAG, "Native GTA host preparation failed", error);
@@ -304,11 +317,11 @@ public final class EngineHostActivity extends GTASA {
             Log.i(TAG, "MTA client library loaded");
         } catch (UnsatisfiedLinkError error) {
             Log.e(TAG, "MTA client library failed to load", error);
-            onEngineBootstrapError("Unable to load the MTA client library.");
+            onEngineBootstrapError(getString(R.string.native_client_load_failed));
             return;
         }
         if (!nativeInit() || !nativeSetAssetPath(gameDirectory)) {
-            onEngineBootstrapError("Unable to initialize the MTA client.");
+            onEngineBootstrapError(getString(R.string.native_client_init_failed));
             return;
         }
         try {
@@ -316,7 +329,7 @@ public final class EngineHostActivity extends GTASA {
                 throw new IllegalStateException("Unable to set network identity");
         } catch (RuntimeException error) {
             Log.e(TAG, "Network identity initialization failed", error);
-            onEngineBootstrapError("Unable to initialize this device's network identity.");
+            onEngineBootstrapError(getString(R.string.network_identity_init_failed));
             return;
         }
         clientReady = true;
@@ -336,7 +349,8 @@ public final class EngineHostActivity extends GTASA {
         connectNick = nick;
         if (!connectToServer()) {
             // Desktop CConnectManager::Connect when StartNetwork fails (CConnectManager.cpp:246-255).
-            showDisconnectDialog("Error [CC22]", "Connecting to " + ip + " at port " + port + " failed!");
+            showDisconnectDialog(getString(R.string.connection_error_code, "CC22"),
+                    getString(R.string.connection_to_server_failed, ip, port));
         }
     }
 
@@ -344,8 +358,9 @@ public final class EngineHostActivity extends GTASA {
         if (!clientReady || isFinishing() || isDestroyed()) return false;
         int joinProfile = getIntent().getIntExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, 0);
         if (!nativeConnect(connectIp, connectPort, connectNick, joinProfile)) return false;
-        if (loadingView != null) loadingView.update("Connecting to " + connectIp + ":" + connectPort, 0f, 0f, 1f);
-        else showDownload(0, "Connecting to server");
+        if (loadingView != null) {
+            loadingView.update(getString(R.string.connecting_to_address, connectIp + ":" + connectPort), 0f, 0f, 1f);
+        } else showDownload(0, getString(R.string.connecting));
         if (netRunning) return true;
         netRunning = true;
         netThread = new Thread(() -> {
@@ -370,7 +385,7 @@ public final class EngineHostActivity extends GTASA {
         transfer.setPadding(dp(16), dp(12), dp(16), dp(12));
         transfer.setVisibility(View.GONE);
         TextView heading = new TextView(this);
-        heading.setText("Downloading");
+        heading.setText(R.string.downloading);
         heading.setTextColor(Color.WHITE);
         heading.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         transfer.addView(heading);
@@ -433,13 +448,13 @@ public final class EngineHostActivity extends GTASA {
         settingsButton.setImageResource(com.saonline.neonlauncher.R.drawable.ic_settings_hud);
         settingsButton.setImageTintList(ColorStateList.valueOf(Color.WHITE));
         settingsButton.setBackground(hudButtonBackground());
-        settingsButton.setContentDescription("Settings");
+        settingsButton.setContentDescription(getString(R.string.settings));
         settingsButton.setPadding(dp(8), dp(8), dp(8), dp(8));
         settingsButton.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
         settingsButton.setOnClickListener(v -> toggleMtaPause());
         addContentView(settingsButton, new FrameLayout.LayoutParams(dp(40), dp(40)));
         Button chatButton = new Button(this);
-        chatButton.setText("Chat");
+        chatButton.setText(R.string.chat);
         chatButton.setAllCaps(false);
         chatButton.setTextColor(Color.WHITE);
         chatButton.setBackground(hudButtonBackground());
@@ -451,7 +466,7 @@ public final class EngineHostActivity extends GTASA {
         GameSettingsView.applyHudSettings(this, settingsHost);
 
         chatInput = new EditText(this);
-        chatInput.setHint("Say:");
+        chatInput.setHint(R.string.chat_hint);
         chatInput.setSingleLine(true);
         // Desktop CChat default character limit (CChat.h:308). setChatboxCharacterLimit changes it (kind 17).
         chatInput.setFilters(new InputFilter[] {new InputFilter.LengthFilter(96)});
@@ -466,7 +481,7 @@ public final class EngineHostActivity extends GTASA {
             return false;
         });
         Button send = new Button(this);
-        send.setText("Send");
+        send.setText(R.string.chat_send);
         send.setOnClickListener(v -> submitChat());
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -595,7 +610,7 @@ public final class EngineHostActivity extends GTASA {
         String bound = nativeBoundKeys();
         if (bound == null || bound.isEmpty()) {
             TextView none = new TextView(this);
-            none.setText("No keys bound");
+            none.setText(R.string.no_bound_keys);
             none.setTextColor(0xFFD5DEE8);
             none.setGravity(Gravity.CENTER_VERTICAL);
             none.setPadding(dp(8), 0, dp(8), 0);
@@ -896,7 +911,7 @@ public final class EngineHostActivity extends GTASA {
             return;
         }
         if (command.isEmpty() || !nativeSendChat(command)) {
-            appendChat("#FF6666Message was not sent.");
+            appendChat("#FF6666" + getString(R.string.chat_send_failed));
         }
     }
 
@@ -926,7 +941,7 @@ public final class EngineHostActivity extends GTASA {
                 joinedOnce = true;
                 // The "Connecting to server" panel ends with the join, as the desktop connect dialog does.
                 hideDownload();
-                appendChat("#ACD5FEConnected to the server.");
+                appendChat("#ACD5FE" + getString(R.string.connected_to_server));
                 setKeyListAvailable(true);
                 // The game loaded its own options file at boot; put the player's choices back.
                 applySavedSettings();
@@ -939,8 +954,8 @@ public final class EngineHostActivity extends GTASA {
                 radarControlEnabled = true;
                 setRadarArea("");
                 // Native sends the desktop error box as "title<0x1F>text" (net/DisconnectMessages).
-                String title = "Disconnected";
-                String text = message == null || message.isEmpty() ? "Disconnected from the server." : message;
+                String title = getString(R.string.disconnected);
+                String text = message == null || message.isEmpty() ? getString(R.string.disconnected_from_server) : message;
                 int split = text.indexOf('\u001f');
                 if (split >= 0) {
                     title = text.substring(0, split);
@@ -1116,9 +1131,9 @@ public final class EngineHostActivity extends GTASA {
             @Override public void onRetry() {
                 disconnectDialog = null;
                 if (!connectToServer()) {
-                    String failed = "Connecting to " + connectIp + " at port " + connectPort + " failed!";
+                    String failed = getString(R.string.connection_to_server_failed, connectIp, connectPort);
                     appendChat("#FF6666" + failed);
-                    showDisconnectDialog("Error [CC22]", failed);
+                    showDisconnectDialog(getString(R.string.connection_error_code, "CC22"), failed);
                 }
             }
             @Override public void onQuit() {
@@ -1216,8 +1231,9 @@ public final class EngineHostActivity extends GTASA {
                     return;
                 }
                 // The screen opened for "Connecting" keeps its artwork when native opens it.
-                if ("B".equals(parts[0]) && !loadingView.isActive()) loadingView.begin(parts[4], fill, segStart, segEnd);
-                else loadingView.update(parts[4], fill, segStart, segEnd);
+                String status = localizeLoadingStatus(parts[4]);
+                if ("B".equals(parts[0]) && !loadingView.isActive()) loadingView.begin(status, fill, segStart, segEnd);
+                else loadingView.update(status, fill, segStart, segEnd);
                 if (downloadPanel != null) hideDownload();
                 return;
             }
@@ -1251,6 +1267,20 @@ public final class EngineHostActivity extends GTASA {
             if (percent >= 100 || label.isEmpty()) hideDownload();
             else showDownload(percent, label);
         });
+    }
+
+    private String localizeLoadingStatus(String status) {
+        // ConnectionLoading emits these labels through JNI. Keep its progress protocol independent of Android resources.
+        String connecting = "Connecting to ";
+        if (status.startsWith(connecting)) return getString(R.string.connecting_to_address, status.substring(connecting.length()));
+        switch (status) {
+            case "Starting San Andreas": return getString(R.string.loading_starting_game);
+            case "Downloading resources": return getString(R.string.loading_downloading_resources);
+            case "Processing resources": return getString(R.string.loading_processing_resources);
+            case "Preparing server data": return getString(R.string.loading_preparing_server_data);
+            case "Preparing world": return getString(R.string.loading_preparing_world);
+            default: return status;
+        }
     }
 
     /**
@@ -1373,7 +1403,7 @@ public final class EngineHostActivity extends GTASA {
         titles.addView(title);
         String server = getIntent().getStringExtra(GameActivity.EXTRA_SERVER_NAME);
         TextView subtitle = new TextView(this);
-        subtitle.setText(server == null || server.isEmpty() ? "Paused" : server);
+        subtitle.setText(server == null || server.isEmpty() ? getString(R.string.paused) : server);
         subtitle.setTextColor(0xFFB7C3CE);
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         subtitle.setSingleLine(true);
@@ -1389,15 +1419,15 @@ public final class EngineHostActivity extends GTASA {
         dividerParams.bottomMargin = dp(8);
         panel.addView(divider, dividerParams);
 
-        panel.addView(pauseButton("Resume", com.saonline.neonlauncher.R.drawable.ic_play_hud, 0xFF2F6FD6, 0xFF2559AD,
+        panel.addView(pauseButton(R.string.resume, R.drawable.ic_play_hud, 0xFF2F6FD6, 0xFF2559AD,
                 v -> showMtaPause(false)));
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        Button map = pauseButton("Map", 0, 0xFF243140, 0xFF31435A, v -> {
+        Button map = pauseButton(R.string.map, 0, 0xFF243140, 0xFF31435A, v -> {
             showMtaPause(false);
             pressMapKey();
         });
-        Button settings = pauseButton("Settings", com.saonline.neonlauncher.R.drawable.ic_settings_hud, 0xFF243140,
+        Button settings = pauseButton(R.string.settings, R.drawable.ic_settings_hud, 0xFF243140,
                 0xFF31435A, v -> {
                     showMtaPause(false);
                     showSettings(true);
@@ -1410,7 +1440,7 @@ public final class EngineHostActivity extends GTASA {
         row.addView(map, half);
         row.addView(settings, half2);
         panel.addView(row);
-        panel.addView(pauseButton("Disconnect", 0, 0xFF5A1F24, 0xFF7A2A31, v -> finish()));
+        panel.addView(pauseButton(R.string.disconnect, 0, 0xFF5A1F24, 0xFF7A2A31, v -> finish()));
 
         FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
                 Math.min(dp(380), getResources().getDisplayMetrics().widthPixels - dp(32)),
@@ -1421,7 +1451,7 @@ public final class EngineHostActivity extends GTASA {
         mtaPause = root;
     }
 
-    private Button pauseButton(String label, int icon, int color, int pressed, View.OnClickListener listener) {
+    private Button pauseButton(int label, int icon, int color, int pressed, View.OnClickListener listener) {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
@@ -1570,7 +1600,7 @@ public final class EngineHostActivity extends GTASA {
         container.addView(playerMap, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         Button close = new Button(this);
-        close.setText("Close");
+        close.setText(R.string.disconnect_close);
         close.setAllCaps(false);
         close.setOnClickListener(v -> showPlayerMap(false));
         FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(dp(120), dp(48), Gravity.TOP | Gravity.END);
@@ -1685,12 +1715,12 @@ public final class EngineHostActivity extends GTASA {
         try (InputStream text = EngineAssetLoader.open(this, gameDirectory, path)) {
             if (text.read() < 0) throw new IOException("Empty text table");
         } catch (IOException error) {
-            String action = usesCdn ? " Run Sync game assets in Settings." : " Add it to the game folder.";
-            throw new IOException("Game text table is missing or empty (" + path + ")." + action, error);
+            int message = usesCdn ? R.string.engine_text_missing_cdn : R.string.engine_text_missing_local;
+            throw new IOException(getString(message, path), error);
         }
     }
 
-    private static void validateLevelDefinitions(File root) throws IOException {
+    private void validateLevelDefinitions(File root) throws IOException {
         // The native loader dereferences null file handles. Check each required
         // map definition with its exact spelling before transferring control.
         for (String level : new String[]{"data/default.dat", "data/gta.dat"}) {
@@ -1703,7 +1733,7 @@ public final class EngineHostActivity extends GTASA {
                     File definition = EngineCaseAliases.resolveReference(root, path);
                     if (!definition.getCanonicalPath().startsWith(root.getPath() + File.separator)
                             || !definition.isFile()) {
-                        throw new IOException("Arquivo de mapa indisponivel: " + path);
+                        throw new IOException(getString(R.string.engine_map_file_missing, path));
                     }
                 }
             }

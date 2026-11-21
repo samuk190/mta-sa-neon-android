@@ -3,6 +3,8 @@ package com.saonline.neonlauncher.game;
 import android.content.Context;
 import android.util.Log;
 
+import com.saonline.neonlauncher.R;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -44,21 +46,22 @@ final class GameLibraries {
         File source = findSource(gameDirectory, localAssetsFolder);
         if (source == null) {
             if (usesCdn) {
-                throw new IOException("Game engine files are missing. Run Sync game assets in Settings.");
+                throw new IOException(context.getString(R.string.engine_libs_missing_cdn));
             }
             String where = (localAssetsFolder != null ? localAssetsFolder : gameDirectory) + File.separator + "lib";
-            throw new IOException("Game libraries missing. Copy libGTASA.so, libSCAnd.so and libOpenAL64.so from "
-                    + "lib/arm64-v8a/ of your GTA San Andreas 2.10 APK to " + where);
+            throw new IOException(context.getString(R.string.engine_libs_missing_local, where));
         }
 
         File target = new File(context.getFilesDir(), "engine_libs");
-        if (!target.isDirectory() && !target.mkdirs()) throw new IOException("Cannot create " + target);
+        if (!target.isDirectory() && !target.mkdirs()) {
+            throw new IOException(context.getString(R.string.engine_file_write_failed, target));
+        }
         for (String name : FILES) {
             File from = new File(source, name);
             File to = new File(target, name);
-            if (!isElf(from)) throw new IOException(from + " is not a valid native library.");
+            if (!isElf(from)) throw new IOException(context.getString(R.string.engine_invalid_lib, from));
             if (!to.isFile() || to.length() != from.length() || to.lastModified() < from.lastModified()) {
-                copy(from, to);
+                copy(context, from, to);
             }
             System.load(to.getAbsolutePath());
             Log.i(TAG, "Loaded " + name + " from " + source);
@@ -91,14 +94,14 @@ final class GameLibraries {
         }
     }
 
-    private static void copy(File from, File to) throws IOException {
+    private static void copy(Context context, File from, File to) throws IOException {
         File partial = new File(to.getPath() + ".part");
         try (InputStream in = new FileInputStream(from); OutputStream out = new FileOutputStream(partial)) {
             byte[] buffer = new byte[64 * 1024];
             int n;
             while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
         }
-        if (!partial.renameTo(to)) throw new IOException("Cannot write " + to);
+        if (!partial.renameTo(to)) throw new IOException(context.getString(R.string.engine_file_write_failed, to));
         to.setReadable(true, true);
         to.setLastModified(from.lastModified());
     }

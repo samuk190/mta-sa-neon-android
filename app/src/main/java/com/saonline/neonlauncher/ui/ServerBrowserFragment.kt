@@ -85,8 +85,11 @@ class ServerBrowserFragment : Fragment() {
         b.emptyState.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
         val online = list.filter { it.status == ServerInfo.Status.ONLINE }
         val players = online.sumOf { it.players }
-        b.serverCount.text = resources.getQuantityString(R.plurals.servers_count, list.size, list.size) + ", " +
+        b.serverCount.text = getString(
+            R.string.server_browser_summary,
+            resources.getQuantityString(R.plurals.servers_count, list.size, list.size),
             resources.getQuantityString(R.plurals.players_online, players, players)
+        )
         if (list.none { it.status == ServerInfo.Status.QUERYING }) b.swipeRefresh.isRefreshing = false
     }
 

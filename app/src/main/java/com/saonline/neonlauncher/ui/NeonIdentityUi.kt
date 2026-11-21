@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.network.NeonIdentityApi
 import com.saonline.neonlauncher.network.NeonIdentitySession
 import kotlinx.coroutines.*
@@ -33,7 +34,7 @@ class NeonIdentityUi(private val activity: Activity) {
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
-                failure.accept("Unable to sign out of your SA:O account. Please try again.")
+                failure.accept(activity.getString(R.string.neon_account_sign_out_failed))
             }
         }
     }
@@ -41,11 +42,11 @@ class NeonIdentityUi(private val activity: Activity) {
     fun signIn(success: Runnable, failure: Consumer<String>) {
         if (signInJob?.isActive == true) return
         signInJob = scope.launch {
-            val waiting = MaterialAlertDialogBuilder(activity).setTitle("SA:O account")
-                .setMessage("Opening Discord. Complete sign-in in your browser, then return to the launcher.")
-                .setNegativeButton(android.R.string.cancel) { _, _ ->
+            val waiting = MaterialAlertDialogBuilder(activity).setTitle(R.string.neon_account_title)
+                .setMessage(R.string.neon_account_waiting_for_browser)
+                .setNegativeButton(R.string.cancel) { _, _ ->
                     signInJob?.cancel()
-                    failure.accept("SA:O sign-in canceled.")
+                    failure.accept(activity.getString(R.string.neon_account_sign_in_canceled))
                 }.setCancelable(false).show()
             dialog = waiting
             try {
@@ -59,7 +60,7 @@ class NeonIdentityUi(private val activity: Activity) {
                 throw cancel
             } catch (error: Exception) {
                 Log.w("NeonIdentity", "Browser sign-in failed (${error.javaClass.simpleName})")
-                failure.accept("Unable to complete SA:O sign-in. Please try again.")
+                failure.accept(activity.getString(R.string.neon_account_sign_in_failed))
                 return@launch
             } finally {
                 waiting.dismiss()
@@ -119,7 +120,7 @@ class NeonIdentityUi(private val activity: Activity) {
             try {
                 val token = withContext(Dispatchers.IO) { session.load() }
                 if (token == null) {
-                    if (required) failure.accept("Sign in to your SA:O account before connecting to this server.")
+                    if (required) failure.accept(activity.getString(R.string.neon_account_sign_in_required))
                     else success.accept("")
                     return@launch
                 }
@@ -128,14 +129,14 @@ class NeonIdentityUi(private val activity: Activity) {
                 } catch (_: NeonIdentityApi.SessionExpired) {
                     // A response for the old token can arrive after the launcher saved a new one.
                     withContext(Dispatchers.IO) { session.clearIfCurrent(token) }
-                    failure.accept("Your SA:O session expired. Sign in again.")
+                    failure.accept(activity.getString(R.string.neon_account_session_expired))
                     return@launch
                 }
                 success.accept(ticket)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
-                failure.accept("Unable to authorize this server with your SA:O account. Please try again.")
+                failure.accept(activity.getString(R.string.neon_account_authorization_failed))
             }
         }
     }

@@ -12,6 +12,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.saonline.neonlauncher.BuildConfig
+import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.databinding.ActivityGameBinding
 import com.saonline.neonlauncher.network.ConnectionManager
 import com.saonline.neonlauncher.network.JoinProtocolSettings
@@ -171,7 +172,7 @@ class GameActivity : AppCompatActivity() {
                 connectionManager.setDisconnected()
                 showConnectionLostDialog()
             } else {
-                val errorMsg = message ?: "Desconectado"
+                val errorMsg = message ?: getString(R.string.disconnected)
                 val genericClose = errorMsg.equals("Disconnected by server", ignoreCase = true) ||
                     errorMsg.equals("Connection lost", ignoreCase = true)
                 val current = connectionManager.connectionState.value
@@ -192,18 +193,18 @@ class GameActivity : AppCompatActivity() {
     private fun showConnectionLostDialog() {
         if (closing || isFinishing) return
         AlertDialog.Builder(this)
-            .setTitle("Conexao perdida")
-            .setMessage("O servidor encerrou a sessao. Deseja entrar novamente?")
+            .setTitle(R.string.connection_lost)
+            .setMessage(R.string.connection_lost_retry)
             .setCancelable(false)
-            .setPositiveButton("Tentar novamente") { _, _ -> retryConnection() }
-            .setNegativeButton("Sair") { _, _ -> finish() }
+            .setPositiveButton(R.string.disconnect_retry) { _, _ -> retryConnection() }
+            .setNegativeButton(R.string.disconnect_close) { _, _ -> finish() }
             .show()
     }
 
     private fun retryConnection() {
         connectionManager.setConnecting(serverIp, serverPort)
         if (!connectToServer()) {
-            connectionManager.setError("Falha ao reconectar.")
+            connectionManager.setError(getString(R.string.reconnect_failed))
             showConnectionLostDialog()
         }
     }
@@ -219,7 +220,7 @@ class GameActivity : AppCompatActivity() {
 
         val assetPath = NativeAssetBridge(this).getReadyStoragePath()
         if (assetPath == null) {
-            Toast.makeText(this, "Baixe os arquivos do jogo em Configuracoes.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, R.string.game_assets_sync_required, Toast.LENGTH_LONG).show()
             finish()
             return
         }
@@ -230,7 +231,7 @@ class GameActivity : AppCompatActivity() {
             nativeLibraryLoaded = true
         } catch (error: UnsatisfiedLinkError) {
             android.util.Log.e("GameActivity", "Falha ao carregar WorldRPGNeon", error)
-            Toast.makeText(this, "Falha ao carregar o cliente nativo.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, R.string.native_client_load_failed, Toast.LENGTH_LONG).show()
             finish()
             return
         }
@@ -283,17 +284,17 @@ class GameActivity : AppCompatActivity() {
                     // Sample before the VM is created so its constructor sees the real focus.
                     nativeWindowFocus(hasWindowFocus())
                     if (!nativeInit()) {
-                        connectionManager.setError("Falha ao iniciar o cliente nativo.")
+                        connectionManager.setError(getString(R.string.native_client_init_failed))
                         return
                     }
                     if (!nativeSetAssetPath(assetPath)) {
                         nativeDestroy()
-                        connectionManager.setError("Os arquivos instalados nao puderam ser abertos.")
+                        connectionManager.setError(getString(R.string.installed_assets_open_failed))
                         return
                     }
                     if (!nativeBootEngine()) {
                         nativeDestroy()
-                        connectionManager.setError("Falha ao carregar a engine GTA (libGTASA).")
+                        connectionManager.setError(getString(R.string.gta_engine_load_failed))
                         return
                     }
                     nativeInitialized = true
@@ -307,7 +308,7 @@ class GameActivity : AppCompatActivity() {
 
                     connectionManager.setConnecting(serverIp, serverPort)
                     if (!connectToServer()) {
-                        connectionManager.setError("Falha ao iniciar a conexao.")
+                        connectionManager.setError(getString(R.string.connection_start_failed))
                     }
                 }
 
@@ -337,25 +338,25 @@ class GameActivity : AppCompatActivity() {
             connectionManager.connectionState.collect { state ->
                 when (state) {
                     is ConnectionManager.ConnectionState.Connected -> {
-                        binding.tvConnectionStatus.text = "Conectado. Aguardando dados do jogo."
+                        binding.tvConnectionStatus.setText(R.string.waiting_for_game_data)
                         binding.tvConnectionStatus.visibility = View.VISIBLE
                         binding.loadingIndicator.visibility = View.GONE
                         binding.btnDisconnect.visibility = View.VISIBLE
                     }
                     is ConnectionManager.ConnectionState.Connecting -> {
-                        binding.tvConnectionStatus.text = "Conectando ao servidor..."
+                        binding.tvConnectionStatus.setText(R.string.connecting)
                         binding.tvConnectionStatus.visibility = View.VISIBLE
                         binding.loadingIndicator.visibility = View.VISIBLE
                         binding.btnDisconnect.visibility = View.VISIBLE
                     }
                     is ConnectionManager.ConnectionState.Error -> {
-                        binding.tvConnectionStatus.text = "Erro: ${state.message}"
+                        binding.tvConnectionStatus.text = getString(R.string.connection_error_detail, state.message)
                         binding.tvConnectionStatus.visibility = View.VISIBLE
                         binding.loadingIndicator.visibility = View.GONE
                         binding.btnDisconnect.visibility = View.VISIBLE
                     }
                     is ConnectionManager.ConnectionState.Disconnected -> {
-                        binding.tvConnectionStatus.text = "Desconectado"
+                        binding.tvConnectionStatus.setText(R.string.disconnected)
                         binding.tvConnectionStatus.visibility = View.VISIBLE
                         binding.loadingIndicator.visibility = View.GONE
                         binding.btnDisconnect.visibility = View.VISIBLE

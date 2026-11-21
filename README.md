@@ -5,6 +5,14 @@
 
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
+## README languages
+
+**English** · [Português (Brasil)](README.pt-BR.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [简体中文](README.zh-Hans.md) · [Русский](README.ru.md)
+
+## Launcher language
+
+The launcher follows your Android language preferences by default and falls back to English. Open **Settings → Language** to choose a language for the launcher. Your choice is applied immediately and saved. Select **Device language** to follow Android again.
+
 ---
 
 ## Neon server compatibility
@@ -241,7 +249,7 @@ Classic game connections use the server's stock network module and anticheat. Ke
 
 ## Game Assets & Folder Location
 
-All game assets are configured locally via environment variables (`.env`) rather than downloading from external cloud repositories.
+Configure the local game files and optional CDN in `.env`.
 
 ### 1. Configure `.env`
 
@@ -256,7 +264,8 @@ Edit `.env` to define your asset locations:
 ```env
 # Launcher UI Customization
 LAUNCHER_TITLE=MTA:SA Neon Android
-LAUNCHER_PLAY_BUTTON_TEXT=Play
+# Leave empty to use the translated Play label.
+LAUNCHER_PLAY_BUTTON_TEXT=
 
 # Default Server Connection Settings
 DEFAULT_SERVER_NAME=MTA Neon Server

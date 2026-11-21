@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="hud_chat_anchor">Chat position</string>
     <string name="hud_buttons_anchor">Button position</string>
@@ -10,6 +11,7 @@
     <string name="hud_bottom_left">Bottom left</string>
     <string name="hud_bottom_right">Bottom right</string>
     <string name="hud_follow_chat">Follow chat</string>
+
     <string-array name="hud_chat_anchors">
         <item>@string/hud_top_left</item>
         <item>@string/hud_top_right</item>

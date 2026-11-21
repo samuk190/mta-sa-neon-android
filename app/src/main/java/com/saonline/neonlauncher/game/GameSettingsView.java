@@ -78,14 +78,14 @@ public final class GameSettingsView extends FrameLayout {
         LinearLayout header = new LinearLayout(context);
         header.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = new TextView(context);
-        title.setText("Settings");
+        title.setText(R.string.settings);
         title.setTextColor(Color.WHITE);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         header.addView(title, new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        Button close = flatButton("Done", 0xFF2F6FD6, 0xFF2559AD);
+        Button close = flatButton(context.getString(R.string.done), 0xFF2F6FD6, 0xFF2559AD);
         close.setOnClickListener(v -> host.onClose());
-        header.addView(close, new LinearLayout.LayoutParams(dp(96), dp(40)));
+        header.addView(close, new LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, dp(40)));
         card.addView(header);
 
         note = new TextView(context);
@@ -110,31 +110,34 @@ public final class GameSettingsView extends FrameLayout {
     public void refresh() {
         list.removeAllViews();
         boolean live = host.get(QUALITY) != null;
-        note.setText(live ? "Changes apply at once and are kept for the next sessions."
-                : "The game is still loading; the options appear once it is running.");
+        note.setText(live ? R.string.game_settings_live : R.string.game_settings_loading);
 
-        section(getContext().getString(R.string.section_interface));
+        section(R.string.section_interface);
         interfaceScale();
         hudSettings();
 
-        section("Graphics");
-        choice("Visual quality", QUALITY, new String[] {"Low", "Medium", "High", "Very high"});
-        slider("Resolution", RESOLUTION, "%");
-        slider("Draw distance", DRAW_DISTANCE, "%");
-        choice("Shadows", SHADOWS, new String[] {"Off", "Low", "High"});
-        choice("Car reflections", CAR_REFLECTIONS, new String[] {"Off", "Low", "Medium", "High"});
-        slider("Brightness", BRIGHTNESS, "%");
-        choice("Frame limiter", FRAME_LIMITER, new String[] {"Off", "On"});
+        section(R.string.section_graphics);
+        choice(R.string.visual_quality, QUALITY, R.string.graphics_low, R.string.graphics_medium,
+                R.string.graphics_high, R.string.graphics_very_high);
+        slider(R.string.resolution, RESOLUTION);
+        slider(R.string.draw_distance, DRAW_DISTANCE);
+        choice(R.string.shadows, SHADOWS, R.string.hud_off, R.string.graphics_low, R.string.graphics_high);
+        choice(R.string.car_reflections, CAR_REFLECTIONS, R.string.hud_off, R.string.graphics_low,
+                R.string.graphics_medium, R.string.graphics_high);
+        slider(R.string.brightness, BRIGHTNESS);
+        choice(R.string.frame_limiter, FRAME_LIMITER, R.string.hud_off, R.string.hud_on);
 
-        section("Audio");
-        slider("Sound effects", SFX, "%");
-        slider("Game music", MUSIC, "%");
+        section(R.string.section_audio);
+        slider(R.string.sound_effects, SFX);
+        slider(R.string.game_music, MUSIC);
 
-        section("Game");
-        choice("Vibration", VIBRATION, new String[] {"Off", "On"});
-        choice("Subtitles", SUBTITLES, new String[] {"Off", "On"});
+        section(R.string.section_game);
+        choice(R.string.vibration, VIBRATION, R.string.hud_off, R.string.hud_on);
+        choice(R.string.subtitles, SUBTITLES, R.string.hud_off, R.string.hud_on);
         boolean chat = prefs.getBoolean(KEY_CHAT, true);
-        row("Chat", segmented(new String[] {"Hidden", "Shown"}, chat ? 1 : 0, picked -> {
+        row(R.string.chat, segmented(new String[] {
+                getContext().getString(R.string.chat_hidden), getContext().getString(R.string.chat_shown)
+        }, chat ? 1 : 0, picked -> {
             prefs.edit().putBoolean(KEY_CHAT, picked == 1).apply();
             host.setChatShown(picked == 1);
         }));
@@ -172,14 +175,14 @@ public final class GameSettingsView extends FrameLayout {
         value.setTextColor(0xFFD5DEE8);
         int percent = HudLayout.clamp(prefs.getInt(KEY_CHAT_SCALE, HudLayout.DEFAULT_CHAT_PERCENT),
                 HudLayout.MIN_CHAT_PERCENT, HudLayout.MAX_CHAT_PERCENT);
-        value.setText(percent + "%");
+        value.setText(getContext().getString(R.string.percentage, percent));
         bar.setMax(HudLayout.MAX_CHAT_PERCENT - HudLayout.MIN_CHAT_PERCENT);
         bar.setProgress(percent - HudLayout.MIN_CHAT_PERCENT);
         bar.setContentDescription(getContext().getString(R.string.hud_chat_size));
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 int next = HudLayout.MIN_CHAT_PERCENT + progress;
-                value.setText(next + "%");
+                value.setText(getContext().getString(R.string.percentage, next));
                 if (fromUser) {
                     prefs.edit().putInt(KEY_CHAT_SCALE, next).apply();
                     applyHudSettings(getContext(), host);
@@ -190,9 +193,9 @@ public final class GameSettingsView extends FrameLayout {
         });
         box.addView(bar, new LinearLayout.LayoutParams(0, dp(48), 1f));
         box.addView(value, new LinearLayout.LayoutParams(dp(56), LayoutParams.WRAP_CONTENT));
-        row(getContext().getString(R.string.hud_chat_size), box);
+        row(R.string.hud_chat_size, box);
 
-        row(getContext().getString(R.string.hud_chat_touch),
+        row(R.string.hud_chat_touch,
                 segmented(new String[]{getContext().getString(R.string.hud_off), getContext().getString(R.string.hud_on)},
                         prefs.getBoolean(KEY_CHAT_TOUCH, true) ? 1 : 0, picked -> {
                             prefs.edit().putBoolean(KEY_CHAT_TOUCH, picked == 1).apply();
@@ -217,7 +220,7 @@ public final class GameSettingsView extends FrameLayout {
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
-        row(getContext().getString(label), spinner);
+        row(label, spinner);
     }
 
     private void store(int index, int value) {
@@ -240,7 +243,7 @@ public final class GameSettingsView extends FrameLayout {
         TextView value = new TextView(getContext());
         value.setTextColor(Color.WHITE);
         value.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        value.setText(host.getInterfaceScalePercent() + "%");
+        value.setText(getContext().getString(R.string.percentage, host.getInterfaceScalePercent()));
         Runnable apply = () -> {
             int percent = InterfaceScale.MIN_PERCENT + bar.getProgress() * InterfaceScale.STEP_PERCENT;
             if (!host.setInterfaceScalePercent(percent)) {
@@ -250,7 +253,8 @@ public final class GameSettingsView extends FrameLayout {
         };
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                value.setText((InterfaceScale.MIN_PERCENT + progress * InterfaceScale.STEP_PERCENT) + "%");
+                value.setText(getContext().getString(R.string.percentage,
+                        InterfaceScale.MIN_PERCENT + progress * InterfaceScale.STEP_PERCENT));
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) { apply.run(); }
@@ -263,12 +267,12 @@ public final class GameSettingsView extends FrameLayout {
             apply.run();
         });
         box.addView(reset, new LinearLayout.LayoutParams(dp(80), dp(48)));
-        row(getContext().getString(R.string.interface_scale), box);
+        row(R.string.interface_scale, box);
     }
 
-    private void section(String label) {
+    private void section(int label) {
         TextView text = new TextView(getContext());
-        text.setText(label.toUpperCase(java.util.Locale.ROOT));
+        text.setText(getContext().getString(label).toUpperCase(getResources().getConfiguration().getLocales().get(0)));
         text.setTextColor(0xFF7FB8FF);
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         text.setTypeface(Typeface.DEFAULT_BOLD);
@@ -277,7 +281,7 @@ public final class GameSettingsView extends FrameLayout {
         list.addView(text);
     }
 
-    private void row(String label, View control) {
+    private void row(int label, View control) {
         LinearLayout row = new LinearLayout(getContext());
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(6), 0, dp(6));
@@ -290,16 +294,16 @@ public final class GameSettingsView extends FrameLayout {
         list.addView(row);
     }
 
-    private void choice(String label, int index, String[] names) {
+    private void choice(int label, int index, int... names) {
         int[] live = host.get(index);
         if (live == null) return;
         int count = Math.min(names.length, live[2] - live[1] + 1);
         String[] shown = new String[count];
-        System.arraycopy(names, 0, shown, 0, count);
+        for (int i = 0; i < count; i++) shown[i] = getContext().getString(names[i]);
         row(label, segmented(shown, live[0] - live[1], picked -> store(index, live[1] + picked)));
     }
 
-    private void slider(String label, int index, String unit) {
+    private void slider(int label, int index) {
         int[] live = host.get(index);
         if (live == null) return;
         LinearLayout box = new LinearLayout(getContext());
@@ -311,10 +315,10 @@ public final class GameSettingsView extends FrameLayout {
         value.setTextColor(0xFFD5DEE8);
         value.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         value.setGravity(Gravity.END);
-        value.setText(live[0] + unit);
+        value.setText(getContext().getString(R.string.percentage, live[0]));
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
-                value.setText((live[1] + progress) + unit);
+                value.setText(getContext().getString(R.string.percentage, live[1] + progress));
                 if (fromUser) store(index, live[1] + progress);
             }
             @Override public void onStartTrackingTouch(SeekBar s) {}

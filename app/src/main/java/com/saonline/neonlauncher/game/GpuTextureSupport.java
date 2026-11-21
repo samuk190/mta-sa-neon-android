@@ -50,6 +50,15 @@ public final class GpuTextureSupport {
         return paths;
     }
 
+    static final class MissingTextures extends IOException {
+        final List<String> paths;
+
+        MissingTextures(String message, List<String> paths) {
+            super(message);
+            this.paths = paths;
+        }
+    }
+
     public void validate(File root) throws IOException {
         List<String> missing = new ArrayList<>();
         List<String> paths = requiredFiles();
@@ -68,9 +77,9 @@ public final class GpuTextureSupport {
             }
         }
         if (!missing.isEmpty()) {
-            throw new IOException("Missing game files for " + label() + " (" + format.toUpperCase(Locale.ROOT)
+            throw new MissingTextures("Missing game files for " + label() + " (" + format.toUpperCase(Locale.ROOT)
                     + " textures).\n\nSync game assets in Settings, then try again.\n\nMissing or unreadable files:\n"
-                    + String.join("\n", missing));
+                    + String.join("\n", missing), missing);
         }
     }
 }

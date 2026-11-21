@@ -24,7 +24,7 @@ class AddFavoriteDialog : DialogFragment() {
         val dialog = MaterialAlertDialogBuilder(context)
             .setTitle(R.string.add_favorite)
             .setView(binding.root)
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.add_server, null)
             .create()
         dialog.setOnShowListener {

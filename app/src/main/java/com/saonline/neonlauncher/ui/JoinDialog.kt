@@ -41,9 +41,10 @@ object JoinDialog {
                 ContextCompat.getColor(ctx, ServerListAdapter.pingColor(server.ping))
             )
         }
-        b.joinVersion.text = "MTA ${server.version}"
+        b.joinVersion.text = ctx.getString(R.string.mta_version, server.version)
 
-        b.btnPlay.text = BuildConfig.LAUNCHER_PLAY_BUTTON_TEXT
+        val customPlayLabel = BuildConfig.LAUNCHER_PLAY_BUTTON_TEXT
+        if (customPlayLabel.isNotEmpty()) b.btnPlay.text = customPlayLabel
         b.editNickname.setText(prefs.username)
         b.editNickname.setSelection(b.editNickname.text?.length ?: 0)
         b.editNickname.doAfterTextChanged { b.nicknameLayout.error = null }
@@ -66,7 +67,7 @@ object JoinDialog {
             }
             prefs.username = nick
             if (!com.saonline.neonlauncher.network.JoinProtocolSettings.save(ctx, server.ip, server.port, mode)) {
-                android.widget.Toast.makeText(ctx, "Unable to save connection mode.", android.widget.Toast.LENGTH_LONG).show()
+                android.widget.Toast.makeText(ctx, R.string.connection_mode_save_failed, android.widget.Toast.LENGTH_LONG).show()
                 return
             }
             // Close the keyboard first: an open IME follows into the game window.

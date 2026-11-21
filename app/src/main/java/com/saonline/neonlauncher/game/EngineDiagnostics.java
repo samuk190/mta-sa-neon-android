@@ -15,6 +15,8 @@ import android.util.Log;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.saonline.neonlauncher.R;
+
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -201,7 +203,7 @@ public final class EngineDiagnostics {
                             catch (android.system.ErrnoException ignored) { }
                         }
                     }
-                    String message = old.optString("error", "The game engine stopped unexpectedly.");
+                    String message = old.optString("error", activity.getString(R.string.engine_stopped_unexpectedly));
                     boolean debug = old.optBoolean("debug") && isEnabled(activity);
                     String report = debug ? buildReport(activity, manager, old, message) : message;
                     activity.runOnUiThread(() -> {
@@ -225,29 +227,34 @@ public final class EngineDiagnostics {
     }
 
     private static String buildReport(Context context, ActivityManager manager, JSONObject old, String message) {
-        StringBuilder text = new StringBuilder(message).append("\n\nDevice: ").append(Build.MANUFACTURER)
-                .append(' ').append(Build.MODEL).append("\nAndroid: ").append(Build.VERSION.RELEASE)
-                .append("\nGPU: ").append(old.optString("gpu", "not detected"))
-                .append("\nTexture format: ").append(old.optString("format", "not detected")).append('\n');
+        String unknown = context.getString(R.string.engine_value_not_detected);
+        StringBuilder text = new StringBuilder(message).append("\n\n")
+                .append(context.getString(R.string.engine_report_device, Build.MANUFACTURER, Build.MODEL,
+                        Build.VERSION.RELEASE, old.optString("gpu", unknown), old.optString("format", unknown)))
+                .append('\n');
         // Native signals cannot be caught by a Java handler. Android keeps their exit traces.
         if (Build.VERSION.SDK_INT >= 30 && manager != null) {
             try {
                 for (ApplicationExitInfo info : manager.getHistoricalProcessExitReasons(context.getPackageName(), old.optInt("pid"), 8)) {
                     if (!(context.getPackageName() + ":engine").equals(info.getProcessName())
                             || info.getTimestamp() < old.optLong("started")) continue;
-                    text.append("\nExit reason: ").append(info.getReason()).append(" / status: ").append(info.getStatus())
+                    text.append('\n').append(context.getString(R.string.engine_report_exit_reason,
+                            info.getReason(), info.getStatus()))
                             .append("\n").append(info.getDescription()).append('\n');
                     try (InputStream trace = info.getTraceInputStream()) {
                         if (trace != null) {
-                            text.append("\nEngine crash trace:\n");
+                            text.append('\n').append(context.getString(R.string.engine_report_crash_trace)).append('\n');
                             if (info.getReason() == ApplicationExitInfo.REASON_CRASH_NATIVE && Build.VERSION.SDK_INT >= 31) {
-                                text.append(limitText(NativeCrashTrace.decode(readBytes(trace, 8 * 1024 * 1024)), 96 * 1024));
+                                text.append(limitText(context,
+                                        NativeCrashTrace.decode(readBytes(trace, 8 * 1024 * 1024)), 96 * 1024));
                             } else text.append(readLimited(trace, LOG_LIMIT));
                         }
                     }
                     break;
                 }
-            } catch (Exception error) { text.append("\nAndroid crash trace unavailable.\n"); }
+            } catch (Exception error) {
+                text.append('\n').append(context.getString(R.string.engine_report_trace_unavailable)).append('\n');
+            }
         }
         for (String name : new String[]{"engine-debug.previous.log", "engine-debug.log"}) {
             try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(new File(context.getFilesDir(), name), "r")) {
@@ -255,18 +262,19 @@ public final class EngineDiagnostics {
                 input.seek(start);
                 byte[] tail = new byte[(int) (input.length() - start)];
                 input.readFully(tail);
-                text.append("\nEngine log:\n");
-                if (start > 0) text.append("[Earlier log lines omitted]\n");
+                text.append('\n').append(context.getString(R.string.engine_report_log)).append('\n');
+                if (start > 0) text.append(context.getString(R.string.engine_report_earlier_lines)).append('\n');
                 text.append(new String(tail, StandardCharsets.UTF_8));
             } catch (Exception ignored) { }
         }
-        text.append("\n\nNative crash traces depend on Android availability; captured engine logs are shown above.");
+        text.append("\n\n").append(context.getString(R.string.engine_report_footer));
         // Keep the clipboard transaction well below Android's shared 1 MiB Binder limit.
-        return limitText(text.toString(), 240 * 1024);
+        return limitText(context, text.toString(), 240 * 1024);
     }
 
-    private static String limitText(String text, int limit) {
-        return text.length() <= limit ? text : text.substring(0, limit) + "\n[Report truncated]\n";
+    private static String limitText(Context context, String text, int limit) {
+        return text.length() <= limit ? text :
+                text.substring(0, limit) + "\n" + context.getString(R.string.engine_report_truncated) + "\n";
     }
 
     private static String readLimited(InputStream input, int limit) throws java.io.IOException {
@@ -294,11 +302,13 @@ public final class EngineDiagnostics {
         ScrollView scroll = new ScrollView(activity);
         scroll.addView(text);
         AlertDialog.Builder dialog = new AlertDialog.Builder(activity)
-                .setTitle(debug ? "Engine failure log" : "Unable to start or continue game")
-                .setView(scroll).setPositiveButton("Close", null);
-        if (debug) dialog.setNeutralButton("Copy log", (d, which) -> {
+                .setTitle(debug ? R.string.engine_failure_log : R.string.engine_failure_title)
+                .setView(scroll).setPositiveButton(R.string.disconnect_close, null);
+        if (debug) dialog.setNeutralButton(R.string.engine_copy_log, (d, which) -> {
             ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("Engine failure log", report));
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(ClipData.newPlainText(activity.getString(R.string.engine_failure_log), report));
+            }
         });
         dialog.show();
     }

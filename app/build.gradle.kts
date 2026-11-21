@@ -13,7 +13,9 @@ if (envFile.exists()) {
     FileInputStream(envFile).use { envProperties.load(it) }
 }
 val launcherTitle = envProperties.getProperty("LAUNCHER_TITLE", "MTA:SA Neon Android")
-val launcherPlayButtonText = envProperties.getProperty("LAUNCHER_PLAY_BUTTON_TEXT", "Play")
+// Older .env files explicitly set the original default label.
+val launcherPlayButtonText = envProperties.getProperty("LAUNCHER_PLAY_BUTTON_TEXT", "").trim()
+    .takeUnless { it == "Play" }.orEmpty()
 val defaultServerName = envProperties.getProperty("DEFAULT_SERVER_NAME", "MTA Neon Server")
 val defaultServerIp = envProperties.getProperty("DEFAULT_SERVER_IP", "127.0.0.1")
 val defaultServerPort = envProperties.getProperty("DEFAULT_SERVER_PORT", "22003")
@@ -37,11 +39,10 @@ android {
         versionName = "1.0.0-neon-alpha"
 
         resValue("string", "app_name", launcherTitle)
-        resValue("string", "connect", launcherPlayButtonText)
 
         // Restrict packaged resources to active locales. No density filter: a
         // single density bucket made every other screen scale one bitmap set.
-        resourceConfigurations += listOf("en", "pt")
+        resourceConfigurations += listOf("en", "pt", "es", "de", "zh-rCN", "b+zh+Hans", "ru")
 
         ndk {
             // Somente arm64-v8a: o libGTASA.so do GTA SA Mobile 2.10 (War Drum) e'
