@@ -8,18 +8,20 @@ data class ServerAddress(val host: String, val port: Int) {
 
     companion object {
         fun normalizeHost(input: String): String? {
-            val host = input.trim().removeSuffix(".").lowercase(Locale.ROOT)
+            val value = input.trim().lowercase(Locale.ROOT)
+            val host = value.removePrefix("quic://").removeSuffix(".")
+            val scheme = if (value.startsWith("quic://")) "quic://" else ""
             if (host.isEmpty() || host.length > 253) return null
             if (host.all { it in '0'..'9' || it == '.' }) {
                 val octets = host.split('.')
                 if (octets.size != 4 || octets.any { it.isEmpty() || it.length > 3 || it.toIntOrNull() !in 0..255 }) return null
-                return octets.joinToString(".") { it.toInt().toString() }
+                return scheme + octets.joinToString(".") { it.toInt().toString() }
             }
             if (host.split('.').any { label ->
                     label.isEmpty() || label.length > 63 || label.first() == '-' || label.last() == '-' ||
                         label.any { it !in 'a'..'z' && it !in '0'..'9' && it != '-' }
                 }) return null
-            return host
+            return scheme + host
         }
 
         fun parsePort(input: String): Int? {

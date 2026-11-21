@@ -57,7 +57,7 @@ class FavoritesFragment : Fragment() {
         binding.emptyState.visibility = if (servers.isEmpty()) View.VISIBLE else View.GONE
         binding.favoritesList.visibility = if (servers.isEmpty()) View.GONE else View.VISIBLE
         serverAdapter.submitList(servers)
-        servers.forEach { s ->
+        servers.filter { it.status != ServerInfo.Status.DIRECT }.forEach { s ->
             queries += viewLifecycleOwner.lifecycleScope.launch {
                 val updated = s.withQuery(ServerQuery.query(s.ip, s.port))
                 servers = servers.map { if (it.getKey() == s.getKey()) updated else it }

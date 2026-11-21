@@ -579,6 +579,8 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
     const char* ipStr = env->GetStringUTFChars(ip, nullptr);
     if (!ipStr) return JNI_FALSE;
     g_serverHost = ipStr;
+    const bool useQuic = g_serverHost.compare(0, 7, "quic://") == 0;
+    if (useQuic) g_serverHost.erase(0, 7);
     const char* nickStr = env->GetStringUTFChars(nickname, nullptr);
     if (!nickStr) {
         env->ReleaseStringUTFChars(ip, ipStr);
@@ -597,8 +599,17 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
         WorldRPG::Game::RequestRemoteReset();
         WorldRPG::Script::ActiveVmResetSession();
     }
-    const bool started = ipStr[0] != '\0' && !normalizedNick.empty() &&
-        g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
+    bool started = false;
+    if (!g_serverHost.empty() && !normalizedNick.empty()) {
+        if (useQuic) {
+#ifdef __ANDROID__
+            auto client = WorldRPG::Net::QuicGameClient::Connect(env, thiz, g_serverHost, port);
+            started = g_state->network->StartQuic(g_serverHost, port, std::move(client));
+#endif
+        } else {
+            started = g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
+        }
+    }
     env->ReleaseStringUTFChars(ip, ipStr);
     // Scheduling a join only starts an attempt. It does not verify a session.
     // The Neon join handshake (PLAYER_JOIN -> MOD_NAME -> PLAYER_JOINDATA ->

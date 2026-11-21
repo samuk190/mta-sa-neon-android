@@ -412,3 +412,9 @@ This project is built upon decades of collective community research, open-source
 - **Opus Codec**: Copyright © 2001–2011 Xiph.Org Foundation, Skype Limited. Licensed under the [BSD-3-Clause License](https://opus-codec.org/license/).
 - **Rockstar Games**: Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
 - This open-source research and educational project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
+
+## Connect to a QUIC gameplay server
+
+In **Favorites → Add**, enter the server's certificate hostname prefixed with `quic://` and its separate QUIC UDP port. The launcher uses the installation key in Android Keystore and its Neon Identity client certificate. The server owner can require Google Play device integrity for this endpoint. Use a plain hostname and the classic port to connect to classic servers.
+
+To build the launcher with the native adapter, check out the server branch from [PR #135](https://github.com/Dryxio/san-andreas-online/pull/135) in a sibling directory named `san-andreas-online`. Install the Go version from `Shared/transport/go.mod` on your PATH. The Android CMake build compiles and packages the arm64 QUIC library using the NDK. A checkout in another location can be selected with the CMake variable `NEON_TRANSPORT_DIR`.

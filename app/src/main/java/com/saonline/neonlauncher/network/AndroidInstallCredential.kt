@@ -31,6 +31,29 @@ internal object AndroidInstallCredential {
     private const val clientAuth = "1.3.6.1.5.5.7.3.2"
     private val lock = Mutex()
 
+    @androidx.annotation.Keep
+    @JvmStatic fun gameplayCertificate(context: Context): ByteArray =
+        AtomicFile(File(context.noBackupFilesDir, "neon-install-certificate.der")).openRead().use {
+            CertificateFactory.getInstance("X.509").generateCertificate(it).encoded
+        }
+
+    @androidx.annotation.Keep
+    @JvmStatic fun signGameplayDigest(digest: ByteArray): ByteArray {
+        require(digest.size == 32)
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        return Signature.getInstance("NONEwithECDSA").run {
+            initSign(store.getKey(alias, null) as java.security.PrivateKey)
+            update(digest)
+            sign()
+        }
+    }
+
+    @androidx.annotation.Keep
+    @JvmStatic fun gameplayServerRoots(context: Context): String? {
+        if (!com.saonline.neonlauncher.BuildConfig.DEBUG) return null
+        return File(context.noBackupFilesDir, "quic-test-server-ca.pem").takeIf { it.isFile }?.path
+    }
+
     suspend fun enroll(context: Context): X509Certificate? = withContext(Dispatchers.IO) {
         lock.withLock {
             val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

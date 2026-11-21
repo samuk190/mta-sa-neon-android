@@ -26,7 +26,7 @@ data class ServerInfo(
     val passworded: Boolean = false,
     val playerNames: List<String> = emptyList()
 ) {
-    enum class Status { QUERYING, ONLINE, OFFLINE }
+    enum class Status { QUERYING, ONLINE, OFFLINE, DIRECT }
 
     /** Unique key for favorite persistence (ip:port). */
     fun getKey(): String = "${ServerAddress.normalizeHost(ip) ?: ip}:$port"
@@ -63,7 +63,8 @@ data class ServerInfo(
             if (address.key() == def.getKey()) {
                 return def.copy(ip = address.host, isFavorite = true)
             }
-            return ServerInfo(name = address.key(), ip = address.host, port = address.port, isFavorite = true)
+            return ServerInfo(name = address.key(), ip = address.host, port = address.port, isFavorite = true,
+                status = if (address.host.startsWith("quic://")) Status.DIRECT else Status.QUERYING)
         }
     }
 }
