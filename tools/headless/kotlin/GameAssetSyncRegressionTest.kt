@@ -1,7 +1,7 @@
-package com.worldrpg.neonlauncher.utils
+package com.saonline.neonlauncher.utils
 
 import android.content.Context
-import com.worldrpg.neonlauncher.BuildConfig
+import com.saonline.neonlauncher.BuildConfig
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking

@@ -30,13 +30,13 @@ def main():
     args.build_dir.mkdir(parents=True, exist_ok=True)
     classpath = os.pathsep.join(map(str, (stdlib, coroutines, annotations, args.json_jar, args.build_dir)))
     compiler_classpath = os.pathsep.join(map(str, (compiler, stdlib, reflect, runtime, trove, annotations)))
-    network = root / "app/src/main/java/com/worldrpg/neonlauncher/network"
+    network = root / "app/src/main/java/com/saonline/neonlauncher/network"
     proof = root / "app/src/main/java/org/mtamobile/identity/AndroidTicketProof.kt"
     files = [network / "NeonIdentityApi.kt", network / "ServerAddress.kt", proof,
              root / "tools/headless/kotlin/NeonIdentityRegressionTest.kt"]
     subprocess.run([args.java, "-cp", compiler_classpath, "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
                     "-jvm-target", "17", "-classpath", classpath + os.pathsep + str(args.android_jar), "-d", str(args.build_dir), *map(str, files)], check=True)
-    subprocess.run([args.java, "-cp", classpath, "com.worldrpg.neonlauncher.network.NeonIdentityRegressionTestKt"], check=True)
+    subprocess.run([args.java, "-cp", classpath, "com.saonline.neonlauncher.network.NeonIdentityRegressionTestKt"], check=True)
 
 
 if __name__ == "__main__":

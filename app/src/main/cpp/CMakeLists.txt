@@ -89,3 +89,34 @@ target_link_options(WorldRPGNeon PRIVATE
     "-Wl,-z,max-page-size=16384"
     "-Wl,-z,common-page-size=16384"
 )
+
+if(ANDROID)
+    set(NEON_TRANSPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../san-andreas-online/Shared/transport"
+        CACHE PATH "PR #135 Shared/transport checkout")
+    if(NOT EXISTS "${NEON_TRANSPORT_DIR}/native/main.go")
+        message(FATAL_ERROR "Place the PR #135 san-andreas-online checkout beside the launcher or set NEON_TRANSPORT_DIR")
+    endif()
+    find_program(NEON_GO go REQUIRED)
+    get_filename_component(ndk_bin "${CMAKE_C_COMPILER}" DIRECTORY)
+    set(quic_cc "${ndk_bin}/aarch64-linux-android${ANDROID_PLATFORM_LEVEL}-clang")
+    if(CMAKE_HOST_WIN32)
+        string(APPEND quic_cc ".cmd")
+    endif()
+    set(quic_out "${CMAKE_CURRENT_BINARY_DIR}/quic")
+    file(GLOB_RECURSE quic_sources CONFIGURE_DEPENDS "${NEON_TRANSPORT_DIR}/*.go")
+    add_custom_command(
+        OUTPUT "${quic_out}/libneon_gameplay.so" "${quic_out}/libneon_gameplay.h"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${quic_out}"
+        COMMAND "${CMAKE_COMMAND}" -E env "CGO_ENABLED=1" "GOOS=android" "GOARCH=arm64" "CC=${quic_cc}"
+                "${NEON_GO}" build -trimpath -buildmode=c-shared
+                "-ldflags=-extldflags=-Wl,-soname,libneon_gameplay.so,-z,max-page-size=16384"
+                -o "${quic_out}/libneon_gameplay.so" ./native
+        DEPENDS ${quic_sources} "${NEON_TRANSPORT_DIR}/go.mod" "${NEON_TRANSPORT_DIR}/go.sum"
+        WORKING_DIRECTORY "${NEON_TRANSPORT_DIR}" VERBATIM)
+    add_custom_target(build_neon_gameplay DEPENDS "${quic_out}/libneon_gameplay.so" "${quic_out}/libneon_gameplay.h")
+    add_library(neon_gameplay SHARED IMPORTED)
+    set_target_properties(neon_gameplay PROPERTIES IMPORTED_LOCATION "${quic_out}/libneon_gameplay.so")
+    add_dependencies(WorldRPGNeon build_neon_gameplay)
+    target_link_libraries(WorldRPGNeon neon_gameplay)
+    target_include_directories(WorldRPGNeon PRIVATE "${quic_out}")
+endif()

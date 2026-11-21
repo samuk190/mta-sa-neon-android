@@ -8,6 +8,10 @@
 #include <atomic>
 #include <array>
 
+#ifdef __ANDROID__
+#include "../QuicGameClient.h"
+#endif
+
 // Forward declarations for RakNet types to avoid direct header dependency in wrapper interface
 namespace RakNet {
     class RakPeerInterface;
@@ -205,6 +209,9 @@ public:
     RakNetWrapper& operator=(RakNetWrapper&&) = delete;
 
     bool StartNetwork(const char* serverHost, uint16_t serverPort, bool packetTag = false);
+#ifdef __ANDROID__
+    bool StartQuic(const std::string& host, uint16_t port, std::unique_ptr<QuicGameClient> client);
+#endif
     void StopNetwork();
 
     bool IsReady() const;

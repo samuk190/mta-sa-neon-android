@@ -22,7 +22,7 @@ extern "C" {
 /// Set HUD element parameters from Kotlin admin command
 /// Matches: /admin module hud <element> <x> <y> <width> <height>
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetHUDElementParams(
+Java_com_saonline_neonlauncher_game_GameActivity_nativeSetHUDElementParams(
     JNIEnv* env, jobject /*thiz*/, jstring elementName,
     jfloat x, jfloat y, jfloat width, jfloat height, jboolean visible)
 {
@@ -50,7 +50,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetHUDElementParams(
 
 /// Get current HUD element parameters as formatted string (ASCII-only)
 JNIEXPORT jstring JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeGetHUDElementParams(
+Java_com_saonline_neonlauncher_game_GameActivity_nativeGetHUDElementParams(
     JNIEnv* env, jobject /*thiz*/, jstring elementName)
 {
     if (!g_hudRenderer) {
@@ -74,7 +74,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeGetHUDElementParams(
 
 /// List all configurable HUD element names
 JNIEXPORT jstring JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeListHUDElements(
+Java_com_saonline_neonlauncher_game_GameActivity_nativeListHUDElements(
     JNIEnv* env, jobject /*thiz*/)
 {
     if (!g_hudRenderer) {
@@ -96,7 +96,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeListHUDElements(
 
 /// Add a chat message to the HUD overlay (ASCII-normalized)
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeAddChatMessage(
+Java_com_saonline_neonlauncher_game_GameActivity_nativeAddChatMessage(
     JNIEnv* env, jobject /*thiz*/, jstring message, jint color)
 {
     if (!g_hudRenderer) return;
