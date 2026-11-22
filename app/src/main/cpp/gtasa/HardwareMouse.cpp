@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
-#include <utility>
 
 #include <dlfcn.h>
 #include <sys/mman.h>
@@ -38,7 +37,6 @@ std::atomic<float> g_wheel{0};
 std::atomic<bool> g_captured{false};
 std::atomic<bool> g_ready{false};
 
-void (*g_updateInput)() = nullptr;
 void (*g_updatePads)() = nullptr;
 int (*g_pointerType)(int) = nullptr;
 int (*g_pointerButton)(int, int) = nullptr;
@@ -47,7 +45,7 @@ int (*g_inputType)() = nullptr;
 std::byte* g_mouseState = nullptr;
 float* g_mouseDelta = nullptr;
 
-void UpdateInput() {
+void SampleMouse() {
     PendingMouse sample;
     {
         std::lock_guard lock(g_mutex);
@@ -68,7 +66,6 @@ void UpdateInput() {
     g_wheel.store(sample.wheel, std::memory_order_relaxed);
     g_captured.store(sample.captured, std::memory_order_release);
     g_frame = {sample.x, sample.y, buttons, sample.captured};
-    g_updateInput();
 }
 
 int PointerType(int pointer) {
@@ -89,13 +86,14 @@ float PointerWheel(int pointer) {
 }
 
 void UpdatePads() {
+    SampleMouse();
     g_updatePads();
     if (g_inputType() != 2) return; // Preserve touch and gamepad camera input.
     // GTA's PC keyboard branch subtracts the screen center from an absolute
     // touch slot. With no real mouse in that slot it can spin the camera.
     // CPad::UpdateMouse copies vecMouseDelta to NewMouseControllerState +0xc/+0x10.
-    const float x = g_frame.captured ? std::exchange(g_frame.x, 0.f) : 0.f;
-    const float y = g_frame.captured ? std::exchange(g_frame.y, 0.f) : 0.f;
+    const float x = g_frame.captured ? g_frame.x : 0.f;
+    const float y = g_frame.captured ? g_frame.y : 0.f;
     g_mouseDelta[0] = x;
     g_mouseDelta[1] = y;
     const float motion[] = {x, y};
@@ -112,10 +110,10 @@ struct Import {
 
 // libGTASA 2.10 ARM64 R_AARCH64_JUMP_SLOT entries. Compare every entry with
 // dlsym before changing the RELRO pages, as in the server-session dispatcher.
-bool BindImports(void* library, std::array<Import, 5>& imports) {
+bool BindImports(void* library, std::array<Import, 4>& imports) {
     const long pageSize = sysconf(_SC_PAGESIZE);
     if (pageSize <= 0) return false;
-    std::array<void*, 5> pages{};
+    std::array<void*, 4> pages{};
     size_t numPages = 0;
     for (auto& import : imports) {
         import.original = dlsym(library, import.symbol);
@@ -150,8 +148,8 @@ bool InstallHardwareMouse() {
     if (HardwareMouseReady()) return true;
     void* lib = dlopen("libGTASA.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
     if (!lib) return false;
-    std::array<Import, 5> imports{{
-        {"_Z11UpdateInputv", 0x847b28, reinterpret_cast<void*>(&UpdateInput)},
+    std::array<Import, 4> imports{{
+        // CGame::Process calls this via PLT at 0x4d62f0, once per gameplay update.
         {"_ZN4CPad10UpdatePadsEv", 0x841480, reinterpret_cast<void*>(&UpdatePads)},
         {"_Z17OS_PointerGetTypei", 0x845750, reinterpret_cast<void*>(&PointerType)},
         {"_Z20LIB_PointerGetButtonii", 0x842fd8, reinterpret_cast<void*>(&PointerButton)},
@@ -167,11 +165,10 @@ bool InstallHardwareMouse() {
     // JNI_OnLoad runs before the GTA game thread can reach the patched entries.
     const bool installed = verified && BindImports(lib, imports);
     if (installed) {
-        g_updateInput = reinterpret_cast<decltype(g_updateInput)>(imports[0].original);
-        g_updatePads = reinterpret_cast<decltype(g_updatePads)>(imports[1].original);
-        g_pointerType = reinterpret_cast<decltype(g_pointerType)>(imports[2].original);
-        g_pointerButton = reinterpret_cast<decltype(g_pointerButton)>(imports[3].original);
-        g_pointerWheel = reinterpret_cast<decltype(g_pointerWheel)>(imports[4].original);
+        g_updatePads = reinterpret_cast<decltype(g_updatePads)>(imports[0].original);
+        g_pointerType = reinterpret_cast<decltype(g_pointerType)>(imports[1].original);
+        g_pointerButton = reinterpret_cast<decltype(g_pointerButton)>(imports[2].original);
+        g_pointerWheel = reinterpret_cast<decltype(g_pointerWheel)>(imports[3].original);
         g_ready.store(true, std::memory_order_release);
     } else {
         ENGINE_LOGE("Hardware mouse unavailable: GTA 2.10 input ABI did not match");
