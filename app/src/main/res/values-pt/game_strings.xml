@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Connection and loading -->
+    <string name="disconnected">Desconectado</string>
+    <string name="disconnected_from_server">Conexão com o servidor encerrada.</string>
+    <string name="connected_to_server">Conectado ao servidor.</string>
+    <string name="connection_lost">Conexão perdida</string>
+    <string name="connection_lost_retry">O servidor encerrou a sessão. Deseja entrar novamente?</string>
+    <string name="reconnect_failed">Não foi possível reconectar ao servidor. Tente novamente.</string>
+    <string name="connection_start_failed">Não foi possível iniciar a conexão.</string>
+    <string name="connection_error_detail">Erro: %1$s</string>
+    <string name="connection_error_code">Erro [%1$s]</string>
+    <string name="connection_to_server_failed">Não foi possível conectar a %1$s na porta %2$d.</string>
+    <string name="connecting_to_address">Conectando a %1$s…</string>
+    <string name="waiting_for_game_data">Conectado. Aguardando os dados do jogo.</string>
+    <string name="loading_starting_game">Iniciando San Andreas</string>
+    <string name="loading_downloading_resources">Baixando recursos</string>
+    <string name="loading_processing_resources">Processando recursos</string>
+    <string name="loading_preparing_server_data">Preparando os dados do servidor</string>
+    <string name="loading_preparing_world">Preparando o mundo</string>
+    <string name="downloading">Baixando</string>
+    <string name="transfer_progress">Download: %1$s de %2$s</string>
+    <string name="transfer_cancel_hint">Desconecte para cancelar o download</string>
+
+    <!-- Game startup and diagnostics -->
+    <string name="game_assets_sync_required">Sincronize os arquivos do jogo em Configurações.</string>
+    <string name="native_client_load_failed">Não foi possível carregar o cliente nativo do MTA.</string>
+    <string name="native_client_init_failed">Não foi possível inicializar o cliente nativo do MTA.</string>
+    <string name="installed_assets_open_failed">Não foi possível abrir os arquivos instalados do jogo.</string>
+    <string name="gta_engine_load_failed">Não foi possível carregar o motor do GTA (libGTASA).</string>
+    <string name="network_identity_init_failed">Não foi possível inicializar a identidade de rede deste aparelho.</string>
+    <string name="engine_text_missing_cdn">O arquivo de texto do jogo (%1$s) está faltando ou está vazio. Sincronize os arquivos em Configurações.</string>
+    <string name="engine_text_missing_local">O arquivo de texto do jogo (%1$s) está faltando ou está vazio. Adicione o arquivo à pasta do jogo.</string>
+    <string name="engine_map_file_missing">Arquivo de mapa indisponível (%1$s).</string>
+    <string name="engine_stopped_unexpectedly">O motor do jogo parou inesperadamente.</string>
+    <string name="engine_failure_title">Não foi possível iniciar ou continuar o jogo</string>
+    <string name="engine_failure_log">Log de falha do motor</string>
+    <string name="engine_copy_log">Copiar log</string>
+    <string name="engine_value_not_detected">Não detectado</string>
+    <string name="engine_report_device">Aparelho: %1$s %2$s\nAndroid: %3$s\nGPU: %4$s\nFormato de textura: %5$s</string>
+    <string name="engine_report_exit_reason">Motivo da saída: %1$d / status: %2$d</string>
+    <string name="engine_report_crash_trace">Rastreio da falha do motor</string>
+    <string name="engine_report_trace_unavailable">Rastreio de falha do Android indisponível.</string>
+    <string name="engine_report_log">Log do motor</string>
+    <string name="engine_report_earlier_lines">[Linhas anteriores do log omitidas]</string>
+    <string name="engine_report_footer">O relatório inclui o rastreio de falhas nativas quando o Android o disponibiliza.</string>
+    <string name="engine_report_truncated">[Relatório truncado]</string>
+    <string name="engine_libs_missing_cdn">Faltam arquivos do motor do jogo. Sincronize os arquivos em Configurações.</string>
+    <string name="engine_libs_missing_local">Copie libGTASA.so, libSCAnd.so e libOpenAL64.so da pasta lib/arm64-v8a/ do seu APK do GTA San Andreas 2.10 para %1$s.</string>
+    <string name="engine_file_write_failed">Não foi possível gravar em %1$s.</string>
+    <string name="engine_invalid_lib">%1$s não é uma biblioteca nativa válida.</string>
+    <string name="engine_textures_missing">Algumas texturas para %1$s (%2$s) estão faltando ou não podem ser lidas. Sincronize os arquivos do jogo em Configurações e tente novamente.\n\n%3$s</string>
+
+    <!-- Game settings and controls -->
+    <string name="paused">Pausado</string>
+    <string name="resume">Continuar</string>
+    <string name="map">Mapa</string>
+    <string name="done">Concluir</string>
+    <string name="chat">Chat</string>
+    <string name="chat_hint">Digite uma mensagem</string>
+    <string name="chat_send">Enviar</string>
+    <string name="chat_send_failed">A mensagem não foi enviada.</string>
+    <string name="no_bound_keys">Nenhuma tecla atribuída</string>
+    <string name="game_settings_live">As alterações são aplicadas na hora e salvas para as próximas sessões.</string>
+    <string name="game_settings_loading">As opções estarão disponíveis quando o jogo terminar de carregar.</string>
+    <string name="visual_quality">Qualidade gráfica</string>
+    <string name="resolution">Resolução</string>
+    <string name="draw_distance">Distância de renderização</string>
+    <string name="shadows">Sombras</string>
+    <string name="car_reflections">Reflexos dos veículos</string>
+    <string name="brightness">Brilho</string>
+    <string name="frame_limiter">Limite de FPS</string>
+    <string name="sound_effects">Efeitos sonoros</string>
+    <string name="game_music">Música do jogo</string>
+    <string name="section_game">Jogo</string>
+    <string name="vibration">Vibração</string>
+    <string name="subtitles">Legendas</string>
+    <string name="chat_hidden">Oculto</string>
+    <string name="chat_shown">Visível</string>
+</resources>

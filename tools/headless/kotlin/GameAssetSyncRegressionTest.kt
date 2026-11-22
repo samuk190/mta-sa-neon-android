@@ -1,8 +1,9 @@
-package com.worldrpg.neonlauncher.utils
+package com.saonline.neonlauncher.utils
 
 import android.content.Context
-import com.worldrpg.neonlauncher.BuildConfig
+import com.saonline.neonlauncher.BuildConfig
 import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
@@ -14,6 +15,9 @@ import java.net.URLStreamHandler
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 private fun manifest(files: Map<String, ByteArray>): String = GameAssetManifest.encode(files.map { (path, bytes) ->
@@ -64,6 +68,10 @@ private suspend fun verifyCdn(root: File) {
     val second = Update(first.files + mapOf("data/default.dat" to "new".toByteArray(), "data/addon.dat" to "new".toByteArray()))
     val update = AtomicReference(first)
     val requests = ConcurrentHashMap<String, Int>()
+    val firstTransfers = CountDownLatch(4)
+    val activeTransfers = AtomicInteger()
+    val peakTransfers = AtomicInteger()
+    val fileToKeepOnRetry = AtomicReference<File>()
     URL.setURLStreamHandlerFactory { scheme ->
         if (scheme != "http") null else object : URLStreamHandler() {
             override fun openConnection(url: URL): URLConnection {
@@ -84,7 +92,26 @@ private suspend fun verifyCdn(root: File) {
                     override fun disconnect() {}
                     override fun usingProxy() = false
                     override fun getResponseCode() = if (body == null) 404 else 200
-                    override fun getInputStream(): InputStream = checkNotNull(body).inputStream()
+                    override fun getInputStream(): InputStream {
+                        val path = url.path
+                        if (current === first && path.startsWith(prefix)) {
+                            val active = activeTransfers.incrementAndGet()
+                            peakTransfers.accumulateAndGet(active, ::maxOf)
+                            try {
+                                firstTransfers.countDown()
+                                check(firstTransfers.await(5, TimeUnit.SECONDS)) { "CDN transfers did not overlap" }
+                            } finally {
+                                activeTransfers.decrementAndGet()
+                            }
+                        }
+                        if (path == prefix + current.corrupt) {
+                            val verified = checkNotNull(fileToKeepOnRetry.get())
+                            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                            while (!verified.isFile && System.nanoTime() < deadline) Thread.sleep(5)
+                            check(verified.isFile) { "The other worker did not finish staging its file" }
+                        }
+                        return checkNotNull(body).inputStream()
+                    }
                 }
             }
         }
@@ -93,15 +120,23 @@ private suspend fun verifyCdn(root: File) {
     BuildConfig.CDN_ROOT_URL = "http://assets.test"
     val context = Context(File(root, "cdn"))
     val bridge = NativeAssetBridge(context)
-    expectComplete(bridge)
+    val states = bridge.syncAssets().toList()
+    check(states.last() is NativeAssetBridge.DownloadState.Complete)
+    check(peakTransfers.get() == 4)
+    val progress = states.filterIsInstance<NativeAssetBridge.DownloadState.Syncing>()
+    check(progress.zipWithNext().all { (a, b) -> a.current <= b.current && a.percent <= b.percent })
+    check(progress.last().let { it.percent == 100 && it.current == it.total })
     val before = installed(bridge)
     check(File(before, "data/addon.dat").readText() == "old")
     val marker = File(context.filesDir, "game_assets/active")
     val previousMarker = marker.readText()
 
+    val generationId = GameAssetManifest.parseRemote(null, second.json).generationId
+    fileToKeepOnRetry.set(File(context.filesDir, "game_assets/staging-$generationId/data/default.dat"))
     update.set(second.copy(corrupt = "data/addon.dat"))
     check(bridge.syncAssets().last() is NativeAssetBridge.DownloadState.Error)
     check(installed(bridge) == before)
+    check(File(context.filesDir, "game_assets").listFiles().orEmpty().none { it.name.endsWith(".part") })
     val copied = requests["data/default.dat"]
 
     update.set(second)
@@ -119,7 +154,28 @@ private suspend fun verifyCdn(root: File) {
     update.set(second.copy(json = missingHashes))
     check(bridge.syncAssets().last() is NativeAssetBridge.DownloadState.Error)
     check(installed(bridge) == after)
-    check(File(after, "data/addon.dat").delete())
+    update.set(second)
+    val beforeRepair = requests.toMap()
+    write(after, "data/addon.dat", "bad")
+    expectComplete(bridge)
+    val repaired = installed(bridge)
+    check(repaired != after && File(repaired, "data/addon.dat").readText() == "new")
+    check(requests["data/addon.dat"] == checkNotNull(beforeRepair["data/addon.dat"]) + 1)
+    check(requests.filterKeys { it != "data/addon.dat" } == beforeRepair.filterKeys { it != "data/addon.dat" })
+
+    val libraries = listOf("libGTASA.so", "libSCAnd.so", "libOpenAL64.so")
+        .associate { name -> "lib/$name" to name.toByteArray() }
+    val beforeEngineSync = requests.toMap()
+    update.set(Update(second.files + libraries))
+    expectComplete(bridge)
+    val withEngine = installed(bridge)
+    check(withEngine != repaired)
+    for ((path, content) in libraries) {
+        check(File(withEngine, path).readBytes().contentEquals(content))
+        check(requests[path] == 1)
+    }
+    check(requests.filterKeys { it !in libraries } == beforeEngineSync)
+    check(File(withEngine, "lib/libSCAnd.so").delete())
     check(bridge.getReadyStoragePath() == null)
 }
 
@@ -142,5 +198,5 @@ fun main() = runBlocking {
     } finally {
         root.deleteRecursively()
     }
-    println("PASS: SHA-256, unpinned CDN, retry, atomic activation, recovery and local asset import")
+    println("PASS: parallel downloads, progress, SHA-256, retry, atomic activation, recovery and local asset import")
 }

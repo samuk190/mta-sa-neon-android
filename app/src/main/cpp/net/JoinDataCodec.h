@@ -4,28 +4,26 @@
 #include "raknet/RakNetWrapper.h"
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <string>
 #include <string_view>
 
 namespace WorldRPG::Net {
 
 constexpr uint16_t NEON_NETCODE_VERSION = 0x41E7;
+constexpr uint8_t NEON_JOIN_DATA_ID = 4;
+constexpr uint8_t LEGACY_MOBILE_JOIN_DATA_ID = 19;
 
 enum class JoinProfile : uint8_t { Automatic = 0, Standard = 1, LegacyMobile = 2 };
 
-// Device captures 2026-11-08/16: these endpoints use the Oracle adapter,
-// which requires logical packet 19 and rewrites the peer to bitstream 0x0030.
-// MOD_NAME auth=0 alone cannot distinguish this adapter from a normal server.
-inline JoinProfile SelectJoinProfile(std::string /*host*/, uint16_t /*port*/, JoinProfile requested) {
-    if (requested != JoinProfile::Automatic) return requested;
-    return JoinProfile::Standard;
+// The old bridge is selected explicitly, independent of the server address.
+constexpr JoinProfile SelectJoinProfile(JoinProfile requested) {
+    return requested == JoinProfile::LegacyMobile ? JoinProfile::LegacyMobile : JoinProfile::Standard;
 }
 
 // CClientGame::StartGame (desktop CClientGame.cpp:715-769) and
 // CPlayerJoinDataPacket::Read: retain the same field order and bit widths.
 // Standard peers honestly advertise the 0x0030 layout implemented on Android.
-// Legacy keeps the captured 763-byte envelope, marker 676/body 668, unchanged.
+// Legacy keeps the captured 763-byte layout, with the marker at 676 and the body at 668.
 inline bool BuildJoinData(JoinProfile profile, const std::string& nick, const std::string& password,
                           const std::string& ticket, BitStreamWriter& out) {
     if ((profile != JoinProfile::Standard && profile != JoinProfile::LegacyMobile) || nick.empty() || nick.size() > 22 || ticket.size() > 4096 ||
@@ -34,7 +32,7 @@ inline bool BuildJoinData(JoinProfile profile, const std::string& nick, const st
     // The deployed legacy adapter truncates the extracted body to 256 bytes.
     // Never silently truncate an Identity ticket or downgrade authentication.
     if (legacy && !ticket.empty()) return false;
-    out.Write(static_cast<uint8_t>(legacy ? 19 : 4));
+    out.Write(legacy ? LEGACY_MOBILE_JOIN_DATA_ID : NEON_JOIN_DATA_ID);
     if (legacy) {
         const std::array<uint8_t, 667> padding{};
         out.WriteBytes(padding.data(), padding.size());
@@ -60,8 +58,11 @@ inline bool BuildJoinData(JoinProfile profile, const std::string& nick, const st
         md5.Finish(digest.data());
     }
     out.WriteBytes(digest.data(), digest.size());
-    const std::array<uint8_t, 32> community{};
-    out.WriteBytes(community.data(), community.size());
+    // Neon reads the platform from the retired community field. Both join
+    // formats keep its width so the legacy adapter can forward it as-is.
+    // Keep in sync with Shared/sdk/net/NeonClientPlatform.h on desktop/server.
+    constexpr char platform[32] = "NEON:ANDROID";
+    out.WriteBytes(reinterpret_cast<const uint8_t*>(platform), sizeof(platform));
     if (!legacy) string(ticket);
     return true;
 }

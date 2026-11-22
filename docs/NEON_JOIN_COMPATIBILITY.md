@@ -4,7 +4,7 @@ The connection dialog saves a connection mode per endpoint:
 
 | Mode | Logical join ID | Selection |
 | --- | --- | --- |
-| Automatic | 19 or 4 | Existing World RPG endpoints (`worldrpgbroficial.duckdns.org:22003`, `146.235.24.222:22003`) retain legacy; other endpoints use standard. |
+| Automatic | 4 | Uses the standard Neon handshake on every endpoint. |
 | Standard | 4 | Native Neon network envelope followed by `PLAYER_JOINDATA`. |
 | Legacy mobile | 19 | Captured 763-byte MobileSA envelope for servers explicitly supporting the adapter. |
 
@@ -12,7 +12,7 @@ There is one join format per connection. Timeout, authentication failure, and se
 
 ## Why the legacy packet existed
 
-The public MTA enum reserves logical ID 19 (`PACKET_ID_MTA_RESERVED_13`); the game-layer join is ID 4. The old MobileSA envelope was translated by the World RPG server hook. The Android port reproduced that envelope, including 667 padding bytes, the version marker at offset 676, and game body at 668. It remains byte-compatible in legacy mode.
+The public MTA enum reserves logical ID 19 (`PACKET_ID_MTA_RESERVED_13`). The game-layer join is ID 4. The World RPG mobile adapter translates the legacy MobileSA envelope. Legacy mode keeps the 667 padding bytes, the version marker at offset 676, and the game body at 668.
 
 A direct game-layer packet 4 is insufficient: `net.so` consumes a network-level prefix before forwarding the body to `CGame`. `NetJoinEnvelope.h` supplies the prefix; it does not patch the server or mark a connection authenticated. The server remains responsible for accepting the peer and checking its ticket and capabilities.
 
@@ -22,7 +22,11 @@ The Android serial is an app-scoped device identifier, independent of IP and the
 
 Both profiles use the implemented `0x0030` peer layout. Legacy retains its captured `0x003D` announcement because the deployed adapter rewrites it to `0x0030`; standard advertises `0x0030` directly. A higher server version in `MOD_NAME` does not mean Android supports that layout. Servers requiring newer Neon capabilities can still reject this client.
 
-World RPG keeps its legacy default: an explicit standard-mode test on the deployed server was refused with its AC #4 serial-change check. No production authentication/check settings were changed. Do not remove the legacy path based only on a successful join to a clean server.
+In earlier tests the deployed World RPG server refused a standard join with AC #4. Players connecting to servers that still require the mobile adapter can select Legacy mobile in the connection dialog.
+
+## Client platform
+
+Both Android join profiles write the zero-padded `NEON:ANDROID` marker in the existing 32-byte community field. The matching desktop client writes `NEON:DESKTOP`. The Neon server exposes the declared value as the ninth argument of the server-side `onPlayerConnect` event and via `getPlayerPlatform(player)`. The values are `android`, `desktop` and `unknown` for clients without a recognized marker. The platform is self-reported connection metadata.
 
 ## SA:O account
 
@@ -56,8 +60,8 @@ Network validation uses loopback-only Oracle test containers with the production
 
 Live checks completed during implementation include full legacy World RPG entry (28 resource packets parsed without errors), a 900-second standard session without an adapter (final state complete, 8827 player-sync packets sent), and required Identity entry with a signed 1911-byte test ticket. The server rejected replayed tickets, invalid signatures, incorrect audiences and expired tickets. Optional mode accepted anonymous and authenticated joins and rejected an invalid supplied signature.
 
-The debug APK for device testing bundles `libGTASA.so`, `libSCAnd.so` and `libOpenAL64.so` from the local developer files and must pass the default `tools/audit_android_apk.py` audit. Do not deliver a `-PnoGameFiles` build as a drop-in replacement: the 397-file CDN manifest contains game data, not those engine libraries. Asset synchronization therefore reports data verification separately from engine readiness.
+Use `assembleDebug -PnoGameFiles` to test CDN delivery. The World RPG CDN manifest lists `libGTASA.so`, `libSCAnd.so` and `libOpenAL64.so` under `lib/`, and **Sync game assets** installs them in the active generation. The plain debug build can also bundle local developer libraries and uses the default `tools/audit_android_apk.py` audit.
 
-Release/explicit `-PnoGameFiles` builds retain the existing external-library installation policy. Audit those variants with `python3 tools/audit_android_apk.py <apk> --external-game-libraries`. Both forms require the launcher library and audit every packaged native library's ARM64 ABI and 16 KB alignment.
+Audit release and `-PnoGameFiles` builds with `python3 tools/audit_android_apk.py <apk> --external-game-libraries`. Both audits require the launcher library and check every packaged library's ARM64 ABI and 16 KB alignment.
 
 Interactive Discord/browser/Keystore checks on a phone remain necessary; no device was available over ADB during this implementation.

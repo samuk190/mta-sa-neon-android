@@ -414,15 +414,16 @@ static void TestNetworkJoinEnvelope() {
 }
 
 static void TestJoinProfilesAndData() {
-    CHECK(SelectJoinProfile("WORLD RP.G", 22003, JoinProfile::Automatic) == JoinProfile::Standard, "unknown host uses standard");
-    CHECK(SelectJoinProfile("WORLD RP.G", 22003, JoinProfile::LegacyMobile) == JoinProfile::LegacyMobile, "explicit legacy override");
-    CHECK(SelectJoinProfile("WorldRpgBrOficial.DuckDns.Org.", 22003, JoinProfile::Automatic) == JoinProfile::Standard, "known World RPG hostname uses standard");
-    CHECK(SelectJoinProfile("146.235.24.222", 22003, JoinProfile::Automatic) == JoinProfile::Standard, "known World RPG address uses standard");
-    CHECK(SelectJoinProfile("146.235.24.222", 22004, JoinProfile::Automatic) == JoinProfile::Standard, "port is part of profile");
-    CHECK(SelectJoinProfile("146.235.24.222", 22003, JoinProfile::Standard) == JoinProfile::Standard, "standard override wins");
-    for (const auto profile : {JoinProfile::Standard, JoinProfile::LegacyMobile}) {
+    RakNetWrapper net;
+    NeonJoinClient join;
+    for (const auto requested : {JoinProfile::Automatic, JoinProfile::LegacyMobile, JoinProfile::Standard,
+                                 static_cast<JoinProfile>(255), JoinProfile::Automatic}) {
+        // Each attempt resolves its profile anew, including a retry after legacy.
+        CHECK(join.Begin(net, "Tester", "secret", requested), "join attempt starts");
+        const auto profile = join.Info().joinProfile;
         BitStreamWriter packet;
-        const bool legacy = profile == JoinProfile::LegacyMobile;
+        const bool legacy = requested == JoinProfile::LegacyMobile;
+        CHECK(profile == (legacy ? JoinProfile::LegacyMobile : JoinProfile::Standard), "only explicit legacy selects the adapter");
         const std::string ticket = legacy ? "" : std::string(1024, 'T');
         CHECK(BuildJoinData(profile, "Tester", "secret", ticket, packet), "join data constructed");
         if (legacy) {
@@ -445,7 +446,9 @@ static void TestJoinProfilesAndData() {
         for (size_t i=0; i<22; ++i) CHECK(reader.read(8, value) && value == (i < 6 ? static_cast<unsigned char>("Tester"[i]) : 0u), "fixed nickname bytes");
         const unsigned char expectedMd5[16] = {0x5e,0xbe,0x22,0x94,0xec,0xd0,0xe0,0xf0,0x8e,0xab,0x76,0x90,0xd2,0xa6,0xee,0x69};
         for (const auto byte : expectedMd5) CHECK(reader.read(8, value) && value == byte, "server password MD5 reference vector");
-        for (int i=0; i<32; ++i) CHECK(reader.read(8, value) && value == 0, "legacy community field");
+        constexpr char androidPlatform[32] = "NEON:ANDROID";
+        for (const unsigned char byte : androidPlatform)
+            CHECK(reader.read(8, value) && value == byte, "platform marker and padding");
         if (!legacy) {
             CHECK(reader.read(16, value) && value == ticket.size(), "unaligned trailing ticket prefix");
             for (const unsigned char c : ticket) CHECK(reader.read(8, value) && value == c, "ticket preserved past old 256-byte limit");

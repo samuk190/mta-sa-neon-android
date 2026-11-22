@@ -1,4 +1,4 @@
-package com.worldrpg.neonlauncher.game;
+package com.saonline.neonlauncher.game;
 
 import java.nio.file.Files;
 import java.nio.file.Path;

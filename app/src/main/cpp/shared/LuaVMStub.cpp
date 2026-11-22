@@ -408,13 +408,13 @@ bool ActiveVmRunCommand(const char* name, const char* args) {
 // Device testing without a server change: after the join, the script
 // files/neon_selftest.lua in the app's private directory runs once per VM as the resource
 // "neon_selftest". Put it there with
-//   adb shell run-as com.worldrpg.neonlauncher sh -c 'cat > files/neon_selftest.lua' < test.lua
+//   adb shell run-as com.saonline.neonlauncher sh -c 'cat > files/neon_selftest.lua' < test.lua
 // No file, no effect. Its print() lines go to logcat.
 static void RunDeviceSelfTest() {
 #ifdef __ANDROID__
     if (g_dx.selfTestRan || !g_dx.L || WorldRPG::ServerWorld::LocalPlayer() == 0) return;
     g_dx.selfTestRan = true;
-    const char* path = "/data/data/com.worldrpg.neonlauncher/files/neon_selftest.lua";
+    const char* path = "/data/data/com.saonline.neonlauncher/files/neon_selftest.lua";
     std::FILE* probe = std::fopen(path, "rb");
     if (!probe) return;
     std::fclose(probe);
@@ -1116,8 +1116,7 @@ static bool IsLocalStatElement(lua_State* L, int index) {
     return id == 0 || id == ServerWorld::LocalPlayer();
 }
 
-// Desktop CStaticFunctionDefinitions::GetElementVelocity for the local ped.
-// Remote velocity is not exposed to Lua yet.
+// Desktop CStaticFunctionDefinitions::GetElementVelocity (466-516).
 static int l_getElementVelocity(lua_State* L) {
     float x = 0, y = 0, z = 0, heading = 0, vx = 0, vy = 0, vz = 0, health = 0;
     const uint32_t id = ElementIdOf(L, 1);
@@ -1127,7 +1126,14 @@ static int l_getElementVelocity(lua_State* L) {
         lua_pushnumber(L, vz);
         return 3;
     }
-    if (IsLocalStatElement(L, 1)) Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+    Game::LocalCarState car;
+    if (IsLocalStatElement(L, 1)) {
+        Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+    } else if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        vx = car.vx;
+        vy = car.vy;
+        vz = car.vz;
+    }
     lua_pushnumber(L, vx);
     lua_pushnumber(L, vy);
     lua_pushnumber(L, vz);
@@ -1573,8 +1579,14 @@ static int l_getElementPosition(lua_State* L) {
         return 3;
     }
     float x = 0, y = 0, z = 0, heading = 0;
-    if (id == 0 || id == ServerWorld::LocalPlayer()) Game::CopyPose(x, y, z, heading);
-    else if (!Game::CopyRemotePose(id, x, y, z) && !ServerWorld::ElementPose(id, x, y, z)) {
+    Game::LocalCarState car;
+    if (id == 0 || id == ServerWorld::LocalPlayer()) {
+        Game::CopyPose(x, y, z, heading);
+    } else if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        x = car.x;
+        y = car.y;
+        z = car.z;
+    } else if (!Game::CopyRemotePose(id, x, y, z) && !ServerWorld::ElementPose(id, x, y, z)) {
         lua_pushnil(L);
         return 1;
     }
@@ -2537,7 +2549,7 @@ static void PumpCursorEvents() {
     }
 }
 
-std::string LuaVMStub::pumpDx() {
+std::string LuaVMStub::pumpDx(bool renderFrame) {
     if (!pImpl_->L) return {};
     // CClientGame::OnWindowFocusChange (CClientGame.cpp:8069-8078). One report per pump.
     bool windowFocused = false;
@@ -2575,6 +2587,10 @@ std::string LuaVMStub::pumpDx() {
     ApplySvgUpdates();
     g_dx.frame.clear();
     g_dx.postGuiFrame.clear();
+    if (!renderFrame) {
+        PulseSpatial();
+        return {};
+    }
     DxBeginFrame(g_dx.frame);
     PulseCamera();
     PulseSpatial();
@@ -2615,7 +2631,7 @@ std::string LuaVMStub::pumpDx() {
 
 void LuaVMStub::shutdown() {
     if (!pImpl_->initialized) return;
-    ResetDffElements();
+    ResetModelAssets();
     AudioStopOwnedSounds();
     Projectiles::Reset();
     ResetSpatial();
@@ -2822,7 +2838,7 @@ static void DropResourceState(lua_State* L, const std::string& name, uint16_t ne
     AudioStopOwnedSounds(&name, netId, generation);
     GuiDropResource(name, netId, generation);
     NativeUiDropResource(name, netId, generation);
-    DropResourceDffs(generation);
+    DropResourceModelAssets(generation);
     DropResourceEnvironment(L, generation);
     Events::DropOwner(name, netId, generation);
     KeyBindsDropResource(L, name, netId, generation);
@@ -2970,8 +2986,8 @@ void ActiveVmAppendPostGuiDraw(const std::string& lines) { g_dx.postGuiFrame += 
 std::string ActiveVmResourceFile(const std::string& path) { return DxImageFile(path); }
 lua_State* ActiveVmState() { return g_dx.L; }
 
-std::string ActiveVmPump() {
-    return g_active ? g_active->pumpDx() : std::string();
+std::string ActiveVmPump(bool renderFrame) {
+    return g_active ? g_active->pumpDx(renderFrame) : std::string();
 }
 void ActiveVmScreenSize(int& width, int& height) {
     width = g_dx.screenW;

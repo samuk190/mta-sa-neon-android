@@ -310,6 +310,14 @@ int PatchTable(std::uintptr_t base, const ElfW(Rela)* rela, std::size_t bytes, c
 
 }  // namespace
 
+void* AllocateGameMemory(std::size_t bytes) {
+    return g_base ? HeapMalloc(bytes) : std::malloc(bytes);
+}
+
+void FreeGameMemory(void* memory) {
+    HeapFree(memory);
+}
+
 bool InstallGameHeap() {
     static bool done = false;
     static bool ok = false;

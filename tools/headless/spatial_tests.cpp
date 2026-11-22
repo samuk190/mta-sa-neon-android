@@ -109,8 +109,44 @@ void GeometryChecks() {
     world.Refresh(2);world.Pulse([](auto){});Check(world.Within(1,2),"explicit shape refresh detects stationary objects");
 
 }
+void DriftVehicleChecks() {
+    // World RPG ENTITY_ADD response to /driftcar supra, 2026-11-20.
+    // Current header, baseline 24-bit X/Y, model 401 with custom handling.
+    constexpr uint8_t packet[] = {
+        0xf1, 0x16, 0x02, 0x01, 0x37, 0x00, 0x80, 0x30, 0x78, 0x60, 0x02, 0x01, 0x80, 0x0a, 0x00, 0x5d,
+        0xc0, 0xa5, 0x70, 0x04, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x22, 0x03, 0xa0, 0xe2, 0x9a,
+        0xc4, 0xd0, 0x9a, 0xc4, 0xd1, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0x80, 0x00, 0x02,
+        0x0a, 0x1a, 0x4a, 0x59, 0x01, 0x9a, 0xd2, 0xb1, 0x00, 0x90, 0x40, 0x00, 0x32, 0x11, 0x00, 0x30,
+        0x16, 0x91, 0x40, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x33, 0x73, 0x33, 0x0f, 0x66, 0xa6,
+        0x66, 0x6f, 0x92, 0xc5, 0x2b, 0x91, 0xcf, 0xd4, 0x94, 0x01, 0x40, 0x00, 0x25, 0x10, 0x40, 0x00,
+        0x08, 0x10, 0x40, 0x00, 0x23, 0x10, 0xc0, 0x00, 0x10, 0x10, 0x73, 0x73, 0x03, 0x0f, 0xc0, 0x00,
+        0x06, 0x88, 0x53, 0x53, 0x2b, 0x27, 0xf1, 0xf8, 0x5e, 0xa7, 0xc6, 0x66, 0x76, 0x67, 0xf3, 0x53,
+        0x23, 0x27, 0xc0, 0x00, 0x00, 0x00, 0x05, 0x2b, 0x91, 0xe7, 0xd1, 0xf8, 0x5e, 0xb7, 0xa0, 0x00,
+        0x00, 0x07, 0xf3, 0x53, 0x33, 0x27, 0xc0, 0x00, 0x00, 0x07, 0xe0, 0x20, 0x00, 0x00, 0x00, 0x20,
+        0x00, 0x00, 0x17, 0x03, 0xd0, 0xa7, 0xc0, 0x00,
+    };
+    ServerWorld::ConfigureEntityAdd(true, true);
+    ServerWorld::OnEntityAdd(packet, sizeof(packet), sizeof(packet) * 8);
+    ServerWorld::ActorSpawn vehicle;
+    Check(ServerWorld::CopyVisual(534, vehicle) && vehicle.model == 401 && vehicle.health == 1000.f &&
+          vehicle.x == 368.f && vehicle.y == -2036.5f, "current ENTITY_ADD stores the Supra");
+
+    ServerWorld::ResetSession();
+    ServerWorld::ConfigureEntityAdd(true, true);
+    Net::BitStreamWriter baseline;
+    for (size_t bit = 0; bit < sizeof(packet) * 8; ++bit) {
+        // Strip call propagation and sync time context as a baseline server does.
+        if (bit == 66 || (bit >= 79 && bit < 87)) continue;
+        Bits(baseline, (packet[bit / 8] >> (7 - bit % 8)) & 1u, 1);
+    }
+    ServerWorld::OnEntityAdd(baseline.GetData(), baseline.GetByteLength(), baseline.GetBitLength());
+    Check(ServerWorld::CopyVisual(534, vehicle) && vehicle.model == 401 && vehicle.x == 368.f,
+          "standard join also accepts a server with baseline ENTITY_ADD headers");
+    ServerWorld::ResetSession();
+}
+
 int main() {
-    GeometryChecks();ServerWorld::ResetSession();Script::ResourceLoader::Reset();ServerWorld::SetLocalPlayer(1);
+    GeometryChecks();DriftVehicleChecks();ServerWorld::ResetSession();Script::ResourceLoader::Reset();ServerWorld::SetLocalPlayer(1);
     Game::ApplyServerSpawn(100.25f,100.25f,10); ServerWorld::NotePlayerSkin(2,7);ServerWorld::NoteElementPosition(2,100.5f,100,10);ServerWorld::NoteElementDimension(2,3);
     Script::LuaVMStub vm;Check(vm.initialize(),"VM initializes");
     Lua(vm,"assert(createColSphere(0,0,0,1)==false and isElementWithinColShape({}, {})==nil and getElementsWithinColShape({})==false)");
@@ -566,6 +602,14 @@ int main() {
         _G.elementTreeOk = true
     )LUA");
     Lua(vm, "assert(elementTreeOk, 'element tree script')");
+    Check(Rpc(handler, MtaIds::Rpc::SetElementPosition, 1, [](auto& w) {
+        w.Write(2229.5f); w.Write(-1722.f); w.Write(14.5f); w.Write(uint8_t(7));
+    }), "server teleport of the local player");
+    Lua(vm, "local x,y,z = getElementPosition(localPlayer); assert(x == 2229.5 and y == -1722 and z == 14.5)");
+    Check(Rpc(handler, MtaIds::Rpc::SetElementInterior, 1, [](auto& w) {
+        w.Write(uint8_t(0)); w.Write(uint8_t(0));
+    }), "server return to the exterior");
+    Check(ServerWorld::InteriorOf(1) == 0, "exterior applies to the local player");
     lua_State* L=Script::ActiveVmState();lua_getglobal(L,"otherShape");
     uint32_t localId=Script::ElementIdOf(L,-1);lua_pop(L,1);
     vm.shutdown();Check(!Script::SpatialShapeAlive(localId),"VM shutdown releases local colshapes");

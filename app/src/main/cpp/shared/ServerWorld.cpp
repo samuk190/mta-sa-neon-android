@@ -6,6 +6,7 @@
 #include "../gtasa/RemoteVehicle.h"
 #include "../net/raknet/RakNetWrapper.h"
 #include "entity/EntityAddTypes.h"
+#include "entity/EntityVehicleModels.h"
 #include "entity/PedSyncState.h"
 #include "entity/PedWire.h"
 
@@ -32,6 +33,7 @@ using namespace WorldRPG::Entity;
 
 std::mutex g_lock;
 bool g_currentWaterFlags = true;
+bool g_preferExtendedEntityHeader = false;
 uint32_t g_local = 0;
 uint64_t g_generation = 0, g_localGeneration = 0;
 // CClientGame::SetAllDimensions: the local player's dimension (PLAYER_SPAWN, PLAYER_LIST, SET_ELEMENT_DIMENSION).
@@ -282,6 +284,7 @@ void ResetSession() {
         g_data.clear();
         g_nicks.clear();
         g_resourceRoot = 0;
+        g_preferExtendedEntityHeader = false;
     }
     g_localDimension = 0;
     g_localInterior = 0;
@@ -326,6 +329,9 @@ int CopyActors(ActorSpawn* out, int capacity, int pedLimit, int vehicleLimit) {
         slot.rotX = visual.rotX;
         slot.rotY = visual.rotY;
         slot.health = visual.health;
+        slot.vehicleDoorLock = visual.vehicleDoorLock;
+        slot.nitroUpgrade = visual.nitroUpgrade;
+        slot.nitroRevision = visual.nitroRevision;
         slot.hosted = visual.hosted;
         slot.interior = visual.interior;
     };
@@ -391,6 +397,9 @@ bool CopyVisual(uint32_t id, ActorSpawn& out) {
     out.rotX = found->second.rotX;
     out.rotY = found->second.rotY;
     out.health = found->second.health;
+    out.vehicleDoorLock = found->second.vehicleDoorLock;
+    out.nitroUpgrade = found->second.nitroUpgrade;
+    out.nitroRevision = found->second.nitroRevision;
     out.hosted = found->second.hosted;
     out.interior = found->second.interior;
     return true;
@@ -702,9 +711,10 @@ bool FindPlayerByNick(const std::string& nick, uint32_t& id) {
     return false;
 }
 
-void SetCurrentWaterFlags(bool enabled) {
+void ConfigureEntityAdd(bool currentWaterFlags, bool preferExtendedHeader) {
     std::lock_guard<std::mutex> lock(g_lock);
-    g_currentWaterFlags = enabled;
+    g_currentWaterFlags = currentWaterFlags;
+    g_preferExtendedEntityHeader = preferExtendedHeader;
 }
 
 void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
@@ -724,37 +734,51 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     // percentage through CCore::UpdateDummyProgress(index * 100 / count, "%").
     ConnectionLoading::Update(ConnectionLoading::Phase::World, "Preparing world", 0.0f);
     std::lock_guard<std::mutex> lock(g_lock);
-    int stored = 0;
-    std::vector<std::pair<uint32_t, uint32_t>> attachments;
-    for (uint32_t index = 0; index < count; ++index) {
-        ConnectionLoading::UpdateProgress(static_cast<float>(index * 100 / count) / 100.0f);
-        EntityCommon common;
-        if (!ReadEntityCommon(reader, common)) {
-            DIAG("ENTITY_ADD stop idx=%u/%u common header failed bit=%zu", index, static_cast<unsigned>(count), reader.GetReadOffsetBits());
-            break;
-        }
-        DIAG("ENTITY_ADD idx=%u/%u id=%u type=%u bit=%zu", index, static_cast<unsigned>(count), common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
-        if (common.id != 0 && common.id != 0xFFFFFFFFu) {
-            for (const auto& [key, value] : common.customData) g_data[common.id][key] = value;
-        }
-        Visual visual;
-        visual.kind = common.type;
-        const auto resolveKind = +[](uint32_t id) -> int {
+    struct IncomingEntity { EntityCommon common; Visual visual; };
+    struct Batch { std::vector<IncomingEntity> entities; bool complete = false; };
+    const auto readBatch = [&](bool extendedHeader) {
+        Net::BitStreamReader reader(body, length, bits);
+        uint32_t parsedCount = 0;
+        ReadCompressed(reader, 4, parsedCount); // Count already validated above.
+        Batch batch;
+        batch.entities.reserve(count);
+        const ElementKindResolver resolveKind = [&](uint32_t id) -> int {
             // OnEntityAdd already holds g_lock: do not call ElementKindName here.
             if (id == 0 || id == 0xFFFFFFFFu) return -1;
             if (id == g_local || g_nicks.find(id) != g_nicks.end()) return kTypePlayer;
+            for (auto it = batch.entities.rbegin(); it != batch.entities.rend(); ++it)
+                if (it->common.id == id) return it->common.type;
             auto found = g_visuals.find(id);
             return found == g_visuals.end() ? -1 : found->second.kind;
         };
-        if (!ReadEntityBody(reader, common, visual, resolveKind, g_currentWaterFlags)) {
-            DIAG("ENTITY_ADD fail idx=%u/%u id=%u type=%u bit=%zu", index, static_cast<unsigned>(count), common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
-            break;
+        for (uint32_t index = 0; index < count; ++index) {
+            ConnectionLoading::UpdateProgress(static_cast<float>(index * 100 / count) / 100.0f);
+            IncomingEntity entity;
+            auto& [common, visual] = entity;
+            if (!ReadEntityCommon(reader, common, extendedHeader)) break;
+            visual.kind = common.type;
+            if (!ReadEntityBody(reader, common, visual, resolveKind, g_currentWaterFlags)) break;
+            batch.entities.push_back(std::move(entity));
         }
+        batch.complete = batch.entities.size() == count && reader.GetRemainingBits() < 8;
+        return batch;
+    };
+    Batch batch = readBatch(g_preferExtendedEntityHeader);
+    if (!batch.complete && g_preferExtendedEntityHeader) {
+        // Servers that gate both header fields on the advertised peer version
+        // still send the baseline header to this client. Try it before committing.
+        Batch baseline = readBatch(false);
+        if (baseline.complete || baseline.entities.size() > batch.entities.size()) batch = std::move(baseline);
+    }
+
+    std::vector<std::pair<uint32_t, uint32_t>> attachments;
+    for (auto& [common, visual] : batch.entities) {
+        if (common.id == 0 || common.id == 0xFFFFFFFFu) continue;
+        for (auto& [key, value] : common.customData) g_data[common.id][key] = std::move(value);
         visual.interior = common.interior;
         visual.syncTimeContext = common.syncTimeContext;
         visual.dimension = static_cast<uint16_t>(common.dimension);
         if (common.type != kTypePlayer) Remember(common.id, visual);
-        if (common.id == 0 || common.id == 0xFFFFFFFFu) { ++stored; continue; }
         Attachment attachment;
         if (common.attached) {
             attachment.position[0] = common.attachedX; attachment.position[1] = common.attachedY; attachment.position[2] = common.attachedZ;
@@ -763,7 +787,6 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
         }
         g_attachments[common.id] = attachment;
         g_attachmentOrder.erase(std::remove(g_attachmentOrder.begin(), g_attachmentOrder.end(), common.id), g_attachmentOrder.end());
-        ++stored;
     }
     // CPacketHandler.cpp:4443-4467 links attachments after all entities in the
     // batch exist. Forward references must not disappear during parsing.
@@ -774,7 +797,7 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
         g_attachmentOrder.erase(std::remove(g_attachmentOrder.begin(), g_attachmentOrder.end(), child), g_attachmentOrder.end());
         g_attachmentOrder.push_back(child);
     }
-    DIAG("ENTITY_ADD stored %d/%u", stored, static_cast<unsigned>(count));
+    DIAG("ENTITY_ADD stored %zu/%u", batch.entities.size(), static_cast<unsigned>(count));
 }
 
 // CPacketHandler::Packet_EntityRemove (CPacketHandler.cpp 4491-4566) reads ids until the stream ends
@@ -873,6 +896,44 @@ void NoteVehicle(uint32_t id, int model) {
     if (stored.kind != 0 && stored.kind != 2) return;
     stored.kind = 2;
     stored.model = model;
+}
+
+int VehicleDoorLockMode(uint32_t id) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    const auto found = g_visuals.find(id);
+    return found != g_visuals.end() && found->second.kind == 2 ? found->second.vehicleDoorLock : 1;
+}
+
+bool SetVehicleDoorLockMode(uint32_t id, int mode) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    const auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 2) return false;
+    found->second.vehicleDoorLock = mode;
+    return true;
+}
+
+uint16_t VehicleNitroUpgrade(uint32_t id) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    const auto found = g_visuals.find(id);
+    return found != g_visuals.end() && found->second.kind == 2 ? found->second.nitroUpgrade : 0;
+}
+
+bool SetVehicleNitroUpgrade(uint32_t id, uint16_t upgrade, bool installed) {
+    if (!VehicleModels::IsNitroUpgrade(upgrade)) return false;
+    std::lock_guard<std::mutex> lock(g_lock);
+    const auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 2) return false;
+    auto& vehicle = found->second;
+    if (installed) {
+        if (!VehicleModels::SupportsNitro(vehicle.model)) return false;
+        vehicle.nitroUpgrade = upgrade;
+    } else {
+        if (vehicle.nitroUpgrade != upgrade) return false;
+        vehicle.nitroUpgrade = 0;
+    }
+    // Adding the same upgrade again is also an explicit GTA refill.
+    ++vehicle.nitroRevision;
+    return true;
 }
 
 void NotePlayerSeen(uint32_t id) {

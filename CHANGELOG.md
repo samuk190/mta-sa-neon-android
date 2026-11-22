@@ -8,15 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Game Sync
+
+- Play opens the game-file setup flow when the installation is missing required assets or engine libraries. Crash reports from older APK installations no longer appear after an update.
+
+- The World RPG CDN supplies the GTA text table, fonts, shader caches, menu sounds and repaired menu texture files for startup without bundled game files. The launcher checks the text table before starting GTA.
+- World RPG's CDN now supplies the three ARM64 engine libraries under `game_files_android_mta/lib/`. The launcher directs CDN users to **Sync game assets** when the engine files are missing.
+
 ### Docs — 16 KB audit result recorded (2026-11-20)
 
 - `README.md`: the Step E roadmap row claimed the 16 KB ELF audit fails and blamed `libc++_shared.so`. That library is not packaged (the build links the static STL), and `python3 tools/audit_android_apk.py app/build/outputs/apk/debug/app-debug.apk --external-game-libraries` exits 0 on a current `-PnoGameFiles` build: `libWorldRPGNeon.so` LOAD alignment 16384, compressed and extracted at install. The row now records the measured result and keeps the unverified part (installing on a 16 KB-page device) as open.
 
 ### Current Neon gameplay protocol
 
+- Vehicle streaming and network sync share a locked vehicle map. The game thread creates and moves GTA vehicle bodies after taking a snapshot of the network poses.
+- World RPG's current `ENTITY_ADD` header is decoded in desktop order, including call propagation and sync time context (`CPacketHandler.cpp:2999-3099`). The captured Android `/driftcar supra` packet retains baseline 24-bit X/Y and now creates the model 401 vehicle record. Standard joins also accept servers that send the baseline header.
+- No-cache Lua scripts start on current Neon servers that send a filename before each compressed chunk (`CPacketHandler.cpp:5710-5750`), including the two scripts in `worldrpg_cars`.
+- Automatic and Standard join with packet 4 on every endpoint. Explicit Legacy mobile uses packet 19. Android declares its platform in the existing fixed-width field from desktop `CClientGame::StartGame` (`CClientGame.cpp:744-767`).
 - Server spawn packets schedule local player placement on the game thread, using the same path as server position updates.
+- Server teleports apply the local interior and load collision at distant destinations before sending the updated position. Follows `CElementRPCs.cpp:122-170,252-280` and `CClientPed.cpp:1101-1159`.
+- Lua position, velocity, rotation, and health queries use the occupied vehicle's live sample on Android. Follows `CStaticFunctionDefinitions.cpp:390-519,728-777`.
+- Android preserves vehicle locks from `ENTITY_ADD` and `SET_VEHICLE_LOCKED` and applies them before a local entry task starts. Follows desktop `CPacketHandler.cpp:3621-3649`, `CVehicleRPCs.cpp:161-175`, and `CClientVehicle.cpp:802-809`.
+- Android applies nitro upgrades from vehicle spawns, upgrade RPCs, and client scripts through GTA's native vehicle upgrade functions. Follows desktop `CPacketHandler.cpp:3578-3602`, `CVehicleRPCs.cpp:255-303`, and `CVehicleUpgrades.cpp:555-649,676-703`.
 - Standard joins use `0x41E7`. The entity reader consumes three or four water vertices and both water flags, following Neon’s `CPacketHandler::Packet_EntityAdd` and `CEntityAddPacket::Write`. Truncated water packets fail decoding.
 - The launcher can answer a trusted issuer’s Android Keystore challenge during join. Chat text and HTTP resource downloads use the companion fixes from Neon PR #135.
+
+### Custom models and textures
+
+- The GTA render queue checks vertex and index command sizes before writing. It can grow from 8 to 64 MiB for a large upload and skips commands that exceed the limit or cannot be allocated.
+- `engineReplaceModel`, `engineImportTXD` and `engineRestoreModel` apply resource DFFs and textures through GTA's model streamer for existing vehicle, ped, and object models. DFF and TXD elements accept resource files or raw RenderWare data and release their overrides when destroyed or when the resource stops. Android rendering still needs device verification.
+
+### In-game interface
+
+- Backgrounded gameplay pauses Lua drawing and reduces network and timer polling to 10 Hz. Multiplayer skips GTA's story autosave when Android backgrounds the game so the save thread cannot modify the world while it is rendering.
+- Disconnect dialogs cover the whole display, including the cutout and system-bar areas. The buttons remain available when the error page fails to load or its WebView renderer exits.
+
+- Added saved anchors for the chat and launcher buttons, chat size and chat touch settings. Newly opened panels draw above the chat. Text editors request a compact keyboard and fit the script panel above the IME.
+- Driving uses stable touch slots when fingers are lifted or replaced. The on-foot control sampler stops while seated.
+- The stock vehicle icon handles entry and exit. The stock nitro button appears for the driver while nitro is installed.
+- The vehicle HUD can read the visible driving controls through `getVehicleTouchControlBounds()` and keep its panel clear of their screen bounds.
 
 ### Added — Ko-fi Support Link & Badge (2026-11-19)
 

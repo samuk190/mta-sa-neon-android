@@ -5,6 +5,14 @@
 
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
+## README languages
+
+**English** · [Português (Brasil)](README.pt-BR.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [简体中文](README.zh-Hans.md) · [Русский](README.ru.md)
+
+## Launcher language
+
+The launcher follows your Android language preferences by default and falls back to English. Open **Settings → Language** to choose a language for the launcher. Your choice is applied immediately and saved. Select **Device language** to follow Android again.
+
 ---
 
 ## Neon server compatibility
@@ -24,9 +32,9 @@ The standard connection uses Neon gameplay protocol `0x41E7` and the mobile bits
 
 ## Install the Release APK (players)
 
-When the build has `CDN_ROOT_URL` configured, use **Settings → Sync game assets** before playing or using **Test GTA**. The app downloads and verifies the CDN manifest into private storage. It does not use external folders such as `Download/WorldRPG_backup`, even when those folders are present. The manual installation instructions below apply only to builds without a configured CDN.
+When the build has `CDN_ROOT_URL` configured, use **Settings → Sync game assets** before playing or using **Test GTA**. The World RPG CDN manifest includes the game data and the three ARM64 engine libraries in `lib/`. The app verifies the downloads and installs them in private storage. The manual instructions below apply to builds without a configured CDN.
 
-The APK on the [Releases page](https://github.com/samuk190/mta-sa-neon-android/releases) includes the launcher and the MTA loading images, without GTA San Andreas files. You copy those from your own copy of the game into one folder on the phone, and the app runs the game from there.
+The APK on the Releases page includes the launcher and the MTA loading images. For manual installation, copy the GTA San Andreas files from your own copy of the game into the game folder. [Releases](https://github.com/samuk190/mta-sa-neon-android/releases)
 
 ### What you need
 
@@ -37,6 +45,10 @@ The APK on the [Releases page](https://github.com/samuk190/mta-sa-neon-android/r
 ### 1. Install the APK
 
 Download `mta-sa-neon-android-<version>.apk` from the Releases page and install it. Open it once, then close it: Android creates the app's folder on the first start.
+
+The launcher uses the Android application ID `com.saonline.neonlauncher`. Android installs it alongside older World RPG packages and gives it a new game-data directory and install key.
+
+For servers using Neon Identity transport credentials, the official launcher obtains its publisher's public Play Integrity project number from Neon Identity. Players and server hosts do not configure Google projects. Independently signed builds can use their own publisher and issuer. Access to a publisher's servers depends on which releases that issuer recognizes.
 
 ### 2. Get the files from your copy of the game
 
@@ -52,7 +64,7 @@ GTA San Andreas for Android keeps its files in two places. Both are ZIP archives
 The default game folder is:
 
 ```text
-/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 Arrange the files like this (the three libraries go in `lib/`, everything else at the top):
@@ -77,7 +89,7 @@ game_assets/
 With adb, after extracting both archives into one folder `gta_sa/` on your PC (with the libraries in `gta_sa/lib/`):
 
 ```bash
-adb push gta_sa/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+adb push gta_sa/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 ### 4. Play
@@ -89,7 +101,7 @@ The fourteen MTA desktop loading images (`MTA/cgui/images/loadscreens/loadsc1.jp
 For CDN builds, publish image overrides and the font under `game_files_android_mta/MTA/cgui/` and list their sizes and SHA-256 hashes in `manifest_android_mta.json`, then sync again. Copying them into an external backup folder does not update the installed CDN generation. The bundled loading images work before that sync.
 
 > [!NOTE]
-> Uninstalling the app deletes `Android/data/com.worldrpg.neonlauncher/`, including the game folder. Keep your extracted copy on the PC.
+> Uninstalling the app deletes `Android/data/com.saonline.neonlauncher/`, including the game folder. Keep your extracted copy on the PC.
 
 ---
 
@@ -127,12 +139,7 @@ This mobile client is designed to connect to servers running the **MTA Neon** / 
 
 To set up and host your own compatible game server, clone and build the San Andreas Online server repository following its instructions.
 
-> [!WARNING]
-> **MTA Anti-Cheat Compatibility Notice**
->
-> Standard Multi Theft Auto proprietary Anti-Cheat (`net.dll` / MTA AC server checks) **does NOT work** with this mobile client.
->
-> Because this client uses a custom packet architecture, mobile-tailored bitstreams, and an ARM64-optimized native cipher for network transport, traditional desktop MTA anti-cheat modules will reject the connection. The server must be run using [San Andreas Online (MTA Neon)](https://github.com/Dryxio/san-andreas-online) or have standard anti-cheat verification modules disabled.
+Classic game connections use the server's stock network module and anticheat. Keep the default settings for mixed PC and Android play. The stock module may reject a mobile connection with AC #4 before the game records a join. Play Integrity enrollment supplies a client credential for servers that implement QUIC gameplay.
 
 ---
 
@@ -242,7 +249,7 @@ To set up and host your own compatible game server, clone and build the San Andr
 
 ## Game Assets & Folder Location
 
-All game assets are configured locally via environment variables (`.env`) rather than downloading from external cloud repositories.
+Configure the local game files and optional CDN in `.env`.
 
 ### 1. Configure `.env`
 
@@ -257,7 +264,8 @@ Edit `.env` to define your asset locations:
 ```env
 # Launcher UI Customization
 LAUNCHER_TITLE=MTA:SA Neon Android
-LAUNCHER_PLAY_BUTTON_TEXT=Play
+# Leave empty to use the translated Play label.
+LAUNCHER_PLAY_BUTTON_TEXT=
 
 # Default Server Connection Settings
 DEFAULT_SERVER_NAME=MTA Neon Server
@@ -270,7 +278,7 @@ DEFAULT_PLAYER_NICK=Player
 GAME_ASSETS_DIR=./game_assets
 
 # Storage path on your Android device (where assets will be loaded from):
-DEVICE_ASSETS_PATH=/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets
+DEVICE_ASSETS_PATH=/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets
 
 # Optional: Custom CDN or Local HTTP Server URL if serving assets over network
 CDN_ROOT_URL=
@@ -334,7 +342,7 @@ bash tools/sync_local_assets.sh
 
 Alternatively, copy the contents of `game_assets/` to your device storage manually:
 ```bash
-adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+adb push game_assets/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 ---
@@ -413,3 +421,9 @@ This project is built upon decades of collective community research, open-source
 - **Opus Codec**: Copyright © 2001–2011 Xiph.Org Foundation, Skype Limited. Licensed under the [BSD-3-Clause License](https://opus-codec.org/license/).
 - **Rockstar Games**: Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
 - This open-source research and educational project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
+
+## Connect to a QUIC gameplay server
+
+In **Favorites → Add**, enter the server's certificate hostname prefixed with `quic://` and its separate QUIC UDP port. The launcher uses the installation key in Android Keystore and its Neon Identity client certificate. The server owner can require Google Play device integrity for this endpoint. Use a plain hostname and the classic port to connect to classic servers.
+
+To build the launcher with the native adapter, check out the server branch from [PR #135](https://github.com/Dryxio/san-andreas-online/pull/135) in a sibling directory named `san-andreas-online`. Install the Go version from `Shared/transport/go.mod` on your PATH. The Android CMake build compiles and packages the arm64 QUIC library using the NDK. A checkout in another location can be selected with the CMake variable `NEON_TRANSPORT_DIR`.

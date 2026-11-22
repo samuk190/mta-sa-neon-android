@@ -929,6 +929,14 @@ bool RemoteTouchActive() {
     return g_touchHooks;
 }
 
+bool InRemoteControlContext() {
+#ifdef __ANDROID__
+    return g_remoteContext;
+#else
+    return false;
+#endif
+}
+
 void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera, bool hasCamera, uint8_t buttons) {
     if (!ped) return;
     RemoteStick* entry = FindStick(ped);

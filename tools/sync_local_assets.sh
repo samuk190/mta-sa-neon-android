@@ -33,7 +33,7 @@ else
 fi
 
 GAME_ASSETS_DIR="${GAME_ASSETS_DIR:-$PROJECT_ROOT/game_assets}"
-DEVICE_ASSETS_PATH="${DEVICE_ASSETS_PATH:-/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets}"
+DEVICE_ASSETS_PATH="${DEVICE_ASSETS_PATH:-/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets}"
 
 # Resolve relative path if needed
 if [[ "$GAME_ASSETS_DIR" != /* ]]; then

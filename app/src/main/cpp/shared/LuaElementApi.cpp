@@ -157,7 +157,7 @@ bool DestroyNode(uint32_t id) {
     RopeRelease(id);
     WaterRelease(id);
     FireRelease(id);
-    ReleaseDffElement(id);
+    ReleaseModelAsset(id);
     g_nodes.erase(id);
     g_localNames.erase(id);
     g_callProp.erase(id);

@@ -1,6 +1,7 @@
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
+#include "entity/EntityVehicleModels.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
 
@@ -349,7 +350,7 @@ bool SlotFromUpgrade(unsigned short us, unsigned char& ucSlot) {
     if (Listed(us, {1109, 1110})) { ucSlot = 5; return true; }
     if (Listed(us, {1013, 1024})) { ucSlot = 6; return true; }
     if (Listed(us, {1006, 1032, 1033, 1035, 1038, 1053, 1054, 1055, 1061, 1067, 1068, 1088, 1091, 1103, 1128, 1130, 1131})) { ucSlot = 7; return true; }
-    if (Listed(us, {1008, 1009, 1010})) { ucSlot = 8; return true; }
+    if (Entity::VehicleModels::IsNitroUpgrade(us)) { ucSlot = 8; return true; }
     if (Listed(us, {1087})) { ucSlot = 9; return true; }
     if (Listed(us, {1086})) { ucSlot = 10; return true; }
     if (Listed(us, {1025, 1073, 1074, 1075, 1076, 1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, 1085, 1096, 1097, 1098})) { ucSlot = 12; return true; }
@@ -698,8 +699,6 @@ int GetVehicleController(lua_State* L) {
 // CClientVehicle fields that exist before the GTA vehicle is created
 // (CClientVehicle.cpp:150-190). The native body write stays DIAG.
 struct VehicleFlags {
-    bool locked = false;
-    int doorLock = 1;  // DOOR_LOCK_UNLOCKED
     bool engine = false;
     unsigned char overrideLights = 0;
     unsigned char paintjob = 3;
@@ -742,9 +741,6 @@ struct VehicleFlags {
     unsigned char variant2 = 255;
     float wheelScale = 1.f;
     bool smokeTrail = false;
-    float nitroLevel = 1.f;
-    char nitroCount = 0;
-    bool nitroInstalled = false;
     unsigned short adjustable = 0;
     float turretH = 0.f;
     float turretV = 0.f;
@@ -918,7 +914,7 @@ int IsVehicleLocked(lua_State* L) {
     uint32_t id = 0;
     if (!ReadVehicleId(L, "isVehicleLocked", id, model)) return FailNil(L);
     (void)model;
-    lua_pushboolean(L, CopyFlags(id).locked ? 1 : 0);
+    lua_pushboolean(L, ServerWorld::VehicleDoorLockMode(id) != 1);
     return 1;
 }
 
@@ -927,13 +923,7 @@ int SetVehicleLocked(lua_State* L) {
     bool locked = false;
     if (!ReadElement(L, "setVehicleLocked", id)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleLocked", 2, locked)) return Fail(L);
-    if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
-    auto flags = CopyFlags(id);
-    flags.locked = locked;
-    flags.doorLock = locked ? 2 : 1;
-    UpdateFlags(id, flags);
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, ServerWorld::SetVehicleDoorLockMode(id, locked ? 2 : 1));
     return 1;
 }
 
@@ -942,7 +932,7 @@ int GetVehicleDoorLockMode(lua_State* L) {
     if (!IsElementArg(L, 1) || std::strcmp(ServerWorld::ElementKindName(ElementIdOf(L, 1)), "vehicle") != 0)
         return luaL_error(L, "%s", ParserError(L, "getVehicleDoorLockMode", "vehicle", 1).c_str());
     (void)model;
-    lua_pushnumber(L, CopyFlags(ElementIdOf(L, 1)).doorLock);
+    lua_pushnumber(L, ServerWorld::VehicleDoorLockMode(ElementIdOf(L, 1)));
     return 1;
 }
 
@@ -960,12 +950,7 @@ int SetVehicleDoorLockMode(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    NoteNativeVehicleGap();
-    auto flags = CopyFlags(ElementIdOf(L, 1));
-    flags.doorLock = mode;
-    flags.locked = mode != 1;
-    UpdateFlags(ElementIdOf(L, 1), flags);
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, ServerWorld::SetVehicleDoorLockMode(ElementIdOf(L, 1), mode));
     return 1;
 }
 
@@ -2788,7 +2773,8 @@ int GetVehicleUpgradeOnSlot(lua_State* L) {
     if (!ReadVehicleId(L, "getVehicleUpgradeOnSlot", id, model)) return Fail(L);
     if (!ReadByteArg(L, "getVehicleUpgradeOnSlot", 2, slot)) return Fail(L);
     (void)model;
-    lua_pushnumber(L, slot < 17 ? CopyFlags(id).upgrades[slot] : 0);
+    const auto flags = CopyFlags(id);
+    lua_pushnumber(L, slot == 8 ? ServerWorld::VehicleNitroUpgrade(id) : slot < 17 ? flags.upgrades[slot] : 0);
     return 1;
 }
 
@@ -2797,7 +2783,8 @@ int GetVehicleUpgrades(lua_State* L) {
     uint32_t id = 0;
     if (!ReadVehicleId(L, "getVehicleUpgrades", id, model)) return Fail(L);
     (void)model;
-    const auto flags = CopyFlags(id);
+    auto flags = CopyFlags(id);
+    flags.upgrades[8] = ServerWorld::VehicleNitroUpgrade(id);
     lua_newtable(L);
     int index = 1;
     for (unsigned short upgrade : flags.upgrades) {
@@ -2825,6 +2812,10 @@ int AddVehicleUpgrade(lua_State* L) {
     unsigned short upgrade = 0;
     if (!ReadUnsignedShortArg(L, "addVehicleUpgrade", 2, upgrade)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
+    if (Entity::VehicleModels::IsNitroUpgrade(upgrade)) {
+        lua_pushboolean(L, ServerWorld::SetVehicleNitroUpgrade(id, upgrade, true));
+        return 1;
+    }
     const int model = ServerWorld::ModelOf(id);
     if (upgrade < 1000 || upgrade > 1193 || !RadioUpgradeAllowed(model) || upgrade != 1086) {
         if (upgrade == 1086) return Fail(L);
@@ -2835,7 +2826,6 @@ int AddVehicleUpgrade(lua_State* L) {
     NoteNativeVehicleGap();
     auto flags = CopyFlags(id);
     flags.upgrades[10] = 1086;
-    flags.nitroInstalled = false;
     UpdateFlags(id, flags);
     lua_pushboolean(L, 1);
     return 1;
@@ -2847,6 +2837,10 @@ int RemoveVehicleUpgrade(lua_State* L) {
     if (!ReadElement(L, "removeVehicleUpgrade", id)) return Fail(L);
     if (!ReadUnsignedShortArg(L, "removeVehicleUpgrade", 2, upgrade)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
+    if (Entity::VehicleModels::IsNitroUpgrade(upgrade)) {
+        lua_pushboolean(L, ServerWorld::SetVehicleNitroUpgrade(id, upgrade, false));
+        return 1;
+    }
     unsigned char slot = 0;
     if (!SlotFromUpgrade(upgrade, slot)) return Fail(L);
     auto flags = CopyFlags(id);

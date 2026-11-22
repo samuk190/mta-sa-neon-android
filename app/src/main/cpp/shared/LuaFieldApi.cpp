@@ -228,6 +228,13 @@ int l_getElementRotation(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    Game::LocalCarState car;
+    if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        lua_pushnumber(L, car.rotX);
+        lua_pushnumber(L, car.rotY);
+        lua_pushnumber(L, car.rotZ);
+        return 3;
+    }
     float z = 0.f;
     if (!HeadingOf(id, z)) {
         lua_pushboolean(L, 0);
@@ -475,6 +482,11 @@ int l_getElementHealth(lua_State* L) {
     const auto found = g_fields.find(id);
     if (found != g_fields.end() && found->second.healthSet) {
         lua_pushnumber(L, found->second.health);
+        return 1;
+    }
+    Game::LocalCarState car;
+    if (kind == Kind::Vehicle && Game::CopyLocalCar(car) && car.vehicleId == id) {
+        lua_pushnumber(L, car.health);
         return 1;
     }
     if (id == ServerWorld::LocalPlayer()) {

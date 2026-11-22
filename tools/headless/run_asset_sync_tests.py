@@ -9,7 +9,7 @@ STUBS = {
     "Context.kt": """package android.content
 import java.io.File
 class Context(val filesDir: File) {
-    val packageName = "com.worldrpg.neonlauncher"
+    val packageName = "com.saonline.neonlauncher"
     @Suppress("UNUSED_PARAMETER")
     fun getExternalFilesDir(type: String?): File? = null
 }
@@ -22,7 +22,7 @@ object Uri { fun encode(value: String): String = URLEncoder.encode(value, "UTF-8
 @Suppress("UNUSED_PARAMETER")
 object Log { fun w(tag: String, text: String, error: Throwable) = 0 }
 """,
-    "BuildConfig.kt": """package com.worldrpg.neonlauncher
+    "BuildConfig.kt": """package com.saonline.neonlauncher
 object BuildConfig { var CDN_ROOT_URL = ""; var DEVICE_ASSETS_PATH = "" }
 """,
 }
@@ -54,13 +54,13 @@ def main():
         (test_stubs / name).write_text(content)
     classpath = os.pathsep.join(map(str, (stdlib, coroutines, annotations, args.json_jar, args.build_dir)))
     compiler_classpath = os.pathsep.join(map(str, (compiler, stdlib, reflect, runtime, trove, annotations)))
-    source = root / "app/src/main/java/com/worldrpg/neonlauncher/utils"
+    source = root / "app/src/main/java/com/saonline/neonlauncher/utils"
     files = [source / "GameAssetManifest.kt", source / "NativeAssetBridge.kt",
              root / "tools/headless/kotlin/GameAssetSyncRegressionTest.kt",
              *(test_stubs / name for name in STUBS)]
     subprocess.run([args.java, "-cp", compiler_classpath, "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
                     "-jvm-target", "17", "-classpath", classpath, "-d", str(args.build_dir), *map(str, files)], check=True)
-    subprocess.run([args.java, "-cp", classpath, "com.worldrpg.neonlauncher.utils.GameAssetSyncRegressionTestKt"], check=True)
+    subprocess.run([args.java, "-cp", classpath, "com.saonline.neonlauncher.utils.GameAssetSyncRegressionTestKt"], check=True)
 
 
 if __name__ == "__main__":
