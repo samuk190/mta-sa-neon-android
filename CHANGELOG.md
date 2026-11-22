@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The World RPG CDN supplies the GTA text table, fonts, shader caches, menu sounds and repaired menu texture files for startup without bundled game files. The launcher checks the text table before starting GTA.
 - World RPG's CDN now supplies the three ARM64 engine libraries under `game_files_android_mta/lib/`. The launcher directs CDN users to **Sync game assets** when the engine files are missing.
 
+### Docs — 16 KB audit result recorded (2026-11-20)
+
+- `README.md`: the Step E roadmap row claimed the 16 KB ELF audit fails and blamed `libc++_shared.so`. That library is not packaged (the build links the static STL), and `python3 tools/audit_android_apk.py app/build/outputs/apk/debug/app-debug.apk --external-game-libraries` exits 0 on a current `-PnoGameFiles` build: `libWorldRPGNeon.so` LOAD alignment 16384, compressed and extracted at install. The row now records the measured result and keeps the unverified part (installing on a 16 KB-page device) as open.
+
 ### Current Neon gameplay protocol
 
 - Vehicle streaming and network sync share a locked vehicle map. The game thread creates and moves GTA vehicle bodies after taking a snapshot of the network poses.
