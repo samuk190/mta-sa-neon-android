@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Connection and loading -->
+    <string name="disconnected">Disconnected</string>
+    <string name="disconnected_from_server">Disconnected from the server.</string>
+    <string name="connected_to_server">Connected to the server.</string>
+    <string name="connection_lost">Connection lost</string>
+    <string name="connection_lost_retry">The server ended the session. Do you want to reconnect?</string>
+    <string name="reconnect_failed">Could not reconnect to the server. Try again.</string>
+    <string name="connection_start_failed">Could not start the connection.</string>
+    <string name="connection_error_detail">Error: %1$s</string>
+    <string name="connection_error_code">Error [%1$s]</string>
+    <string name="connection_to_server_failed">Could not connect to %1$s on port %2$d.</string>
+    <string name="connecting_to_address">Connecting to %1$s…</string>
+    <string name="waiting_for_game_data">Connected. Waiting for game data.</string>
+    <string name="loading_starting_game">Starting San Andreas</string>
+    <string name="loading_downloading_resources">Downloading resources</string>
+    <string name="loading_processing_resources">Processing resources</string>
+    <string name="loading_preparing_server_data">Preparing server data</string>
+    <string name="loading_preparing_world">Preparing the world</string>
+    <string name="downloading">Downloading</string>
+    <string name="transfer_progress">Download progress: %1$s of %2$s</string>
+    <string name="transfer_cancel_hint">Disconnect to cancel the download</string>
+
+    <!-- Game startup and diagnostics -->
+    <string name="game_assets_sync_required">Sync the game files in Settings.</string>
+    <string name="native_client_load_failed">Could not load the native MTA client.</string>
+    <string name="native_client_init_failed">Could not initialize the native MTA client.</string>
+    <string name="installed_assets_open_failed">Could not open the installed game files.</string>
+    <string name="gta_engine_load_failed">Could not load the GTA engine (libGTASA).</string>
+    <string name="network_identity_init_failed">Could not initialize this device’s network identity.</string>
+    <string name="engine_text_missing_cdn">The game text file (%1$s) is missing or empty. Sync the game files in Settings.</string>
+    <string name="engine_text_missing_local">The game text file (%1$s) is missing or empty. Add it to the game folder.</string>
+    <string name="engine_map_file_missing">Map file missing or inaccessible (%1$s).</string>
+    <string name="engine_stopped_unexpectedly">The game engine stopped unexpectedly.</string>
+    <string name="engine_failure_title">Could not start or continue the game</string>
+    <string name="engine_failure_log">Engine failure log</string>
+    <string name="engine_copy_log">Copy log</string>
+    <string name="engine_value_not_detected">Not detected</string>
+    <string name="engine_report_device">Device: %1$s %2$s\nAndroid: %3$s\nGPU: %4$s\nTexture format: %5$s</string>
+    <string name="engine_report_exit_reason">Exit reason: %1$d / status: %2$d</string>
+    <string name="engine_report_crash_trace">Engine crash trace</string>
+    <string name="engine_report_trace_unavailable">Android crash trace unavailable.</string>
+    <string name="engine_report_log">Engine log</string>
+    <string name="engine_report_earlier_lines">[Earlier log lines omitted]</string>
+    <string name="engine_report_footer">Native crash traces are included when Android provides them.</string>
+    <string name="engine_report_truncated">[Report truncated]</string>
+    <string name="engine_libs_missing_cdn">Game engine files are missing. Sync the game files in Settings.</string>
+    <string name="engine_libs_missing_local">Copy libGTASA.so, libSCAnd.so and libOpenAL64.so from lib/arm64-v8a/ in your GTA San Andreas 2.10 APK to %1$s.</string>
+    <string name="engine_file_write_failed">Could not write to %1$s.</string>
+    <string name="engine_invalid_lib">%1$s is not a valid native library.</string>
+    <string name="engine_textures_missing">Some game textures for %1$s (%2$s) are missing or unreadable. Sync the game files in Settings and try again.\n\n%3$s</string>
+
+    <!-- Game settings and controls -->
+    <string name="paused">Paused</string>
+    <string name="resume">Resume</string>
+    <string name="map">Map</string>
+    <string name="done">Done</string>
+    <string name="chat">Chat</string>
+    <string name="chat_hint">Type a message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_send_failed">Message was not sent.</string>
+    <string name="no_bound_keys">No keys bound</string>
+    <string name="game_settings_live">Changes apply immediately and are saved for future sessions.</string>
+    <string name="game_settings_loading">The settings will be available when the game finishes loading.</string>
+    <string name="visual_quality">Visual quality</string>
+    <string name="resolution">Resolution</string>
+    <string name="draw_distance">Draw distance</string>
+    <string name="shadows">Shadows</string>
+    <string name="car_reflections">Vehicle reflections</string>
+    <string name="brightness">Brightness</string>
+    <string name="frame_limiter">Frame rate limit</string>
+    <string name="sound_effects">Sound effects</string>
+    <string name="game_music">Game music</string>
+    <string name="section_game">Game</string>
+    <string name="vibration">Vibration</string>
+    <string name="subtitles">Subtitles</string>
+    <string name="chat_hidden">Hidden</string>
+    <string name="chat_shown">Visible</string>
+</resources>

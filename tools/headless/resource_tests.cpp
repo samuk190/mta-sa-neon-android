@@ -11,9 +11,11 @@
 // Usage: neon_resource_tests [path/to/catalog.json]
 
 #include "HttpDownloader.h"
+#include "EngineModelLoader.h"
 #include <filesystem>
 #include <fstream>
 #include "LuaEventRegistry.h"
+#include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
 #include "LuaMtaWindowApi.h"
@@ -40,6 +42,8 @@
 #include "ResourceLoader.h"
 #include "ResourcePackets.h"
 #include "ServerWorld.h"
+#include "PacketHandler.h"
+#include "MtaIds.h"
 #include "entity/EntityAddTypes.h"
 #include "net/raknet/RakNetWrapper.h"
 #include "lua.hpp"
@@ -89,10 +93,9 @@ bool RunLua(WorldRPG::Script::LuaVMStub& vm, const char* name, const std::string
     return result.success;
 }
 
-// RESOURCE_CLIENT_SCRIPTS (packet 95) body after the game id, as the server writes it for a
-// mobile peer: uint16 net id, uint16 count, then per item uint32 length and the item
-// (uint32 big-endian original length + zlib data).
-std::vector<uint8_t> NoCacheScriptBody(uint16_t netId, const std::string& source) {
+// Packet 95 carries a filename per item on current Neon and only the
+// length-prefixed compressed item on legacy mobile.
+std::vector<uint8_t> NoCacheScriptBody(uint16_t netId, const std::string& source, std::string_view filename = {}) {
     uLongf packedLength = compressBound(source.size());
     std::vector<uint8_t> packed(packedLength);
     compress2(packed.data(), &packedLength, reinterpret_cast<const Bytef*>(source.data()), source.size(),
@@ -105,6 +108,11 @@ std::vector<uint8_t> NoCacheScriptBody(uint16_t netId, const std::string& source
     item.insert(item.end(), packed.begin(), packed.end());
 
     std::vector<uint8_t> body = {static_cast<uint8_t>(netId & 0xFF), static_cast<uint8_t>(netId >> 8), 1, 0};
+    if (!filename.empty()) {
+        body.push_back(static_cast<uint8_t>(filename.size()));
+        body.push_back(static_cast<uint8_t>(filename.size() >> 8));
+        body.insert(body.end(), filename.begin(), filename.end());
+    }
     const uint32_t length = static_cast<uint32_t>(item.size());
     for (int i = 0; i < 4; ++i) body.push_back(static_cast<uint8_t>(length >> (8 * i)));
     body.insert(body.end(), item.begin(), item.end());
@@ -1980,14 +1988,26 @@ void CheckCoreClientCalls(WorldRPG::Script::LuaVMStub& vm) {
     RunLua(vm, "core-client-focus-same",
            "assert(#focusHits == 1, 'same focus does not fire again')");
     WorldRPG::Script::MtaWindowSetFocused(false);
-    vm.pumpDx();
+    RunLua(vm, "background-pulse-setup", R"LUA(
+        backgroundTimerHits, renderHits = 0, 0
+        countRender = function() renderHits = renderHits + 1 end
+        assert(addEventHandler("onClientPreRender", root, countRender))
+        assert(addEventHandler("onClientRender", root, countRender))
+        assert(setTimer(function() backgroundTimerHits = backgroundTimerHits + 1 end, 10, 1))
+    )LUA");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(vm.pumpDx(false).empty());
     RunLua(vm, "core-client-focus-off",
-           "assert(isMTAWindowFocused() == false and #focusHits == 2 and focusHits[2] == false, 'focus lost')");
+           "assert(isMTAWindowFocused() == false and #focusHits == 2 and focusHits[2] == false, 'focus lost')\n"
+           "assert(backgroundTimerHits == 1 and renderHits == 0, 'background timers run without rendering')");
     WorldRPG::Script::MtaWindowSetFocused(true);
     WorldRPG::Script::MtaWindowSetFocused(false);
     vm.pumpDx();
     RunLua(vm, "core-client-focus-coalesced",
-           "assert(#focusHits == 2 and setWindowFlashing(true) == true, 'cancelled focus change')");
+           "assert(#focusHits == 2 and setWindowFlashing(true) == true, 'cancelled focus change')\n"
+           "assert(backgroundTimerHits == 1 and renderHits == 2, 'rendering resumed')\n"
+           "assert(removeEventHandler('onClientPreRender', root, countRender))\n"
+           "assert(removeEventHandler('onClientRender', root, countRender))");
 }
 
 void CheckMtaWindow(WorldRPG::Script::LuaVMStub& vm) {
@@ -2204,6 +2224,9 @@ void CheckMtaWindow(WorldRPG::Script::LuaVMStub& vm) {
         assert(getVehicleUpgradeOnSlot(car, 10) == 0 and addVehicleUpgrade(car, 1086) == true, "radio")
         assert(getVehicleUpgradeOnSlot(car, 10) == 1086 and getVehicleUpgrades(car)[1] == 1086, "radio stored")
         assert(addVehicleUpgrade(train, 1086) == false and removeVehicleUpgrade(car, 1086) == true, "radio rules")
+        assert(addVehicleUpgrade(car, 1010) and getVehicleUpgradeOnSlot(car, 8) == 1010, "nitro installed")
+        assert(getVehicleUpgrades(car)[1] == 1010 and not addVehicleUpgrade(train, 1010), "nitro compatibility")
+        assert(removeVehicleUpgrade(car, 1010) and getVehicleUpgradeOnSlot(car, 8) == 0, "nitro removed")
         assert(type(getVehicleComponents(car)) == "table" and getVehicleComponentPosition(car, "bonnet") == false, "components")
         assert(setVehicleComponentPosition(car, "bonnet", 0, 0, 0) == false, "component not on the clump")
         assert(createVehicle(411, 0, 0, 0) == false and requestVehicleRecording(1) == false, "no resource")
@@ -3112,6 +3135,130 @@ private:
     std::thread thread_;
 };
 
+void CheckModelDownloads(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+
+    LoopbackHttp server(LoopbackHttp::Mode::Respond);
+    CHECK(server.ok());
+    if (!server.ok()) return;
+    const std::string base = "http://127.0.0.1:" + std::to_string(server.port());
+    Net::HttpDownloader::SetServerBase(base);
+
+    Net::ResourceStartInfo model;
+    model.name = "model-download-test";
+    model.resourceId = 120;
+    model.entityId = 0x7300;
+    model.noClientCacheScripts = 1;
+    Net::ResourceFile asset;
+    asset.name = "model.dff";
+    asset.clientFile = true;
+    asset.type = Net::kResourceFileTypeClientFile;
+    constexpr char response[] = "ok-body";
+    asset.size = sizeof(response) - 1;
+    asset.crc = crc32(0, reinterpret_cast<const unsigned char*>(response), asset.size);
+    model.files = {asset};
+
+    const std::filesystem::path path = Net::HttpDownloader::CachedFilePath(model.name, asset.name);
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream(path) << "old";
+    Script::ActiveVmOnResourceStart(model);
+    const auto body = NoCacheScriptBody(model.resourceId, R"LUA(
+        _G.modelDownloadEvents = 0
+        addEventHandler("onClientFileDownloadComplete", resourceRoot, function(name, ok, requester)
+            assert(name == "model.dff" and ok and requester == getThisResource())
+            assert(source.id == resourceRoot.id and fileGetContents(name) == "ok-body")
+            _G.modelDownloadEvents = _G.modelDownloadEvents + 1
+        end)
+        assert(downloadFile("undeclared.dff") == false)
+        assert(downloadFile("./model.dff") and downloadFile("model.dff"))
+        assert(_G.modelDownloadEvents == 0, "completion runs on the next resource pulse")
+    )LUA", "[worldrpg]/model-download-test/client/models.lua");
+    CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+    Script::ActiveVmPulseResources();
+    std::filesystem::path resolved;
+    CHECK(!Script::ResolveModelPath(":model-download-test/model.dff", resolved));
+    CHECK(Net::HttpDownloader::WaitIdle(3000));
+    Script::ActiveVmPulseResources();
+    CHECK(Script::ResolveModelPath(":model-download-test/model.dff", resolved) && resolved == path);
+    RunLua(vm, "download-model", "assert(_G.modelDownloadEvents == 1)");
+
+    LoopbackHttp oldServer(LoopbackHttp::Mode::Hold);
+    CHECK(oldServer.ok());
+    if (!oldServer.ok()) return;
+    model.name = "model-download-restart-test";
+    model.resourceId = 121;
+    model.entityId = 0x7301;
+    model.noClientCacheScripts = 0;
+    model.files[0].autoDownload = true;
+    const std::string restartPath = Net::HttpDownloader::CachedFilePath(model.name, asset.name);
+    std::filesystem::remove(restartPath);
+    Net::HttpDownloader::SetServerBase("http://127.0.0.1:" + std::to_string(oldServer.port()));
+    model.files[0].crc ^= 1u;
+    Script::ActiveVmOnResourceStart(model);
+    CHECK(oldServer.WaitAccepted(3000));
+    Net::HttpDownloader::SetServerBase(base);
+    model.files[0].crc = asset.crc;
+    Script::ActiveVmOnResourceStart(model);
+    oldServer.Release();
+    CHECK(Net::HttpDownloader::WaitIdle(3000));
+    Script::ActiveVmPulseResources();
+    CHECK(Script::ResourceLoader::IsFileReady(model.name, asset.name, 0));
+    Script::ResourceLoader::ResourceView latest;
+    CHECK(Script::ResourceLoader::CopyResource(model.name, latest) && latest.state == "running");
+
+    // The host validates chunk boundaries before any native parser is called.
+    constexpr unsigned char clump[] = {
+        0x10, 0, 0, 0, 16, 0, 0, 0, 0xff, 0xff, 3, 0x18,
+        0x01, 0, 0, 0, 4, 0, 0, 0, 0xff, 0xff, 3, 0x18,
+        0, 0, 0, 0,
+    };
+    const auto fixture = path.parent_path() / "clump-fixture.dff";
+    std::ofstream(fixture, std::ios::binary).write(reinterpret_cast<const char*>(clump), sizeof(clump));
+    CHECK(Script::ReadDffClump(fixture.c_str()).size() == sizeof(clump));
+    std::filesystem::resize_file(fixture, sizeof(clump) - 1);
+    CHECK(Script::ReadDffClump(fixture.c_str()).empty());
+    std::filesystem::remove(fixture);
+
+    // One 4x4 D3D9/DXT1 texture. The native reader sizes its upload buffer
+    // from the mip dimensions, so an oversized length must fail validation.
+    Net::BitStreamWriter txd;
+    const auto chunk = [&](uint32_t type, uint32_t size) {
+        txd.Write(type);
+        txd.Write(size);
+        txd.Write(uint32_t{0x1803ffff});
+    };
+    chunk(0x16, 152);
+    chunk(1, 4);
+    txd.Write(uint16_t{1});
+    txd.Write(uint16_t{2});
+    chunk(0x15, 112);
+    chunk(1, 100);
+    std::array<uint8_t, 100> raster{};
+    raster[0] = 9;
+    raster[8] = 'a';
+    raster[73] = 2;
+    std::memcpy(raster.data() + 76, "DXT1", 4);
+    raster[80] = 4;
+    raster[82] = 4;
+    raster[84] = 16;
+    raster[85] = 1;
+    raster[86] = 4;
+    raster[87] = 8;
+    raster[88] = 8;
+    // The writer adds an empty dictionary extension, as normal PC TXDs do.
+    txd.WriteBytes(raster.data(), raster.size());
+    chunk(3, 0);
+    const auto txdBytes = std::span(txd.GetData(), txd.GetByteLength());
+    CHECK(Script::FindTxdDictionary(txdBytes).size() == txdBytes.size());
+    CHECK(Script::FindTxdDictionary(txdBytes.first(txdBytes.size() - 1)).empty());
+    std::vector<uint8_t> wrongMip(txdBytes.begin(), txdBytes.end());
+    wrongMip[52 + 88] = 12;
+    CHECK(Script::FindTxdDictionary(wrongMip).empty());
+
+    std::filesystem::remove(path);
+    std::filesystem::remove(restartPath);
+}
+
 uint16_t ClosedTcpPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return 0;
@@ -3430,6 +3577,58 @@ void CheckNetworkCalls(WorldRPG::Script::LuaVMStub& vm) {
 }
 
 } // namespace
+
+void CheckVehiclePackets() {
+    using namespace WorldRPG;
+    constexpr uint32_t id = 0x1234;
+    Net::BitStreamWriter spawn;
+    auto bits = [&](uint32_t value, size_t count) { WriteTestBits(spawn, value, count); };
+    spawn.WriteCompressed(1u, 4);
+    bits(id, 17); spawn.Write(uint8_t(Entity::kTypeVehicle)); bits(0, 17);
+    spawn.Write(uint8_t(0)); spawn.WriteCompressed(0u, 2);
+    bits(0, 1); bits(1, 1); // Unattached, collisions enabled.
+    spawn.WriteCompressed(0u, 2); spawn.WriteCompressed(0u, 2); // Custom data and name.
+    bits(0, 24); bits(0, 24); spawn.Write(10.f);
+    bits(0, 16); bits(0, 16); bits(0, 16);
+    spawn.Write(uint16_t(536));
+    bits(2000, 12); bits(0, 2); // Health and blow state.
+    bits(0, 2); bits(0, 24); bits(0, 2); // One RGB colour and paintjob.
+    bits(0, 18); bits(0, 8); bits(0, 14); bits(0, 8); // Damage.
+    bits(0, 16); bits(0, 12); // Variants and six closed door ratios.
+    spawn.Write(uint8_t(2)); spawn.Write(uint8_t(10)); spawn.Write(uint8_t(86)); // Nitro and radio.
+    bits(0, 32); bits(0, 32); // Plate.
+    bits(0, 2); // Lights.
+    for (int flag = 0; flag < 12; ++flag) bits(flag == 4, 1);
+    spawn.WriteCompressed(0u, 1); bits(0, 3);
+    ServerWorld::OnEntityAdd(spawn.GetData(), spawn.GetByteLength(), spawn.GetBitLength());
+    ServerWorld::ActorSpawn vehicle;
+    CHECK(ServerWorld::CopyVisual(id, vehicle) && vehicle.model == 536 && vehicle.vehicleDoorLock == 2);
+    CHECK(vehicle.nitroUpgrade == 1010);
+
+    Sync::PacketHandler handler;
+    auto vehicleRpc = [&](uint8_t func, auto... arguments) {
+        Net::BitStreamWriter rpc;
+        rpc.Write(MtaIds::Packet::LuaElementRpc);
+        rpc.Write(func);
+        WriteTestBits(rpc, id, 17);
+        (rpc.Write(arguments), ...);
+        return handler.handlePacket(99, rpc.GetData(), rpc.GetByteLength(), rpc.GetBitLength());
+    };
+    CHECK(!vehicleRpc(MtaIds::Rpc::SetVehicleLocked) && ServerWorld::VehicleDoorLockMode(id) == 2);
+    CHECK(vehicleRpc(MtaIds::Rpc::SetVehicleLocked, uint8_t(0)) && ServerWorld::VehicleDoorLockMode(id) == 1);
+    CHECK(vehicleRpc(MtaIds::Rpc::SetVehicleLocked, uint8_t(1)) && ServerWorld::VehicleDoorLockMode(id) == 2);
+
+    CHECK(!vehicleRpc(MtaIds::Rpc::AddVehicleUpgrade, uint8_t(8)) && ServerWorld::VehicleNitroUpgrade(id) == 1010);
+    CHECK(vehicleRpc(MtaIds::Rpc::AddVehicleUpgrade, uint16_t(1008)) && ServerWorld::VehicleNitroUpgrade(id) == 1008);
+    CHECK(ServerWorld::CopyActors(&vehicle, 1) == 1 && vehicle.nitroUpgrade == 1008);
+    const uint64_t revision = vehicle.nitroRevision;
+    CHECK(vehicleRpc(MtaIds::Rpc::AddVehicleUpgrade, uint16_t(1008)));
+    CHECK(ServerWorld::CopyActors(&vehicle, 1) == 1 && vehicle.nitroRevision == revision + 1);
+    CHECK(vehicleRpc(MtaIds::Rpc::RemoveVehicleUpgrade, uint8_t(10)) && ServerWorld::VehicleNitroUpgrade(id) == 1008);
+    CHECK(vehicleRpc(MtaIds::Rpc::RemoveVehicleUpgrade, uint8_t(8)) && ServerWorld::VehicleNitroUpgrade(id) == 0);
+    CHECK(vehicleRpc(MtaIds::Rpc::AddAllVehicleUpgrades) && ServerWorld::VehicleNitroUpgrade(id) == 1010);
+    ServerWorld::ResetSession();
+}
 
 // ROADMAP_PEDS_SYNC phase 1: every field of the ENTITY_ADD ped body is kept, in the order of
 // CPacketHandler::Packet_EntityAdd case PED (CPacketHandler.cpp 3997-4187), at the 0x0030 widths.
@@ -4427,6 +4626,7 @@ void CheckSight(WorldRPG::Script::LuaVMStub& vm) {
 
 int main(int argc, char** argv) {
     CheckPacketLayouts();
+    CheckVehiclePackets();
     CheckPedEntityBody();
     CheckPlayerListCapture();
 
@@ -4481,6 +4681,7 @@ int main(int argc, char** argv) {
     CheckDxImage(vm);
     CheckGuiFonts(vm);
     CheckNetworkCalls(vm);
+    CheckModelDownloads(vm);
     CheckPedBodyState(vm);
 
     if (argc > 1) {

@@ -1,4 +1,4 @@
-package com.worldrpg.neonlauncher.game;
+package com.saonline.neonlauncher.game;
 
 /** Run with javac/java; Android rendering itself still requires a device. */
 public final class DxTextLayoutTest {

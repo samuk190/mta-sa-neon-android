@@ -1,4 +1,4 @@
-package com.worldrpg.neonlauncher.game;
+package com.saonline.neonlauncher.game;
 
 import android.graphics.Canvas;
 import android.graphics.Typeface;
@@ -155,6 +155,23 @@ public final class DxViewRegressionTest {
         touch=android.view.MotionEvent.obtain(0,0,1,1560,720,0);
         scaled.onTouchEvent(touch);touch.recycle();
         check(touched[0]==1 && touched[1]==832f && touched[2]==384f);
+
+        check(HudLayout.left(HudLayout.TOP_LEFT, 800, 200, 12) == 12);
+        check(HudLayout.left(HudLayout.BOTTOM_RIGHT, 800, 200, 12) == 588);
+        check(HudLayout.top(HudLayout.BOTTOM_RIGHT, 400, 100, 12) == 288);
+        check(HudLayout.besideChat(12, 40, 12, 140, HudLayout.TOP_LEFT, 400, 12, 8) == 160);
+        check(HudLayout.besideChat(348, 40, 288, 100, HudLayout.BOTTOM_RIGHT, 400, 12, 8) == 240);
+        scaled.setKeyboardScale(HudLayout.keyboardScale(1440, 720));
+        Canvas.rectangles.clear();
+        scaled.setFrame("C\nV 1560 720\nR 500 440 300 200 4294967295\n");
+        scaled.onDraw(new Canvas());
+        Canvas.RectDraw form = Canvas.rectangles.get(0);
+        check(form.left == 1279f && form.bottom == 640f);
+        touch = android.view.MotionEvent.obtain(0, 0, 0, 1300, 500, 0);
+        check(scaled.onTouchEvent(touch)); touch.recycle();
+        check(touched[0] == 0 && touched[1] == 520f && touched[2] == 500f);
+        check(HudLayout.keyboardScale(1440, 0) == 1f);
+
         System.out.println("DxViewRegressionTest: " + checks + " checks, 0 failures");
     }
 }

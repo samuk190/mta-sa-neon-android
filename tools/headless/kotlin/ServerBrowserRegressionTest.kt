@@ -1,4 +1,4 @@
-package com.worldrpg.neonlauncher.network
+package com.saonline.neonlauncher.network
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async

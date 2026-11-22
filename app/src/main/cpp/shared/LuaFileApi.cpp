@@ -1,4 +1,5 @@
 #include "LuaFileApi.h"
+#include "ResourceLoader.h"
 
 #include "LuaVMStub.h"
 #include "net/HttpDownloader.h"
@@ -30,7 +31,7 @@ int g_nextFile = 1;
 
 fs::path Root() {
 #if defined(__ANDROID__)
-    return "/data/data/com.worldrpg.neonlauncher/files/lua";
+    return "/data/data/com.saonline.neonlauncher/files/lua";
 #else
     return "/tmp/neon-lua-files";
 #endif
@@ -53,7 +54,7 @@ bool PathWithin(const fs::path& root, const fs::path& relative, fs::path& out) {
     return true;
 }
 
-enum class PathAccess { Read, Write, Asset };
+enum class PathAccess { Read, Write, Asset, Model };
 
 bool Resolve(std::string_view text, PathAccess access, fs::path& out, bool* readOnly = nullptr) {
     if (text.empty() || text.find('\0') != std::string_view::npos) return false;
@@ -84,8 +85,12 @@ bool Resolve(std::string_view text, PathAccess access, fs::path& out, bool* read
         const fs::path cache = WorldRPG::Net::HttpDownloader::GetResourceCacheRoot();
         if (!cache.empty() && !resource.empty() && PathWithin(cache, fs::path(resource) / relative, out) &&
             fs::exists(out, error)) {
-            if (readOnly) *readOnly = true;
-            return true;
+            if (access != PathAccess::Model ||
+                ResourceLoader::IsFileReady(resource, relative.lexically_normal().generic_string(),
+                                            explicitResource ? 0 : ActiveVmOwnerGeneration())) {
+                if (readOnly) *readOnly = true;
+                return true;
+            }
         }
         if (explicitResource) return false;
         if (!cache.empty() && PathWithin(cache.parent_path() / "game_assets", relative, out) &&
@@ -94,7 +99,7 @@ bool Resolve(std::string_view text, PathAccess access, fs::path& out, bool* read
             return true;
         }
     }
-    if (access == PathAccess::Asset && !resource.empty()) return false;
+    if ((access == PathAccess::Asset || access == PathAccess::Model) && !resource.empty()) return false;
     return PathWithin(Root(), relative, out);
 }
 
@@ -444,6 +449,11 @@ int l_pathListDir(lua_State* L) {
 bool ResolveFilePath(std::string_view text, fs::path& out) {
     std::error_code error;
     return Resolve(text, PathAccess::Asset, out) && fs::is_regular_file(out, error);
+}
+
+bool ResolveModelPath(std::string_view text, fs::path& out) {
+    std::error_code error;
+    return Resolve(text, PathAccess::Model, out) && fs::is_regular_file(out, error);
 }
 
 void InstallFileLua(lua_State* L) {

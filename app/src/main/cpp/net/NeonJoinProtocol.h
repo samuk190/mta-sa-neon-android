@@ -42,7 +42,7 @@ enum class NeonPacketID : uint8_t {
     SERVER_JOIN_DATA = 1,
     SERVER_JOIN_COMPLETE = 2,
     PLAYER_JOIN = 3,
-    PLAYER_JOINDATA = 4,
+    PLAYER_JOINDATA = NEON_JOIN_DATA_ID,
     PLAYER_QUIT = 5,
     PLAYER_TIMEOUT = 6,
     MOD_NAME = 7,

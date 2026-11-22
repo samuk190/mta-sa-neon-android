@@ -28,15 +28,15 @@ def main():
     coroutines = jar("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "1.7.3")
     annotations = jar("org.jetbrains", "annotations", "13.0")
     args.build_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run([args.javac, "-d", str(args.build_dir), str(root / "app/build/generated/source/buildConfig/debug/com/worldrpg/neonlauncher/BuildConfig.java")], check=True)
+    subprocess.run([args.javac, "-d", str(args.build_dir), str(root / "app/build/generated/source/buildConfig/debug/com/saonline/neonlauncher/BuildConfig.java")], check=True)
     classpath = os.pathsep.join(map(str, (stdlib, coroutines, annotations, args.json_jar, args.build_dir)))
     compiler_classpath = os.pathsep.join(map(str, (compiler, stdlib, reflect, runtime, trove, annotations)))
-    source = root / "app/src/main/java/com/worldrpg/neonlauncher/network"
+    source = root / "app/src/main/java/com/saonline/neonlauncher/network"
     files = [source / (name + ".kt") for name in ("ServerAddress", "ServerInfo", "ServerQuery", "NeonServerRegistry", "ServerBrowserService")]
     files.append(root / "tools/headless/kotlin/ServerBrowserRegressionTest.kt")
     subprocess.run([args.java, "-cp", compiler_classpath, "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
                     "-jvm-target", "17", "-classpath", classpath, "-d", str(args.build_dir), *map(str, files)], check=True)
-    command = [args.java, "-cp", classpath, "com.worldrpg.neonlauncher.network.ServerBrowserRegressionTestKt"]
+    command = [args.java, "-cp", classpath, "com.saonline.neonlauncher.network.ServerBrowserRegressionTestKt"]
     if args.registry_fixture:
         command.append(str(args.registry_fixture))
     subprocess.run(command, check=True)

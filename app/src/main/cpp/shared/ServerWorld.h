@@ -52,7 +52,7 @@ void NotePlayerNick(uint32_t id, const std::string& nick);
 // Case-insensitive nick match among players (CClientPlayerManager::Get, default insensitive).
 bool FindPlayerByNick(const std::string& nick, uint32_t& id);
 
-void SetCurrentWaterFlags(bool enabled);
+void ConfigureEntityAdd(bool currentWaterFlags, bool preferExtendedHeader);
 void OnEntityAdd(const uint8_t* body, size_t length, size_t bits);
 void OnEntityRemove(const uint8_t* body, size_t length, size_t bits);
 void OnCustomData(const uint8_t* body, size_t length, size_t bits);
@@ -76,6 +76,9 @@ struct ActorSpawn {
     bool hosted = false;
     // ENTITY_ADD interior (CPacketHandler common header). Outdoor traffic is 0.
     uint8_t interior = 0;
+    int vehicleDoorLock = 1;
+    uint16_t nitroUpgrade = 0;
+    uint64_t nitroRevision = 0;
 };
 // Copies peds (kind 14) and vehicles (kind 2).
 // Both limits negative: the two kinds share `capacity` (a run of vehicles can fill it).
@@ -149,6 +152,10 @@ void NoteElementInterior(uint32_t id, uint8_t interior);
 void NoteElementModel(uint32_t id, int model);
 // A vehicle element for script state. Does not replace a player, ped, or other live kind.
 void NoteVehicle(uint32_t id, int model);
+int VehicleDoorLockMode(uint32_t id);
+bool SetVehicleDoorLockMode(uint32_t id, int mode);
+uint16_t VehicleNitroUpgrade(uint32_t id);
+bool SetVehicleNitroUpgrade(uint32_t id, uint16_t upgrade, bool installed);
 // CClientEntity::SetDimension and CClientGame::SetAllDimensions. A ped whose dimension is not the local one is streamed
 // out (no body). DimensionOf returns the local dimension for an element this session has no record of.
 void NoteElementDimension(uint32_t id, uint16_t dimension);

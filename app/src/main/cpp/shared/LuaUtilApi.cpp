@@ -4,6 +4,10 @@
 
 #include "LuaVMStub.h"
 #include "Checksums.h"
+#include "ResourceLoader.h"
+#ifdef __ANDROID__
+#include "../gtasa/GameEngine.h"
+#endif
 #include "../net/RemoteCalls.h"
 
 #include "lua.hpp"
@@ -366,6 +370,24 @@ int l_getVersion(lua_State* L) {
     lua_pushstring(L, "Android"); lua_setfield(L, -2, "tag");
     return 1;
 }
+
+#ifdef __ANDROID__
+int l_getVehicleTouchControlBounds(lua_State* L) {
+    const auto controls = Game::CopyVehicleTouchControlBounds();
+    lua_createtable(L, static_cast<int>(controls.size()), 0);
+    int index = 0;
+    for (const auto& control : controls) {
+        lua_createtable(L, 4, 0);
+        const float bounds[] = {control.left, control.top, control.right, control.bottom};
+        for (int coordinate = 0; coordinate < 4; ++coordinate) {
+            lua_pushnumber(L, bounds[coordinate]);
+            lua_rawseti(L, -2, coordinate + 1);
+        }
+        lua_rawseti(L, -2, ++index);
+    }
+    return 1;
+}
+#endif
 
 const char* kWeapons[] = {
     "Fist", "Brassknuckle", "Golfclub", "Nightstick", "Knife", "Bat", "Shovel", "Poolstick",
@@ -1480,12 +1502,9 @@ int l_downloadFile(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const char* path = lua_tostring(L, 1);
-    if (!path || path[0] == '\0') {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
-    lua_pushboolean(L, 1);
+    size_t length = 0;
+    const char* path = lua_tolstring(L, 1, &length);
+    lua_pushboolean(L, ResourceLoader::RequestFile({path, length}, ActiveVmOwnerGeneration()));
     return 1;
 }
 
@@ -1608,6 +1627,9 @@ void InstallUtilLua(lua_State* L) {
         {"utfCode", l_utfCode},
         {"utfSeek", l_utfSeek},
         {"getVersion", l_getVersion},
+#ifdef __ANDROID__
+        {"getVehicleTouchControlBounds", l_getVehicleTouchControlBounds},
+#endif
         {"getWeaponNameFromID", l_getWeaponNameFromID},
         {"getWeaponIDFromName", l_getWeaponIDFromName},
         {"getSlotFromWeapon", l_getSlotFromWeapon},

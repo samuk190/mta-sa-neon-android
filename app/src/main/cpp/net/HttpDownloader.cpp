@@ -18,6 +18,7 @@
 #include <charconv>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <netdb.h>
@@ -52,10 +53,11 @@ struct HttpTarget {
 };
 
 struct Request {
-    std::string cacheRoot;
+    std::string cachePath;
     std::string serverBase;
     std::string resource;
     std::string file;
+    uint32_t generation = 0;
     uint64_t size = 0;
     uint32_t crc = 0;
     bool hasMd5 = false;
@@ -87,7 +89,8 @@ struct State {
     std::condition_variable idle;  // queue drained and no transfer running
     std::deque<Request> queue;
     std::vector<Completion> completions;
-    std::unordered_set<std::string> inFlight;
+    std::unordered_map<std::string, uint32_t> latestQueued;
+    std::unordered_set<std::string> activePaths;
     std::vector<std::thread> workers;
     size_t active = 0;
     bool stopping = false;
@@ -105,7 +108,7 @@ struct State {
             stopping = true;
             stats.dropped += queue.size();
             for (const Request& req : queue) {
-                completions.push_back({req.resource, req.file, false, "dropped at shutdown"});
+                completions.push_back({req.resource, req.file, req.generation, false, "dropped at shutdown"});
             }
             queue.clear();
         }
@@ -490,7 +493,7 @@ bool FetchToFile(ResourceConnection& pool, const HttpTarget& target, const std::
 Outcome ProcessRequest(ResourceConnection& pool, const Request& req) {
     Outcome out;
     const std::string label = req.resource + "/" + req.file;
-    const std::string finalPath = req.cacheRoot + "/" + req.resource + "/" + req.file;
+    const std::string& finalPath = req.cachePath;
     const std::string partPath = finalPath + ".part";
 
     // Cache: reuse the local copy when size, CRC-32 and (if sent) MD5 all match.
@@ -604,10 +607,20 @@ void WorkerLoop() {
         Request req;
         {
             std::unique_lock<std::mutex> lock(state.mutex);
-            state.wake.wait(lock, [&] { return state.stopping || !state.queue.empty(); });
+            auto next = state.queue.end();
+            state.wake.wait(lock, [&] {
+                if (state.stopping) return true;
+                next = std::find_if(state.queue.begin(), state.queue.end(), [&](const Request& item) {
+                    return !state.activePaths.contains(item.cachePath);
+                });
+                return next != state.queue.end();
+            });
             if (state.stopping) return;
-            req = std::move(state.queue.front());
-            state.queue.pop_front();
+            req = std::move(*next);
+            state.queue.erase(next);
+            // The checked file and its .part path belong to one request at a
+            // time. A later generation for the same path runs after this one.
+            state.activePaths.insert(req.cachePath);
             ++state.active;
         }
 
@@ -616,9 +629,13 @@ void WorkerLoop() {
         std::lock_guard<std::mutex> lock(state.mutex);
         ApplyOutcome(state.stats, outcome, req);
         const bool ok = outcome.kind == Outcome::Kind::Cached || outcome.kind == Outcome::Kind::Downloaded;
-        state.completions.push_back({req.resource, req.file, ok, ok ? std::string() : outcome.note});
-        state.inFlight.erase(req.resource + "/" + req.file);
+        state.completions.push_back({req.resource, req.file, req.generation, ok, ok ? std::string() : outcome.note});
+        state.activePaths.erase(req.cachePath);
+        if (auto latest = state.latestQueued.find(req.cachePath);
+            latest != state.latestQueued.end() && latest->second == req.generation)
+            state.latestQueued.erase(latest);
         --state.active;
+        state.wake.notify_all();
         if (state.queue.empty() && state.active == 0) state.idle.notify_all();
     }
 }
@@ -653,7 +670,7 @@ std::string BuildServerBase(const NeonJoinInfo& info, const std::string& host) {
     return std::string();
 }
 
-EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file) {
+EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file, uint32_t generation) {
     State& state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
     if (state.stopping) return EnqueueResult::Stopped;
@@ -671,17 +688,20 @@ EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file)
         }
         return EnqueueResult::Disabled;
     }
-    const std::string key = resourceName + "/" + file.name;
-    if (!state.inFlight.insert(key).second) {
+    const std::string cachePath = state.cacheRoot + "/" + resourceName + "/" + file.name;
+    auto [latest, inserted] = state.latestQueued.try_emplace(cachePath, generation);
+    if (!inserted && latest->second == generation) {
         ++state.stats.skippedDuplicate;
         return EnqueueResult::Duplicate;
     }
+    latest->second = generation;
 
     Request req;
-    req.cacheRoot = state.cacheRoot;
+    req.cachePath = cachePath;
     req.serverBase = state.serverBase;
     req.resource = resourceName;
     req.file = file.name;
+    req.generation = generation;
     req.size = file.size;
     req.crc = file.crc;
     req.hasMd5 = file.hasMd5;

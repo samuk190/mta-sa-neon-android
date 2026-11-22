@@ -14,7 +14,6 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -147,7 +146,6 @@ struct NeonJoinClient::Impl {
     std::string nickname;
     std::string password;
     std::string identityTicket;
-    JoinProfile requestedProfile = JoinProfile::Automatic;
     uint32_t deadlineMs = 0;
 
     void SetState(JoinState next, const char* detail) {
@@ -403,12 +401,11 @@ struct NeonJoinClient::Impl {
     }
 
     // Bitstream 0x0030, the version the join hook stores for this client:
-    // no extended positions and no native-task block. Time context 0 is
-    // accepted by CanUpdateSync. Without this packet the server never
-    // relays a position, so a desktop client has no ped to draw.
+    // no extended positions and no native-task block. Suppress sync while
+    // a server position is waiting to be applied to the local body.
     void SendPureSync() {
         pureSyncSentThisPulse = false;
-        if (!net || !net->IsConnected()) return;
+        if (!net || !net->IsConnected() || WorldRPG::Game::LocalPlacementPending()) return;
         const uint32_t now = NowMs();
         if (now - lastSyncMs < 100) return;
         lastSyncMs = now;
@@ -501,15 +498,12 @@ struct NeonJoinClient::Impl {
         BitStreamWriter w;
         w.Write(static_cast<uint8_t>(32));          // PLAYER_PURESYNC
         // CNetAPI::WritePlayerPuresync writes GetSyncTimeContext (CNetAPI.cpp 1119).
-        // ENTITY_ADD does not store a player (ServerWorld::OnEntityAdd skips type 1) and the
-        // PLAYER_LIST context byte is not kept, so the phone has no local time context. 0 is
-        // what CanUpdateSync accepts for a fresh element.
+        // The mobile client doesn't process every RPC that can change the local context.
         static bool loggedContext = false;
         if (!loggedContext) {
             loggedContext = true;
-            JOIN_LOGI("DIAG PLAYER_PURESYNC time context stays 0: CClientPlayer::GetSyncTimeContext "
-                      "is not stored for the local player (CNetAPI.cpp 1118-1119). "
-                      "Skipped at bitstream 0x0030: SNativeTaskLocomotionSync (NativeTaskLocomotionPresentation 0x3C). "
+            JOIN_LOGI("DIAG PLAYER_PURESYNC skipped at bitstream 0x0030: "
+                      "SNativeTaskLocomotionSync (NativeTaskLocomotionPresentation 0x3C). "
                       "Not read, so those bits stay clear: HasJetPack, GetContactEntity, GetWeapon / aim, "
                       "IsOnGround (bIsOnGround stays set), GetArmor (SPlayerArmorSync stays 0). "
                       "WriteCameraOrientation (CNetAPI.cpp 1023-1114) has no camera matrix; "
@@ -620,7 +614,7 @@ struct NeonJoinClient::Impl {
     // CNetAPI::DoPulse (381-397) sends this only when that pulse did not send puresync.
     // A pad release (IsSmallKeySyncNeeded 507: the stick left the analog band) is sent at once.
     void SendKeySync() {
-        if (!net || !net->IsConnected()) return;
+        if (!net || !net->IsConnected() || WorldRPG::Game::LocalPlacementPending()) return;
         // Driving a server-confirmed car: the vehicle form (SendDriverKeySync), as SendPureSync switches to packet 33.
         // The on-foot release below does not run in the driver branch.
         {
@@ -1027,8 +1021,8 @@ struct NeonJoinClient::Impl {
         const bool valid = BuildJoinData(info.joinProfile, nickname, password, identityTicket, w);
         identityTicket.clear(); // Tickets are consumed once, including failed sends.
         if (!valid) return false;
-        JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s bitstream=0x30",
-                  info.joinProfile == JoinProfile::LegacyMobile ? 19 : 4,
+        JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s platform=android bitstream=0x30",
+                  static_cast<unsigned>(w.GetData()[0]),
                   info.joinProfile == JoinProfile::LegacyMobile ? "legacy-mobile" : "standard");
         return SendUpe(w);
     }
@@ -1082,13 +1076,8 @@ struct NeonJoinClient::Impl {
             Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
             return;
         }
-        if (net) {
-            const std::string endpoint = net->GetConnectedServer(true);
-            const auto colon = endpoint.rfind(':');
-            const uint16_t port = colon == std::string::npos ? 0 : static_cast<uint16_t>(std::strtoul(endpoint.c_str() + colon + 1, nullptr, 10));
-            info.joinProfile = SelectJoinProfile(net->GetConnectedServer(false), port, requestedProfile);
-        }
-        WorldRPG::ServerWorld::SetCurrentWaterFlags(info.joinProfile == JoinProfile::Standard);
+        const bool standard = info.joinProfile == JoinProfile::Standard;
+        WorldRPG::ServerWorld::ConfigureEntityAdd(standard, standard && bsVersion >= 0x0031);
         JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
                   modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
         if (info.authMode != NeonAuthMode::Disabled && identityCallback) {
@@ -1258,7 +1247,7 @@ bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, cons
     pImpl_->identityTicket.clear();
     pImpl_->identityRequestId = 0;
     pImpl_->info = NeonJoinInfo{};
-    pImpl_->requestedProfile = profile;
+    pImpl_->info.joinProfile = SelectJoinProfile(profile);
     pImpl_->SetState(JoinState::WaitingRakNet, "waiting for RakNet connect");
     return true;
 }

@@ -11,7 +11,9 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -26,16 +28,18 @@ constexpr uint32_t kInvalidElement = 0xFFFFFFFFu;
 
 std::mutex g_mutex;
 
-enum class FileState : uint8_t { Pending, Ready, Failed };
+enum class FileState : uint8_t { Idle, Pending, Ready, Failed };
 
 struct TrackedFile {
-    std::string name;
-    FileState state = FileState::Pending;
+    WorldRPG::Net::ResourceFile description;
+    FileState state = FileState::Idle;
     std::string note;
+    std::vector<uint32_t> requesters;
 };
 
 struct NoCacheItem {
     bool ok = false;
+    std::string filename;
     std::vector<uint8_t> source;
 };
 
@@ -44,7 +48,7 @@ struct Entry {
     uint16_t netId = 0;
     uint32_t root = 0;
     uint32_t noCacheExpected = 0;
-    std::vector<TrackedFile> files;             // every auto-download file of the resource
+    std::vector<TrackedFile> files;             // manifest files, including downloads on demand
     std::vector<std::string> clientScriptFiles; // CLIENT_SCRIPT files in RESOURCE_START order
     std::vector<NoCacheItem> noCache;           // packet 95 items received so far
     std::string failure;                        // non-empty: the resource will not start
@@ -119,9 +123,40 @@ Entry* FindByNetId(uint16_t netId) {
 
 Entry* FindByName(const std::string& name) {
     for (auto it = g_entries.rbegin(); it != g_entries.rend(); ++it) {
-        if (it->name == name && !it->started) return &*it;
+        if (it->name == name) return &*it;
     }
     return nullptr;
+}
+
+Entry* FindByGeneration(uint32_t generation) {
+    for (auto& entry : g_entries)
+        if (entry.generation == generation) return &entry;
+    return nullptr;
+}
+
+TrackedFile* FindFile(Entry& entry, const std::string& name) {
+    for (auto& file : entry.files)
+        if (file.description.name == name) return &file;
+    return nullptr;
+}
+
+bool QueueFile(const Entry& entry, TrackedFile& file) {
+    using WorldRPG::Net::HttpDownloader::EnqueueResult;
+    switch (WorldRPG::Net::HttpDownloader::Enqueue(entry.name, file.description, entry.generation)) {
+        case EnqueueResult::Queued:
+        case EnqueueResult::Duplicate:
+            file.state = FileState::Pending;
+            file.note.clear();
+            return true;
+        case EnqueueResult::Disabled:
+            file.note = "download service not available";
+            break;
+        case EnqueueResult::Stopped:
+            file.note = "downloader stopped";
+            break;
+    }
+    file.state = FileState::Failed;
+    return false;
 }
 
 } // namespace
@@ -153,23 +188,14 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
     entry.startCounter = entry.startCounterFromWire ? info.startCounter : ResourcePackets::kFirstStartCounter;
     entry.generation = g_nextGeneration++;
 
+    size_t automatic = 0;
     for (const WorldRPG::Net::ResourceFile& file : info.files) {
-        if (!file.autoDownload) continue;
         TrackedFile tracked;
-        tracked.name = file.name;
-        if (file.type == WorldRPG::Net::kResourceFileTypeClientScript) entry.clientScriptFiles.push_back(file.name);
-        switch (WorldRPG::Net::HttpDownloader::Enqueue(info.name, file)) {
-            case WorldRPG::Net::HttpDownloader::EnqueueResult::Queued:
-            case WorldRPG::Net::HttpDownloader::EnqueueResult::Duplicate:
-                break;  // a completion for this file will arrive
-            case WorldRPG::Net::HttpDownloader::EnqueueResult::Disabled:
-                tracked.state = FileState::Failed;
-                tracked.note = "download service not available";
-                break;
-            case WorldRPG::Net::HttpDownloader::EnqueueResult::Stopped:
-                tracked.state = FileState::Failed;
-                tracked.note = "downloader stopped";
-                break;
+        tracked.description = file;
+        if (file.autoDownload) {
+            ++automatic;
+            if (file.type == WorldRPG::Net::kResourceFileTypeClientScript) entry.clientScriptFiles.push_back(file.name);
+            if (!QueueFile(entry, tracked)) Fail(entry, file.name + ": " + tracked.note);
         }
         entry.files.push_back(std::move(tracked));
     }
@@ -178,42 +204,38 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
         AddNoCacheItems(entry, std::move(orphan->second));
         g_orphans.erase(orphan);
     }
-    for (const TrackedFile& file : entry.files) {
-        if (file.state == FileState::Failed) {
-            Fail(entry, file.name + ": " + file.note);
-            break;
-        }
-    }
-
     // A restarted resource replaces its earlier entry.
     std::erase_if(g_entries, [&](const Entry& old) { return old.name == entry.name && !old.started; });
     LUA_LOGI("LuaVM: resource %s announced: %zu download file(s), %u no-cache script(s)", entry.name.c_str(),
-             entry.files.size(), static_cast<unsigned>(entry.noCacheExpected));
+             automatic, static_cast<unsigned>(entry.noCacheExpected));
     g_entries.push_back(std::move(entry));
 }
 
 bool OnClientScripts(const uint8_t* body, size_t length, size_t bits) {
-    WorldRPG::Net::BitStreamReader reader(body, length, bits);
-    uint16_t netId = 0, count = 0;
-    if (!reader.Read(netId) || !reader.Read(count)) return false;
-
+    uint16_t netId = 0;
     std::vector<NoCacheItem> items;
-    bool wellFormed = true;
-    for (uint16_t i = 0; i < count; ++i) {
-        uint32_t length32 = 0;
-        if (!reader.Read(length32) || length32 < 4 || length32 > reader.GetRemainingBits() / 8) {
-            wellFormed = false;
-            break;
+    // Desktop Packet_ResourceClientScripts (5710-5750) reads a filename before
+    // each compressed chunk. The legacy mobile packet contains only the chunks.
+    const auto readItems = [&](bool named) {
+        WorldRPG::Net::BitStreamReader reader(body, length, bits);
+        uint16_t count = 0;
+        if (!reader.Read(netId) || !reader.Read(count)) return false;
+        items.clear();
+        for (uint16_t i = 0; i < count; ++i) {
+            NoCacheItem item;
+            if (named && (!reader.ReadString(item.filename, 4096) || item.filename.empty() ||
+                          std::any_of(item.filename.begin(), item.filename.end(),
+                                      [](unsigned char ch) { return ch < 32 || ch == 127; }))) return false;
+            uint32_t size = 0;
+            if (!reader.Read(size) || size < 4 || size > reader.GetRemainingBits() / 8) return false;
+            std::vector<uint8_t> blob(size);
+            if (!reader.ReadBytes(blob.data(), size)) return false;
+            item.ok = InflateItem(blob.data(), size, item.source);
+            items.push_back(std::move(item));
         }
-        std::vector<uint8_t> blob(length32);
-        if (!reader.ReadBytes(blob.data(), length32)) {
-            wellFormed = false;
-            break;
-        }
-        NoCacheItem item;
-        item.ok = InflateItem(blob.data(), length32, item.source);
-        items.push_back(std::move(item));
-    }
+        return reader.GetRemainingBits() == 0;
+    };
+    if (!readItems(true) && !readItems(false)) return false;
 
     std::lock_guard<std::mutex> lock(g_mutex);
     if (Entry* entry = FindByNetId(netId)) {
@@ -230,26 +252,62 @@ bool OnClientScripts(const uint8_t* body, size_t length, size_t bits) {
                      static_cast<unsigned>(netId), held.size());
         }
     }
-    return wellFormed;
+    return true;
 }
 
-std::vector<ResourceLoadJob> Pump() {
-    // Same game thread that drains resource downloads. Callbacks run here, and
+bool RequestFile(std::string_view path, uint32_t callerGeneration) {
+    if (path.empty() || path.find('\0') != std::string_view::npos) return false;
+    std::string relative(path);
+    std::replace(relative.begin(), relative.end(), '\\', '/');
+    std::lock_guard<std::mutex> lock(g_mutex);
+    Entry* caller = FindByGeneration(callerGeneration);
+    if (!caller || !caller->started || caller->stopping) return false;
+    Entry* entry = caller;
+    if (relative.front() == ':') {
+        const size_t slash = relative.find('/');
+        if (slash == std::string::npos || slash < 2) return false;
+        entry = FindByName(relative.substr(1, slash - 1));
+        relative.erase(0, slash + 1);
+    }
+    if (!entry || entry->stopping || !entry->failure.empty() || entry != FindByName(entry->name)) return false;
+    const std::filesystem::path filePath(relative);
+    if (filePath.empty() || filePath.is_absolute()) return false;
+    for (const auto& part : filePath)
+        if (part == "..") return false;
+    TrackedFile* file = FindFile(*entry, filePath.lexically_normal().generic_string());
+    if (!file) return false;
+    if (file->state != FileState::Pending && !QueueFile(*entry, *file)) return false;
+    if (std::find(file->requesters.begin(), file->requesters.end(), callerGeneration) == file->requesters.end())
+        file->requesters.push_back(callerGeneration);
+    return true;
+}
+
+bool IsFileReady(const std::string& resource, const std::string& file, uint32_t generation) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    Entry* entry = FindByName(resource);
+    if (!entry || (generation != 0 && entry->generation != generation) || !entry->failure.empty()) return false;
+    const TrackedFile* tracked = FindFile(*entry, file);
+    return tracked && tracked->state == FileState::Ready;
+}
+
+std::vector<ResourceLoadJob> Pump(std::vector<FileDownloadEvent>& events) {
+    // Same VM thread that drains resource downloads. Callbacks run here, and
     // not under g_mutex, so a callback cannot deadlock on the resource loader.
     WorldRPG::Net::RemoteCalls::DeliverCompletions();
     // encodeString / passwordHash / generateKeyPair callbacks (LuaCryptApi.cpp).
     WorldRPG::Script::CryptDeliverCompletions();
     std::lock_guard<std::mutex> lock(g_mutex);
     for (WorldRPG::Net::HttpDownloader::Completion& done : WorldRPG::Net::HttpDownloader::TakeCompletions()) {
-        Entry* entry = FindByName(done.resource);
-        if (!entry) continue;
-        for (TrackedFile& file : entry->files) {
-            if (file.name != done.file || file.state != FileState::Pending) continue;
-            file.state = done.ok ? FileState::Ready : FileState::Failed;
-            file.note = done.note;
-            if (!done.ok) Fail(*entry, file.name + ": " + file.note);
-            break;
-        }
+        Entry* entry = FindByGeneration(done.generation);
+        if (!entry || entry->name != done.resource || entry->stopping || entry != FindByName(done.resource)) continue;
+        TrackedFile* file = FindFile(*entry, done.file);
+        if (!file || file->state != FileState::Pending) continue;
+        file->state = done.ok ? FileState::Ready : FileState::Failed;
+        file->note = std::move(done.note);
+        if (!done.ok && !entry->started && file->description.autoDownload) Fail(*entry, done.file + ": " + file->note);
+        for (uint32_t requester : file->requesters)
+            events.push_back({done.file, entry->generation, requester, done.ok});
+        file->requesters.clear();
     }
 
     std::vector<ResourceLoadJob> jobs;
@@ -258,7 +316,8 @@ std::vector<ResourceLoadJob> Pump() {
         if (!entry.failure.empty()) continue;
         // Desktop OnDownloadGroupFinished: a resource still downloading stops the loop.
         bool waiting = false;
-        for (const TrackedFile& file : entry.files) waiting = waiting || file.state == FileState::Pending;
+        for (const TrackedFile& file : entry.files)
+            waiting = waiting || (file.description.autoDownload && file.state == FileState::Pending);
         if (waiting) break;
         if (entry.noCache.size() < entry.noCacheExpected) continue;
 
@@ -272,7 +331,9 @@ std::vector<ResourceLoadJob> Pump() {
         unsigned index = 0;
         for (NoCacheItem& item : entry.noCache) {
             ResourceScript script;
-            script.chunkName = entry.name + "/no-cache-" + std::to_string(++index);
+            ++index;
+            script.chunkName = item.filename.empty() ? entry.name + "/no-cache-" + std::to_string(index)
+                                                     : std::move(item.filename);
             script.source = std::move(item.source);
             job.noCacheScripts.push_back(std::move(script));
         }

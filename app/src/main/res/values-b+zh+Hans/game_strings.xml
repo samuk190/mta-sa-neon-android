@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Connection and loading -->
+    <string name="disconnected">连接已断开</string>
+    <string name="disconnected_from_server">与服务器的连接已断开。</string>
+    <string name="connected_to_server">已连接到服务器。</string>
+    <string name="connection_lost">连接中断</string>
+    <string name="connection_lost_retry">服务器已结束会话。要重新连接吗？</string>
+    <string name="reconnect_failed">无法重新连接到服务器，请重试。</string>
+    <string name="connection_start_failed">无法发起连接。</string>
+    <string name="connection_error_detail">错误：%1$s</string>
+    <string name="connection_error_code">错误 [%1$s]</string>
+    <string name="connection_to_server_failed">无法连接到 %1$s 的 %2$d 端口。</string>
+    <string name="connecting_to_address">正在连接 %1$s…</string>
+    <string name="waiting_for_game_data">已连接，正在等待游戏数据。</string>
+    <string name="loading_starting_game">正在启动 San Andreas</string>
+    <string name="loading_downloading_resources">正在下载资源</string>
+    <string name="loading_processing_resources">正在处理资源</string>
+    <string name="loading_preparing_server_data">正在准备服务器数据</string>
+    <string name="loading_preparing_world">正在准备游戏世界</string>
+    <string name="downloading">正在下载</string>
+    <string name="transfer_progress">下载进度：%1$s / %2$s</string>
+    <string name="transfer_cancel_hint">断开连接即可取消下载</string>
+
+    <!-- Game startup and diagnostics -->
+    <string name="game_assets_sync_required">请在设置中同步游戏文件。</string>
+    <string name="native_client_load_failed">无法加载 MTA 原生客户端。</string>
+    <string name="native_client_init_failed">无法初始化 MTA 原生客户端。</string>
+    <string name="installed_assets_open_failed">无法打开已安装的游戏文件。</string>
+    <string name="gta_engine_load_failed">无法加载 GTA 引擎（libGTASA）。</string>
+    <string name="network_identity_init_failed">无法初始化此设备的网络身份。</string>
+    <string name="engine_text_missing_cdn">游戏文本文件（%1$s）缺失或为空。请在设置中同步游戏文件。</string>
+    <string name="engine_text_missing_local">游戏文本文件（%1$s）缺失或为空。请将文件添加到游戏目录。</string>
+    <string name="engine_map_file_missing">地图文件缺失或无法读取（%1$s）。</string>
+    <string name="engine_stopped_unexpectedly">游戏引擎意外停止。</string>
+    <string name="engine_failure_title">无法启动或继续游戏</string>
+    <string name="engine_failure_log">引擎故障日志</string>
+    <string name="engine_copy_log">复制日志</string>
+    <string name="engine_value_not_detected">未检测到</string>
+    <string name="engine_report_device">设备：%1$s %2$s\nAndroid：%3$s\nGPU：%4$s\n纹理格式：%5$s</string>
+    <string name="engine_report_exit_reason">退出原因：%1$d / 状态：%2$d</string>
+    <string name="engine_report_crash_trace">引擎崩溃堆栈</string>
+    <string name="engine_report_trace_unavailable">无法获取 Android 崩溃堆栈。</string>
+    <string name="engine_report_log">引擎日志</string>
+    <string name="engine_report_earlier_lines">[已省略较早的日志行]</string>
+    <string name="engine_report_footer">如果 Android 提供原生崩溃堆栈，报告会将其包含在内。</string>
+    <string name="engine_report_truncated">[报告已截断]</string>
+    <string name="engine_libs_missing_cdn">游戏引擎文件缺失。请在设置中同步游戏文件。</string>
+    <string name="engine_libs_missing_local">请将 GTA San Andreas 2.10 APK 中 lib/arm64-v8a/ 下的 libGTASA.so、libSCAnd.so 和 libOpenAL64.so 复制到 %1$s。</string>
+    <string name="engine_file_write_failed">无法写入 %1$s。</string>
+    <string name="engine_invalid_lib">%1$s 不是有效的原生库。</string>
+    <string name="engine_textures_missing">适用于 %1$s（%2$s）的部分游戏纹理缺失或无法读取。请在设置中同步游戏文件后重试。\n\n%3$s</string>
+
+    <!-- Game settings and controls -->
+    <string name="paused">已暂停</string>
+    <string name="resume">继续</string>
+    <string name="map">地图</string>
+    <string name="done">完成</string>
+    <string name="chat">聊天</string>
+    <string name="chat_hint">输入消息</string>
+    <string name="chat_send">发送</string>
+    <string name="chat_send_failed">消息未发送。</string>
+    <string name="no_bound_keys">未绑定按键</string>
+    <string name="game_settings_live">更改立即生效，并会保留到下次游戏。</string>
+    <string name="game_settings_loading">游戏加载完成后即可调整设置。</string>
+    <string name="visual_quality">画质</string>
+    <string name="resolution">分辨率</string>
+    <string name="draw_distance">绘制距离</string>
+    <string name="shadows">阴影</string>
+    <string name="car_reflections">车辆反射</string>
+    <string name="brightness">亮度</string>
+    <string name="frame_limiter">帧率限制</string>
+    <string name="sound_effects">音效</string>
+    <string name="game_music">游戏音乐</string>
+    <string name="section_game">游戏</string>
+    <string name="vibration">振动</string>
+    <string name="subtitles">字幕</string>
+    <string name="chat_hidden">隐藏</string>
+    <string name="chat_shown">显示</string>
+
+    <!-- HUD placement -->
+    <string name="hud_chat_anchor">聊天位置</string>
+    <string name="hud_buttons_anchor">按钮位置</string>
+    <string name="hud_chat_size">聊天大小</string>
+    <string name="hud_chat_touch">点按聊天区开始输入</string>
+    <string name="hud_off">关</string>
+    <string name="hud_on">开</string>
+    <string name="hud_top_left">左上</string>
+    <string name="hud_top_right">右上</string>
+    <string name="hud_bottom_left">左下</string>
+    <string name="hud_bottom_right">右下</string>
+    <string name="hud_follow_chat">跟随聊天区</string>
+</resources>

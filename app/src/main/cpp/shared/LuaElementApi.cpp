@@ -32,6 +32,7 @@
 #include "ResourceLoader.h"
 #include "ServerWorld.h"
 #include "PedQueries.h"
+#include "EngineAssets.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
 
@@ -156,6 +157,7 @@ bool DestroyNode(uint32_t id) {
     RopeRelease(id);
     WaterRelease(id);
     FireRelease(id);
+    ReleaseModelAsset(id);
     g_nodes.erase(id);
     g_localNames.erase(id);
     g_callProp.erase(id);

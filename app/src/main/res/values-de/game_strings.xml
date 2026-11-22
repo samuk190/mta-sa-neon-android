@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Connection and loading -->
+    <string name="disconnected">Getrennt</string>
+    <string name="disconnected_from_server">Die Verbindung zum Server wurde getrennt.</string>
+    <string name="connected_to_server">Mit dem Server verbunden.</string>
+    <string name="connection_lost">Verbindung verloren</string>
+    <string name="connection_lost_retry">Der Server hat die Sitzung beendet. Möchtest du dich erneut verbinden?</string>
+    <string name="reconnect_failed">Die erneute Verbindung zum Server ist fehlgeschlagen. Versuche es erneut.</string>
+    <string name="connection_start_failed">Die Verbindung konnte nicht aufgebaut werden.</string>
+    <string name="connection_error_detail">Fehler: %1$s</string>
+    <string name="connection_error_code">Fehler [%1$s]</string>
+    <string name="connection_to_server_failed">Die Verbindung zu %1$s über Port %2$d ist fehlgeschlagen.</string>
+    <string name="connecting_to_address">Verbindung zu %1$s wird hergestellt …</string>
+    <string name="waiting_for_game_data">Verbunden. Spieldaten werden erwartet.</string>
+    <string name="loading_starting_game">San Andreas wird gestartet</string>
+    <string name="loading_downloading_resources">Ressourcen werden heruntergeladen</string>
+    <string name="loading_processing_resources">Ressourcen werden verarbeitet</string>
+    <string name="loading_preparing_server_data">Serverdaten werden vorbereitet</string>
+    <string name="loading_preparing_world">Spielwelt wird vorbereitet</string>
+    <string name="downloading">Download läuft</string>
+    <string name="transfer_progress">Download: %1$s von %2$s</string>
+    <string name="transfer_cancel_hint">Trenne die Verbindung, um den Download abzubrechen</string>
+
+    <!-- Game startup and diagnostics -->
+    <string name="game_assets_sync_required">Synchronisiere die Spieldateien in den Einstellungen.</string>
+    <string name="native_client_load_failed">Der native MTA-Client konnte nicht geladen werden.</string>
+    <string name="native_client_init_failed">Der native MTA-Client konnte nicht initialisiert werden.</string>
+    <string name="installed_assets_open_failed">Die installierten Spieldateien konnten nicht geöffnet werden.</string>
+    <string name="gta_engine_load_failed">Die GTA-Engine (libGTASA) konnte nicht geladen werden.</string>
+    <string name="network_identity_init_failed">Die Netzwerkidentität dieses Geräts konnte nicht eingerichtet werden.</string>
+    <string name="engine_text_missing_cdn">Die Spieldatei mit Texten (%1$s) fehlt oder ist leer. Synchronisiere die Spieldateien in den Einstellungen.</string>
+    <string name="engine_text_missing_local">Die Spieldatei mit Texten (%1$s) fehlt oder ist leer. Füge sie dem Spielordner hinzu.</string>
+    <string name="engine_map_file_missing">Kartendatei fehlt oder ist nicht lesbar (%1$s).</string>
+    <string name="engine_stopped_unexpectedly">Die Spiel-Engine wurde unerwartet beendet.</string>
+    <string name="engine_failure_title">Das Spiel konnte nicht gestartet oder fortgesetzt werden</string>
+    <string name="engine_failure_log">Engine-Fehlerprotokoll</string>
+    <string name="engine_copy_log">Protokoll kopieren</string>
+    <string name="engine_value_not_detected">Nicht erkannt</string>
+    <string name="engine_report_device">Gerät: %1$s %2$s\nAndroid: %3$s\nGPU: %4$s\nTexturformat: %5$s</string>
+    <string name="engine_report_exit_reason">Beendigungsgrund: %1$d / Status: %2$d</string>
+    <string name="engine_report_crash_trace">Absturz-Stacktrace der Engine</string>
+    <string name="engine_report_trace_unavailable">Android-Absturz-Stacktrace nicht verfügbar.</string>
+    <string name="engine_report_log">Engine-Protokoll</string>
+    <string name="engine_report_earlier_lines">[Frühere Protokollzeilen ausgelassen]</string>
+    <string name="engine_report_footer">Native Absturz-Stacktraces werden angezeigt, wenn Android sie bereitstellt.</string>
+    <string name="engine_report_truncated">[Bericht gekürzt]</string>
+    <string name="engine_libs_missing_cdn">Dateien der Spiel-Engine fehlen. Synchronisiere die Spieldateien in den Einstellungen.</string>
+    <string name="engine_libs_missing_local">Kopiere libGTASA.so, libSCAnd.so und libOpenAL64.so aus lib/arm64-v8a/ in deiner GTA-San-Andreas-2.10-APK nach %1$s.</string>
+    <string name="engine_file_write_failed">Unter %1$s konnte nicht geschrieben werden.</string>
+    <string name="engine_invalid_lib">%1$s ist keine gültige native Bibliothek.</string>
+    <string name="engine_textures_missing">Einige Spieltexturen für %1$s (%2$s) fehlen oder sind nicht lesbar. Synchronisiere die Spieldateien in den Einstellungen und versuche es erneut.\n\n%3$s</string>
+
+    <!-- Game settings and controls -->
+    <string name="paused">Pausiert</string>
+    <string name="resume">Fortsetzen</string>
+    <string name="map">Karte</string>
+    <string name="done">Fertig</string>
+    <string name="chat">Chat</string>
+    <string name="chat_hint">Nachricht eingeben</string>
+    <string name="chat_send">Senden</string>
+    <string name="chat_send_failed">Die Nachricht wurde nicht gesendet.</string>
+    <string name="no_bound_keys">Keine Tasten belegt</string>
+    <string name="game_settings_live">Änderungen gelten sofort und werden für künftige Spielsitzungen gespeichert.</string>
+    <string name="game_settings_loading">Die Einstellungen sind verfügbar, sobald das Spiel geladen ist.</string>
+    <string name="visual_quality">Grafikqualität</string>
+    <string name="resolution">Auflösung</string>
+    <string name="draw_distance">Sichtweite</string>
+    <string name="shadows">Schatten</string>
+    <string name="car_reflections">Fahrzeugreflexionen</string>
+    <string name="brightness">Helligkeit</string>
+    <string name="frame_limiter">Bildratenlimit</string>
+    <string name="sound_effects">Soundeffekte</string>
+    <string name="game_music">Spielmusik</string>
+    <string name="section_game">Spiel</string>
+    <string name="vibration">Vibration</string>
+    <string name="subtitles">Untertitel</string>
+    <string name="chat_hidden">Ausgeblendet</string>
+    <string name="chat_shown">Sichtbar</string>
+
+    <!-- HUD placement -->
+    <string name="hud_chat_anchor">Chatposition</string>
+    <string name="hud_buttons_anchor">Schaltflächenposition</string>
+    <string name="hud_chat_size">Chatgröße</string>
+    <string name="hud_chat_touch">Tippe zum Schreiben auf den Chat</string>
+    <string name="hud_off">Aus</string>
+    <string name="hud_on">An</string>
+    <string name="hud_top_left">Oben links</string>
+    <string name="hud_top_right">Oben rechts</string>
+    <string name="hud_bottom_left">Unten links</string>
+    <string name="hud_bottom_right">Unten rechts</string>
+    <string name="hud_follow_chat">An Chat ausrichten</string>
+</resources>

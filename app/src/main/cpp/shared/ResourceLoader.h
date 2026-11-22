@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace WorldRPG::Net {
@@ -64,8 +65,19 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info);
 // arrived yet are kept until it does.
 bool OnClientScripts(const uint8_t* body, size_t length, size_t bits);
 
+struct FileDownloadEvent {
+    std::string file;
+    uint32_t generation = 0;
+    uint32_t requesterGeneration = 0;
+    bool ok = false;
+};
+
+// Queues a manifest file from this resource or a :resource/path reference.
+bool RequestFile(std::string_view path, uint32_t callerGeneration);
+bool IsFileReady(const std::string& resource, const std::string& file, uint32_t generation);
+
 // Applies finished downloads and returns the resources that can start now.
-std::vector<ResourceLoadJob> Pump();
+std::vector<ResourceLoadJob> Pump(std::vector<FileDownloadEvent>& events);
 
 // RESOURCE_STOP: removes the resource with this net id (desktop CResourceManager::RemoveResource).
 ForgottenResource Forget(uint16_t netId);

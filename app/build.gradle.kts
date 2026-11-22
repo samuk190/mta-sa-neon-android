@@ -13,7 +13,9 @@ if (envFile.exists()) {
     FileInputStream(envFile).use { envProperties.load(it) }
 }
 val launcherTitle = envProperties.getProperty("LAUNCHER_TITLE", "MTA:SA Neon Android")
-val launcherPlayButtonText = envProperties.getProperty("LAUNCHER_PLAY_BUTTON_TEXT", "Play")
+// Older .env files explicitly set the original default label.
+val launcherPlayButtonText = envProperties.getProperty("LAUNCHER_PLAY_BUTTON_TEXT", "").trim()
+    .takeUnless { it == "Play" }.orEmpty()
 val defaultServerName = envProperties.getProperty("DEFAULT_SERVER_NAME", "MTA Neon Server")
 val defaultServerIp = envProperties.getProperty("DEFAULT_SERVER_IP", "127.0.0.1")
 val defaultServerPort = envProperties.getProperty("DEFAULT_SERVER_PORT", "22003")
@@ -21,27 +23,26 @@ val defaultServerLogoUrl = envProperties.getProperty("DEFAULT_SERVER_LOGO_URL", 
 val uiDisconnectUrl = envProperties.getProperty("UI_DISCONNECT_URL", "")
 val defaultPlayerNick = envProperties.getProperty("DEFAULT_PLAYER_NICK", "Player")
 val gameAssetsDir = envProperties.getProperty("GAME_ASSETS_DIR", "./game_assets")
-val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets")
+val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets")
 val cdnRootUrl = envProperties.getProperty("CDN_ROOT_URL", "")
 
 android {
-    namespace = "com.worldrpg.neonlauncher"
+    namespace = "com.saonline.neonlauncher"
     compileSdk = 34
     ndkVersion = "25.1.8937393"
 
     defaultConfig {
-        applicationId = "com.worldrpg.neonlauncher"
+        applicationId = "com.saonline.neonlauncher"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0-neon-alpha"
 
         resValue("string", "app_name", launcherTitle)
-        resValue("string", "connect", launcherPlayButtonText)
 
         // Restrict packaged resources to active locales. No density filter: a
         // single density bucket made every other screen scale one bitmap set.
-        resourceConfigurations += listOf("en", "pt")
+        resourceConfigurations += listOf("en", "pt", "es", "de", "zh-rCN", "b+zh+Hans", "ru")
 
         ndk {
             // Somente arm64-v8a: o libGTASA.so do GTA SA Mobile 2.10 (War Drum) e'
@@ -134,7 +135,8 @@ android {
 }
 
 // The public release APK carries no game code: libGTASA.so, libSCAnd.so and libOpenAL64.so are
-// GTA San Andreas Mobile 2.10 files. Players copy them into the game folder (GameLibraries.java).
+// GTA San Andreas Mobile 2.10 files. Game Sync installs them into lib/ from a configured CDN.
+// Local installations can also supply them in the game folder (GameLibraries.java).
 // The same game files sit in src/main/assets (american.gxt, fonts, scache lists, menu sounds,
 // mainV1.scm, menu.pvr); the engine reads the game folder first (EngineAssetLoader), so the release
 // leaves them out too. -PnoGameFiles applies the same rules to a debug build, for testing.
@@ -153,6 +155,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("com.google.android.play:integrity:1.6.0")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")

@@ -593,14 +593,17 @@ RakNetWrapper* g_liveWrapper = nullptr;
 enum class HandshakeState : uint8_t {
     IDLE = 0,
     RAKNET_CONNECTING,
-    RAKNET_CONNECTED,       // RakNet CONNECTION_REQUEST_ACCEPTED received
-    JOIN_SENT,              // SendJoinRequest dispatched
+    TRANSPORT_CONNECTED,       // Authenticated QUIC stream or accepted classic transport
     HANDSHAKE_COMPLETE,     // Server accepted join (user packet or spawn)
     FAILED
 };
 
 struct RakNetWrapper::Impl {
     Mta::ClientTransport adapter;
+#ifdef __ANDROID__
+    std::unique_ptr<QuicGameClient> quic;
+    std::vector<uint8_t> quicPacket;
+#endif
     PacketHandlerCallback packetHandler;
     ConnectionStateCallback connectionStateCallback;
     std::atomic<bool> ready{false};
@@ -614,8 +617,6 @@ struct RakNetWrapper::Impl {
     std::atomic<uint8_t> connectionError{0};
     char serialBuffer[64] = {};
     uint32_t startTime = 0;
-    std::string pendingNickname;
-    std::string pendingSerial;
     // Wire packet id 0..255. Application packets use 99 + ePacketID.
     std::array<PacketUsage, 256> usageIn{};
     std::array<PacketUsage, 256> usageOut{};
@@ -670,7 +671,28 @@ bool RakNetWrapper::StartNetwork(const char* serverHost, uint16_t serverPort, bo
     return true;
 }
 
+#ifdef __ANDROID__
+bool RakNetWrapper::StartQuic(const std::string& host, uint16_t port, std::unique_ptr<QuicGameClient> client) {
+    if (!client || pImpl_->running.load()) return false;
+    pImpl_->serverHost = host;
+    pImpl_->serverPort = port;
+    pImpl_->usageIn = {};
+    pImpl_->usageOut = {};
+    pImpl_->quic = std::move(client);
+    pImpl_->quicPacket.resize(1 + (256 << 10));
+    pImpl_->handshakeState.store(HandshakeState::IDLE);
+    pImpl_->ready.store(true);
+    pImpl_->running.store(true);
+    g_liveWrapper = this;
+    return true;
+}
+#endif
+
 void RakNetWrapper::StopNetwork() {
+#ifdef __ANDROID__
+    pImpl_->quic.reset();
+#endif
+    pImpl_->handshakeState.store(HandshakeState::IDLE);
     pImpl_->running.store(false);
     pImpl_->ready.store(false);
     pImpl_->adapter.shutdown();
@@ -681,12 +703,46 @@ bool RakNetWrapper::IsReady() const {
 }
 
 bool RakNetWrapper::IsConnected() const {
+#ifdef __ANDROID__
+    if (pImpl_->quic) return IsRakNetConnected();
+#endif
     return pImpl_->adapter.isConnected();
 }
 
 void RakNetWrapper::DoPulse() {
     if (!pImpl_->running.load()) return;
 
+#ifdef __ANDROID__
+    if (pImpl_->quic) {
+        std::string error;
+        const int status = pImpl_->quic->Status(error);
+        if (status == 0) return;
+        if (status > 0) {
+            if (pImpl_->handshakeState.load() == HandshakeState::IDLE) {
+                pImpl_->handshakeState.store(HandshakeState::TRANSPORT_CONNECTED);
+                if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(true, "QUIC connected");
+                return;  // Let NeonJoinClient enter WaitingModName before dispatching game frames.
+            }
+            auto& packet = pImpl_->quicPacket;
+            for (int i = 0; i < 48; ++i) {
+                uint32_t bits = 0;
+                int result = pImpl_->quic->Poll(packet.data(), &bits, packet.data()+1, packet.size()-1);
+                if (result == 0) return;
+                if (result < 0) { error = "QUIC connection closed"; break; }
+                const size_t size = 1 + (bits + 7) / 8;
+                const auto user = static_cast<uint8_t>(PacketID::USER_PACKET_ENUM);
+                if (packet[0] > UINT8_MAX - user) { error = "Invalid QUIC game packet"; break; }
+                NoteUsage(true, packet[0] + user, size);
+                if (pImpl_->packetHandler) pImpl_->packetHandler(user, packet.data(), size, bits + 8);
+            }
+            if (error.empty()) return;
+        }
+        LOGE("QUIC: %s", error.c_str());
+        StopNetwork();
+        if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(false, error.c_str());
+        return;
+    }
+#endif
     // Transport-level timeout covers only the RakNet connect phase. Once
     // CONNECTION_REQUEST_ACCEPTED arrives, the NeonJoinClient owns per-step
     // timeouts for the MTA application join (MOD_NAME/JOINDATA/JOINEDGAME).
@@ -756,7 +812,7 @@ void RakNetWrapper::DoPulse() {
         case static_cast<uint8_t>(PacketID::CONNECTION_REQUEST_ACCEPTED): {
             LOGI("RakNetWrapper: CONNECTION_REQUEST_ACCEPTED from %s:%u",
                  pImpl_->serverHost.c_str(), pImpl_->serverPort);
-            pImpl_->handshakeState.store(HandshakeState::RAKNET_CONNECTED);
+            pImpl_->handshakeState.store(HandshakeState::TRANSPORT_CONNECTED);
 
             // The MTA application join (PLAYER_JOIN -> MOD_NAME ->
             // PLAYER_JOINDATA -> ...) is owned by NeonJoinClient, which polls
@@ -833,6 +889,19 @@ void RakNetWrapper::SetPacketHandler(PacketHandlerCallback handler) {
 bool RakNetWrapper::SendPacket(uint8_t packetId, const BitStreamWriter& stream,
                                PacketPriority priority, PacketReliability reliability,
                                PacketOrdering ordering) {
+#ifdef __ANDROID__
+    if (pImpl_->quic) {
+        const auto bits = stream.GetBitLength();
+        if (packetId != static_cast<uint8_t>(PacketID::USER_PACKET_ENUM) || bits < 8 ||
+            bits - 8 > (256u << 10) * 8u || stream.GetData()[0] > UINT8_MAX - packetId) return false;
+        const uint8_t mode = reliability == PacketReliability::UNRELIABLE ? 1 :
+                             reliability == PacketReliability::UNRELIABLE_SEQUENCED ? 2 : 0;
+        const auto kind = stream.GetData()[0];
+        if (!pImpl_->quic->Send(kind, bits - 8, stream.GetData()+1, mode, static_cast<uint8_t>(ordering))) return false;
+        NoteUsage(false, packetId + kind, stream.GetByteLength());
+        return true;
+    }
+#endif
     if (!pImpl_->running.load() || !pImpl_->adapter.isConnected()) return false;
 
     const size_t dataLen = stream.GetByteLength();
@@ -840,7 +909,7 @@ bool RakNetWrapper::SendPacket(uint8_t packetId, const BitStreamWriter& stream,
     size_t bits = stream.GetBitLength();
     if (packetId == static_cast<uint8_t>(PacketID::USER_PACKET_ENUM)) {
         if (bits < 8 || stream.GetData()[0] > 156) return false;
-        if (stream.GetData()[0] == 4) {
+        if (stream.GetData()[0] == NEON_JOIN_DATA_ID) {
             BitStreamWriter envelope;
             if (!BuildNetJoinEnvelope(stream,pImpl_->serialBuffer,envelope)) return false;
             sendBuf.assign(envelope.GetData(),envelope.GetData()+envelope.GetByteLength());
@@ -866,7 +935,7 @@ void RakNetWrapper::SetClientPort(uint16_t port) {
 }
 
 std::string RakNetWrapper::GetConnectedServer(bool includePort) const {
-    if (!pImpl_->adapter.isConnected()) return "";
+    if (!IsConnected()) return "";
     if (includePort) {
         return pImpl_->serverHost + ":" + std::to_string(pImpl_->serverPort);
     }
@@ -874,6 +943,9 @@ std::string RakNetWrapper::GetConnectedServer(bool includePort) const {
 }
 
 std::string RakNetWrapper::GetPeerEndpoint() const {
+#ifdef __ANDROID__
+    if (pImpl_->quic) return GetConnectedServer(true);
+#endif
     return pImpl_->adapter.remoteEndpoint();
 }
 
@@ -967,35 +1039,6 @@ bool RakNetWrapper::SendOpenPacket() {
                       stream, PacketPriority::HIGH, PacketReliability::RELIABLE);
 }
 
-bool RakNetWrapper::SendJoinRequest(const std::string& nickname, const std::string& serial) {
-    // Store credentials for deferred send if RakNet hasn't connected yet
-    pImpl_->pendingNickname = nickname;
-    pImpl_->pendingSerial = serial;
-
-    auto state = pImpl_->handshakeState.load();
-    if (state != HandshakeState::RAKNET_CONNECTED && state != HandshakeState::JOIN_SENT) {
-        LOGI("RakNetWrapper: JoinRequest deferred (state=%d, waiting for RakNet connect)",
-             static_cast<int>(state));
-        return true; // Will be sent automatically when CONNECTION_REQUEST_ACCEPTED arrives
-    }
-
-    // Envelope: SendPacket() writes the RID_USER_PACKET_ENUM (99) prefix byte
-    // exactly once; the stream carries only the game packet body. Writing the
-    // UPE byte here too would double-prefix the join on the wire.
-    // TODO(P1B.2): replace simplified body with real PLAYER_JOINDATA layout
-    // from Client/mods/deathmatch/logic/CPacketHandler.cpp.
-    BitStreamWriter stream;
-    stream.Write(NormalizeAscii(nickname).c_str());
-    stream.Write(NormalizeAscii(serial).c_str());
-    bool sent = SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM),
-                           stream, PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
-    if (sent) {
-        pImpl_->handshakeState.store(HandshakeState::JOIN_SENT);
-        LOGI("RakNetWrapper: JoinRequest sent for '%s'", nickname.c_str());
-    }
-    return sent;
-}
-
 void RakNetWrapper::SetConnectionStateCallback(ConnectionStateCallback callback) {
     pImpl_->connectionStateCallback = std::move(callback);
 }
@@ -1010,8 +1053,7 @@ void RakNetWrapper::MarkSessionAccepted() {
 
 bool RakNetWrapper::IsRakNetConnected() const {
     const auto s = pImpl_->handshakeState.load();
-    return s == HandshakeState::RAKNET_CONNECTED ||
-           s == HandshakeState::JOIN_SENT ||
+    return s == HandshakeState::TRANSPORT_CONNECTED ||
            s == HandshakeState::HANDSHAKE_COMPLETE;
 }
 

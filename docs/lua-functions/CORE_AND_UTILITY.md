@@ -46,7 +46,7 @@ Timers, event handling, network latent transfers, file I/O, XML parsing, JSON se
 | `decodeString` | **Implemented** | `CLuaCryptDefs.cpp:33` | `DecodeString` | Operational on Android. (DecodeString) |
 | `deref` | **Implemented** | `CLuaUtilDefs.cpp:44` | `Dereference` | Operational on Android. (l_deref) |
 | `dofile` | **Implemented** | `CLuaMain.cpp:86` | `CLuaUtilDefs::DisabledFunction` | Disabled in the client. Returns false. |
-| `downloadFile` | **Implemented** | `CLuaManager.cpp:206` | `CLuaFunctionDefs::DownloadFile` | Operational on Android. (l_downloadFile) |
+| `downloadFile` | **Implemented** | `CLuaManager.cpp:206` | `CLuaFunctionDefs::DownloadFile` | Queues a declared resource file and fires `onClientFileDownloadComplete` after the cache or download check. |
 | `encodeString` | **Implemented** | `CLuaCryptDefs.cpp:32` | `EncodeString` | Operational on Android. (EncodeString) |
 | `executeCommandHandler` | **Implemented** | `CLuaManager.cpp:227` | `CLuaFunctionDefs::ExecuteCommandHandler` | Operational on Android. (l_executeCommandHandler) |
 | `fetchRemote` | **Implemented** | `CLuaNetworkDefs.cpp:26` | `FetchRemote` | Operational on Android. (LuaFetchRemote) |

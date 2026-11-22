@@ -83,7 +83,7 @@ public:
 
     /// Runs timers and onClientRender. The result is one frame of
     /// "R x y w h argb" and "T x y size argb text" commands.
-    std::string pumpDx();
+    std::string pumpDx(bool renderFrame = true);
 
 private:
     struct Impl;
@@ -100,7 +100,7 @@ bool ActiveVmPulseResources();
 // New session: drops every resource and restarts the VM with a clean state.
 void ActiveVmResetSession();
 bool ActiveVmOnChat(const char* text, int red, int green, int blue);
-std::string ActiveVmPump();
+std::string ActiveVmPump(bool renderFrame = true);
 // Appends draw lines ("L ...\n", "P ...\n") to the DX frame being built. VM thread.
 void ActiveVmAppendDraw(const std::string& lines);
 void ActiveVmAppendPostGuiDraw(const std::string& lines);

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Connection and loading -->
+    <string name="disconnected">Отключено</string>
+    <string name="disconnected_from_server">Соединение с сервером прервано.</string>
+    <string name="connected_to_server">Подключение к серверу установлено.</string>
+    <string name="connection_lost">Соединение потеряно</string>
+    <string name="connection_lost_retry">Сервер завершил сеанс. Подключиться снова?</string>
+    <string name="reconnect_failed">Не удалось снова подключиться к серверу. Попробуйте ещё раз.</string>
+    <string name="connection_start_failed">Не удалось начать подключение.</string>
+    <string name="connection_error_detail">Ошибка: %1$s</string>
+    <string name="connection_error_code">Ошибка [%1$s]</string>
+    <string name="connection_to_server_failed">Не удалось подключиться к %1$s через порт %2$d.</string>
+    <string name="connecting_to_address">Подключение к %1$s…</string>
+    <string name="waiting_for_game_data">Соединение установлено. Ожидание данных игры.</string>
+    <string name="loading_starting_game">Запуск San Andreas</string>
+    <string name="loading_downloading_resources">Загрузка ресурсов</string>
+    <string name="loading_processing_resources">Обработка ресурсов</string>
+    <string name="loading_preparing_server_data">Подготовка данных сервера</string>
+    <string name="loading_preparing_world">Подготовка игрового мира</string>
+    <string name="downloading">Загрузка</string>
+    <string name="transfer_progress">Загрузка: %1$s из %2$s</string>
+    <string name="transfer_cancel_hint">Отключитесь, чтобы отменить загрузку</string>
+
+    <!-- Game startup and diagnostics -->
+    <string name="game_assets_sync_required">Синхронизируйте файлы игры в настройках.</string>
+    <string name="native_client_load_failed">Не удалось загрузить нативный клиент MTA.</string>
+    <string name="native_client_init_failed">Не удалось инициализировать нативный клиент MTA.</string>
+    <string name="installed_assets_open_failed">Не удалось открыть установленные файлы игры.</string>
+    <string name="gta_engine_load_failed">Не удалось загрузить движок GTA (libGTASA).</string>
+    <string name="network_identity_init_failed">Не удалось настроить сетевой идентификатор устройства.</string>
+    <string name="engine_text_missing_cdn">Файл текстов игры (%1$s) отсутствует или пуст. Синхронизируйте файлы игры в настройках.</string>
+    <string name="engine_text_missing_local">Файл текстов игры (%1$s) отсутствует или пуст. Добавьте его в папку игры.</string>
+    <string name="engine_map_file_missing">Файл карты отсутствует или недоступен (%1$s).</string>
+    <string name="engine_stopped_unexpectedly">Движок игры неожиданно остановился.</string>
+    <string name="engine_failure_title">Не удалось запустить или продолжить игру</string>
+    <string name="engine_failure_log">Журнал сбоя движка</string>
+    <string name="engine_copy_log">Скопировать журнал</string>
+    <string name="engine_value_not_detected">Не обнаружено</string>
+    <string name="engine_report_device">Устройство: %1$s %2$s\nAndroid: %3$s\nGPU: %4$s\nФормат текстур: %5$s</string>
+    <string name="engine_report_exit_reason">Причина завершения: %1$d / статус: %2$d</string>
+    <string name="engine_report_crash_trace">Трассировка сбоя движка</string>
+    <string name="engine_report_trace_unavailable">Трассировка сбоя Android недоступна.</string>
+    <string name="engine_report_log">Журнал движка</string>
+    <string name="engine_report_earlier_lines">[Предыдущие строки журнала пропущены]</string>
+    <string name="engine_report_footer">Трассировки нативных сбоев включаются в отчёт, если их предоставляет Android.</string>
+    <string name="engine_report_truncated">[Отчёт обрезан]</string>
+    <string name="engine_libs_missing_cdn">Отсутствуют файлы движка игры. Синхронизируйте файлы игры в настройках.</string>
+    <string name="engine_libs_missing_local">Скопируйте libGTASA.so, libSCAnd.so и libOpenAL64.so из lib/arm64-v8a/ в APK GTA San Andreas 2.10 в %1$s.</string>
+    <string name="engine_file_write_failed">Не удалось записать в %1$s.</string>
+    <string name="engine_invalid_lib">%1$s не является допустимой нативной библиотекой.</string>
+    <string name="engine_textures_missing">Часть текстур игры для %1$s (%2$s) отсутствует или недоступна. Синхронизируйте файлы игры в настройках и попробуйте снова.\n\n%3$s</string>
+
+    <!-- Game settings and controls -->
+    <string name="paused">Пауза</string>
+    <string name="resume">Продолжить</string>
+    <string name="map">Карта</string>
+    <string name="done">Готово</string>
+    <string name="chat">Чат</string>
+    <string name="chat_hint">Введите сообщение</string>
+    <string name="chat_send">Отправить</string>
+    <string name="chat_send_failed">Сообщение не отправлено.</string>
+    <string name="no_bound_keys">Клавиши не назначены</string>
+    <string name="game_settings_live">Изменения вступают в силу сразу и сохраняются для следующих сеансов.</string>
+    <string name="game_settings_loading">Настройки станут доступны после загрузки игры.</string>
+    <string name="visual_quality">Качество графики</string>
+    <string name="resolution">Разрешение</string>
+    <string name="draw_distance">Дальность прорисовки</string>
+    <string name="shadows">Тени</string>
+    <string name="car_reflections">Отражения на машинах</string>
+    <string name="brightness">Яркость</string>
+    <string name="frame_limiter">Ограничение частоты кадров</string>
+    <string name="sound_effects">Звуковые эффекты</string>
+    <string name="game_music">Музыка в игре</string>
+    <string name="section_game">Игра</string>
+    <string name="vibration">Вибрация</string>
+    <string name="subtitles">Субтитры</string>
+    <string name="chat_hidden">Скрыт</string>
+    <string name="chat_shown">Показан</string>
+
+    <!-- HUD placement -->
+    <string name="hud_chat_anchor">Положение чата</string>
+    <string name="hud_buttons_anchor">Положение кнопок</string>
+    <string name="hud_chat_size">Размер чата</string>
+    <string name="hud_chat_touch">Нажать на чат для ввода</string>
+    <string name="hud_off">Выкл.</string>
+    <string name="hud_on">Вкл.</string>
+    <string name="hud_top_left">Вверху слева</string>
+    <string name="hud_top_right">Вверху справа</string>
+    <string name="hud_bottom_left">Внизу слева</string>
+    <string name="hud_bottom_right">Внизу справа</string>
+    <string name="hud_follow_chat">Рядом с чатом</string>
+</resources>

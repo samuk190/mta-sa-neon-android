@@ -1,4 +1,4 @@
-package com.worldrpg.neonlauncher.game;
+package com.saonline.neonlauncher.game;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

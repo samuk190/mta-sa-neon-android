@@ -61,19 +61,20 @@ std::string BuildServerBase(const NeonJoinInfo& info, const std::string& host);
 
 enum class EnqueueResult : uint8_t {
     Queued,     // accepted; a Completion follows
-    Duplicate,  // the same file is already in flight; its Completion follows
+    Duplicate,  // the same file and resource generation are already queued or in flight
     Disabled,   // no cache root or no HTTP service yet; no Completion will come
     Stopped,    // shut down; no Completion will come
 };
 
 // Queues one client file (or CLIENT_SCRIPT) for download.
-EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file);
+EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file, uint32_t generation);
 
 // One finished request, in completion order. ok is true for a verified local copy
 // (cached or downloaded); otherwise note says why the file is not available.
 struct Completion {
     std::string resource;
     std::string file;
+    uint32_t generation = 0;
     bool ok = false;
     std::string note;
 };

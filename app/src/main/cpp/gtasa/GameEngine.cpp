@@ -49,6 +49,7 @@ using LoadAllRequestedModelsFn = void (*)(bool);
 using SetupPlayerPedFn = void (*)(int);
 using FindPlayerPedFn = void* (*)(int);
 using TeleportFn = void (*)(void*, Vec3, unsigned char);
+using LoadSceneCollisionFn = void (*)(const Vec3&);
 using EndUserPauseFn = void (*)();
 using RemoveTopFn = void (*)(void*, int, int);
 using SwitchOffFn = void (*)();
@@ -92,8 +93,13 @@ static std::atomic<int64_t> g_lastDamageMs{0};
 static std::atomic<int64_t> g_lastMeleeMs{0};
 static std::atomic<bool> g_localFire{false};
 static std::atomic<bool> g_localDuck{false};
-// SET_ELEMENT_POSITION on the local player: CClientPlayer::Teleport on the game thread (PlacePlayer).
-static std::atomic<bool> g_localTeleportPending{false};
+// The game thread publishes the position after all native work for this request.
+// The network thread waits for that acknowledgement before sending its next sample.
+static std::mutex g_localPlacementMutex;
+static Vec3 g_localPlacement{1754.f, -1894.f, 14.f};
+static uint64_t g_requestedPlacement = 0;
+static uint64_t g_appliedPlacement = 0;
+static std::atomic<int> g_pendingLocalInterior{-1};
 // ButtonCross (sprint) held, and a ButtonSquare (jump) press waiting for the next on-foot packet.
 static std::atomic<bool> g_localSprint{false};
 static std::atomic<bool> g_localJumpLatch{false};
@@ -111,6 +117,8 @@ static std::atomic<bool> g_padStickValid{false};
 static std::atomic<float> g_cameraRot{0.f};
 static std::atomic<bool> g_cameraRotValid{false};
 static TeleportFn g_teleport = nullptr;
+static LoadSceneCollisionFn g_loadSceneCollision = nullptr;
+static int* g_currentArea = nullptr;
 static EndUserPauseFn g_endPause = nullptr;
 static RemoveTopFn g_removeTop = nullptr;
 static void (*g_processMenuPending)(void*) = nullptr;
@@ -118,9 +126,6 @@ static SwitchOffFn g_switchOff = nullptr;
 static void* g_mobileMenu = nullptr;
 using ScriptProcessFn = void (*)(void*);
 static ScriptProcessFn g_originalScript = nullptr;
-static std::atomic<float> g_spawnX{1754.f};
-static std::atomic<float> g_spawnY{-1894.f};
-static std::atomic<float> g_spawnZ{14.f};
 
 static void AllowWrite(void* address, size_t size) {
     long page = sysconf(_SC_PAGESIZE);
@@ -151,18 +156,56 @@ static void ResolvePlayerFns() {
     g_pedDensity = reinterpret_cast<float*>(dlsym(handle, "_ZN11CPopulation20PedDensityMultiplierE"));
     g_managePopulation = dlsym(handle, "_ZN11CPopulation16ManagePopulationEv");
     g_teleport = reinterpret_cast<TeleportFn>(dlsym(handle, "_ZN4CPed8TeleportE7CVectorh"));
+    g_loadSceneCollision = reinterpret_cast<LoadSceneCollisionFn>(
+        dlsym(handle, "_ZN10CStreaming18LoadSceneCollisionERK7CVector"));
+    g_currentArea = static_cast<int*>(dlsym(handle, "_ZN5CGame8currAreaE"));
+    if (!g_loadSceneCollision) ENGINE_LOGI("DIAG local teleport: CStreaming::LoadSceneCollision is unavailable");
+    if (!g_currentArea) ENGINE_LOGI("DIAG local interior: CGame::currArea is unavailable");
     g_endPause = reinterpret_cast<EndUserPauseFn>(dlsym(handle, "_ZN6CTimer12EndUserPauseEv"));
     g_removeTop = reinterpret_cast<RemoveTopFn>(dlsym(handle, "_ZN10MobileMenu15RemoveTopScreenEbb"));
     g_processMenuPending = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN10MobileMenu14ProcessPendingEv"));
     g_switchOff = reinterpret_cast<SwitchOffFn>(dlsym(handle, "_Z20Menu_SwitchOffToGamev"));
 }
 
-static void PlacePlayer() {
+static void QueueLocalPlacement(float x, float y, float z) {
+    std::lock_guard lock(g_localPlacementMutex);
+    g_localPlacement = {x, y, z};
+    ++g_requestedPlacement;
+}
+
+bool LocalPlacementPending() {
+    std::lock_guard lock(g_localPlacementMutex);
+    return g_requestedPlacement != g_appliedPlacement;
+}
+
+static void PlacePlayer(bool initial = false) {
+    Vec3 pos;
+    uint64_t request;
+    {
+        std::lock_guard lock(g_localPlacementMutex);
+        request = g_requestedPlacement;
+        if (!initial && request == g_appliedPlacement) return;
+        pos = g_localPlacement;
+    }
     if (!g_findPlayer || !g_teleport) return;
     void* ped = g_findPlayer(0);
     if (!ped) return;
-    Vec3 pos{g_spawnX.load(), g_spawnY.load(), g_spawnZ.load()};
+    // Desktop CClientPed::Teleport waits for ground collision on jumps over
+    // 50 units. Arm64 LoadSceneCollision loads COL and IPLs at the target.
+    const float dx = pos.x - g_poseX.load();
+    const float dy = pos.y - g_poseY.load();
+    const float dz = pos.z - g_poseZ.load();
+    if (g_loadSceneCollision && dx * dx + dy * dy + dz * dz > 2500.f)
+        g_loadSceneCollision(pos);
     g_teleport(ped, pos, 0);
+    g_poseX = pos.x;
+    g_poseY = pos.y;
+    g_poseZ = pos.z;
+    g_velX = 0.f;
+    g_velY = 0.f;
+    g_velZ = 0.f;
+    std::lock_guard lock(g_localPlacementMutex);
+    g_appliedPlacement = std::max(g_appliedPlacement, request);
 }
 
 // Same replacement the PC client installs on CRunningScript::Process: the
@@ -409,6 +452,12 @@ struct RemoteCar {
     // and from VEHICLE_STARTSYNC (everything). Guarded by g_remoteMutex.
     CarSeed seed;
     bool actorSeeded = false;
+    int doorLockMode = 1;
+    int appliedDoorLockMode = -1;
+    uint16_t nitroUpgrade = 0;
+    uint64_t nitroRevision = 0;
+    uint16_t appliedNitroUpgrade = 0;
+    uint64_t appliedNitroRevision = 0;
 };
 static std::unordered_map<uint32_t, RemoteCar> g_remoteCars;
 static std::vector<uint32_t> g_forget;
@@ -428,6 +477,7 @@ static uint32_t g_localVehicleId = kNoVehicle;
 // Live sample of that car for packet 33 (CopyLocalCar). Written in WatchLocalVehicle, under g_remoteMutex.
 static LocalCarState g_localCar;
 static bool g_localCarValid = false;
+static std::vector<VehicleTouchRect> g_vehicleTouchBounds;
 static std::vector<LocalVehicleEvent> g_localVehicleEvents;
 static constexpr size_t kMaxLocalVehicleEvents = 16;
 // Local bullet-weapon shots (NoteLocalShot / ConsumeLocalShot). Guarded by g_remoteMutex.
@@ -678,6 +728,11 @@ struct TaskFns {
     void* (*createCarForScript)(int, Vec3, unsigned char) = nullptr;
     // CVehicle* FindPlayerVehicle(int playerId, bool bIncludeRemote). playerId -1 is the local player.
     void* (*findPlayerVehicle)(int, bool) = nullptr;
+    bool (*isVehicleDriver)(const void*, const void*) = nullptr;
+    void (*requestVehicleUpgrade)(int, int) = nullptr;
+    bool (*hasVehicleUpgradeLoaded)(int) = nullptr;
+    int (*addVehicleUpgrade)(void*, int) = nullptr;
+    void (*removeVehicleUpgrade)(void*, int) = nullptr;
     // CPad (libGTASA 2.10). GetPad(0) is the local pad; the getters are CPad members, so they take the pad.
     void* (*getPad)(int) = nullptr;
     int (*padSteering)(void*) = nullptr;       // CPad::GetSteeringLeftRight, -128..128
@@ -687,6 +742,7 @@ struct TaskFns {
     bool (*padHorn)(void*, bool) = nullptr;    // CPad::GetHorn(bool), the bool is unused on libGTASA 2.10
     bool (*padLookLeft)(void*, bool) = nullptr;   // CPad::GetLookLeft(bool), true includes the touch look widget
     bool (*padLookRight)(void*, bool) = nullptr;  // CPad::GetLookRight(bool), same
+    bool (*padNitroFired)(void*) = nullptr;       // CPad::GetNitroFired refreshes the native nitro widget
     void* wanderVtable = nullptr;
 };
 
@@ -722,6 +778,11 @@ static TaskFns& Tasks() {
     api.createCarForScript = reinterpret_cast<void* (*)(int, Vec3, unsigned char)>(
         dlsym(handle, "_ZN8CCarCtrl18CreateCarForScriptEi7CVectorh"));
     api.findPlayerVehicle = reinterpret_cast<void* (*)(int, bool)>(dlsym(handle, "_Z17FindPlayerVehicleib"));
+    api.isVehicleDriver = reinterpret_cast<decltype(api.isVehicleDriver)>(dlsym(handle, "_ZNK8CVehicle8IsDriverEPK4CPed"));
+    api.requestVehicleUpgrade = reinterpret_cast<decltype(api.requestVehicleUpgrade)>(dlsym(handle, "_ZN10CStreaming21RequestVehicleUpgradeEii"));
+    api.hasVehicleUpgradeLoaded = reinterpret_cast<decltype(api.hasVehicleUpgradeLoaded)>(dlsym(handle, "_ZN10CStreaming23HasVehicleUpgradeLoadedEi"));
+    api.addVehicleUpgrade = reinterpret_cast<decltype(api.addVehicleUpgrade)>(dlsym(handle, "_ZN8CVehicle17AddVehicleUpgradeEi"));
+    api.removeVehicleUpgrade = reinterpret_cast<decltype(api.removeVehicleUpgrade)>(dlsym(handle, "_ZN8CVehicle20RemoveVehicleUpgradeEi"));
     api.getPad = reinterpret_cast<void* (*)(int)>(dlsym(handle, "_ZN4CPad6GetPadEi"));
     api.padSteering = reinterpret_cast<int (*)(void*)>(dlsym(handle, "_ZN4CPad20GetSteeringLeftRightEv"));
     api.padAccelerate = reinterpret_cast<int (*)(void*)>(dlsym(handle, "_ZN4CPad13GetAccelerateEv"));
@@ -730,6 +791,7 @@ static TaskFns& Tasks() {
     api.padHorn = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad7GetHornEb"));
     api.padLookLeft = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad11GetLookLeftEb"));
     api.padLookRight = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad12GetLookRightEb"));
+    api.padNitroFired = reinterpret_cast<decltype(api.padNitroFired)>(dlsym(handle, "_ZN4CPad13GetNitroFiredEv"));
     api.wanderVtable = dlsym(handle, "_ZTV26CTaskComplexWanderStandard");
     return api;
 }
@@ -754,7 +816,14 @@ static void SamplePadControls(const TaskFns& api, LocalCarState& c) {
 // Orientation is +0x154 (CCamera::Process store at 0x4bbcc0; PlayerControlZelda load at 0x655a28).
 static void SampleLocalPadAndCamera() {
     TaskFns& api = Tasks();
-    if (!api.getPad) {
+    if (api.findPlayerVehicle && api.findPlayerVehicle(-1, false)) {
+        // GetPedWalk* and GetSprint call IsTouched(..., 1), which enables
+        // their widgets (0x36fcd4-0x36fcf4). Sample only the driving pad in a car.
+        g_padStickValid = false;
+        g_localSprint = false;
+        g_localAttackHeld = false;
+        g_localAttackLatch = false;
+    } else if (!api.getPad) {
         g_padStickValid = false;
         static bool loggedPad = false;
         if (!loggedPad) {
@@ -798,7 +867,7 @@ static void SampleLocalPadAndCamera() {
             g_padStickX = sx;
             g_padStickY = sy;
             g_padStickValid = true;
-            // ButtonCross: CPad::GetSprint (IsTouched 0xa8 / 0x1f, a passive read). The int argument is the
+            // ButtonCross: CPad::GetSprint (IsTouched 0xa8 / 0x1f). The int argument is the
             // sprint type the game passes; 0 is the on-foot form.
             g_localSprint = getSprint ? getSprint(pad, 0) : false;
             // ButtonCircle: the attack widget (0x1) that CPad::GetMeleeAttack and GetWeapon read with IsTouched.
@@ -814,7 +883,7 @@ static void SampleLocalPadAndCamera() {
             }
             if (isTouched) {
                 float vec[2] = {0.f, 0.f};
-                const bool held = isTouched(0x1, vec, 1);
+                const bool held = isTouched(0x1, vec, 0);
                 if (held && !g_localAttackHeld.load()) g_localAttackLatch = true;
                 g_localAttackHeld = held;
             }
@@ -1670,6 +1739,200 @@ static void ApplyCarMotion(uint32_t vehicleId, void* body) {
     std::memcpy(raw + 0x74, turn, sizeof turn);
 }
 
+static void ApplyCarDoorLock(RemoteCar& car) {
+    if (car.doorLockMode == car.appliedDoorLockMode) return;
+    // CVehicle::CanPedOpenLocks loads CVehicle+0x684 (0x6a8c78).
+    // CCarGenerator::DoInternalProcessing sets DOOR_LOCK_LOCKED there (0x68fc20-0x68fc24).
+    auto* mode = reinterpret_cast<int32_t*>(static_cast<unsigned char*>(car.body) + 0x684);
+    *mode = car.doorLockMode;
+    car.appliedDoorLockMode = car.doorLockMode;
+}
+
+static bool HasInstalledNitro(const void* vehicle) {
+    // CAutomobile::ProcessControl (0x674c3c) tests this flag before calling NitrousControl.
+    return (static_cast<const uint8_t*>(vehicle)[0x4ba] & 0x08) != 0;
+}
+
+static void ApplyCarNitro(uint32_t id, RemoteCar& car, const TaskFns& api) {
+    if (car.nitroUpgrade == car.appliedNitroUpgrade && car.nitroRevision == car.appliedNitroRevision) return;
+    if (IsPlaceableVtable(car.body)) return;
+    // CVehicle::SetVehicleUpgradeFlags (0x6b0238) only installs nitro on native automobiles.
+    const auto* raw = static_cast<const uint8_t*>(car.body);
+    if (*reinterpret_cast<const int32_t*>(raw + 0x734) != 0) return;
+    if (!api.requestVehicleUpgrade || !api.hasVehicleUpgradeLoaded || !api.addVehicleUpgrade || !api.removeVehicleUpgrade) {
+        static bool loggedMissing = false;
+        if (!loggedMissing) {
+            loggedMissing = true;
+            ENGINE_LOGI("DIAG vehicle nitro: native upgrade functions unavailable");
+        }
+        return;
+    }
+    if (car.nitroUpgrade && !api.hasVehicleUpgradeLoaded(car.nitroUpgrade)) {
+        api.requestVehicleUpgrade(car.nitroUpgrade, 0);
+        return;
+    }
+    if (car.appliedNitroUpgrade && car.appliedNitroUpgrade != car.nitroUpgrade) {
+        api.removeVehicleUpgrade(car.body, car.appliedNitroUpgrade);
+    }
+    if (car.nitroUpgrade) api.addVehicleUpgrade(car.body, car.nitroUpgrade);
+    car.appliedNitroUpgrade = car.nitroUpgrade;
+    car.appliedNitroRevision = car.nitroRevision;
+    ENGINE_LOGI("Vehicle nitro id=%u upgrade=%u active=%d", id, unsigned(car.nitroUpgrade), HasInstalledNitro(car.body));
+}
+
+static void RefreshNitroButton(void* vehicle, const TaskFns& api) {
+    if (!vehicle || !HasInstalledNitro(vehicle) || !g_findPlayer || !api.isVehicleDriver ||
+        !api.getPad || !api.padNitroFired) return;
+    void* ped = g_findPlayer(0);
+    if (!ped || !api.isVehicleDriver(vehicle, ped)) return;
+    // CPad::GetNitroFired enables touch widget 0x1e at 0x4dd460. Refresh it
+    // during recharge too. GTA's NitrousControl still handles activation.
+    if (void* pad = api.getPad(0)) api.padNitroFired(pad);
+}
+
+// Called on the game thread with g_remoteMutex held, after the driving pad enabled its widgets.
+static void SampleVehicleTouchControlBounds(bool inVehicle) {
+    g_vehicleTouchBounds.clear();
+    if (!inVehicle) return;
+    static const auto native = [] {
+        struct {
+            const unsigned char* screen = nullptr;
+            const unsigned char* const* widgets = nullptr;
+            std::array<void*, 4> buttonDrawMethods{};
+            void* steerDraw = nullptr;
+            bool (*isTouchDown)(int) = nullptr;
+        } result;
+        void* library = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        if (!library) return result;
+        result.screen = static_cast<const unsigned char*>(dlsym(library, "RsGlobal"));
+        result.widgets = static_cast<const unsigned char* const*>(
+            dlsym(library, "_ZN15CTouchInterface10m_pWidgetsE"));
+        const char* names[] = {
+            "_ZN13CWidgetButton4DrawEv", "_ZN21CWidgetButtonEnterCar4DrawEv",
+            "_ZN21CWidgetButtonAnimated4DrawEv", "_ZN23CWidgetButtonHydraulics4DrawEv",
+        };
+        for (size_t i = 0; i < result.buttonDrawMethods.size(); ++i)
+            result.buttonDrawMethods[i] = dlsym(library, names[i]);
+        result.steerDraw = dlsym(library, "_ZN18CWidgetRegionSteer4DrawEv");
+        result.isTouchDown = reinterpret_cast<decltype(result.isTouchDown)>(
+            dlsym(library, "_ZN15CTouchInterface11IsTouchDownEi"));
+        return result;
+    }();
+    if (!native.screen || !native.widgets) return;
+
+    // CWidget::SetScreenRect (0x373134, 0x373174) reads the render width and height from RsGlobal.
+    int32_t screen[2];
+    std::memcpy(screen, native.screen + 0x8, sizeof(screen));
+    if (screen[0] <= 0 || screen[1] <= 0) return;
+    // DrawAll (0x36fbb0, 0x36fbc8) uses vtable slot 5 and a 0x5f0-byte widget array.
+    constexpr size_t widgetCount = 190;
+    for (size_t i = 0; i < widgetCount; ++i) {
+        const auto* widget = native.widgets[i];
+        // CWidgetButton::Draw (0x3736b0) tests draw alpha. GetEnabled (0x3725c8) reads +0x59.
+        if (!widget || (widget[0x58] == 0 && widget[0x59] == 0)) continue;
+        auto* vtable = *reinterpret_cast<void* const* const*>(widget);
+        void* draw = vtable[5];
+        float rect[4];
+        const auto& buttonMethods = native.buttonDrawMethods;
+        if (draw && std::find(buttonMethods.begin(), buttonMethods.end(), draw) != buttonMethods.end()) {
+            // Draw passes CRect at +0x2c to CSprite2d (0x3736c8). Its order is left, bottom, right, top.
+            std::memcpy(rect, widget + 0x2c, sizeof(rect));
+        } else if (draw && draw == native.steerDraw && native.isTouchDown && widget[0x58] != 0) {
+            // The steering region spans more of the screen than the circle it draws. Use the actual
+            // center and radius from CWidgetRegionSteer::Draw (0x383cc8-0x383d18) while touched.
+            int32_t touch;
+            std::memcpy(&touch, widget + 0x84, sizeof(touch));  // IsTouched (0x383e9c).
+            // LIB_PointerGetButton (0x327040) has two pointer slots.
+            if (touch < 0 || touch > 1 || !native.isTouchDown(touch)) continue;
+            float centers[4], width, radiusScale;
+            std::memcpy(centers, widget + 0xb0, sizeof(centers));
+            std::memcpy(&width, widget + 0x20, sizeof(width));
+            std::memcpy(&radiusScale, widget + 0xa4, sizeof(radiusScale));
+            const float scaledWidth = width * (screen[0] / 640.0f);
+            const float radius = scaledWidth * radiusScale;
+            if (radius <= 0) continue;
+            // The moving knob uses 15 percent of that width (0x383d20-0x383d64).
+            const float knob = scaledWidth * 0.15f;
+            rect[0] = std::min(centers[2] - radius, centers[0] - knob);
+            rect[1] = std::max(centers[3] + radius, centers[1] + knob);
+            rect[2] = std::max(centers[2] + radius, centers[0] + knob);
+            rect[3] = std::min(centers[3] - radius, centers[1] - knob);
+        } else {
+            continue;
+        }
+        VehicleTouchRect bounds{
+            std::min(rect[0], rect[2]) / screen[0], std::min(rect[1], rect[3]) / screen[1],
+            std::max(rect[0], rect[2]) / screen[0], std::max(rect[1], rect[3]) / screen[1],
+        };
+        if (std::isfinite(bounds.left) && std::isfinite(bounds.top) &&
+            std::isfinite(bounds.right) && std::isfinite(bounds.bottom) &&
+            bounds.right > bounds.left && bounds.bottom > bounds.top)
+            g_vehicleTouchBounds.push_back(bounds);
+    }
+}
+
+using EnterCarFirstTask = void* (*)(void*, void*);
+static EnterCarFirstTask g_enterCarFirstTask = nullptr;
+static void* (*g_createEnterCarSubTask)(void*, int, void*) = nullptr;
+static bool (*g_canPedOpenLocks)(const void*, const void*) = nullptr;
+
+static void* StartEnterCarTask(void* task, void* ped) {
+    if (ped && !InRemoteControlContext() && g_findPlayer && ped == g_findPlayer(0)) {
+        // CTaskComplexEnterCar::CreateFirstSubTask loads the target CVehicle at +0x18 (0x5fdfb8).
+        void* vehicle = *reinterpret_cast<void**>(static_cast<unsigned char*>(task) + 0x18);
+        uint32_t id = kNoVehicle;
+        if (vehicle) {
+            std::lock_guard lock(g_remoteMutex);
+            for (const auto& [vehicleId, car] : g_remoteCars) {
+                if (car.body == vehicle) {
+                    id = vehicleId;
+                    break;
+                }
+            }
+        }
+        if (id != kNoVehicle) {
+            // The server's native-vehicle-traffic onVehicleStartEnter cancels
+            // entry into active traffic. Apply the synced protection before GTA
+            // starts a task, including vehicle types that skip door checks.
+            double traffic = 0;
+            std::string text;
+            bool numeric = false;
+            bool boolean = false;
+            const bool protectedTraffic = ServerWorld::GetData(id, "neon:ambientVehicleTraffic",
+                traffic, text, numeric, &boolean) && boolean && traffic != 0;
+            if (protectedTraffic || !g_canPedOpenLocks(vehicle, ped)) {
+                // Same finish path as CreateFirstSubTask's invalid-target branch (0x5fe0ec).
+                ENGINE_LOGI("VehInOut: blocked entry into locked server vehicle %u", id);
+                return g_createEnterCarSubTask(task, 1302, ped);
+            }
+        }
+    }
+    return g_enterCarFirstTask(task, ped);
+}
+
+static void InstallVehicleEntryGuard(void* library) {
+    auto* target = dlsym(library, "_ZN20CTaskComplexEnterCar18CreateFirstSubTaskEP4CPed");
+    g_createEnterCarSubTask = reinterpret_cast<decltype(g_createEnterCarSubTask)>(
+        dlsym(library, "_ZN20CTaskComplexEnterCar13CreateSubTaskEiP4CPed"));
+    g_canPedOpenLocks = reinterpret_cast<decltype(g_canPedOpenLocks)>(
+        dlsym(library, "_ZNK8CVehicle15CanPedOpenLocksEPK4CPed"));
+    constexpr std::array<uint32_t, 4> kPrologue{0xd10183ff, 0xf90013f7, 0xa90357f6, 0xa9044ff4};
+    if (!target || !g_createEnterCarSubTask || !g_canPedOpenLocks ||
+        std::memcmp(target, kPrologue.data(), sizeof(kPrologue)) != 0) {
+        ENGINE_LOGE("DIAG vehicle entry guard: GTA symbols or entry prologue unavailable");
+        return;
+    }
+    static Hook::MemoryPatcher patcher;
+    const auto result = patcher.installHook(reinterpret_cast<uintptr_t>(target),
+                                            reinterpret_cast<uintptr_t>(&StartEnterCarTask));
+    if (result.success) {
+        g_enterCarFirstTask = reinterpret_cast<EnterCarFirstTask>(result.trampolineAddress);
+        ENGINE_LOGI("Vehicle entry guard installed");
+    } else {
+        ENGINE_LOGE("DIAG vehicle entry guard: %s", result.errorMessage.c_str());
+    }
+}
+
 // Desktop CClientPed::EnterVehicle (CClientPed.cpp:9886, request written at 10061) and ExitVehicle
 // (CClientPed.cpp:10096, request written at 10178) send REQUEST_IN / REQUEST_OUT only after the local ped
 // is allowed to act. On Android the native enter button
@@ -1681,6 +1944,7 @@ static void WatchLocalVehicle() {
     TaskFns& api = Tasks();
     if (!api.findPlayerVehicle) return;
     void* vehicle = api.findPlayerVehicle(-1, false);
+    RefreshNitroButton(vehicle, api);
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     uint32_t current = kNoVehicle;
     int model = 0;
@@ -1718,6 +1982,7 @@ static void WatchLocalVehicle() {
         c.health = sample.health;
         SamplePadControls(api, c);
     }
+    SampleVehicleTouchControlBounds(vehicle != nullptr);
     if (current == g_localVehicleId) return;
     if (g_localVehicleId != kNoVehicle) {
         g_localVehicleEvents.push_back(LocalVehicleEvent{g_localVehicleId, false});
@@ -2707,6 +2972,13 @@ static void ApplyLocalPedRpcs() {
     if (local == 0) return;
     void* ped = g_findPlayer(0);
     if (!ped) return;
+    if (const int interior = g_pendingLocalInterior.exchange(-1); interior >= 0) {
+        // CClientPed::SetInterior changes the camera area if it followed the ped.
+        const auto previous = static_cast<const unsigned char*>(ped)[0x4B];
+        static RemoteBody localArea;
+        ApplyPedInterior(ped, localArea, static_cast<uint8_t>(interior));
+        if (g_currentArea && *g_currentArea == previous) *g_currentArea = interior;
+    }
     RunPedRpcOps(local, ped, true, nullptr);
     static int alphaApplied = -1, collisionsApplied = -1;
     const auto* raw = static_cast<const unsigned char*>(ped);
@@ -2717,8 +2989,6 @@ static void ApplyLocalPedRpcs() {
 static void ApplyRemotePeds() {
     NoteGameFrame();
     LogPoolUsage(g_remoteBodies.size());
-    if (g_localTeleportPending.exchange(false)) PlacePlayer();
-    ApplyLocalPedRpcs();
     if (WorldRPG::Debug::Flag("noremote")) return;
     if (g_remoteResetPending.exchange(false)) {
         // The whole reset runs under g_remoteMutex: the network thread adds cars and seat requests of the new
@@ -2744,6 +3014,7 @@ static void ApplyRemotePeds() {
         // events and shots, and the hosted snapshots of the old session's element ids.
         g_localVehicleId = kNoVehicle;
         g_localCarValid = false;
+        g_vehicleTouchBounds.clear();
         g_localVehicleEvents.clear();
         g_localShots.clear();
         g_hostedSnap.clear();
@@ -2783,6 +3054,9 @@ static void ApplyRemotePeds() {
                 auto& car = g_remoteCars[actor.id];
                 car.model = actor.model;
                 car.hosted = actor.hosted;
+                car.doorLockMode = actor.vehicleDoorLock;
+                car.nitroUpgrade = actor.nitroUpgrade;
+                car.nitroRevision = actor.nitroRevision;
                 // Desktop Packet_EntityAdd, vehicle case: SetRotationDegrees and SetHealth. Once per record; a
                 // VEHICLE_STARTSYNC seed that arrived first is newer and is kept.
                 if (!car.actorSeeded) {
@@ -3386,42 +3660,59 @@ static void ApplyRemotePeds() {
         g_hostedSnap.swap(hosted);
     }
     TaskFns& api = Tasks();
-    struct CarPose { uint32_t id; int model; float x, y, z, heading; bool hosted; };
+    struct CarPose {
+        uint32_t id;
+        RemoteCar* record;
+        int model;
+        float x, y, z, heading;
+        bool hosted;
+    };
     std::vector<CarPose> cars;
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
-        for (const auto& [id, car] : g_remoteCars)
-            cars.push_back({id, car.model, car.x, car.y, car.z, car.heading, car.hosted});
+        cars.reserve(g_remoteCars.size());
+        // Only the game thread erases vehicle records. References survive insertions and rehashes
+        // by the packet thread, so use these pointers without looking up the map again unlocked.
+        for (auto& [id, car] : g_remoteCars)
+            cars.push_back({id, &car, car.model, car.x, car.y, car.z, car.heading, car.hosted});
     }
     // The car the local ped is in. Its body is moved by the local driver, not by server poses.
     void* const localVehicle = api.findPlayerVehicle ? api.findPlayerVehicle(-1, false) : nullptr;
     for (const auto& car : cars) {
         const uint32_t id = car.id;
         if (!PlausiblePosition(car.x, car.y, car.z) || car.model < 400 || car.model > 611) continue;
-        auto found = g_remoteCars.find(id);
-        if (found == g_remoteCars.end()) continue;
-        void* body = found->second.body;
+        RemoteCar& record = *car.record;
+        void* body = record.body;
         if (!body) {
-            if (!EnsureWorldModel(car.model) || g_remoteCars.size() > static_cast<size_t>(kMaxRemoteVehicleRecords)) continue;
+            if (!EnsureWorldModel(car.model) || cars.size() > static_cast<size_t>(kMaxRemoteVehicleRecords)) continue;
             if (api.createCarForScript) {
                 // Desktop CPoolsSA::AddVehicle: CCarCtrl::CreateCarForScript(model, CVector(), 0) (pool-owned, added to the world).
                 body = api.createCarForScript(car.model, Vec3{car.x, car.y, car.z}, 0);
                 if (!body) continue;
             } else {
                 if (!api.carCtor || !g_worldAdd) continue;
-                found->second.owned = std::make_unique<std::byte[]>(0x2000);
-                body = found->second.owned.get();
+                record.owned = std::make_unique<std::byte[]>(0x2000);
+                body = record.owned.get();
                 std::memset(body, 0, 0x2000);
                 api.carCtor(body, car.model, 2, 0);
                 g_worldAdd(body);
             }
-            found->second.body = body;
-            found->second.spatialGeneration = ServerWorld::ElementGeneration(id);
-            found->second.shownX = car.x;
-            found->second.shownY = car.y;
-            found->second.shownZ = car.z;
-            found->second.shownH = car.heading;
-            found->second.shown = true;
+            const uint64_t generation = ServerWorld::ElementGeneration(id);
+            {
+                std::lock_guard lock(g_remoteMutex);
+                record.body = body;
+                record.spatialGeneration = generation;
+                record.shownX = car.x;
+                record.shownY = car.y;
+                record.shownZ = car.z;
+                record.shownH = car.heading;
+                record.shown = true;
+            }
+            record.appliedDoorLockMode = -1;
+            record.appliedNitroUpgrade = 0;
+            record.appliedNitroRevision = 0;
+            ApplyCarDoorLock(record);
+            ApplyCarNitro(id, record, api);
             WriteBodyPos(body, car.x, car.y, car.z);
             if (g_setHeading) g_setHeading(body, car.heading);
             // Server rotation and health from ENTITY_ADD or VEHICLE_STARTSYNC. A new body starts upright at the
@@ -3434,6 +3725,8 @@ static void ApplyRemotePeds() {
             }
             continue;
         }
+        ApplyCarDoorLock(record);
+        ApplyCarNitro(id, record, api);
         ApplyCarSeed(id, body, body == localVehicle);
         if (body == localVehicle) {
             // The local ped is in this car. The desktop applies remote vehicle state (CNetAPI::ReadVehiclePuresync,
@@ -3443,36 +3736,39 @@ static void ApplyRemotePeds() {
             // follows the live body instead, so the lerp starts from the right place when the ped leaves.
             float lx = 0, ly = 0, lz = 0, lh = 0;
             if (ReadBodyPos(body, lx, ly, lz, lh)) {
-                std::lock_guard<std::mutex> lock(g_remoteMutex);
-                auto live = g_remoteCars.find(id);
-                if (live != g_remoteCars.end()) {
-                    HostedCar pose;
-                    live->second.x = live->second.shownX = lx;
-                    live->second.y = live->second.shownY = ly;
-                    live->second.z = live->second.shownZ = lz;
-                    // Same heading convention as the server's rz (CarPose heading is rz in radians).
-                    if (SampleHostedCar(body, pose)) live->second.heading = live->second.shownH = pose.rotZ * 3.14159265f / 180.f;
-                    live->second.motionPending = false;
-                }
+                HostedCar pose;
+                const bool sampled = SampleHostedCar(body, pose);
+                std::lock_guard lock(g_remoteMutex);
+                record.x = record.shownX = lx;
+                record.y = record.shownY = ly;
+                record.z = record.shownZ = lz;
+                // Same heading convention as the server's rz (CarPose heading is rz in radians).
+                if (sampled) record.heading = record.shownH = pose.rotZ * 3.14159265f / 180.f;
+                record.motionPending = false;
             }
             continue;
         }
         if (!car.hosted) ApplyCarMotion(id, body);
         if (car.hosted) continue;
-        const float dx = car.x - found->second.shownX;
-        const float dy = car.y - found->second.shownY;
-        const float dz = car.z - found->second.shownZ;
-        if (dx * dx + dy * dy + dz * dz > 30.f * 30.f) {
-            found->second.shownX = car.x;
-            found->second.shownY = car.y;
-            found->second.shownZ = car.z;
-        } else {
-            found->second.shownX += dx * 0.35f;
-            found->second.shownY += dy * 0.35f;
-            found->second.shownZ += dz * 0.35f;
+        Vec3 position;
+        {
+            std::lock_guard lock(g_remoteMutex);
+            const float dx = car.x - record.shownX;
+            const float dy = car.y - record.shownY;
+            const float dz = car.z - record.shownZ;
+            if (dx * dx + dy * dy + dz * dz > 30.f * 30.f) {
+                record.shownX = car.x;
+                record.shownY = car.y;
+                record.shownZ = car.z;
+            } else {
+                record.shownX += dx * 0.35f;
+                record.shownY += dy * 0.35f;
+                record.shownZ += dz * 0.35f;
+            }
+            record.shownH = car.heading;
+            position = {record.shownX, record.shownY, record.shownZ};
         }
-        found->second.shownH = car.heading;
-        WriteBodyPos(body, found->second.shownX, found->second.shownY, found->second.shownZ);
+        WriteBodyPos(body, position.x, position.y, position.z);
         if (g_setHeading) g_setHeading(body, car.heading);
     }
 
@@ -4035,6 +4331,8 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         Projectiles::Pump(ResolveProjectileEntity);
         GameTasks::Service();
         if (g_pedDensity) *g_pedDensity = 0.f;
+        ApplyLocalPedRpcs();
+        PlacePlayer();
         SampleLocalPose();
         SampleLocalPadAndCamera();
         ApplyRemotePeds();
@@ -4049,7 +4347,8 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         g_requestSpecial(0, "player", 26);
         g_loadAll(true);
         g_setupPlayer(0);
-        PlacePlayer();
+        ApplyLocalPedRpcs();
+        PlacePlayer(true);
         DressLocalPlayer();
         if (g_endPause) g_endPause();
         ENGINE_LOGI("Player created without main.scm");
@@ -4419,6 +4718,7 @@ static bool BeginServerSessionOnGameThread() {
         {
             // CEventDamage::AffectsPed (const, 0x444bac; prologue is sub sp / str / stp / stp, no PC-relative words).
             void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+            if (handle) InstallVehicleEntryGuard(handle);
             void* affects = handle ? dlsym(handle, "_ZNK12CEventDamage10AffectsPedEP4CPed") : nullptr;
             static Hook::MemoryPatcher damagePatcher;
             const auto damage = affects
@@ -4494,22 +4794,18 @@ static bool BeginServerSessionOnGameThread() {
     return true;
 }
 void ApplyServerSpawn(float x, float y, float z) {
-    g_spawnX = x;
-    g_spawnY = y;
-    g_spawnZ = z;
-    g_poseX = x;
-    g_poseY = y;
-    g_poseZ = z;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
+    QueueLocalPlacement(x, y, z);
     g_health = 100.f;
     g_armor = 0.f;
     g_healthOwned = false;
     g_damagePending = false;
-    g_localTeleportPending = true;
 }
 void CopySpawn(float& x, float& y, float& z) {
-    x = g_spawnX.load();
-    y = g_spawnY.load();
-    z = g_spawnZ.load();
+    std::lock_guard lock(g_localPlacementMutex);
+    x = g_localPlacement.x;
+    y = g_localPlacement.y;
+    z = g_localPlacement.z;
 }
 void CopyPose(float& x, float& y, float& z, float& heading) {
     x = g_poseX.load();
@@ -4725,13 +5021,7 @@ void RpcSetPosition(uint32_t id, float x, float y, float z) {
     if (id == 0 || id == 0xFFFFFFFFu || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     if (id == ServerWorld::LocalPlayer()) {
         // CClientPlayer::Teleport for the local player (CElementRPCs.cpp 133-150): run on the game thread.
-        g_spawnX = x;
-        g_spawnY = y;
-        g_spawnZ = z;
-        g_poseX = x;
-        g_poseY = y;
-        g_poseZ = z;
-        g_localTeleportPending = true;
+        QueueLocalPlacement(x, y, z);
         return;
     }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -4781,7 +5071,11 @@ void RpcSetRotation(uint32_t id, float radians) {
 }
 
 void RpcSetInterior(uint32_t id, uint8_t interior) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    if (id == ServerWorld::LocalPlayer()) {
+        g_pendingLocalInterior = interior;
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     g_remotePeds[id].interior = interior;
 }
@@ -4915,6 +5209,11 @@ void SetPedVitals(uint32_t id, float health, float armor) {
 // Reconnect (P3.1): the network thread clears the record set; the game thread
 // drops the bodies in ApplyRemotePeds on its next tick.
 void RequestRemoteReset() {
+    {
+        std::lock_guard lock(g_localPlacementMutex);
+        g_appliedPlacement = g_requestedPlacement;
+        g_pendingLocalInterior = -1;
+    }
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         g_remotePeds.clear();
@@ -5057,6 +5356,11 @@ bool CopyLocalCar(LocalCarState& out) {
     out = g_localCar;
     return true;
 }
+
+std::vector<VehicleTouchRect> CopyVehicleTouchControlBounds() {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    return g_vehicleTouchBounds;
+}
 // Desktop has no queue: CClientGame::PostWeaponFire sends at once. The queue only bridges the game thread
 // (CWeapon::Fire hook) and the network thread (SendBulletSync). At the cap the oldest shot is dropped.
 void NoteLocalShot(int weapon, const float* start, const float* end) {
@@ -5098,6 +5402,7 @@ bool ConsumeLocalShot(LocalShot& out) {
 bool InstallServerSessionHook() { return false; }
 bool BeginServerSession() { return false; }
 bool ServerSessionLive() { return false; }
+bool LocalPlacementPending() { return false; }
 void ApplyServerSpawn(float, float, float) {}
 void CopySpawn(float& x, float& y, float& z) { x = y = z = 0.f; }
 void CopyPose(float& x, float& y, float& z, float& heading) { x = y = z = heading = 0.f; }
