@@ -111,7 +111,7 @@ destruição, stop de recurso e reset, além dos retornos e da ponte JNI.
 - `neon_dx_text_tests`: **24 verificações Java, zero falhas**.
 - `neon_dx_state_tests`: **29 verificações Java, zero falhas**.
 - `neon_dx_view_tests`: **34 verificações Java, zero falhas**, com doubles Android.
-- `WorldRPGNeon` ARM64: compilou e linkou com o NDK.
+- Biblioteca nativa do launcher ARM64 compilada e linkada com o NDK.
 - Classes Java de jogo: compilaram; somente avisos de APIs obsoletas e
   bootstrap class path para Java 8.
 - Catálogo de Lua regenerado: 651 handlers não constantes, 136 stubs e

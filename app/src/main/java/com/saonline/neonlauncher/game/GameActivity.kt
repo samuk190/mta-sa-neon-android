@@ -226,11 +226,11 @@ class GameActivity : AppCompatActivity() {
         }
 
         try {
-// libc++ is linked statically into WorldRPGNeon (c++_static); no shared runtime to preload.
-            System.loadLibrary("WorldRPGNeon")
+// libc++ is linked statically into libsaonlineneon.so (c++_static); no shared runtime to preload.
+            System.loadLibrary("saonlineneon")
             nativeLibraryLoaded = true
         } catch (error: UnsatisfiedLinkError) {
-            android.util.Log.e("GameActivity", "Falha ao carregar WorldRPGNeon", error)
+            android.util.Log.e("GameActivity", "Falha ao carregar libsaonlineneon.so", error)
             Toast.makeText(this, R.string.native_client_load_failed, Toast.LENGTH_LONG).show()
             finish()
             return
