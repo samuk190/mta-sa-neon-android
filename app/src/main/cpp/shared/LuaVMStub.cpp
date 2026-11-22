@@ -939,6 +939,17 @@ static int l_isPlayerHudComponentVisible(lua_State* L) {
     return 1;
 }
 
+static int l_getMobileCrosshairPosition(lua_State* L) {
+    float x = 0.f, y = 0.f;
+    if (!WorldRPG::Game::GetMobileCrosshairPosition(x, y)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    return 2;
+}
+
 static int l_guiGetScreenSize(lua_State* L) {
     lua_pushinteger(L, g_dx.screenW);
     lua_pushinteger(L, g_dx.screenH);
@@ -2006,6 +2017,7 @@ static void installDxBindings(lua_State* L) {
         {"setPlayerHudComponentVisible", l_setPlayerHudComponentVisible},
         {"showPlayerHudComponent", l_setPlayerHudComponentVisible},
         {"isPlayerHudComponentVisible", l_isPlayerHudComponentVisible},
+        {"getMobileCrosshairPosition", l_getMobileCrosshairPosition},
         {"outputDebugString", l_debug},
         {"addCommandHandler", l_true},
     };

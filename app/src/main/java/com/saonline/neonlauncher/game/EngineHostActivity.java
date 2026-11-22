@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.SparseArray;
 import android.util.TypedValue;
 import android.os.Build;
 import android.text.Editable;
@@ -17,7 +18,9 @@ import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -172,6 +175,26 @@ public final class EngineHostActivity extends GTASA {
     private native boolean nativeSendChat(String text);
     private native void nativeChatInputActive(boolean active);
     private native void nativeKeyEvent(String key, boolean down);
+    private native boolean nativeHardwareMouseReady();
+    private native void nativeHardwareMouse(float x, float y, int buttons, float wheel, boolean captured);
+    private static final class PhysicalKey {
+        final KeyEvent down;
+        final boolean sentToGame;
+
+        PhysicalKey(KeyEvent down, boolean sentToGame) {
+            this.down = down;
+            this.sentToGame = sentToGame;
+        }
+    }
+    private final SparseArray<PhysicalKey> physicalKeys = new SparseArray<>();
+    private static final int[] MOUSE_BUTTONS = {
+        MotionEvent.BUTTON_PRIMARY, MotionEvent.BUTTON_SECONDARY, MotionEvent.BUTTON_TERTIARY,
+        MotionEvent.BUTTON_BACK, MotionEvent.BUTTON_FORWARD
+    };
+    private static final String[] MOUSE_KEYS = {"mouse1", "mouse2", "mouse3", "mouse4", "mouse5"};
+    private int mouseButtons;
+    private int pendingCaptureButtons;
+    private boolean hardwareInputBlocked = true;
     private native String nativeBoundKeys();
     // On-screen key list (legacy SA-MP launcher ButtonPanel: ">>" opens a row of keys, "<<" closes it).
     private Button keysOpenButton;
@@ -287,7 +310,12 @@ public final class EngineHostActivity extends GTASA {
     protected void onEngineSurfaceReady(boolean ready) {
         Log.i(TAG, "Native GTA surface ready=" + ready);
         super.onEngineSurfaceReady(ready);
-        if (ready) startMtaSession();
+        if (ready) {
+            view.setOnCapturedPointerListener((v, event) -> onCapturedMouse(event));
+            startMtaSession();
+        } else {
+            releaseHardwareInput();
+        }
     }
 
     @Override
@@ -303,6 +331,7 @@ public final class EngineHostActivity extends GTASA {
     @Override
     public void onPause() {
         foreground = false;
+        releaseHardwareInput();
         super.onPause();
     }
 
@@ -870,6 +899,7 @@ public final class EngineHostActivity extends GTASA {
         }
         if (show == scriptKeyboardShown && !changedMode) return;
         scriptKeyboardShown = show;
+        refreshHardwareInput();
         if (show) showScriptKeyboard();
         else hideScriptKeyboard();
     }
@@ -880,6 +910,7 @@ public final class EngineHostActivity extends GTASA {
         scriptKeyboardShown = false;
         hideScriptKeyboard();
         chatInputBar.setVisibility(View.VISIBLE);
+        refreshHardwareInput();
         raisePanel(chatInputBar);
         getWindow().setSoftInputMode(keyboardAdjustMode());
         nativeChatInputActive(true);
@@ -897,9 +928,11 @@ public final class EngineHostActivity extends GTASA {
         String typed = chatInput.getText() == null ? "" : chatInput.getText().toString().trim();
         chatInput.setText("");
         if (chatInputBar != null) chatInputBar.setVisibility(View.GONE);
+        refreshHardwareInput();
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         nativeChatInputActive(false);
         closeKeyList();
+        chatInput.clearFocus();
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(chatInput.getWindowToken(), 0);
         if (typed.isEmpty()) return;
@@ -1348,6 +1381,7 @@ public final class EngineHostActivity extends GTASA {
                 }
                 setHudRowHidden(dxOverlay.isCursorShown());
             }
+            refreshHardwareInput();
         });
     }
 
@@ -1619,6 +1653,7 @@ public final class EngineHostActivity extends GTASA {
             ((View) tag).setVisibility(show ? View.VISIBLE : View.GONE);
             if (show) raisePanel((View) tag);
         }
+        refreshHardwareInput();
         mapHandler.removeCallbacks(mapRefresh);
         if (show) mapHandler.post(mapRefresh);
     }
@@ -1681,6 +1716,7 @@ public final class EngineHostActivity extends GTASA {
         if (show) settingsView.refresh();
         settingsView.setVisibility(show ? View.VISIBLE : View.GONE);
         if (show) raisePanel(settingsView);
+        refreshHardwareInput();
     }
 
     private void applySavedSettings() {
@@ -1691,6 +1727,7 @@ public final class EngineHostActivity extends GTASA {
         if (mtaPause == null) return;
         mtaPause.setVisibility(show ? View.VISIBLE : View.GONE);
         if (show) raisePanel(mtaPause);
+        refreshHardwareInput();
     }
 
     // A single elevation band for panels. Draw and touch order follow the
@@ -1764,6 +1801,7 @@ public final class EngineHostActivity extends GTASA {
 
     @Override
     public void onDestroy() {
+        releaseHardwareInput();
         if (disconnectDialog != null) {
             disconnectDialog.dismiss();
             disconnectDialog = null;
@@ -1792,29 +1830,191 @@ public final class EngineHostActivity extends GTASA {
         }
     }
 
+    private static boolean visible(View view) {
+        return view != null && view.getVisibility() == View.VISIBLE;
+    }
+
+    private boolean isHardwareGameplayBlocked() {
+        return !clientReady || !foreground || !hasWindowFocus() || visible(chatInputBar)
+                || scriptKeyboardShown || visible(mtaPause) || visible(settingsView)
+                || visible(downloadPanel) || isPlayerMapShowing()
+                || (loadingView != null && loadingView.isActive())
+                || (dxOverlay != null && dxOverlay.isCursorShown());
+    }
+
+    private void refreshHardwareInput() {
+        boolean blocked = isHardwareGameplayBlocked();
+        if (blocked && !hardwareInputBlocked) releaseHardwareInput();
+        hardwareInputBlocked = blocked;
+    }
+
     @Override
-    public boolean onKeyDown(int keyCode, android.view.KeyEvent event) {
-        if (keyCode == android.view.KeyEvent.KEYCODE_BACK) {
-            if (playerMap != null && playerMap.getTag() instanceof View
-                    && ((View) playerMap.getTag()).getVisibility() == View.VISIBLE) {
-                showPlayerMap(false);
-                return true;
-            }
-            if (settingsView != null && settingsView.getVisibility() == View.VISIBLE) {
-                showSettings(false);
-                showMtaPause(true);
-                return true;
-            }
-            toggleMtaPause();
+    public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) releaseHardwareInput();
+        refreshHardwareInput();
+    }
+
+    private void releaseHardwareInput() {
+        releaseHardwareMouse();
+        for (int i = 0; i < physicalKeys.size(); i++) {
+            PhysicalKey held = physicalKeys.valueAt(i);
+            int code = held.down.getKeyCode();
+            String key = mtaKeyName(code);
+            if (key != null) nativeKeyEvent(key, false);
+            if (held.sentToGame) super.onKeyUp(code, KeyEvent.changeAction(held.down, KeyEvent.ACTION_UP));
+        }
+        physicalKeys.clear();
+    }
+
+    private void releaseHardwareMouse() {
+        pendingCaptureButtons = 0;
+        setMouseButtons(0);
+        if (clientReady) nativeHardwareMouse(0, 0, 0, 0, false);
+        if (view != null && view.hasPointerCapture()) view.releasePointerCapture();
+    }
+
+    private void setMouseButtons(int buttons) {
+        int changed = mouseButtons ^ buttons;
+        for (int i = 0; i < MOUSE_BUTTONS.length; i++) {
+            int button = MOUSE_BUTTONS[i];
+            if ((changed & button) != 0) nativeKeyEvent(MOUSE_KEYS[i], (buttons & button) != 0);
+        }
+        mouseButtons = buttons;
+    }
+
+    @Override
+    protected void onGamePointerCaptureChanged(boolean captured) {
+        if (!clientReady) return;
+        if (captured && !isHardwareGameplayBlocked()) {
+            setMouseButtons(pendingCaptureButtons);
+            nativeHardwareMouse(0, 0, mouseButtons, 0, true);
+            pendingCaptureButtons = 0;
+        } else {
+            releaseHardwareMouse();
+        }
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                && event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)
+                && view != null && view.hasPointerCapture()) {
+            releaseHardwareMouse();
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!event.isFromSource(InputDevice.SOURCE_MOUSE)) return super.onTouchEvent(event);
+        if (isHardwareGameplayBlocked() || !nativeHardwareMouseReady() || view == null) return false;
+        // Capture only on a gameplay click that no Android UI view handled.
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            pendingCaptureButtons = event.getButtonState();
+            view.requestFocus();
+            view.requestPointerCapture();
+        } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            pendingCaptureButtons = 0;
+        }
+        return true;
+    }
+
+    private boolean onCapturedMouse(MotionEvent event) {
+        if (isHardwareGameplayBlocked()) {
+            releaseHardwareMouse();
             return true;
         }
-        // A hardware keyboard key for bindKey and onClientKey. Held-key repeats are not new presses.
-        String key = mtaKeyName(keyCode);
-        if (key != null && event.getRepeatCount() == 0) nativeKeyEvent(key, true);
-        if (keyCode == android.view.KeyEvent.KEYCODE_F11 && event.getRepeatCount() == 0 && radarControlEnabled) {
-            showPlayerMap(!isPlayerMapShowing());
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_CANCEL) {
+            releaseHardwareMouse();
+            return true;
         }
-        return super.onKeyDown(keyCode, event);
+        int buttons = event.getButtonState();
+        if (action == MotionEvent.ACTION_UP) buttons &= ~MotionEvent.BUTTON_PRIMARY;
+        setMouseButtons(buttons);
+        float x = 0, y = 0, wheel = 0;
+        if (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_HOVER_MOVE) {
+            x = event.getX();
+            y = event.getY();
+            for (int i = 0; i < event.getHistorySize(); i++) {
+                x += event.getHistoricalX(i);
+                y += event.getHistoricalY(i);
+            }
+        } else if (action == MotionEvent.ACTION_SCROLL) {
+            wheel = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            if (wheel != 0) {
+                String key = wheel > 0 ? "mouse_wheel_up" : "mouse_wheel_down";
+                nativeKeyEvent(key, true);
+                nativeKeyEvent(key, false);
+            }
+        }
+        nativeHardwareMouse(x, y, buttons, wheel, true);
+        return true;
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (!clientReady || !event.isFromSource(InputDevice.SOURCE_KEYBOARD)
+                || (event.getFlags() & KeyEvent.FLAG_SOFT_KEYBOARD) != 0) {
+            return super.dispatchKeyEvent(event);
+        }
+        refreshHardwareInput();
+        int code = event.getKeyCode();
+        boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
+        boolean up = event.getAction() == KeyEvent.ACTION_UP;
+        if (!down && !up) return super.dispatchKeyEvent(event);
+        if (visible(chatInputBar) || scriptKeyboardShown) return super.dispatchKeyEvent(event);
+        if (code == KeyEvent.KEYCODE_ESCAPE) {
+            if (down && event.getRepeatCount() == 0) onKeyDown(code, event);
+            return true;
+        }
+        boolean firstPress = down && event.getRepeatCount() == 0;
+        if (!hardwareInputBlocked && firstPress && event.hasNoModifiers()
+                && (code == KeyEvent.KEYCODE_T || code == KeyEvent.KEYCODE_SLASH)) {
+            openChatInput();
+            if (code == KeyEvent.KEYCODE_SLASH && chatInput != null) {
+                chatInput.setText("/");
+                chatInput.setSelection(1);
+            }
+            return true;
+        }
+        String key = mtaKeyName(code);
+        if (key == null) return super.dispatchKeyEvent(event);
+        if (firstPress && physicalKeys.get(code) == null) {
+            boolean mapShortcut = code == KeyEvent.KEYCODE_F11 && radarControlEnabled
+                    && (!hardwareInputBlocked || isPlayerMapShowing());
+            boolean sendToGame = !hardwareInputBlocked && !mapShortcut;
+            physicalKeys.put(code, new PhysicalKey(event, sendToGame));
+            nativeKeyEvent(key, true);
+            if (mapShortcut) showPlayerMap(!isPlayerMapShowing());
+            else if (sendToGame) super.onKeyDown(code, event);
+        } else if (up) {
+            PhysicalKey held = physicalKeys.get(code);
+            if (held != null && held.down.getDeviceId() == event.getDeviceId()) {
+                physicalKeys.remove(code);
+                nativeKeyEvent(key, false);
+                if (held.sentToGame) super.onKeyUp(code, event);
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_ESCAPE) {
+            if (clientReady && isHardwareGameplayBlocked() && event.isFromSource(InputDevice.SOURCE_KEYBOARD)) return false;
+            return super.onKeyDown(keyCode, event);
+        }
+        if (isPlayerMapShowing()) {
+            showPlayerMap(false);
+        } else if (visible(settingsView)) {
+            showSettings(false);
+            showMtaPause(true);
+        } else {
+            toggleMtaPause();
+        }
+        return true;
     }
 
     /** Desktop key-bind name (CScriptKeyBinds.cpp g_bkKeys) for an Android key code, or null. */
@@ -1854,15 +2054,35 @@ public final class EngineHostActivity extends GTASA {
             case android.view.KeyEvent.KEYCODE_MOVE_HOME: return "home";
             case android.view.KeyEvent.KEYCODE_MOVE_END: return "end";
             case android.view.KeyEvent.KEYCODE_INSERT: return "insert";
+            case KeyEvent.KEYCODE_CAPS_LOCK: return "capslock";
+            case KeyEvent.KEYCODE_SCROLL_LOCK: return "scroll";
+            case KeyEvent.KEYCODE_BREAK: return "pause";
+            case KeyEvent.KEYCODE_SEMICOLON: return ";";
+            case KeyEvent.KEYCODE_EQUALS: return "=";
+            case KeyEvent.KEYCODE_COMMA: return ",";
+            case KeyEvent.KEYCODE_MINUS: return "-";
+            case KeyEvent.KEYCODE_PERIOD: return ".";
+            case KeyEvent.KEYCODE_SLASH: return "/";
+            case KeyEvent.KEYCODE_APOSTROPHE: return "'";
+            case KeyEvent.KEYCODE_LEFT_BRACKET: return "[";
+            case KeyEvent.KEYCODE_RIGHT_BRACKET: return "]";
+            case KeyEvent.KEYCODE_BACKSLASH: return "\\";
+            case KeyEvent.KEYCODE_POUND: return "#";
+            case KeyEvent.KEYCODE_NUMPAD_MULTIPLY: return "num_mul";
+            case KeyEvent.KEYCODE_NUMPAD_ADD: return "num_add";
+            case KeyEvent.KEYCODE_NUMPAD_ENTER: return "num_enter";
+            case KeyEvent.KEYCODE_NUMPAD_COMMA: return "num_sep";
+            case KeyEvent.KEYCODE_NUMPAD_SUBTRACT: return "num_sub";
+            case KeyEvent.KEYCODE_NUMPAD_DOT: return "num_dec";
+            case KeyEvent.KEYCODE_NUMPAD_DIVIDE: return "num_div";
             default: return null;
         }
     }
 
     @Override
     public boolean onKeyUp(int keyCode, android.view.KeyEvent event) {
-        if (keyCode == android.view.KeyEvent.KEYCODE_BACK) return true;
-        String key = mtaKeyName(keyCode);
-        if (key != null) nativeKeyEvent(key, false);
+        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) return true;
+        if (clientReady && isHardwareGameplayBlocked() && event.isFromSource(InputDevice.SOURCE_KEYBOARD)) return false;
         return super.onKeyUp(keyCode, event);
     }
 

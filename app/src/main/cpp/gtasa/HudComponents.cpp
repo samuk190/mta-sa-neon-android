@@ -1,6 +1,7 @@
 #include "HudComponents.h"
 #include "GameEngine.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -18,6 +19,8 @@ namespace WorldRPG::Game {
 namespace {
 
 constexpr std::uint32_t kNop = 0xD503201Fu;
+constexpr std::uint32_t kRet = 0xD65F03C0u;
+constexpr std::uint32_t kCrosshairPrologue = 0xD10283FFu; // sub sp, sp, #0xa0
 
 // Call sites inside CWidgetPlayerInfo::Draw. Each is a BL whose result is not used:
 //   clock   0x37d3c0  CFont::PrintString (the "%02d:%02d" string)
@@ -42,6 +45,7 @@ Component g_components[] = {
     {"ammo", {0x37d690, 0x37d6c8}, {0, 0}, true}, {"wanted", {0x37d6d0, 0}, {0, 0}, true},
 };
 bool g_radarVisible = true;
+bool g_crosshairVisible = true;
 std::mutex g_mutex;
 
 bool WriteWord(std::uintptr_t address, std::uint32_t word) {
@@ -49,7 +53,7 @@ bool WriteWord(std::uintptr_t address, std::uint32_t word) {
     const std::uintptr_t page = pageLong > 0 ? static_cast<std::uintptr_t>(pageLong) : 4096u;
     void* start = reinterpret_cast<void*>(address & ~(page - 1));
     if (mprotect(start, page, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return false;
-    std::memcpy(reinterpret_cast<void*>(address), &word, sizeof(word));
+    __atomic_store_n(reinterpret_cast<std::uint32_t*>(address), word, __ATOMIC_RELEASE);
     mprotect(start, page, PROT_READ | PROT_EXEC);
     __builtin___clear_cache(reinterpret_cast<char*>(address), reinterpret_cast<char*>(address) + 4);
     return true;
@@ -84,6 +88,25 @@ bool ApplyLocked(Component& c, bool visible) {
     return ok;
 }
 
+bool SetCrosshairLocked(bool visible) {
+#if defined(__aarch64__)
+    if (g_crosshairVisible == visible) return true;
+    void* lib = dlopen("libGTASA.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!lib) return false;
+    auto* draw = static_cast<const std::uint32_t*>(dlsym(lib, "_ZN4CHud14DrawCrossHairsEv"));
+    const std::uint32_t expected = visible ? kRet : kCrosshairPrologue;
+    // CHud::DrawCrossHairs at 0x51c694 (2.10 ARM64). Ret at the entry
+    // leaves the stack intact and can be swapped with a single aligned store.
+    const bool applied = draw && draw[0] == expected && draw[1] == 0x6D023BEFu
+        && WriteWord(reinterpret_cast<uintptr_t>(draw), visible ? kCrosshairPrologue : kRet);
+    dlclose(lib);
+    if (applied) g_crosshairVisible = visible;
+    return applied;
+#else
+    return false;
+#endif
+}
+
 bool SetRadarLocked(bool visible) {
     void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
     auto* flag = handle ? static_cast<unsigned char*>(dlsym(handle, "_ZN4CHud23bScriptDontDisplayRadarE")) : nullptr;
@@ -100,10 +123,14 @@ bool SetHudComponentVisible(const char* component, bool visible) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (std::strcmp(component, "all") == 0) {
         bool ok = SetRadarLocked(visible);
+#if defined(__aarch64__)
+        ok = SetCrosshairLocked(visible) && ok;
+#endif
         for (Component& c : g_components) ok = ApplyLocked(c, visible) && ok;
         return ok;
     }
     if (std::strcmp(component, "radar") == 0) return SetRadarLocked(visible);
+    if (std::strcmp(component, "crosshair") == 0) return SetCrosshairLocked(visible);
     for (Component& c : g_components) {
         if (std::strcmp(component, c.name) == 0) return ApplyLocked(c, visible);
     }
@@ -114,10 +141,31 @@ bool IsHudComponentVisible(const char* component) {
     if (!component) return false;
     std::lock_guard<std::mutex> lock(g_mutex);
     if (std::strcmp(component, "radar") == 0) return g_radarVisible;
+    if (std::strcmp(component, "crosshair") == 0) return g_crosshairVisible;
     for (const Component& c : g_components) {
         if (std::strcmp(component, c.name) == 0) return c.visible;
     }
     return true;
+}
+
+bool GetMobileCrosshairPosition(float& x, float& y) {
+    // CHud::DrawCrossHairs multiplies these two values by the render
+    // dimensions. Keep them normalized for the Lua logical viewport.
+    static const auto position = [] {
+        struct Position { const float* x; const float* y; };
+        void* lib = dlopen("libGTASA.so", RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
+        if (!lib) return Position{};
+        Position pos{
+            static_cast<const float*>(dlsym(lib, "_ZN7CCamera22m_f3rdPersonCHairMultXE")),
+            static_cast<const float*>(dlsym(lib, "_ZN7CCamera22m_f3rdPersonCHairMultYE")),
+        };
+        dlclose(lib);
+        return pos;
+    }();
+    if (!position.x || !position.y) return false;
+    x = *position.x;
+    y = *position.y;
+    return std::isfinite(x) && std::isfinite(y) && x > 0.f && x < 1.f && y > 0.f && y < 1.f;
 }
 
 void ResetHudComponents() {
@@ -126,11 +174,13 @@ void ResetHudComponents() {
         if (!c.visible) ApplyLocked(c, true);
     }
     if (!g_radarVisible) SetRadarLocked(true);
+    if (!g_crosshairVisible) SetCrosshairLocked(true);
 }
 
 #else
 bool SetHudComponentVisible(const char*, bool) { return true; }
 bool IsHudComponentVisible(const char*) { return true; }
+bool GetMobileCrosshairPosition(float&, float&) { return false; }
 void ResetHudComponents() {}
 #endif
 

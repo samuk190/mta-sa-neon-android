@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Physical keyboards use GTA's control mappings and MTA keybinds. A gameplay mouse click captures relative camera input, buttons and scroll. Escape, chat and script interfaces release capture and held controls.
+- Lua HUD resources can read the Android crosshair position and hide or restore the native reticle.
+
 - The Android launcher now ships and loads its native client as `libsaonlineneon.so`. The APK audit and runtime integrity checks use the same name.
 
 ### Game Sync
