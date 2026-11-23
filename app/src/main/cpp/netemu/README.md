@@ -83,7 +83,10 @@ makes it connect through a host build of `libsaonline_netemu.so` (on
 server's LAN address. Against an official 1.6 server the join gets
 `SERVER_JOIN`, `MOD_NAME` and sends `PLAYER_JOINDATA`; the server then needs
 the Neon protocol the Android client speaks (MTA 0x170, bitstream 0x30), so a
-Neon server is the end-to-end target.
+Neon server is the end-to-end target. Against one (213.32.90.138:22013) the
+join completed through this path (SERVER_JOINEDGAME, then the initial data
+stream) once the netcode matched what that server runs (release 189, 0x41E6;
+the client's default is 0x41E7).
 
 ## Building
 
