@@ -5,5 +5,6 @@ set -euo pipefail
 neon_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 neon_build="${NEON_HOST_TEST_BUILD_DIR:-$neon_root/outputs/host-join-tests}"
 cmake -S "$neon_root/tools/headless" -B "$neon_build"
-cmake --build "$neon_build" --target neon_join_codec_tests -j "${NEON_TEST_JOBS:-2}"
+cmake --build "$neon_build" --target neon_join_codec_tests neon_vehicle_sync_tests -j "${NEON_TEST_JOBS:-2}"
 "$neon_build/neon_join_codec_tests"
+"$neon_build/neon_vehicle_sync_tests"

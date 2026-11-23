@@ -325,6 +325,17 @@ double ElapsedSeconds() {
     return std::chrono::duration<double>(Clock::now() - kProcessStart).count();
 }
 
+bool CopySeenVehicle(uint32_t id, int& model, float& x, float& y, float& z, float& heading) {
+    auto found = g_seen.find(id);
+    if (found == g_seen.end()) return false;
+    model = found->second.model;
+    x = found->second.x;
+    y = found->second.y;
+    z = found->second.z;
+    heading = found->second.heading;
+    return true;
+}
+
 void NoteServerVehicleInOut(uint32_t vehicle, uint8_t action) {
     if (!DriverActive() || g_drv.carId == kNoVehicle || vehicle != g_drv.carId) return;
     const double now = ElapsedSeconds();

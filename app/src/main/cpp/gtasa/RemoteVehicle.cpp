@@ -41,6 +41,29 @@ bool IsTrainId(uint32_t vehicleId) {
     return model >= 0 && WorldRPG::Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(model));
 }
 
+// CClientVehicle::SetTargetPosition / SetTargetRotation write the element's target pose; the phone's
+// equivalent is the queued RemoteCar record that ApplyRemoteCars interpolates on the game thread. Without
+// this publish, packet 56 only logged the pose and the empty car never moved. Read the stored state, then
+// call the game layer outside g_mutex (ServerWorld and GameEngine take their own locks).
+void PublishPose(uint32_t vehicleId) {
+    Vec3 position;
+    float heading = 0.f;
+    bool havePose = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        auto found = g_vehicles.find(vehicleId);
+        if (found == g_vehicles.end()) return;
+        position = found->second.position;
+        heading = RadiansFromDegrees(found->second.rotation.z);
+        havePose = found->second.havePose;
+    }
+    // A rotation-only update has no stored position yet; keep the ENTITY_ADD pose instead of sending the
+    // car to the origin. Desktop SetTargetRotation only changes the rotation of an existing element.
+    if (!havePose && !WorldRPG::ServerWorld::ElementPose(vehicleId, position.x, position.y, position.z)) return;
+    WorldRPG::Game::NoteRemoteVehicle(vehicleId, WorldRPG::ServerWorld::ModelOf(vehicleId), position.x, position.y,
+                                      position.z, heading);
+}
+
 // Caller holds g_mutex. Creates or updates the stored state and returns it, or null when full.
 VehicleState* StateFor(uint32_t vehicleId) {
     auto found = g_vehicles.find(vehicleId);
@@ -102,8 +125,9 @@ bool FindSeatOccupant(uint32_t vehicleId, uint8_t seat, uint32_t& playerId) {
 }
 
 // CClientVehicle::SetTargetPosition / SetTargetRotation / SetMoveSpeed / SetTurnSpeed / SetHealth /
-// SetEngineOn / SetDerailed. The phone has no remote VehicleHandle yet, so each call records the
-// desktop state and logs it. Engine effects are the open gap listed in the roadmap.
+// SetEngineOn / SetDerailed. Position and rotation reach the remote car body through PublishPose
+// (Game::NoteRemoteVehicle, the same queue ENTITY_ADD and VEHICLE_STARTSYNC use). Speed, health,
+// engine and derailed state still record and log only; those are the open engine gaps in the roadmap.
 void SetTargetPosition(uint32_t vehicleId, const Vec3& pos, uint32_t rateMs, bool useVelocityZ, float velocityZ) {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -114,6 +138,7 @@ void SetTargetPosition(uint32_t vehicleId, const Vec3& pos, uint32_t rateMs, boo
     }
     DIAG("veh %u SetTargetPosition pos=%.1f %.1f %.1f rate=%u velZ=%s%.2f", vehicleId, pos.x, pos.y, pos.z, rateMs,
          useVelocityZ ? "" : "unused:", velocityZ);
+    PublishPose(vehicleId);
 }
 
 void SetTargetRotation(uint32_t vehicleId, const Vec3& rot, uint32_t rateMs) {
@@ -124,6 +149,7 @@ void SetTargetRotation(uint32_t vehicleId, const Vec3& rot, uint32_t rateMs) {
         state->rotation = rot;
     }
     DIAG("veh %u SetTargetRotation rot=%.1f %.1f %.1f rate=%u", vehicleId, rot.x, rot.y, rot.z, rateMs);
+    PublishPose(vehicleId);
 }
 
 void SetMoveSpeed(uint32_t vehicleId, const Vec3& v) {
