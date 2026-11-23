@@ -27,22 +27,25 @@ val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/
 val cdnRootUrl = envProperties.getProperty("CDN_ROOT_URL", "")
 
 // PC Network compatibility: the x86 netc.dll runs under emulation (cpp/netemu).
-// NETC_BUNDLE_IN_ASSETS=true ships the DLLs named by NETC_NEON_DLL / NETC_STOCK_DLL
+// NETC_BUNDLE_IN_ASSETS=true ships the DLLs named by NETC_OFFICIAL_DLL / NETC_FORK_DLL
 // in assets/netc/<build>/netc.dll; otherwise the player imports netc.dll the first
 // time they tick "Use PC Network — Compatibility" (file picker or MTA download).
 val netcBundle = envProperties.getProperty("NETC_BUNDLE_IN_ASSETS", "false").trim().equals("true", ignoreCase = true)
 fun envPath(key: String): File? = envProperties.getProperty(key, "").trim().takeIf { it.isNotEmpty() }?.let { rootProject.file(it) }
-val netcNeonDll = if (netcBundle) envPath("NETC_NEON_DLL") else null
-val netcStockDll = if (netcBundle) envPath("NETC_STOCK_DLL") else null
+val netcOfficialDll = if (netcBundle) envPath("NETC_OFFICIAL_DLL") else null
+val netcForkDll = if (netcBundle) envPath("NETC_FORK_DLL") else null
 if (netcBundle) {
-    if (netcNeonDll == null && netcStockDll == null)
-        throw GradleException("NETC_BUNDLE_IN_ASSETS=true needs NETC_NEON_DLL and/or NETC_STOCK_DLL in .env")
-    listOfNotNull(netcNeonDll, netcStockDll).forEach {
+    if (netcOfficialDll == null && netcForkDll == null)
+        throw GradleException("NETC_BUNDLE_IN_ASSETS=true needs NETC_OFFICIAL_DLL and/or NETC_FORK_DLL in .env")
+    listOfNotNull(netcOfficialDll, netcForkDll).forEach {
         if (!it.isFile) throw GradleException("netc.dll to bundle not found: $it")
     }
 }
-val netcStockDownloadUrl = envProperties.getProperty(
-    "NETC_STOCK_DOWNLOAD_URL", "https://mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll").trim()
+val netcOfficialDownloadUrl = envProperties.getProperty(
+    "NETC_OFFICIAL_DOWNLOAD_URL", "https://mirror-cdn.multitheftauto.com/bdata/netc.dll").trim()
+val netcForkDownloadUrl = envProperties.getProperty(
+    "NETC_FORK_DOWNLOAD_URL", "https://mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll").trim()
+fun javaString(v: String) = "\"${v.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 // Optional unpacked Unicorn 2.1.4 tree for offline native builds; CMake downloads it otherwise.
 val unicornSourceDir = envPath("UNICORN_SOURCE_DIR")
 val netcAssetsDir = layout.buildDirectory.dir("generated/netcAssets")
@@ -97,9 +100,10 @@ android {
         buildConfigField("String", "GAME_ASSETS_DIR", "\"${gameAssetsDir.replace("\\", "\\\\")}\"")
         buildConfigField("String", "DEVICE_ASSETS_PATH", "\"${deviceAssetsPath.replace("\\", "\\\\")}\"")
         buildConfigField("String", "CDN_ROOT_URL", "\"${cdnRootUrl.replace("\\", "\\\\")}\"")
-        buildConfigField("boolean", "NETC_BUNDLED_NEON", (netcNeonDll != null).toString())
-        buildConfigField("boolean", "NETC_BUNDLED_STOCK", (netcStockDll != null).toString())
-        buildConfigField("String", "NETC_STOCK_DOWNLOAD_URL", "\"${netcStockDownloadUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("boolean", "NETC_BUNDLED_OFFICIAL", (netcOfficialDll != null).toString())
+        buildConfigField("boolean", "NETC_BUNDLED_FORK", (netcForkDll != null).toString())
+        buildConfigField("String", "NETC_OFFICIAL_DOWNLOAD_URL", javaString(netcOfficialDownloadUrl))
+        buildConfigField("String", "NETC_FORK_DOWNLOAD_URL", javaString(netcForkDownloadUrl))
     }
 
     // Release signing from keystore.properties (git-ignored): storeFile, storePassword, keyAlias, keyPassword.
@@ -201,8 +205,8 @@ val prepareNetcAssets = if (netcBundle) {
         group = "mta"
         description = "Bundles netc.dll for PC Network compatibility (NETC_BUNDLE_IN_ASSETS)"
         into(netcAssetsDir)
-        netcNeonDll?.let { from(it) { into("netc/neon"); rename { "netc.dll" } } }
-        netcStockDll?.let { from(it) { into("netc/stock"); rename { "netc.dll" } } }
+        netcOfficialDll?.let { from(it) { into("netc/official"); rename { "netc.dll" } } }
+        netcForkDll?.let { from(it) { into("netc/fork"); rename { "netc.dll" } } }
     }
 } else {
     tasks.register<Delete>("prepareNetcAssets") {

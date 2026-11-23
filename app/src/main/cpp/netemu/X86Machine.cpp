@@ -410,6 +410,7 @@ GuestThread* Machine::CreateThread(uint32_t start, uint32_t param, bool suspende
     t->id = (nextThreadId_ += 4);
     t->handle = NewHandle();
     t->name = name;
+    t->createdUs = NowUs();
     t->stackSize = kStackSize;
     t->stackBase = mem_.AllocPages(kStackSize + Map::kPage, 0x10000u, true);
     t->teb = mem_.AllocPages(0x2000, Map::kPage, true);
@@ -487,6 +488,8 @@ void Machine::ThreadStartShim(ShimCall& call) {
     (*next)(call);
 }
 
+uint32_t Machine::CurrentEbp() const { return Reg(uc_, UC_X86_REG_EBP); }
+
 GuestThread* Machine::ThreadById(uint32_t id) {
     for (auto& t : threads_)
         if (t->id == id) return t.get();
@@ -513,6 +516,7 @@ void Machine::FlushCode(uint32_t begin, uint32_t end) {
 }
 
 void Machine::ReleaseThread(GuestThread& t) {
+    if (!t.exitedUs) t.exitedUs = NowUs();
     if (t.stackBase) mem_.FreePages(t.stackBase);
     t.stackBase = 0;
     // The TEB stays mapped: other threads may still hold its address.

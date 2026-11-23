@@ -86,6 +86,7 @@ Win32State::Win32State(Machine& m, Win32Env e) : machine(m), env(std::move(e)) {
         f->console = true;
         stdHandles[i] = Add(f);
     }
+    processStartFileTime = FileTimeNow() - machine.NowUs() * 10;
     LoadRegistry();
     // The folders every Windows profile and MTA install has; netc keeps data
     // in alternate streams on some of them.

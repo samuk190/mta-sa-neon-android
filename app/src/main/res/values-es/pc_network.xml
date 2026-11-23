@@ -2,11 +2,9 @@
 <!-- "Use PC Network — Compatibility" (network/PcNetworkSettings.kt). -->
 <resources>
     <string name="pc_network_option">Usar red de PC — Compatibilidad</string>
-    <string name="pc_network_hint_neon">Entra mediante el módulo de red de PC (versión Neon), para servidores sin el transporte móvil.</string>
-    <string name="pc_network_hint_stock">Entra mediante el módulo de red de PC (versión MTA), para servidores sin el transporte móvil.</string>
+    <string name="pc_network_hint">Entra mediante el módulo de red de PC, para servidores sin el transporte móvil.</string>
     <string name="pc_network_source_title">Se necesita el módulo de red de PC</string>
-    <string name="pc_network_source_message_stock">Esta opción usa el netc.dll de MTA para PC. Elige netc.dll de la carpeta MTA de una instalación de PC o descárgalo de MTA.</string>
-    <string name="pc_network_source_message_neon">Este servidor necesita la versión Neon de netc.dll. Elige netc.dll de la carpeta MTA de una instalación Neon de PC.</string>
+    <string name="pc_network_source_message">Esta opción usa el netc.dll de MTA para PC. Elige netc.dll de la carpeta MTA de una instalación de PC o descárgalo de MTA.</string>
     <string name="pc_network_choose_file">Elegir archivo</string>
     <string name="pc_network_download">Descargar de MTA</string>
     <string name="pc_network_downloading">Descargando netc.dll…</string>

@@ -114,7 +114,7 @@ public final class EngineHostActivity extends GTASA {
     private native boolean nativeConnect(String ip, int port, String nickname, int joinProfile);
     // "Use PC Network — Compatibility": netc.dll to run under emulation, its build id
     // and data folder. An empty path selects the normal transport. Call before nativeConnect.
-    private native boolean nativeSetPcNetwork(String netcPath, String netcBuild, String dataDir);
+    private native boolean nativeSetPcNetwork(String netcPath, String netcBuild, String dataDir, String productVersion);
     private native boolean nativeSetNetworkSerial(String serial);
     private native boolean nativeCancelIdentityRequest(long requestId);
     private native void nativeProvideIdentityTicket(long requestId, String ticket, String error);
@@ -366,8 +366,10 @@ public final class EngineHostActivity extends GTASA {
         String netcBuild = getIntent().getStringExtra(PcNetworkSettings.EXTRA_NETC_BUILD);
         if (netcPath == null) netcPath = "";
         if (netcBuild == null) netcBuild = "";
+        String productVersion = getIntent().getStringExtra(PcNetworkSettings.EXTRA_PRODUCT_VERSION);
+        if (productVersion == null) productVersion = "";
         String netcData = netcPath.isEmpty() ? "" : NetcModuleStore.dataDirFor(this, netcBuild).getPath();
-        if (!nativeSetPcNetwork(netcPath, netcBuild, netcData)) return false;
+        if (!nativeSetPcNetwork(netcPath, netcBuild, netcData, productVersion)) return false;
         if (!nativeConnect(connectIp, connectPort, connectNick, joinProfile)) return false;
         if (loadingView != null) {
             loadingView.update(getString(R.string.connecting_to_address, connectIp + ":" + connectPort), 0f, 0f, 1f);

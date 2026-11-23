@@ -87,6 +87,9 @@ struct Options {
     WorldRPG::Headless::Mode mode = WorldRPG::Headless::Mode::Observer;
     WorldRPG::Net::JoinProfile profile = WorldRPG::Net::JoinProfile::Automatic;
     std::string identityTicketFile;
+    // "Use PC Network": join through this netc.dll (needs libsaonline_netemu.so
+    // on the library path) instead of the native transport.
+    std::string netcPath, netcDataDir, netcProductVersion = "1.6.0-9.23081";
 };
 
 // First three RESOURCE_START (82) bodies: full hex to resource_start_dumps.txt, one line to stdout.
@@ -109,14 +112,34 @@ void DumpResourceStart(const uint8_t* body, size_t length, size_t bits) {
 
 Options ParseArgs(int argc, char** argv) {
     Options o;
-    if (argc > 1) o.host = argv[1];
-    if (argc > 2) o.port = static_cast<uint16_t>(std::atoi(argv[2]));
-    if (argc > 3) o.nickname = argv[3];
-    if (argc > 4) o.seconds = std::atoi(argv[4]);
-    if (argc > 5 && std::string(argv[5]) == "driver") o.mode = WorldRPG::Headless::Mode::Driver;
-    if (argc > 6 && std::string(argv[6]) == "standard") o.profile = WorldRPG::Net::JoinProfile::Standard;
-    if (argc > 6 && std::string(argv[6]) == "legacy") o.profile = WorldRPG::Net::JoinProfile::LegacyMobile;
-    if (argc > 7) o.identityTicketFile = argv[7];
+    // Positional arguments first; `--netc <dll> --netc-data <dir> [--netc-version <v>]` anywhere.
+    std::vector<std::string> positional;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--netc" || a == "--netc-data" || a == "--netc-version") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "neon_headless: %s needs a value\n", a.c_str());
+                std::exit(2);
+            }
+            std::string& field = a == "--netc" ? o.netcPath : a == "--netc-data" ? o.netcDataDir : o.netcProductVersion;
+            field = argv[++i];
+        } else {
+            positional.push_back(a);
+        }
+    }
+    if (!o.netcPath.empty() && o.netcDataDir.empty()) {
+        std::fprintf(stderr, "neon_headless: --netc needs --netc-data <writable dir>\n");
+        std::exit(2);
+    }
+    const auto& p = positional;
+    if (p.size() > 0) o.host = p[0];
+    if (p.size() > 1) o.port = static_cast<uint16_t>(std::atoi(p[1].c_str()));
+    if (p.size() > 2) o.nickname = p[2];
+    if (p.size() > 3) o.seconds = std::atoi(p[3].c_str());
+    if (p.size() > 4 && p[4] == "driver") o.mode = WorldRPG::Headless::Mode::Driver;
+    if (p.size() > 5 && p[5] == "standard") o.profile = WorldRPG::Net::JoinProfile::Standard;
+    if (p.size() > 5 && p[5] == "legacy") o.profile = WorldRPG::Net::JoinProfile::LegacyMobile;
+    if (p.size() > 6) o.identityTicketFile = p[6];
     return o;
 }
 
@@ -324,8 +347,10 @@ int main(int argc, char** argv) {
     });
 
     // nativeConnect: transport first, then the join attempt.
-    if (!net.StartNetwork(opt.host.c_str(), opt.port) ||
-        !join.Begin(net, opt.nickname, "", opt.profile)) {
+    const bool started = opt.netcPath.empty()
+        ? net.StartNetwork(opt.host.c_str(), opt.port)
+        : net.StartPcNetwork(opt.host, opt.port, opt.netcPath, opt.netcDataDir, opt.netcProductVersion);
+    if (!started || !join.Begin(net, opt.nickname, "", opt.profile)) {
         std::printf("neon_headless: could not start the join attempt\n");
         net.StopNetwork();
         return 1;

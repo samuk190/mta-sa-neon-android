@@ -255,6 +255,10 @@ public:
     // behind a process handle (pseudo handle included); 0 when not a process.
     static constexpr uint32_t kSelfPid = 0x1000, kExplorerPid = 0x0FA0;
     uint32_t priorityClass = 0x20;  // NORMAL_PRIORITY_CLASS
+    // FILETIME the process started at (machine time 0). Thread creation times
+    // count from it, so the main thread is always the earliest, as netc expects
+    // when it looks for the main thread.
+    uint64_t processStartFileTime = 0;
     std::string ProcessImage(uint32_t pid) const;
     uint32_t OpenProcessHandle(uint32_t pid);
     uint32_t ProcessPid(uint32_t handle) const;

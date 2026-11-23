@@ -811,11 +811,12 @@ void InstallNtdll(Win32State& s) {
             if (ret) c.mem.Write32(ret, 1);
             c.Return(STATUS_SUCCESS);
         } else if (cls == 1 && len >= 32) {  // ThreadTimes: creation, exit, kernel, user
-            const uint64_t up = st->machine.NowUs() * 10;
-            c.mem.Write64(buf, FileTimeNow() - up);
-            c.mem.Write64(buf + 8, 0);
-            c.mem.Write64(buf + 16, up / 8);
-            c.mem.Write64(buf + 24, up / 4);
+            const uint64_t end = t->exitedUs ? t->exitedUs : st->machine.NowUs();
+            const uint64_t alive = (end - std::min(t->createdUs, end)) * 10;
+            c.mem.Write64(buf, st->processStartFileTime + t->createdUs * 10);
+            c.mem.Write64(buf + 8, t->exitedUs ? st->processStartFileTime + t->exitedUs * 10 : 0);
+            c.mem.Write64(buf + 16, alive / 8);
+            c.mem.Write64(buf + 24, alive / 4);
             if (ret) c.mem.Write32(ret, 32);
             c.Return(STATUS_SUCCESS);
         } else if ((cls == 16 || cls == 18 || cls == 20 || cls == 22 || cls == 24) && len >= 4) {
@@ -832,6 +833,33 @@ void InstallNtdll(Win32State& s) {
             st->NoteStub("NtQueryInformationThread class " + std::to_string(cls));
             c.Return(STATUS_INVALID_INFO_CLASS);
         }
+    });
+    // (FramesToSkip, FramesToCapture, BackTrace, *BackTraceHash) -> frames written.
+    // Frame 0 is the caller's return address, then the EBP chain, as the x86
+    // RtlWalkFrameChain does; at most 63 frames before Vista's limit was lifted.
+    R("RtlCaptureStackBackTrace", 4, [st](ShimCall& c) {
+        const uint32_t skip = c.Arg(0), want = std::min<uint32_t>(c.Arg(1), 63), out = c.Arg(2), hashOut = c.Arg(3);
+        std::vector<uint32_t> frames{c.ReturnAddress()};
+        uint32_t ebp = st->machine.CurrentEbp();
+        // Like RtlWalkFrameChain: frames must be aligned and on this thread's stack.
+        const uint32_t stackLow = c.thread.stackBase + Map::kPage;
+        const uint32_t stackHigh = stackLow + c.thread.stackSize;
+        auto onStack = [&](uint32_t p) { return (p & 3) == 0 && p >= stackLow && p + 8 <= stackHigh; };
+        while (frames.size() < skip + want + 1 && onStack(ebp)) {
+            const uint32_t ret = c.mem.Read32(ebp + 4);
+            if (!ret) break;
+            frames.push_back(ret);
+            const uint32_t next = c.mem.Read32(ebp);
+            if (next <= ebp) break;
+            ebp = next;
+        }
+        uint32_t n = 0, hash = 0;
+        for (size_t i = skip; i < frames.size() && n < want; ++i, ++n) {
+            if (out) c.mem.Write32(out + n * 4, frames[i]);
+            hash += frames[i];
+        }
+        if (hashOut) c.mem.Write32(hashOut, hash);
+        c.Return(n);
     });
     R("NtOpenThread", 4, [st](ShimCall& c) {
         const uint32_t tid = c.Arg(3) ? c.mem.Read32(c.Arg(3) + 4) : 0;

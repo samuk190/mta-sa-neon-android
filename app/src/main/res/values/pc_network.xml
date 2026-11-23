@@ -2,11 +2,9 @@
 <!-- "Use PC Network — Compatibility" (network/PcNetworkSettings.kt). -->
 <resources>
     <string name="pc_network_option">Use PC Network — Compatibility</string>
-    <string name="pc_network_hint_neon">Joins through the PC network module (Neon build), for servers without the mobile transport.</string>
-    <string name="pc_network_hint_stock">Joins through the PC network module (MTA build), for servers without the mobile transport.</string>
+    <string name="pc_network_hint">Joins through the PC network module, for servers without the mobile transport.</string>
     <string name="pc_network_source_title">PC network module needed</string>
-    <string name="pc_network_source_message_stock">This option runs MTA\'s PC netc.dll. Choose netc.dll from the MTA folder of a PC install, or download it from MTA.</string>
-    <string name="pc_network_source_message_neon">This server needs the Neon build of netc.dll. Choose netc.dll from the MTA folder of a Neon PC install.</string>
+    <string name="pc_network_source_message">This option runs MTA\'s PC netc.dll. Choose netc.dll from the MTA folder of a PC install, or download it from MTA.</string>
     <string name="pc_network_choose_file">Choose file</string>
     <string name="pc_network_download">Download from MTA</string>
     <string name="pc_network_downloading">Downloading netc.dll…</string>

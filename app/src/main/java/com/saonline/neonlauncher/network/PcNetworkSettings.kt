@@ -11,21 +11,31 @@ object PcNetworkSettings {
     /** Intent extras EngineHostActivity reads; an empty path means off. */
     const val EXTRA_NETC_PATH = "pc_network_netc_path"
     const val EXTRA_NETC_BUILD = "pc_network_netc_build"
+    const val EXTRA_PRODUCT_VERSION = "pc_network_product_version"
 
-    /** The two netc.dll builds the emulator runs. */
+    /** The netc.dll builds the emulator can run. */
     enum class NetcBuild(val id: String) {
-        /** The Neon fork's netc, for Neon servers without the mobile transport. */
-        NEON("neon"),
-        /** Stock MTA netc (bdata/fork-support), for every other server. */
-        STOCK("stock"),
+        /** MTA's official module (mirror-cdn bdata/netc.dll), also what the Neon PC client ships. */
+        OFFICIAL("official"),
+        /** MTA's module for fork builds (bdata/fork-support/netc.dll). Official servers ignore it. */
+        FORK("fork"),
     }
 
     /**
-     * Neon servers (listed in the Neon registry, or reporting MTA 1.7) use the
-     * Neon build; everything else is a stock MTA server.
+     * Official MTA servers answer only the official module (checked against an
+     * MTA 1.6 server: the fork-support build gets no reply at the RakNet step),
+     * and the Neon PC client ships the official one too, so every server uses it.
      */
-    fun buildFor(server: ServerInfo): NetcBuild =
-        if (server.registryId.isNotEmpty() || server.version.trim().startsWith("1.7")) NetcBuild.NEON else NetcBuild.STOCK
+    @Suppress("UNUSED_PARAMETER")
+    fun buildFor(server: ServerInfo): NetcBuild = NetcBuild.OFFICIAL
+
+    /**
+     * The product version core.dll passes to InitNetRev
+     * (SharedUtil::GetProductVersion): Neon servers (Neon registry, or MTA 1.7)
+     * expect the Neon 1.7.0 custom client, others an MTA 1.6 release client.
+     */
+    fun productVersionFor(server: ServerInfo): String =
+        if (server.registryId.isNotEmpty() || server.version.trim().startsWith("1.7")) "1.7.0-1.00000" else "1.6.0-9.23081"
 
     @JvmStatic fun isEnabled(context: Context, host: String, port: Int): Boolean =
         prefs(context).getBoolean(key(host, port), false)

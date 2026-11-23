@@ -73,6 +73,9 @@ void CopyBits(const uint8_t* src, size_t from, size_t to, uint8_t* dst) {
 
 }  // namespace
 
+// state and cancelled are seq_cst: the loader stores state then reads
+// cancelled, the destructor stores cancelled then reads state, and at least
+// one of them must see the other's store.
 struct PcNetworkTransport::Session {
     const NetEmuApi* api = nullptr;
     NetEmuHandle* handle = nullptr;  // set by the loader before state becomes 1
@@ -108,14 +111,14 @@ std::unique_ptr<PcNetworkTransport> PcNetworkTransport::Start(const Options& opt
         NetEmuHandle* h = session->api->load(&cfg, err, sizeof(err));
         if (!h) {
             session->error = std::string("PC network module failed to load: ") + err;
-            session->state.store(2, std::memory_order_release);
+            session->state.store(2);
             return;
         }
         PCNET_LOGI("netc loaded in %llu ms", static_cast<unsigned long long>(NowMs() - started));
         if (session->cancelled.load() || !session->api->start_network(h, host.c_str(), port, 0)) {
             if (!session->cancelled.load()) session->error = "PC network module could not start the connection";
             session->api->unload(h);
-            session->state.store(2, std::memory_order_release);
+            session->state.store(2);
             return;
         }
         {
@@ -123,7 +126,7 @@ std::unique_ptr<PcNetworkTransport> PcNetworkTransport::Start(const Options& opt
             session->handle = h;
             session->ApplyPending();
         }
-        session->state.store(1, std::memory_order_release);
+        session->state.store(1);
         // Cancelled while StartNetwork ran: the transport is gone, clean up here.
         if (session->cancelled.load()) {
             std::lock_guard lk(session->mutex);
@@ -141,7 +144,7 @@ std::unique_ptr<PcNetworkTransport> PcNetworkTransport::Start(const Options& opt
 PcNetworkTransport::~PcNetworkTransport() {
     Session& s = *session_;
     s.cancelled.store(true);
-    if (s.state.load(std::memory_order_acquire) != 1) return;  // still loading: the loader cleans up
+    if (s.state.load() != 1) return;  // still loading: the loader cleans up
     std::lock_guard lk(s.mutex);
     if (s.handle) {
         s.api->stop_network(s.handle);
@@ -151,12 +154,12 @@ PcNetworkTransport::~PcNetworkTransport() {
 }
 
 bool PcNetworkTransport::Up() {
-    return session_->state.load(std::memory_order_acquire) == 1 && session_->handle;
+    return session_->state.load() == 1 && session_->handle;
 }
 
 PcNetworkTransport::Status PcNetworkTransport::Pulse(std::string* error) {
     Session& s = *session_;
-    const int state = s.state.load(std::memory_order_acquire);
+    const int state = s.state.load();
     if (state == 0) return Status::Loading;
     if (state == 2) {
         if (error) *error = s.error;
@@ -209,8 +212,7 @@ bool PcNetworkTransport::Pop(std::vector<uint8_t>& packet, size_t& bits) {
         const size_t need = (static_cast<size_t>(total) + 7) / 8;
         if (need > kMaxPacketBytes) {
             PCNET_LOGE("PC network: %zu-byte packet dropped", need);
-            std::vector<uint8_t> drop(need);
-            s.api->pop_packet(s.handle, &id, drop.data(), drop.size(), &total, &offset);
+            s.api->drop_packet(s.handle);
             return false;
         }
         scratch_.resize(need);
@@ -232,7 +234,10 @@ bool PcNetworkTransport::Send(uint8_t id, const uint8_t* payload, size_t bits, i
     if (!Up()) return false;
     Session& s = *session_;
     std::lock_guard lk(s.mutex);
-    return s.api->send_packet(s.handle, id, payload, bits, priority, reliability, ordering) == 1;
+    if (s.api->send_packet(s.handle, id, payload, bits, priority, reliability, ordering) == 1) return true;
+    PCNET_LOGE("PC network: netc refused packet %u (%zu bits, priority %d, reliability %d, ordering %d)", id, bits,
+               priority, reliability, ordering);
+    return false;
 }
 
 int PcNetworkTransport::Ping() {

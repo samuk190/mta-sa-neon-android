@@ -97,13 +97,25 @@ int PopPacket(NetEmuHandle* h, uint8_t* id, uint8_t* data, size_t size, uint32_t
     return 1;
 }
 
+int DropPacket(NetEmuHandle* h) {
+    if (!h) return 0;
+    std::lock_guard lk(h->popMutex);
+    if (h->hasPending) {
+        h->hasPending = false;
+        h->pending = {};
+        return 1;
+    }
+    NetEmu::NetcPacket skipped;
+    return h->netc.PopPacket(&skipped) ? 1 : 0;
+}
+
 int SessionOver(NetEmuHandle* h) { return !h || h->netc.SessionOver() ? 1 : 0; }
 
 const NetEmuApi kApi = {
     NETEMU_ABI_VERSION, Load,       Unload,          StartNetwork,         StopNetwork,
     DoPulse,            IsConnected, IsReady,        GetPing,              GetConnectionError,
     SetServerBitStreamVersion,       SetTimeoutTime, GetSerial,            SendPacket,
-    PopPacket,          SessionOver,
+    PopPacket,          SessionOver,     DropPacket,
 };
 
 }  // namespace

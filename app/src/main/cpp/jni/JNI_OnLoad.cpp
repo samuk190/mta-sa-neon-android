@@ -38,7 +38,7 @@ static std::string g_serverHost;
 // emulator runs (libsaonline_netemu.so), its build id and data folder. An
 // empty netcPath selects the normal transport.
 struct PcNetworkConfig {
-    std::string netcPath, build, dataDir;
+    std::string netcPath, build, dataDir, productVersion;
 };
 static PcNetworkConfig g_pcNetwork;
 
@@ -614,9 +614,8 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
             started = g_state->network->StartQuic(g_serverHost, port, std::move(client));
 #endif
         } else if (!g_pcNetwork.netcPath.empty()) {
-            // InitNetRev product version of the core each netc build expects
-            // (SharedUtil::GetProductVersion): Neon 1.7.0 custom, stock 1.6 release.
-            const std::string productVersion = g_pcNetwork.build == "neon" ? "1.7.0-1.00000" : "1.6.0-9.23081";
+            // InitNetRev product version for this server (PcNetworkSettings.productVersionFor).
+            const std::string& productVersion = g_pcNetwork.productVersion;
             started = g_state->network->StartPcNetwork(g_serverHost, static_cast<uint16_t>(port), g_pcNetwork.netcPath,
                                                        g_pcNetwork.dataDir, productVersion);
         } else {
@@ -927,16 +926,16 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeConnect(
 }
 JNIEXPORT jboolean JNICALL
 Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetPcNetwork(
-    JNIEnv* env, jobject thiz, jstring netcPath, jstring netcBuild, jstring dataDir) {
+    JNIEnv* env, jobject thiz, jstring netcPath, jstring netcBuild, jstring dataDir, jstring productVersion) {
     const std::lock_guard lock(g_stateMutex);
-    if (!isOwner(env, thiz) || !netcPath || !netcBuild || !dataDir) return JNI_FALSE;
+    if (!isOwner(env, thiz) || !netcPath || !netcBuild || !dataDir || !productVersion) return JNI_FALSE;
     auto read = [env](jstring s) {
         const char* c = env->GetStringUTFChars(s, nullptr);
         std::string out = c ? c : "";
         if (c) env->ReleaseStringUTFChars(s, c);
         return out;
     };
-    PcNetworkConfig config{read(netcPath), read(netcBuild), read(dataDir)};
+    PcNetworkConfig config{read(netcPath), read(netcBuild), read(dataDir), read(productVersion)};
     if (!config.netcPath.empty() && (config.build.empty() || config.dataDir.empty())) return JNI_FALSE;
     g_pcNetwork = std::move(config);
     if (!g_pcNetwork.netcPath.empty())

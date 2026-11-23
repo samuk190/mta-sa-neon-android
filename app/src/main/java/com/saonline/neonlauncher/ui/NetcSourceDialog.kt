@@ -15,8 +15,8 @@ import java.io.IOException
 /**
  * Makes sure the PC netc.dll for [build] is on the phone. Asked only when the
  * player ticks "Use PC Network — Compatibility": a bundled copy installs
- * silently; otherwise the player chooses the file from a PC install or, for
- * the stock build, downloads it from MTA. [done] runs once, with true when the
+ * silently; otherwise the player chooses the file from a PC install or
+ * downloads it from MTA. [done] runs once, with true when the
  * module is ready.
  */
 object NetcSourceDialog {
@@ -60,7 +60,7 @@ object NetcSourceDialog {
             var choiceMade = false
             val dialog = MaterialAlertDialogBuilder(activity)
                 .setTitle(R.string.pc_network_source_title)
-                .setMessage(if (build == NetcBuild.NEON) R.string.pc_network_source_message_neon else R.string.pc_network_source_message_stock)
+                .setMessage(R.string.pc_network_source_message)
                 .setNegativeButton(R.string.cancel) { _, _ -> finish(false) }
                 .setOnDismissListener { if (!choiceMade) finish(false) }
                 .setPositiveButton(R.string.pc_network_choose_file) { _, _ ->

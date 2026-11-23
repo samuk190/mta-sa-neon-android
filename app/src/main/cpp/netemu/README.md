@@ -41,34 +41,49 @@ mirror image: Allocate → WriteBits → SendPacket → Deallocate as one guest 
 
 ## Where netc comes from
 
-`netc.dll` is MTA's binary, so it is never committed here. `.env` picks how it
-reaches the phone (the question is only ever asked when the compatibility box
-is ticked):
+`netc.dll` is MTA's binary, so it is never committed here. Two builds exist:
+
+- **official**: `mirror-cdn.multitheftauto.com/bdata/netc.dll`, which is also
+  the one the Neon PC client ships. Every server uses it: an official MTA 1.6
+  server ignores the fork-support build at the RakNet step.
+- **fork**: `bdata/fork-support/netc.dll`, MTA's module for fork builds. Kept
+  configurable, not picked automatically.
+
+`.env` picks how it reaches the phone (the question is only ever asked when the
+compatibility box is ticked):
 
 - **Bundled** (`NETC_BUNDLE_IN_ASSETS=true`, our own builds): Gradle copies the
-  files named by `NETC_NEON_DLL` and `NETC_STOCK_DLL` into
-  `assets/netc/neon/netc.dll` and `assets/netc/stock/netc.dll`
-  (`prepareNetcAssets`); `BuildConfig.NETC_BUNDLED_NEON/STOCK` say which exist.
+  files named by `NETC_OFFICIAL_DLL` and `NETC_FORK_DLL` into
+  `assets/netc/official/netc.dll` and `assets/netc/fork/netc.dll`
+  (`prepareNetcAssets`); `BuildConfig.NETC_BUNDLED_OFFICIAL/FORK` say which exist.
 - **Imported** (`false`, the default): the player picks a `netc.dll` from their
-  own PC install, or downloads the stock module from
-  `NETC_STOCK_DOWNLOAD_URL` (`BuildConfig.NETC_STOCK_DOWNLOAD_URL`).
+  own PC install, or downloads it from `NETC_OFFICIAL_DOWNLOAD_URL` /
+  `NETC_FORK_DOWNLOAD_URL`.
 
-Two targets are supported, picked by the server's version: the Neon `netc`
-(for Neon servers without the mobile transport) and the stock MTA `netc` from
-`mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll`.
+The InitNetRev product version follows the server, not the DLL: Neon servers
+(Neon registry, or MTA 1.7) get `1.7.0-1.00000`, others `1.6.0-9.23081`.
 
 ## In the launcher
 
 The join dialog's **Use PC Network — Compatibility** checkbox
-(`ui/JoinDialog.kt`, `network/PcNetworkSettings.kt`) is per server. The build
-follows the server: Neon-registry and MTA 1.7 servers get the Neon netc,
-others the stock one. When it is ticked and that build is not on the phone yet,
-`ui/NetcSourceDialog.kt` asks once: choose the file, or download (stock only).
-`network/NetcModuleStore.kt` stores it as `files/netc/<build>/netc.dll` after
-checking it is an i386 DLL exporting `InitNetInterface`, and each build gets
-its own emulator data folder `files/netemu/<build>/` (registry, identity). The
-path, build and data folder go to native code with
-`EngineHostActivity.nativeSetPcNetwork` before `nativeConnect`.
+(`ui/JoinDialog.kt`, `network/PcNetworkSettings.kt`) is per server. When it is
+ticked and the module is not on the phone yet, `ui/NetcSourceDialog.kt` asks
+once: choose the file, or download it. `network/NetcModuleStore.kt` stores it as
+`files/netc/<build>/netc.dll` after checking it is an i386 DLL exporting
+`InitNetInterface`, and each build gets its own emulator data folder
+`files/netemu/<build>/` (registry, identity). The path, build, data folder and
+product version go to native code with `EngineHostActivity.nativeSetPcNetwork`
+before `nativeConnect`.
+
+## Testing a join on the host
+
+`tools/headless` runs the real client join; `--netc <dll> --netc-data <dir>`
+makes it connect through a host build of `libsaonline_netemu.so` (on
+`LD_LIBRARY_PATH`). MTA servers ignore loopback clients, so point it at the
+server's LAN address. Against an official 1.6 server the join gets
+`SERVER_JOIN`, `MOD_NAME` and sends `PLAYER_JOINDATA`; the server then needs
+the Neon protocol the Android client speaks (MTA 0x170, bitstream 0x30), so a
+Neon server is the end-to-end target.
 
 ## Building
 

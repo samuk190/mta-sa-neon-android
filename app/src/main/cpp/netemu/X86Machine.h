@@ -88,6 +88,8 @@ struct GuestThread {
     bool cancelRequested = false;  // pthread_cancel, honoured at cancellation points
     uint32_t exitCode = 259;  // STILL_ACTIVE
     uint32_t suspendCount = 0;
+    uint64_t createdUs = 0;        // Machine::NowUs() at creation (GetThreadTimes); main is 0
+    uint64_t exitedUs = 0;         // Machine::NowUs() when it exited (0 while running)
     int32_t priority = 0;          // THREAD_PRIORITY_NORMAL; bookkeeping (the scheduler is round-robin)
     bool priorityBoostOff = false;
     // Hardware-exception loop guard. The dispatcher records where a handler
@@ -185,6 +187,8 @@ public:
     // Threads. Called on the emu thread (from shims) or before Start().
     GuestThread* CreateThread(uint32_t start, uint32_t param, bool suspended, const std::string& name);
     GuestThread* Current() { return current_; }
+    // EBP of the running guest thread; valid inside a shim (emu thread only).
+    uint32_t CurrentEbp() const;
     GuestThread* ThreadById(uint32_t id);
     GuestThread* ThreadByHandle(uint32_t handle);
     void ResumeThread(GuestThread* t);

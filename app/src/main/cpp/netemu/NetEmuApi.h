@@ -60,6 +60,9 @@ typedef struct NetEmuApi {
     // 1 when this handle is finished: netc asked to end the process (an
     // anti-tamper verdict) or a guest call hung. Unload it and stop.
     int (*session_over)(NetEmuHandle* h);
+    // Discards the next received packet without copying it (one pop_packet
+    // reported too large for the caller). Returns 1 when one was dropped.
+    int (*drop_packet)(NetEmuHandle* h);
 } NetEmuApi;
 
 // The one exported symbol.

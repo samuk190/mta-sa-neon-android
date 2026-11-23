@@ -33,9 +33,7 @@ object JoinDialog {
         val netcBuild = PcNetworkSettings.buildFor(server)
         fun updatePcNetworkHint() {
             b.pcNetworkHint.visibility = if (b.pcNetwork.isChecked) View.VISIBLE else View.GONE
-            b.pcNetworkHint.setText(
-                if (netcBuild == PcNetworkSettings.NetcBuild.NEON) R.string.pc_network_hint_neon else R.string.pc_network_hint_stock
-            )
+            b.pcNetworkHint.setText(R.string.pc_network_hint)
         }
         fun askForModule() {
             b.pcNetwork.isEnabled = false  // until the module question is settled

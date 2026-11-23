@@ -26,6 +26,8 @@ set(NATIVE_SOURCES
 
     # RakNet-compatible wrapper on top of the native MTA transport.
     "${NATIVE_DIR}/net/raknet/RakNetWrapper.cpp"
+    # "Use PC Network": netc.dll through libsaonline_netemu.so (dlopen).
+    "${NATIVE_DIR}/net/PcNetworkTransport.cpp"
     "${NATIVE_DIR}/net/mta/MtaCipher.cpp"
     "${NATIVE_DIR}/net/mta/MtaClientTransport.cpp"
     "${NATIVE_DIR}/net/mta/MtaOfflineCodec.cpp"
@@ -211,7 +213,7 @@ if(Java_FOUND)
     endif()
 endif()
 # Usage requirements only (Lua and zlib headers): the objects are linked by the executables below.
-target_link_libraries(neon_core PRIVATE lua53 ZLIB::ZLIB neon_cryptopp neon_bcrypt)
+target_link_libraries(neon_core PRIVATE lua53 ZLIB::ZLIB neon_cryptopp neon_bcrypt ${CMAKE_DL_LIBS})
 # Link-time wrap of the one RakNetWrapper send entry point (see send_tap.cpp). The
 # symbol is RakNetWrapper::SendPacket(uint8_t, BitStreamWriter const&, PacketPriority,
 # PacketReliability, PacketOrdering); the calls come from NeonJoinProtocol.cpp.

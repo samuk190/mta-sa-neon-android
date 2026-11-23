@@ -2,11 +2,9 @@
 <!-- "Use PC Network — Compatibility" (network/PcNetworkSettings.kt). -->
 <resources>
     <string name="pc_network_option">Сеть ПК — совместимость</string>
-    <string name="pc_network_hint_neon">Подключение через сетевой модуль ПК (версия Neon) для серверов без мобильного транспорта.</string>
-    <string name="pc_network_hint_stock">Подключение через сетевой модуль ПК (версия MTA) для серверов без мобильного транспорта.</string>
+    <string name="pc_network_hint">Подключение через сетевой модуль ПК для серверов без мобильного транспорта.</string>
     <string name="pc_network_source_title">Нужен сетевой модуль ПК</string>
-    <string name="pc_network_source_message_stock">Эта опция использует netc.dll от MTA для ПК. Выберите netc.dll из папки MTA установки на ПК или скачайте его с MTA.</string>
-    <string name="pc_network_source_message_neon">Этому серверу нужна версия Neon файла netc.dll. Выберите netc.dll из папки MTA установки Neon на ПК.</string>
+    <string name="pc_network_source_message">Эта опция использует netc.dll от MTA для ПК. Выберите netc.dll из папки MTA установки на ПК или скачайте его с MTA.</string>
     <string name="pc_network_choose_file">Выбрать файл</string>
     <string name="pc_network_download">Скачать с MTA</string>
     <string name="pc_network_downloading">Загрузка netc.dll…</string>

@@ -202,6 +202,7 @@ class MainActivity : AppCompatActivity() {
                     putExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, JoinProtocolSettings.read(this@MainActivity, server.ip, server.port))
                     putExtra(PcNetworkSettings.EXTRA_NETC_PATH, netcPath)
                     putExtra(PcNetworkSettings.EXTRA_NETC_BUILD, netcBuild.id)
+                    putExtra(PcNetworkSettings.EXTRA_PRODUCT_VERSION, PcNetworkSettings.productVersionFor(server))
                 })
                 PreferencesManager(this@MainActivity).rememberServer(server.getKey())
             } finally {

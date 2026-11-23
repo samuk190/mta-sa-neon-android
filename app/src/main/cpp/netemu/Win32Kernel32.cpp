@@ -785,18 +785,32 @@ void InstallKernel32(Win32State& s) {
         c.mem.Fill(c.Arg(0), 0, 172);
         c.Return(0);  // TIME_ZONE_ID_UNKNOWN: UTC
     });
-    // (handle, *creation, *exit, *kernel, *user). Created when the machine
-    // started, still running; CPU time approximated by wall time since then.
-    auto processTimes = [st](ShimCall& c) {
-        const uint64_t up = st->machine.NowUs() * 10;  // 100 ns units
-        if (c.Arg(1)) c.mem.Write64(c.Arg(1), FileTimeNow() - up);
-        if (c.Arg(2)) c.mem.Write64(c.Arg(2), 0);
-        if (c.Arg(3)) c.mem.Write64(c.Arg(3), up / 8);
-        if (c.Arg(4)) c.mem.Write64(c.Arg(4), up / 4);
+    // (handle, *creation, *exit, *kernel, *user). Creation is stable per object:
+    // the process at machine start, each thread when it was created (the main
+    // thread first). CPU time is approximated from the time alive.
+    auto writeTimes = [st](ShimCall& c, uint64_t createdUs, uint64_t exitedUs) {
+        const uint64_t now = st->machine.NowUs();
+        const uint64_t end = exitedUs ? exitedUs : now;
+        const uint64_t alive = (end - std::min(createdUs, end)) * 10;  // 100 ns
+        if (c.Arg(1)) c.mem.Write64(c.Arg(1), st->processStartFileTime + createdUs * 10);
+        if (c.Arg(2)) c.mem.Write64(c.Arg(2), exitedUs ? st->processStartFileTime + exitedUs * 10 : 0);
+        if (c.Arg(3)) c.mem.Write64(c.Arg(3), alive / 8);
+        if (c.Arg(4)) c.mem.Write64(c.Arg(4), alive / 4);
         c.Return(1);
     };
-    R("GetThreadTimes", 5, processTimes);
-    R("GetProcessTimes", 5, processTimes);
+    R("GetProcessTimes", 5, [writeTimes](ShimCall& c) { writeTimes(c, 0, 0); });
+    R("GetThreadTimes", 5, [st, writeTimes](ShimCall& c) {
+        GuestThread* t = c.Arg(0) == Win32::kCurrentThread ? &c.thread : nullptr;
+        if (!t) {
+            if (auto k = st->GetAs<KThread>(c.Arg(0), KObject::Kind::Thread)) t = st->machine.ThreadById(k->tid);
+        }
+        if (!t) {
+            c.SetLastError(Win32::kErrorInvalidHandle);
+            c.Return(0);
+            return;
+        }
+        writeTimes(c, t->createdUs, t->exitedUs);
+    });
     auto noFormat = [st](ShimCall& c) {
         st->NoteStub(c.def.name);
         c.SetLastError(Win32::kErrorNotSupported);

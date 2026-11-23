@@ -15,7 +15,7 @@ import java.net.URL
  * Where the PC netc.dll for each build lives on the phone:
  * files/netc/<build>/netc.dll. It arrives one of three ways: copied from the APK
  * assets when the build bundles it (NETC_BUNDLE_IN_ASSETS), imported from a file
- * the player picks, or downloaded from MTA (stock build only). Every file is
+ * the player picks, or downloaded from MTA. Every file is
  * checked to be a 32-bit x86 DLL exporting InitNetInterface before it is kept.
  */
 object NetcModuleStore {
@@ -28,12 +28,17 @@ object NetcModuleStore {
     @JvmStatic fun dataDirFor(context: Context, buildId: String): File = File(context.filesDir, "netemu/$buildId")
 
     fun isBundled(build: NetcBuild): Boolean = when (build) {
-        NetcBuild.NEON -> BuildConfig.NETC_BUNDLED_NEON
-        NetcBuild.STOCK -> BuildConfig.NETC_BUNDLED_STOCK
+        NetcBuild.OFFICIAL -> BuildConfig.NETC_BUNDLED_OFFICIAL
+        NetcBuild.FORK -> BuildConfig.NETC_BUNDLED_FORK
     }
 
-    /** Only the stock module has a public download. */
-    fun canDownload(build: NetcBuild): Boolean = build == NetcBuild.STOCK && BuildConfig.NETC_STOCK_DOWNLOAD_URL.isNotEmpty()
+    /** Where MTA publishes each build (.env NETC_OFFICIAL/FORK_DOWNLOAD_URL). */
+    private fun downloadUrl(build: NetcBuild): String = when (build) {
+        NetcBuild.OFFICIAL -> BuildConfig.NETC_OFFICIAL_DOWNLOAD_URL
+        NetcBuild.FORK -> BuildConfig.NETC_FORK_DOWNLOAD_URL
+    }
+
+    fun canDownload(build: NetcBuild): Boolean = downloadUrl(build).isNotEmpty()
 
     /** The installed module, without doing I/O beyond a stat. */
     fun installed(context: Context, build: NetcBuild): File? = target(context, build).takeIf { it.isFile && it.length() > 0 }
@@ -58,10 +63,10 @@ object NetcModuleStore {
         return input.use { install(context, build, it) }
     }
 
-    /** Downloads the stock module from MTA. Throws IOException with a reason. */
+    /** Downloads the module from MTA. Throws IOException with a reason. */
     fun download(context: Context, build: NetcBuild): File {
         if (!canDownload(build)) throw IOException("no download for this build")
-        val conn = URL(BuildConfig.NETC_STOCK_DOWNLOAD_URL).openConnection() as HttpURLConnection
+        val conn = URL(downloadUrl(build)).openConnection() as HttpURLConnection
         conn.connectTimeout = 15_000
         conn.readTimeout = 30_000
         try {
