@@ -10,6 +10,13 @@
 namespace WorldRPG::Net {
 
 constexpr uint16_t NEON_NETCODE_VERSION = 0x41E7;
+// Release 189 servers (older Neon deployments) admit only this netcode; they
+// share the current bitstream but write one water flag bit (server CGame.cpp,
+// SetRelease189Protocol). Current servers admit both.
+constexpr uint16_t NEON_RELEASE189_NETCODE_VERSION = 0x41E6;
+// Which server release a Standard join speaks. Automatic resolves to Current
+// or Release189 before serializing (NeonJoinClient falls back on rejection).
+enum class NetcodeRelease : uint8_t { Automatic = 0, Current = 1, Release189 = 2 };
 constexpr uint8_t NEON_JOIN_DATA_ID = 4;
 constexpr uint8_t LEGACY_MOBILE_JOIN_DATA_ID = 19;
 
@@ -25,9 +32,10 @@ constexpr JoinProfile SelectJoinProfile(JoinProfile requested) {
 // Standard peers honestly advertise the 0x0030 layout implemented on Android.
 // Legacy keeps the captured 763-byte layout, with the marker at 676 and the body at 668.
 inline bool BuildJoinData(JoinProfile profile, const std::string& nick, const std::string& password,
-                          const std::string& ticket, BitStreamWriter& out) {
+                          const std::string& ticket, BitStreamWriter& out,
+                          NetcodeRelease release = NetcodeRelease::Current) {
     if ((profile != JoinProfile::Standard && profile != JoinProfile::LegacyMobile) || nick.empty() || nick.size() > 22 || ticket.size() > 4096 ||
-        ticket.find('\0') != std::string::npos) return false;
+        ticket.find('\0') != std::string::npos || release == NetcodeRelease::Automatic) return false;
     const bool legacy = profile == JoinProfile::LegacyMobile;
     // The deployed legacy adapter truncates the extracted body to 256 bytes.
     // Never silently truncate an Identity ticket or downgrade authentication.
@@ -37,7 +45,7 @@ inline bool BuildJoinData(JoinProfile profile, const std::string& nick, const st
         const std::array<uint8_t, 667> padding{};
         out.WriteBytes(padding.data(), padding.size());
     }
-    out.Write(legacy ? uint16_t{0x41E6} : NEON_NETCODE_VERSION);
+    out.Write(legacy || release == NetcodeRelease::Release189 ? NEON_RELEASE189_NETCODE_VERSION : NEON_NETCODE_VERSION);
     out.Write(static_cast<uint16_t>(0x0170));
     out.Write(static_cast<uint16_t>(legacy ? 0x003D : 0x0030));
     auto string = [&](std::string_view value) {

@@ -460,6 +460,22 @@ static void TestJoinProfilesAndData() {
     CHECK(!BuildJoinData(JoinProfile::Standard, "Tester", "", std::string(4097, 'T'), oversized), "oversized ticket rejected");
     CHECK(!BuildJoinData(JoinProfile::LegacyMobile, "Tester", "", "ticket", legacyAuth), "legacy never truncates an auth ticket");
     CHECK(!BuildJoinData(JoinProfile::Automatic, "Tester", "", "", invalid), "automatic must be resolved before serializing");
+    {
+        // Release 189 servers admit only netcode 0x41E6; the rest of the standard body is unchanged.
+        BitStreamWriter current, release189, unresolved;
+        CHECK(BuildJoinData(JoinProfile::Standard, "Tester", "", "", current, NetcodeRelease::Current), "current release body");
+        CHECK(BuildJoinData(JoinProfile::Standard, "Tester", "", "", release189, NetcodeRelease::Release189), "release 189 body");
+        CHECK(!BuildJoinData(JoinProfile::Standard, "Tester", "", "", unresolved, NetcodeRelease::Automatic),
+              "automatic release must be resolved before serializing");
+        RefReader a{current.GetData(), static_cast<uint32_t>(current.GetBitLength())};
+        RefReader b{release189.GetData(), static_cast<uint32_t>(release189.GetBitLength())};
+        uint32_t id = 0, netcode = 0;
+        CHECK(a.read(8, id) && a.read(16, netcode) && netcode == 0x41E7, "current netcode");
+        CHECK(b.read(8, id) && b.read(16, netcode) && netcode == 0x41E6, "release 189 netcode");
+        CHECK(current.GetBitLength() == release189.GetBitLength() &&
+                  std::memcmp(current.GetData() + 3, release189.GetData() + 3, current.GetByteLength() - 3) == 0,
+              "only the netcode differs between releases");
+    }
 }
 
 static void TestIdentityRequests() {

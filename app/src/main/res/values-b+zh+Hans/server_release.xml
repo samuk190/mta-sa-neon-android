@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Server release in the Play window (network/ServerReleaseSettings.kt). -->
+<resources>
+    <string name="server_release">服务器版本</string>
+    <string name="server_release_save_failed">无法保存服务器版本。</string>
+    <string-array name="server_releases">
+        <item>自动</item>
+        <item>当前 Neon</item>
+        <item>Neon 版本 189</item>
+    </string-array>
+</resources>

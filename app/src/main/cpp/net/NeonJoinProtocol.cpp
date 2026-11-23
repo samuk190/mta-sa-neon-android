@@ -142,6 +142,9 @@ const char* JoinStateName(JoinState state) {
 
 struct NeonJoinClient::Impl {
     RakNetWrapper* net = nullptr;
+    // Server release for Standard joins, and the Automatic fallback state.
+    NetcodeRelease release = NetcodeRelease::Current;
+    bool autoRelease = false, fallbackUsed = false, fallbackPending = false, fallbackArmed = false;
     JoinState state = JoinState::Idle;
     NeonJoinInfo info;
     StateCallback callback;
@@ -1047,7 +1050,7 @@ struct NeonJoinClient::Impl {
 
     bool SendJoinData() {
         BitStreamWriter w;
-        const bool valid = BuildJoinData(info.joinProfile, nickname, password, identityTicket, w);
+        const bool valid = BuildJoinData(info.joinProfile, nickname, password, identityTicket, w, release);
         identityTicket.clear(); // Tickets are consumed once, including failed sends.
         if (!valid) return false;
         JOIN_LOGI("NeonJoin: sending logical packet %u profile=%s platform=android bitstream=0x30",
@@ -1103,14 +1106,17 @@ struct NeonJoinClient::Impl {
 
         // Desktop CConnectManager.cpp:628: the net module learns the server's
         // bitstream version once MOD_NAME is validated (no-op off PC Network).
-        net->SetServerBitStreamVersion(bsVersion);
+        if (net) net->SetServerBitStreamVersion(bsVersion);
 
         if (modName != "deathmatch") {
             Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
             return;
         }
         const bool standard = info.joinProfile == JoinProfile::Standard;
-        WorldRPG::ServerWorld::ConfigureEntityAdd(standard, standard && bsVersion >= 0x0031);
+        // Release 189 writes one water flag bit (server CEntityAddPacket for
+        // SetRelease189Protocol peers); current servers write two.
+        WorldRPG::ServerWorld::ConfigureEntityAdd(standard && release != NetcodeRelease::Release189,
+                                                  standard && bsVersion >= 0x0031);
         JOIN_LOGI("NeonJoin: MOD_NAME mod=%s bs=0x%X auth=%u",
                   modName.c_str(), bsVersion, static_cast<unsigned>(info.authMode));
         if (info.authMode != NeonAuthMode::Disabled && identityCallback) {
@@ -1258,6 +1264,23 @@ struct NeonJoinClient::Impl {
             r.ReadString(info.disconnectReason, 256);
             r.ReadString(troubleLink, 256);
         }
+        // Server CGame::Packet_PlayerJoinData refuses an unknown netcode with a
+        // custom "requires the current ... network protocol." message. In
+        // Automatic mode that is the cue to retry once with the other release.
+        // Older servers refuse through the stock bad-version types instead.
+        const uint8_t t = info.disconnectType;
+        const bool versionRefusal = info.disconnectReason.find("network protocol") != std::string::npos ||
+                                    t == DisconnectMessages::VERSION_MISMATCH || t == DisconnectMessages::DIFFERENT_BRANCH ||
+                                    t == DisconnectMessages::BAD_VERSION || t == DisconnectMessages::SERVER_NEWER ||
+                                    t == DisconnectMessages::SERVER_OLDER;
+        if (autoRelease && !fallbackUsed && state != JoinState::Complete && versionRefusal) {
+            fallbackUsed = true;
+            fallbackPending = true;
+            JOIN_LOGI("NeonJoin: server refused netcode 0x%X; retrying with the other release",
+                      release == NetcodeRelease::Release189 ? NEON_RELEASE189_NETCODE_VERSION : NEON_NETCODE_VERSION);
+            SetState(JoinState::Idle, "server release differs; reconnecting");
+            return;
+        }
         const DisconnectMessages::Box box =
             DisconnectMessages::ServerDisconnected(info.disconnectType, info.disconnectReason, duration);
         Fail("SERVER_DISCONNECTED type " + std::to_string(info.disconnectType) + ": " + info.disconnectReason, box);
@@ -1268,7 +1291,7 @@ NeonJoinClient::NeonJoinClient() : pImpl_(std::make_unique<Impl>()) {}
 NeonJoinClient::~NeonJoinClient() = default;
 
 bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password,
-                           JoinProfile profile) {
+                           JoinProfile profile, NetcodeRelease release, NetcodeRelease hint) {
     const std::string normalized = NormalizeAscii(nickname);
     if (normalized.empty() || normalized.size() > NEON_MAX_PLAYER_NICK_LENGTH) {
         pImpl_->Fail("invalid nickname length", DisconnectMessages::InvalidNick());
@@ -1290,9 +1313,31 @@ bool NeonJoinClient::Begin(RakNetWrapper& net, const std::string& nickname, cons
     pImpl_->identityRequestId = 0;
     pImpl_->info = NeonJoinInfo{};
     pImpl_->info.joinProfile = SelectJoinProfile(profile);
+    // A fallback attempt arrives as Automatic with the other release as hint;
+    // it may not fall back again.
+    const bool isFallback = pImpl_->fallbackArmed;
+    pImpl_->fallbackArmed = false;
+    pImpl_->autoRelease = release == NetcodeRelease::Automatic;
+    if (!isFallback) pImpl_->fallbackUsed = false;
+    pImpl_->release = release != NetcodeRelease::Automatic ? release
+                      : hint == NetcodeRelease::Release189 ? NetcodeRelease::Release189 : NetcodeRelease::Current;
     pImpl_->SetState(JoinState::WaitingRakNet, "waiting for RakNet connect");
     return true;
 }
+
+bool NeonJoinClient::TakeReleaseFallback() {
+    // One-shot: a reconnect that fails is not retried every frame.
+    if (!pImpl_->fallbackPending) return false;
+    pImpl_->fallbackPending = false;
+    pImpl_->fallbackArmed = true;  // the next Begin is the fallback attempt
+    return true;
+}
+
+NetcodeRelease NeonJoinClient::FallbackRelease() const {
+    return pImpl_->release == NetcodeRelease::Release189 ? NetcodeRelease::Current : NetcodeRelease::Release189;
+}
+
+NetcodeRelease NeonJoinClient::ActiveRelease() const { return pImpl_->release; }
 
 void NeonJoinClient::SetIdentityCallback(IdentityCallback callback) {
     pImpl_->identityCallback = std::move(callback);
@@ -1634,6 +1679,8 @@ void NeonJoinClient::Reset() {
     pImpl_->net = nullptr;
     pImpl_->state = JoinState::Idle;
     pImpl_->info = NeonJoinInfo{};
+    pImpl_->release = NetcodeRelease::Current;
+    pImpl_->autoRelease = pImpl_->fallbackUsed = pImpl_->fallbackPending = pImpl_->fallbackArmed = false;
     pImpl_->nickname.clear();
     pImpl_->password.clear();
     pImpl_->identityTicket.clear();

@@ -41,6 +41,19 @@ struct PcNetworkConfig {
     std::string netcPath, build, dataDir, productVersion;
 };
 static PcNetworkConfig g_pcNetwork;
+// Server release for the next join (nativeSetNetcodeRelease) and what
+// nativeConnect last asked for, so a release fallback can reopen the same
+// transport from nativePulse.
+static WorldRPG::Net::NetcodeRelease g_requestedRelease = WorldRPG::Net::NetcodeRelease::Automatic;
+static WorldRPG::Net::NetcodeRelease g_releaseHint = WorldRPG::Net::NetcodeRelease::Current;
+struct LastConnect {
+    std::string address;  // what nativeConnect received (the native transport resolves it)
+    uint16_t port = 0;
+    bool quic = false;
+    std::string nick;
+    WorldRPG::Net::JoinProfile profile = WorldRPG::Net::JoinProfile::Standard;
+};
+static LastConnect g_lastConnect;
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -573,6 +586,26 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeResume(JNIEnv* env, jobje
     if (isOwner(env, thiz) && g_state->gameEngine) g_state->gameEngine->resume();
 }
 
+// Opens the transport nativeConnect chose (QUIC, PC Network or the native MTA
+// one) for g_lastConnect. Caller holds g_stateMutex.
+static bool StartTransport(JNIEnv* env, jobject thiz) {
+    const LastConnect& c = g_lastConnect;
+    if (c.quic) {
+#ifdef __ANDROID__
+        auto client = WorldRPG::Net::QuicGameClient::Connect(env, thiz, g_serverHost, c.port);
+        return g_state->network->StartQuic(g_serverHost, c.port, std::move(client));
+#else
+        return false;
+#endif
+    }
+    if (!g_pcNetwork.netcPath.empty()) {
+        // InitNetRev product version for this server (PcNetworkSettings.productVersionFor).
+        return g_state->network->StartPcNetwork(g_serverHost, c.port, g_pcNetwork.netcPath, g_pcNetwork.dataDir,
+                                                g_pcNetwork.productVersion);
+    }
+    return g_state->network->StartNetwork(c.address.c_str(), c.port);
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
     JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname, jint joinProfile)
@@ -606,31 +639,20 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
         WorldRPG::Game::RequestRemoteReset();
         WorldRPG::Script::ActiveVmResetSession();
     }
-    bool started = false;
-    if (!g_serverHost.empty() && !normalizedNick.empty()) {
-        if (useQuic) {
-#ifdef __ANDROID__
-            auto client = WorldRPG::Net::QuicGameClient::Connect(env, thiz, g_serverHost, port);
-            started = g_state->network->StartQuic(g_serverHost, port, std::move(client));
-#endif
-        } else if (!g_pcNetwork.netcPath.empty()) {
-            // InitNetRev product version for this server (PcNetworkSettings.productVersionFor).
-            const std::string& productVersion = g_pcNetwork.productVersion;
-            started = g_state->network->StartPcNetwork(g_serverHost, static_cast<uint16_t>(port), g_pcNetwork.netcPath,
-                                                       g_pcNetwork.dataDir, productVersion);
-        } else {
-            started = g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
-        }
-    }
+    g_lastConnect.address = ipStr;
     env->ReleaseStringUTFChars(ip, ipStr);
+    g_lastConnect.port = static_cast<uint16_t>(port);
+    g_lastConnect.quic = useQuic;
+    g_lastConnect.nick = normalizedNick;
     // Scheduling a join only starts an attempt. It does not verify a session.
     // The Neon join handshake (PLAYER_JOIN -> MOD_NAME -> PLAYER_JOINDATA ->
     // SERVER_JOIN_COMPLETE -> RPCs -> SERVER_JOINEDGAME) is driven by
     // NeonJoinClient from nativePulse once the transport is up.
-    const auto profile = joinProfile == static_cast<jint>(WorldRPG::Net::JoinProfile::LegacyMobile)
+    g_lastConnect.profile = joinProfile == static_cast<jint>(WorldRPG::Net::JoinProfile::LegacyMobile)
         ? WorldRPG::Net::JoinProfile::LegacyMobile
         : WorldRPG::Net::JoinProfile::Standard;
-    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "", profile)) {
+    if (g_serverHost.empty() || normalizedNick.empty() || !StartTransport(env, thiz) ||
+        !g_state->join->Begin(*g_state->network, normalizedNick, "", g_lastConnect.profile, g_requestedRelease, g_releaseHint)) {
         g_state->network->StopNetwork();
         return JNI_FALSE;
     }
@@ -730,6 +752,22 @@ static void PulseClient(JNIEnv* env, jobject thiz, bool renderFrame) {
     if (g_enterServer.load()) WorldRPG::Game::BeginServerSession();
     g_state->network->DoPulse();
     g_state->join->Pulse();
+    if (g_state->join->TakeReleaseFallback()) {
+        // Automatic server release: the server refused this netcode before the
+        // join completed. Reopen the same transport and join once more with the
+        // other release; a second refusal fails the join as usual.
+        const auto release = g_state->join->FallbackRelease();
+        g_state->network->StopNetwork();
+        WorldRPG::ServerWorld::ResetSession();
+        WorldRPG::RemoteVehicle::ResetSession();
+        if (!StartTransport(env, thiz) ||
+            !g_state->join->Begin(*g_state->network, g_lastConnect.nick, "", g_lastConnect.profile,
+                                  WorldRPG::Net::NetcodeRelease::Automatic, release)) {
+            g_state->network->StopNetwork();
+            WorldRPG::ConnectionLoading::End();
+            PostConnectionState(false, "Could not reconnect with the server's release");
+        }
+    }
     bool transferring = false;
     {
         // Transfer box (desktop CTransferBox): "downloaded|total" while files are in flight, then one
@@ -941,6 +979,28 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetPcNetwork(
     if (!g_pcNetwork.netcPath.empty())
         JNI_LOGI("PC Network compatibility on: netc %s (%s build)", g_pcNetwork.netcPath.c_str(), g_pcNetwork.build.c_str());
     return JNI_TRUE;
+}
+// Server release for the next nativeConnect: requested 0 Automatic, 1 Current,
+// 2 Release 189; hint is the release Automatic tries first.
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetNetcodeRelease(JNIEnv* env, jobject thiz, jint requested,
+                                                                                jint hint) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz)) return;
+    using WorldRPG::Net::NetcodeRelease;
+    auto pick = [](jint v, NetcodeRelease fallback) {
+        return v == 1 ? NetcodeRelease::Current : v == 2 ? NetcodeRelease::Release189 : fallback;
+    };
+    g_requestedRelease = pick(requested, NetcodeRelease::Automatic);
+    g_releaseHint = pick(hint, NetcodeRelease::Current);
+}
+// The release the current join speaks (1 Current, 2 Release 189), so the
+// launcher can remember what an Automatic join found.
+JNIEXPORT jint JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeGetNetcodeRelease(JNIEnv* env, jobject thiz) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !g_state || !g_state->join) return 0;
+    return g_state->join->ActiveRelease() == WorldRPG::Net::NetcodeRelease::Release189 ? 2 : 1;
 }
 JNIEXPORT void JNICALL
 Java_com_saonline_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz, jboolean renderFrame) {

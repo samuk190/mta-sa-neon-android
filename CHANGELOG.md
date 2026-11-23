@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - The project is licensed under GPL-2.0-only again (was AGPL-3.0-only), so it can ship the GPLv2 Unicorn engine the PC Network emulation is built on. `LICENSE` holds the GPLv2 text, the MIT `NOTICE` stays for code first released under MIT, and the READMEs say so. `SampMapParser.{h,cpp}`, ported from the GPLv3 Neon/MTA fork, keeps its GPL-3.0 header as a marked exception.
 
+### Server version: current Neon and release 189
+
+- The Play window has a **Server version** list per server: Automatic, Current Neon (netcode `0x41E7`) and Neon release 189 (`0x41E6`, which older Neon deployments require). Release 189 also reads the one-flag water entity layout those servers write (`ConfigureEntityAdd`, server `CGame.cpp` `SetRelease189Protocol`).
+- Automatic tries the release that worked last for that server (Current the first time). When the server refuses it before the join completes ("This server requires the current ... network protocol", server `CGame::Packet_PlayerJoinData`), `NeonJoinClient` reports a fallback instead of failing, and `nativePulse` reopens the same transport (native, QUIC or PC Network) and joins once more with the other release. The launcher remembers the release that joined (`ServerReleaseSettings`). Works for every transport.
+- Checked live against 213.32.90.138:22013 through PC Network, on the host (`tools/headless --release auto`): Current refused, fallback to release 189, joined (local player 92, entity add, resource start). `tests/test_join_codec.cpp` covers both netcodes. Not yet run on a device.
+- Fixed: `HandleModName` called the network before checking a join client without one, which crashed `TestModNameParse`.
+
 ### PC Network compatibility (netc emulation)
 
 - New `app/src/main/cpp/netemu` subsystem runs the PC `netc.dll` (x86/32-bit) under emulation on arm64, so the transport and join handshake behave like a real PC client. This backs the planned "Use PC Network — Compatibility" server option for joining servers without the mobile transport. It reuses MobileSA's approach only; no code from that APK is used, and `netc.dll` (MTA's binary) is supplied at runtime, never committed. See `app/src/main/cpp/netemu/README.md`.

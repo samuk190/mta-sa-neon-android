@@ -143,8 +143,19 @@ public:
     NeonJoinClient& operator=(const NeonJoinClient&) = delete;
 
     /// Automatic preserves known World RPG legacy endpoints; all others use packet 4.
+    /// release: the server release a Standard join speaks. Automatic tries
+    /// `hint` (Current when unset) and, if the server refuses that netcode
+    /// before the join completes, asks the caller for one retry with the other
+    /// release (TakeReleaseFallback).
     bool Begin(RakNetWrapper& net, const std::string& nickname, const std::string& password,
-               JoinProfile profile = JoinProfile::Automatic);
+               JoinProfile profile = JoinProfile::Automatic, NetcodeRelease release = NetcodeRelease::Automatic,
+               NetcodeRelease hint = NetcodeRelease::Current);
+    /// True once per refused Automatic attempt: reconnect the transport and
+    /// call Begin(..., Automatic, FallbackRelease()).
+    bool TakeReleaseFallback();
+    NetcodeRelease FallbackRelease() const;
+    /// The release this attempt speaks (never Automatic once Begin succeeded).
+    NetcodeRelease ActiveRelease() const;
     void SetIdentityCallback(IdentityCallback callback);
     bool ProvideIdentityTicket(uint64_t requestId, const std::string& ticket, const std::string& error);
     bool CancelIdentityRequest(uint64_t requestId);

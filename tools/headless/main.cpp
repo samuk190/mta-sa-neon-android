@@ -90,6 +90,8 @@ struct Options {
     // "Use PC Network": join through this netc.dll (needs libsaonline_netemu.so
     // on the library path) instead of the native transport.
     std::string netcPath, netcDataDir, netcProductVersion = "1.6.0-9.23081";
+    // Server release: auto (with the one-time fallback JNI does), current, 189.
+    WorldRPG::Net::NetcodeRelease release = WorldRPG::Net::NetcodeRelease::Automatic;
 };
 
 // First three RESOURCE_START (82) bodies: full hex to resource_start_dumps.txt, one line to stdout.
@@ -116,7 +118,16 @@ Options ParseArgs(int argc, char** argv) {
     std::vector<std::string> positional;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--netc" || a == "--netc-data" || a == "--netc-version") {
+        if (a == "--release") {
+            const std::string v = i + 1 < argc ? argv[++i] : "";
+            if (v == "auto") o.release = WorldRPG::Net::NetcodeRelease::Automatic;
+            else if (v == "current") o.release = WorldRPG::Net::NetcodeRelease::Current;
+            else if (v == "189") o.release = WorldRPG::Net::NetcodeRelease::Release189;
+            else {
+                std::fprintf(stderr, "neon_headless: --release needs auto, current or 189\n");
+                std::exit(2);
+            }
+        } else if (a == "--netc" || a == "--netc-data" || a == "--netc-version") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "neon_headless: %s needs a value\n", a.c_str());
                 std::exit(2);
@@ -347,10 +358,13 @@ int main(int argc, char** argv) {
     });
 
     // nativeConnect: transport first, then the join attempt.
-    const bool started = opt.netcPath.empty()
-        ? net.StartNetwork(opt.host.c_str(), opt.port)
-        : net.StartPcNetwork(opt.host, opt.port, opt.netcPath, opt.netcDataDir, opt.netcProductVersion);
-    if (!started || !join.Begin(net, opt.nickname, "", opt.profile)) {
+    auto startTransport = [&] {
+        return opt.netcPath.empty()
+            ? net.StartNetwork(opt.host.c_str(), opt.port)
+            : net.StartPcNetwork(opt.host, opt.port, opt.netcPath, opt.netcDataDir, opt.netcProductVersion);
+    };
+    const bool started = startTransport();
+    if (!started || !join.Begin(net, opt.nickname, "", opt.profile, opt.release)) {
         std::printf("neon_headless: could not start the join attempt\n");
         net.StopNetwork();
         return 1;
@@ -365,6 +379,20 @@ int main(int argc, char** argv) {
         WorldRPG::Game::BeginServerSession();
         net.DoPulse();
         join.Pulse();
+        // Same release fallback as JNI nativePulse.
+        if (join.TakeReleaseFallback()) {
+            const auto release = join.FallbackRelease();
+            std::printf("[%7.3fs] RELEASE fallback to %s\n", WorldRPG::Headless::ElapsedSeconds(),
+                        release == WorldRPG::Net::NetcodeRelease::Release189 ? "release 189" : "current");
+            net.StopNetwork();
+            WorldRPG::ServerWorld::ResetSession();
+            WorldRPG::RemoteVehicle::ResetSession();
+            if (!startTransport() ||
+                !join.Begin(net, opt.nickname, "", opt.profile, WorldRPG::Net::NetcodeRelease::Automatic, release)) {
+                std::printf("neon_headless: release fallback could not reconnect\n");
+                break;
+            }
+        }
         WorldRPG::Script::ActiveVmPulseResources();
         if (std::chrono::steady_clock::now() >= nextFrame) {
             WorldRPG::Script::ActiveVmPump();

@@ -27,6 +27,12 @@ object JoinDialog {
         b.connectionMode.setSimpleItems(modes)
         b.connectionMode.setText(modes[mode], false)
         b.connectionMode.setOnItemClickListener { _, _, position, _ -> mode = position }
+        // Server version: Automatic detects it (and remembers what worked).
+        val releases = ctx.resources.getStringArray(R.array.server_releases)
+        var release = com.saonline.neonlauncher.network.ServerReleaseSettings.read(ctx, server.ip, server.port)
+        b.serverRelease.setSimpleItems(releases)
+        b.serverRelease.setText(releases[release], false)
+        b.serverRelease.setOnItemClickListener { _, _, position, _ -> release = position }
 
         // "Use PC Network — Compatibility". Ticking it is the only time the
         // player is asked for netc.dll (NetcSourceDialog), and only if needed.
@@ -101,6 +107,11 @@ object JoinDialog {
             if (!com.saonline.neonlauncher.network.JoinProtocolSettings.save(ctx, server.ip, server.port, mode) ||
                 !PcNetworkSettings.setEnabled(ctx, server.ip, server.port, b.pcNetwork.isChecked)) {
                 android.widget.Toast.makeText(ctx, R.string.connection_mode_save_failed, android.widget.Toast.LENGTH_LONG).show()
+                return
+            }
+            // Saved last, so a failed save above leaves the release unchanged too.
+            if (!com.saonline.neonlauncher.network.ServerReleaseSettings.save(ctx, server.ip, server.port, release)) {
+                android.widget.Toast.makeText(ctx, R.string.server_release_save_failed, android.widget.Toast.LENGTH_LONG).show()
                 return
             }
             // Close the keyboard first: an open IME follows into the game window.

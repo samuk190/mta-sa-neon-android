@@ -41,6 +41,7 @@ import com.saonline.neonlauncher.R;
 import com.saonline.neonlauncher.network.JoinProtocolSettings;
 import com.saonline.neonlauncher.network.NetcModuleStore;
 import com.saonline.neonlauncher.network.PcNetworkSettings;
+import com.saonline.neonlauncher.network.ServerReleaseSettings;
 import com.saonline.neonlauncher.utils.PreferencesManager;
 import com.rockstargames.gtasa.GTASA;
 import com.saonline.engine.EngineAssetLoader;
@@ -115,6 +116,9 @@ public final class EngineHostActivity extends GTASA {
     // "Use PC Network — Compatibility": netc.dll to run under emulation, its build id
     // and data folder. An empty path selects the normal transport. Call before nativeConnect.
     private native boolean nativeSetPcNetwork(String netcPath, String netcBuild, String dataDir, String productVersion);
+    // Server release (ServerReleaseSettings): requested, and the one Automatic tries first.
+    private native void nativeSetNetcodeRelease(int requested, int hint);
+    private native int nativeGetNetcodeRelease();
     private native boolean nativeSetNetworkSerial(String serial);
     private native boolean nativeCancelIdentityRequest(long requestId);
     private native void nativeProvideIdentityTicket(long requestId, String ticket, String error);
@@ -370,6 +374,10 @@ public final class EngineHostActivity extends GTASA {
         if (productVersion == null) productVersion = "";
         String netcData = netcPath.isEmpty() ? "" : NetcModuleStore.dataDirFor(this, netcBuild).getPath();
         if (!nativeSetPcNetwork(netcPath, netcBuild, netcData, productVersion)) return false;
+        // The hint is re-read on every connect, so a reconnect starts with what
+        // this session's Automatic join already found.
+        nativeSetNetcodeRelease(getIntent().getIntExtra(ServerReleaseSettings.EXTRA_RELEASE, ServerReleaseSettings.AUTOMATIC),
+                ServerReleaseSettings.detected(this, connectIp, connectPort));
         if (!nativeConnect(connectIp, connectPort, connectNick, joinProfile)) return false;
         if (loadingView != null) {
             loadingView.update(getString(R.string.connecting_to_address, connectIp + ":" + connectPort), 0f, 0f, 1f);
@@ -952,6 +960,10 @@ public final class EngineHostActivity extends GTASA {
             if (isFinishing() || isDestroyed()) return;
             if (connected) {
                 joinedOnce = true;
+                // Remember the release this server accepted, so Automatic starts there next time.
+                ServerReleaseSettings.rememberDetected(this, connectIp, connectPort,
+                        getIntent().getIntExtra(ServerReleaseSettings.EXTRA_RELEASE, ServerReleaseSettings.AUTOMATIC),
+                        nativeGetNetcodeRelease());
                 // The "Connecting to server" panel ends with the join, as the desktop connect dialog does.
                 hideDownload();
                 appendChat("#ACD5FE" + getString(R.string.connected_to_server));

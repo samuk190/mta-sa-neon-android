@@ -22,6 +22,7 @@ import com.saonline.neonlauncher.network.AndroidInstallCredential
 import com.saonline.neonlauncher.network.JoinProtocolSettings
 import com.saonline.neonlauncher.network.NetcModuleStore
 import com.saonline.neonlauncher.network.PcNetworkSettings
+import com.saonline.neonlauncher.network.ServerReleaseSettings
 import com.saonline.neonlauncher.game.EngineDiagnostics
 import com.saonline.neonlauncher.game.GameActivity
 import com.saonline.neonlauncher.network.ServerInfo
@@ -203,6 +204,7 @@ class MainActivity : AppCompatActivity() {
                     putExtra(PcNetworkSettings.EXTRA_NETC_PATH, netcPath)
                     putExtra(PcNetworkSettings.EXTRA_NETC_BUILD, netcBuild.id)
                     putExtra(PcNetworkSettings.EXTRA_PRODUCT_VERSION, PcNetworkSettings.productVersionFor(server))
+                    putExtra(ServerReleaseSettings.EXTRA_RELEASE, ServerReleaseSettings.read(this@MainActivity, server.ip, server.port))
                 })
                 PreferencesManager(this@MainActivity).rememberServer(server.getKey())
             } finally {
