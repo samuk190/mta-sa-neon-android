@@ -245,6 +245,9 @@ public:
     bool processExitRequested = false;
     uint32_t processExitCode = 0;
 
+    // Sockets, DNS lookups and static buffers of ws2_32 (Win32Winsock.cpp).
+    std::shared_ptr<struct WinsockState> winsock;
+
     // Shim-owned helpers (e.g. the WMI provider) that registered thunks capture.
     std::vector<std::shared_ptr<void>> keepAlive;
 
@@ -275,7 +278,7 @@ bool WriteMemoryBasicInformation(Win32State& st, uint32_t addr, uint32_t out);
 void InstallAll(Win32State& s);
 
 // Socket readiness for an event bound with WSAEventSelect (Win32Winsock.cpp).
-bool WinsockEventReady(int fd, uint32_t mask);
+bool WinsockEventReady(const Win32State& st, int fd, uint32_t mask);
 
 // Helpers shared by the shim files.
 std::string Lower(std::string s);

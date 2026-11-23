@@ -34,6 +34,13 @@
 
 // Host the player connected to; the HTTP file service lives on the same host.
 static std::string g_serverHost;
+// "Use PC Network — Compatibility" for the next nativeConnect: the netc.dll the
+// emulator runs (libsaonline_netemu.so), its build id and data folder. An
+// empty netcPath selects the normal transport.
+struct PcNetworkConfig {
+    std::string netcPath, build, dataDir;
+};
+static PcNetworkConfig g_pcNetwork;
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -911,6 +918,24 @@ JNIEXPORT jboolean JNICALL
 Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeConnect(
     JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname, jint joinProfile) {
     return Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(env, thiz, ip, port, nickname, joinProfile);
+}
+JNIEXPORT jboolean JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetPcNetwork(
+    JNIEnv* env, jobject thiz, jstring netcPath, jstring netcBuild, jstring dataDir) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !netcPath || !netcBuild || !dataDir) return JNI_FALSE;
+    auto read = [env](jstring s) {
+        const char* c = env->GetStringUTFChars(s, nullptr);
+        std::string out = c ? c : "";
+        if (c) env->ReleaseStringUTFChars(s, c);
+        return out;
+    };
+    PcNetworkConfig config{read(netcPath), read(netcBuild), read(dataDir)};
+    if (!config.netcPath.empty() && (config.build.empty() || config.dataDir.empty())) return JNI_FALSE;
+    g_pcNetwork = std::move(config);
+    if (!g_pcNetwork.netcPath.empty())
+        JNI_LOGI("PC Network compatibility on: netc %s (%s build)", g_pcNetwork.netcPath.c_str(), g_pcNetwork.build.c_str());
+    return JNI_TRUE;
 }
 JNIEXPORT void JNICALL
 Java_com_saonline_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz, jboolean renderFrame) {

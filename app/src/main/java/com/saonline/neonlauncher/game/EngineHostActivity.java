@@ -39,6 +39,8 @@ import androidx.core.content.ContextCompat;
 import com.saonline.neonlauncher.BuildConfig;
 import com.saonline.neonlauncher.R;
 import com.saonline.neonlauncher.network.JoinProtocolSettings;
+import com.saonline.neonlauncher.network.NetcModuleStore;
+import com.saonline.neonlauncher.network.PcNetworkSettings;
 import com.saonline.neonlauncher.utils.PreferencesManager;
 import com.rockstargames.gtasa.GTASA;
 import com.saonline.engine.EngineAssetLoader;
@@ -110,6 +112,9 @@ public final class EngineHostActivity extends GTASA {
     private native boolean nativeInit();
     private native boolean nativeSetAssetPath(String assetPath);
     private native boolean nativeConnect(String ip, int port, String nickname, int joinProfile);
+    // "Use PC Network — Compatibility": netc.dll to run under emulation, its build id
+    // and data folder. An empty path selects the normal transport. Call before nativeConnect.
+    private native boolean nativeSetPcNetwork(String netcPath, String netcBuild, String dataDir);
     private native boolean nativeSetNetworkSerial(String serial);
     private native boolean nativeCancelIdentityRequest(long requestId);
     private native void nativeProvideIdentityTicket(long requestId, String ticket, String error);
@@ -357,6 +362,12 @@ public final class EngineHostActivity extends GTASA {
     private boolean connectToServer() {
         if (!clientReady || isFinishing() || isDestroyed()) return false;
         int joinProfile = getIntent().getIntExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, 0);
+        String netcPath = getIntent().getStringExtra(PcNetworkSettings.EXTRA_NETC_PATH);
+        String netcBuild = getIntent().getStringExtra(PcNetworkSettings.EXTRA_NETC_BUILD);
+        if (netcPath == null) netcPath = "";
+        if (netcBuild == null) netcBuild = "";
+        String netcData = netcPath.isEmpty() ? "" : NetcModuleStore.dataDirFor(this, netcBuild).getPath();
+        if (!nativeSetPcNetwork(netcPath, netcBuild, netcData)) return false;
         if (!nativeConnect(connectIp, connectPort, connectNick, joinProfile)) return false;
         if (loadingView != null) {
             loadingView.update(getString(R.string.connecting_to_address, connectIp + ":" + connectPort), 0f, 0f, 1f);

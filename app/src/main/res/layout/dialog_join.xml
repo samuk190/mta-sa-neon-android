@@ -121,6 +121,23 @@
                 android:inputType="none" />
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Join through MTA's PC netc.dll under emulation (cpp/netemu). -->
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/pcNetwork"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/pc_network_option" />
+
+        <TextView
+            android:id="@+id/pcNetworkHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="32dp"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?android:attr/textColorSecondary"
+            android:visibility="gone" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnPlay"
             style="@style/Widget.Material3.Button"

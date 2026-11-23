@@ -170,7 +170,7 @@ bool Win32State::IsSignaled(uint32_t handle, uint32_t tid) {
         auto e = std::static_pointer_cast<KEvent>(o);
         if (e->signaled) return true;
         if (e->socketFd >= 0 && e->networkMask) {
-            if (WinsockEventReady(e->socketFd, e->networkMask)) return true;
+            if (WinsockEventReady(*this, e->socketFd, e->networkMask)) return true;
         }
         return false;
     }
@@ -241,7 +241,7 @@ std::string Win32State::HostPath(const std::string& guestPath) const {
     if (!env.moduleGuestPath.empty() && lower == Lower(env.moduleGuestPath)) return env.moduleHostPath;
     // Normalize "." and ".." segments.
     std::vector<std::string> parts;
-    std::stringstream ss(lower.substr(3));
+    std::stringstream ss(lower.size() > 3 ? lower.substr(3) : std::string());  // "c:" alone is the drive root
     std::string seg;
     while (std::getline(ss, seg, '\\')) {
         if (seg.empty() || seg == ".") continue;

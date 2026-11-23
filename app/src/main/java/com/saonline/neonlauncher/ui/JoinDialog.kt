@@ -11,6 +11,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.saonline.neonlauncher.BuildConfig
 import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.databinding.DialogJoinBinding
+import com.saonline.neonlauncher.network.PcNetworkSettings
 import com.saonline.neonlauncher.network.ServerInfo
 import com.saonline.neonlauncher.utils.PreferencesManager
 
@@ -26,6 +27,35 @@ object JoinDialog {
         b.connectionMode.setSimpleItems(modes)
         b.connectionMode.setText(modes[mode], false)
         b.connectionMode.setOnItemClickListener { _, _, position, _ -> mode = position }
+
+        // "Use PC Network — Compatibility". Ticking it is the only time the
+        // player is asked for netc.dll (NetcSourceDialog), and only if needed.
+        val netcBuild = PcNetworkSettings.buildFor(server)
+        fun updatePcNetworkHint() {
+            b.pcNetworkHint.visibility = if (b.pcNetwork.isChecked) View.VISIBLE else View.GONE
+            b.pcNetworkHint.setText(
+                if (netcBuild == PcNetworkSettings.NetcBuild.NEON) R.string.pc_network_hint_neon else R.string.pc_network_hint_stock
+            )
+        }
+        fun askForModule() {
+            b.pcNetwork.isEnabled = false  // until the module question is settled
+            NetcSourceDialog.ensure(fragment, netcBuild) { ready ->
+                b.pcNetwork.isEnabled = true
+                if (!ready) b.pcNetwork.isChecked = false
+            }
+        }
+        b.pcNetwork.isChecked = PcNetworkSettings.isEnabled(ctx, server.ip, server.port)
+        updatePcNetworkHint()
+        b.pcNetwork.setOnCheckedChangeListener { _, checked ->
+            updatePcNetworkHint()
+            if (checked) askForModule()
+        }
+        // Remembered as on, but this server's build is not on the phone (the
+        // server changed version, or the file was removed): ask now, not at Play.
+        if (b.pcNetwork.isChecked && com.saonline.neonlauncher.network.NetcModuleStore.installed(ctx, netcBuild) == null &&
+            !com.saonline.neonlauncher.network.NetcModuleStore.isBundled(netcBuild)) {
+            askForModule()
+        }
 
         ServerLogo.bind(b.joinLogo, server.name, server.logoUrl)
         b.joinName.text = server.name
@@ -66,7 +96,12 @@ object JoinDialog {
                 return
             }
             prefs.username = nick
-            if (!com.saonline.neonlauncher.network.JoinProtocolSettings.save(ctx, server.ip, server.port, mode)) {
+            if (!b.pcNetwork.isEnabled) {  // still asking for netc.dll
+                android.widget.Toast.makeText(ctx, R.string.pc_network_source_title, android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (!com.saonline.neonlauncher.network.JoinProtocolSettings.save(ctx, server.ip, server.port, mode) ||
+                !PcNetworkSettings.setEnabled(ctx, server.ip, server.port, b.pcNetwork.isChecked)) {
                 android.widget.Toast.makeText(ctx, R.string.connection_mode_save_failed, android.widget.Toast.LENGTH_LONG).show()
                 return
             }

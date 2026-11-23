@@ -149,6 +149,8 @@ bool PeImage::Load(GuestMemory& mem, const std::vector<uint8_t>& f, const Import
         const uint32_t funcs = base + mem.Read32(e + 28);
         const uint32_t names = base + mem.Read32(e + 32);
         const uint32_t ords = base + mem.Read32(e + 36);
+        // Ordinals are 16-bit; larger tables only come from a malformed file.
+        if (nFuncs > 0x10000 || nNames > 0x10000) return fail("export table too large");
         for (uint32_t i = 0; i < nFuncs; ++i) {
             const uint32_t rva = mem.Read32(funcs + i * 4);
             if (rva) ordinals_[static_cast<uint16_t>(ordBase + i)] = base + rva;
@@ -156,6 +158,7 @@ bool PeImage::Load(GuestMemory& mem, const std::vector<uint8_t>& f, const Import
         for (uint32_t i = 0; i < nNames; ++i) {
             const std::string n = mem.ReadA(base + mem.Read32(names + i * 4), 512);
             const uint16_t idx = mem.Read16(ords + i * 2);
+            if (idx >= nFuncs) continue;
             const uint32_t rva = mem.Read32(funcs + idx * 4u);
             if (rva) exports_[n] = base + rva;
         }

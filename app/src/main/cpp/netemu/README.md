@@ -57,6 +57,19 @@ Two targets are supported, picked by the server's version: the Neon `netc`
 (for Neon servers without the mobile transport) and the stock MTA `netc` from
 `mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll`.
 
+## In the launcher
+
+The join dialog's **Use PC Network — Compatibility** checkbox
+(`ui/JoinDialog.kt`, `network/PcNetworkSettings.kt`) is per server. The build
+follows the server: Neon-registry and MTA 1.7 servers get the Neon netc,
+others the stock one. When it is ticked and that build is not on the phone yet,
+`ui/NetcSourceDialog.kt` asks once: choose the file, or download (stock only).
+`network/NetcModuleStore.kt` stores it as `files/netc/<build>/netc.dll` after
+checking it is an i386 DLL exporting `InitNetInterface`, and each build gets
+its own emulator data folder `files/netemu/<build>/` (registry, identity). The
+path, build and data folder go to native code with
+`EngineHostActivity.nativeSetPcNetwork` before `nativeConnect`.
+
 ## Building
 
 `netemu/CMakeLists.txt` builds `libsaonline_netemu.so` (arm64, 16 KB pages,

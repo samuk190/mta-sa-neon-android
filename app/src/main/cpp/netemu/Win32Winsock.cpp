@@ -28,6 +28,38 @@
 
 namespace NetEmu {
 
+// Per-machine Winsock state (Win32State::winsock): the sockets this netc
+// opened, DNS lookups in flight, and the per-process static result buffers.
+// Destroying it closes every socket, so an unloaded session leaks nothing.
+struct SockInfo {
+    bool blocking = true;
+    uint32_t recvTimeoutMs = 0;
+    uint32_t sendTimeoutMs = 0;
+    int type = SOCK_DGRAM;
+    bool connecting = false;
+};
+
+// Async DNS: one lookup in flight per guest thread.
+struct Lookup {
+    std::mutex mutex;
+    bool done = false;
+    int status = 0;
+    addrinfo* result = nullptr;
+    ~Lookup() {
+        if (result) ::freeaddrinfo(result);
+    }
+};
+
+struct WinsockState {
+    std::map<int, SockInfo> sockets;
+    std::map<uint32_t, std::shared_ptr<Lookup>> lookups;  // by guest thread id
+    uint32_t hostent = 0;     // gethostbyname's static hostent
+    uint32_t ntoaBuffer = 0;  // inet_ntoa's static string
+    ~WinsockState() {
+        for (const auto& [fd, info] : sockets) ::close(fd);
+    }
+};
+
 namespace {
 constexpr char kWs[] = "ws2_32.dll";
 constexpr uint32_t kSocketError = 0xFFFFFFFFu;
@@ -41,14 +73,7 @@ constexpr uint32_t WSAEINTR = 10004, WSAEFAULT = 10014, WSAEINVAL = 10022, WSAEW
                    WSAECONNREFUSED = 10061, WSAEHOSTUNREACH = 10065, WSAHOST_NOT_FOUND = 11001, WSATRY_AGAIN = 11002,
                    WSANO_DATA = 11004;
 
-struct SockInfo {
-    bool blocking = true;
-    uint32_t recvTimeoutMs = 0;
-    uint32_t sendTimeoutMs = 0;
-    int type = SOCK_DGRAM;
-    bool connecting = false;
-};
-std::map<int, SockInfo> g_sockets;
+
 
 uint32_t WsaError(int e) {
     switch (e) {
@@ -158,17 +183,7 @@ short PollEvents(uint32_t mask, const SockInfo* info) {
     return ev;
 }
 
-// Async DNS: one lookup in flight per guest thread.
-struct Lookup {
-    std::mutex mutex;
-    bool done = false;
-    int status = 0;
-    addrinfo* result = nullptr;
-    ~Lookup() {
-        if (result) ::freeaddrinfo(result);
-    }
-};
-std::map<uint32_t, std::shared_ptr<Lookup>> g_lookups;
+
 
 std::shared_ptr<Lookup> StartLookup(const std::string& node, const std::string& service, const addrinfo& hints) {
     auto l = std::make_shared<Lookup>();
@@ -211,18 +226,18 @@ std::string LocalName(const Win32State& st, const std::string& node) {
 
 // Run fn(lookup) once the lookup for this thread is done; block until then.
 template <class Fn>
-void WithLookup(ShimCall& c, const std::string& node, const std::string& service, const addrinfo& hints, Fn fn) {
+void WithLookup(WinsockState& ws, ShimCall& c, const std::string& node, const std::string& service, const addrinfo& hints, Fn fn) {
     GuestThread& t = c.thread;
     if (t.waitPhase == 0) {
-        g_lookups[t.id] = StartLookup(node, service, hints);
+        ws.lookups[t.id] = StartLookup(node, service, hints);
         t.waitPhase = 1;
     }
-    auto l = g_lookups[t.id];
+    auto l = ws.lookups[t.id];
     {
         std::lock_guard lk(l->mutex);
         if (!l->done) {
             if (c.WaitElapsedMs() > 15000) {
-                g_lookups.erase(t.id);
+                ws.lookups.erase(t.id);
                 fn(nullptr, EAI_AGAIN);
                 return;
             }
@@ -230,14 +245,15 @@ void WithLookup(ShimCall& c, const std::string& node, const std::string& service
             return;
         }
     }
-    g_lookups.erase(t.id);
+    ws.lookups.erase(t.id);
     fn(l->result, l->status);
 }
 }  // namespace
 
-bool WinsockEventReady(int fd, uint32_t mask) {
-    auto it = g_sockets.find(fd);
-    pollfd p{fd, PollEvents(mask, it == g_sockets.end() ? nullptr : &it->second), 0};
+bool WinsockEventReady(const Win32State& st, int fd, uint32_t mask) {
+    const auto& sockets = st.winsock->sockets;
+    auto it = sockets.find(fd);
+    pollfd p{fd, PollEvents(mask, it == sockets.end() ? nullptr : const_cast<SockInfo*>(&it->second)), 0};
     if (!p.events) return false;
     return ::poll(&p, 1, 0) > 0 && (p.revents & (p.events | POLLERR | POLLHUP));
 }
@@ -245,6 +261,7 @@ bool WinsockEventReady(int fd, uint32_t mask) {
 void InstallWinsock(Win32State& s) {
     Machine& m = s.machine;
     Win32State* st = &s;
+    s.winsock = std::make_shared<WinsockState>();
     auto R = [&m](const char* name, int args, ShimFn fn) { m.RegisterShim(kWs, name, args * 4, std::move(fn)); };
     auto O = [&m](uint16_t ord, const char* name) { m.RegisterOrdinal(kWs, ord, name); };
 
@@ -284,9 +301,9 @@ void InstallWinsock(Win32State& s) {
         c.SetLastError(err);
         c.Return(kSocketError);
     };
-    auto info = [](uint32_t s) -> SockInfo* {
-        auto it = g_sockets.find(static_cast<int>(s));
-        return it == g_sockets.end() ? nullptr : &it->second;
+    auto info = [st](uint32_t s) -> SockInfo* {
+        auto it = st->winsock->sockets.find(static_cast<int>(s));
+        return it == st->winsock->sockets.end() ? nullptr : &it->second;
     };
 
     R("WSAStartup", 2, [](ShimCall& c) {
@@ -313,7 +330,7 @@ void InstallWinsock(Win32State& s) {
         c.Return(::inet_aton(c.mem.ReadA(c.Arg(0), 64).c_str(), &a) ? a.s_addr : 0xFFFFFFFFu);
     });
     R("inet_ntoa", 1, [st](ShimCall& c) {
-        static uint32_t buf = 0;
+        uint32_t& buf = st->winsock->ntoaBuffer;
         if (!buf) buf = st->machine.Mem().StaticAlloc(32);
         in_addr a{};
         a.s_addr = c.Arg(0);
@@ -351,13 +368,13 @@ void InstallWinsock(Win32State& s) {
     });
     R("gethostbyname", 1, [st](ShimCall& c) {
         // One static hostent per process, like the real per-thread buffer.
-        static uint32_t he = 0;
+        uint32_t& he = st->winsock->hostent;
         if (!he) he = st->machine.Mem().StaticAlloc(0x200);
         addrinfo hints{};
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_DGRAM;
         const std::string name = c.mem.ReadA(c.Arg(0), 256);
-        WithLookup(c, LocalName(*st, name), "", hints, [&](addrinfo* res, int rc) {
+        WithLookup(*st->winsock, c, LocalName(*st, name), "", hints, [&](addrinfo* res, int rc) {
             if (rc || !res) {
                 c.SetLastError(GaiError(rc ? rc : EAI_NONAME));
                 c.Return(0);
@@ -397,7 +414,7 @@ void InstallWinsock(Win32State& s) {
             hints.ai_protocol = static_cast<int>(c.mem.Read32(h + 12));
         }
         const uint32_t resPtr = c.Arg(3);
-        WithLookup(c, node.empty() ? node : LocalName(*st, node), service, hints, [&](addrinfo* res, int rc) {
+        WithLookup(*st->winsock, c, node.empty() ? node : LocalName(*st, node), service, hints, [&](addrinfo* res, int rc) {
             if (rc) {
                 c.mem.Write32(resPtr, 0);
                 const uint32_t e = GaiError(rc);
@@ -443,7 +460,7 @@ void InstallWinsock(Win32State& s) {
         c.Return(0);
     });
 
-    R("socket", 3, [fail](ShimCall& c) {
+    R("socket", 3, [fail, st](ShimCall& c) {
         const int fam = HostFamily(c.Arg(0));
         const int type = static_cast<int>(c.Arg(1));
         const int fd = ::socket(fam, type | SOCK_NONBLOCK | SOCK_CLOEXEC, static_cast<int>(c.Arg(2)));
@@ -453,13 +470,13 @@ void InstallWinsock(Win32State& s) {
         }
         SockInfo si;
         si.type = type;
-        g_sockets[fd] = si;
+        st->winsock->sockets[fd] = si;
         NETEMU_LOGI("socket(af=%u, type=%d) -> %d", c.Arg(0), type, fd);
         c.Return(static_cast<uint32_t>(fd));
     });
-    R("closesocket", 1, [fail](ShimCall& c) {
+    R("closesocket", 1, [fail, st](ShimCall& c) {
         const int fd = static_cast<int>(c.Arg(0));
-        if (!g_sockets.erase(fd)) {
+        if (!st->winsock->sockets.erase(fd)) {
             fail(c, WSAENOTSOCK);
             return;
         }
@@ -483,7 +500,7 @@ void InstallWinsock(Win32State& s) {
         if (::listen(static_cast<int>(c.Arg(0)), static_cast<int>(c.Arg(1))) != 0) fail(c, WsaError(errno));
         else c.Return(0);
     });
-    R("accept", 3, [fail, info](ShimCall& c) {
+    R("accept", 3, [fail, info, st](ShimCall& c) {
         sockaddr_storage a{};
         socklen_t len = sizeof(a);
         const int fd = ::accept4(static_cast<int>(c.Arg(0)), reinterpret_cast<sockaddr*>(&a), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -498,7 +515,7 @@ void InstallWinsock(Win32State& s) {
         }
         SockInfo si;
         si.type = SOCK_STREAM;
-        g_sockets[fd] = si;
+        st->winsock->sockets[fd] = si;
         WriteAddr(c.mem, c.Arg(1), c.Arg(2), a, len);
         c.Return(static_cast<uint32_t>(fd));
     });

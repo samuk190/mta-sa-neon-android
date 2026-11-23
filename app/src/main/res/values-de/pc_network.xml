@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Use PC Network — Compatibility" (network/PcNetworkSettings.kt). -->
+<resources>
+    <string name="pc_network_option">PC-Netzwerk verwenden — Kompatibilität</string>
+    <string name="pc_network_hint_neon">Verbindet über das PC-Netzwerkmodul (Neon-Version), für Server ohne den Mobil-Transport.</string>
+    <string name="pc_network_hint_stock">Verbindet über das PC-Netzwerkmodul (MTA-Version), für Server ohne den Mobil-Transport.</string>
+    <string name="pc_network_source_title">PC-Netzwerkmodul benötigt</string>
+    <string name="pc_network_source_message_stock">Diese Option nutzt die netc.dll von MTA für PC. Wähle die netc.dll aus dem MTA-Ordner einer PC-Installation oder lade sie von MTA herunter.</string>
+    <string name="pc_network_source_message_neon">Dieser Server benötigt die Neon-Version der netc.dll. Wähle die netc.dll aus dem MTA-Ordner einer Neon-PC-Installation.</string>
+    <string name="pc_network_choose_file">Datei wählen</string>
+    <string name="pc_network_download">Von MTA herunterladen</string>
+    <string name="pc_network_downloading">netc.dll wird heruntergeladen…</string>
+    <string name="pc_network_installed">PC-Netzwerkmodul bereit.</string>
+    <string name="pc_network_import_failed">Diese Datei kann nicht verwendet werden: %1$s</string>
+    <string name="pc_network_download_failed">Download fehlgeschlagen: %1$s</string>
+</resources>
