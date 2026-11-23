@@ -1,0 +1,24 @@
+<resources>
+    <string name="browser_title">选择服务器</string>
+    <string name="browser_subtitle">San Andreas Online · 多人服务器列表</string>
+    <string name="browser_all">全部服务器</string>
+    <string name="browser_recent">最近</string>
+    <string name="browser_search">搜索服务器或输入地址</string>
+    <string name="browser_filters">筛选</string>
+    <string name="browser_online">仅在线</string>
+    <string name="browser_quick">快速连接</string>
+    <string name="browser_browse">浏览服务器</string>
+    <string name="browser_quit">退出</string>
+    <string name="browser_connect">连接</string>
+    <string name="browser_copy">复制 IP</string>
+    <string name="browser_copied">地址已复制</string>
+    <string name="browser_endpoint">IP:端口</string>
+    <string name="browser_players">玩家</string>
+    <string name="browser_ping">延迟</string>
+    <string name="browser_mode">模式</string>
+    <string name="browser_map">地图</string>
+    <string name="browser_version">版本</string>
+    <string name="browser_languages">语言</string>
+    <string name="browser_no_recent">没有最近玩过的服务器</string>
+    <string name="browser_no_match">没有匹配的服务器</string>
+</resources>

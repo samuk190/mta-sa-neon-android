@@ -24,7 +24,11 @@ data class ServerInfo(
     val mapName: String = "",
     val version: String = "",
     val passworded: Boolean = false,
-    val playerNames: List<String> = emptyList()
+    val playerNames: List<String> = emptyList(),
+    val bannerUrl: String = "",
+    val description: String = "",
+    val countries: List<String> = emptyList(),
+    val languages: List<String> = emptyList()
 ) {
     enum class Status { QUERYING, ONLINE, OFFLINE, DIRECT }
 

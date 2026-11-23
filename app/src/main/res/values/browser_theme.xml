@@ -1,0 +1,70 @@
+<resources>
+    <!-- Server browser palette from the desktop shell in san-andreas-online PR 132. -->
+    <color name="browser_online_dot">#22C55E</color>
+    <color name="browser_amber">#FFBB4E</color>
+    <color name="browser_canvas">#07090B</color>
+    <color name="browser_card">#0C0C0C</color>
+    <color name="browser_selected">#161412</color>
+    <color name="browser_glass">#C70F0E0D</color>
+    <color name="browser_line">#25FFFFFF</color>
+    <color name="browser_paper">#F6F4ED</color>
+    <color name="browser_muted">#B7B6B2</color>
+
+    <style name="BrowserText" parent="">
+        <item name="android:fontFamily">@font/sa_bank_gothic</item>
+        <item name="android:textColor">@color/browser_paper</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:includeFontPadding">false</item>
+    </style>
+    <style name="BrowserText.Small">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/browser_muted</item>
+    </style>
+    <style name="BrowserText.Title">
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textSize">24sp</item>
+        <item name="android:letterSpacing">0.06</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    <style name="BrowserText.Tab">
+        <item name="android:textAllCaps">true</item>
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingHorizontal">9dp</item>
+        <item name="android:textColor">@color/browser_tab_text</item>
+        <item name="android:background">@drawable/browser_tab</item>
+        <item name="android:foreground">?attr/selectableItemBackground</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+    </style>
+    <style name="BrowserButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textAllCaps">true</item>
+        <item name="android:fontFamily">@font/sa_bank_gothic</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/browser_amber</item>
+        <item name="iconTint">@color/browser_amber</item>
+        <item name="strokeColor">@color/browser_amber</item>
+        <item name="backgroundTint">#23FFBB4E</item>
+        <item name="cornerRadius">4dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingHorizontal">10dp</item>
+        <item name="android:insetTop">6dp</item>
+        <item name="android:insetBottom">6dp</item>
+        <item name="iconSize">13dp</item>
+        <item name="iconPadding">4dp</item>
+    </style>
+    <style name="BrowserButton.Secondary">
+        <item name="android:textColor">@color/browser_paper</item>
+        <item name="iconTint">@color/browser_muted</item>
+        <item name="strokeColor">@color/browser_line</item>
+        <item name="backgroundTint">@color/browser_glass</item>
+    </style>
+    <style name="BrowserIcon" parent="Widget.Material3.Button.IconButton">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="iconSize">18dp</item>
+        <item name="iconTint">@color/browser_muted</item>
+    </style>
+</resources>

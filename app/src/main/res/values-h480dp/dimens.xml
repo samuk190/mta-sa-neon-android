@@ -3,4 +3,5 @@
     <!-- Tall enough for a bigger logo (large phones in landscape, small tablets). -->
     <dimen name="row_logo_size">52dp</dimen>
     <dimen name="join_logo_size">96dp</dimen>
+    <dimen name="browser_banner_height">88dp</dimen>
 </resources>

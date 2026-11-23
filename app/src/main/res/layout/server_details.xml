@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/browser_panel"
+    android:fillViewport="true"
+    android:scrollbars="vertical">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="10dp">
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="@style/BrowserButton.Secondary"
+            android:text="@string/browser_browse"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/banner"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/browser_banner_height"
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter"
+            android:background="@color/browser_card" />
+
+        <TextView
+            android:id="@+id/name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            style="@style/BrowserText"
+            android:layout_marginTop="7dp"
+            android:textStyle="bold"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/description"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            style="@style/BrowserText.Small"
+            android:layout_marginTop="4dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/connect"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                style="@style/BrowserButton"
+                android:text="@string/browser_connect"
+                android:layout_weight="1"
+                app:icon="@drawable/ic_play" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/copyIp"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                style="@style/BrowserButton.Secondary"
+                android:text="@string/browser_copy"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/facts"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/browser_panel"
+            android:padding="8dp">
+            <include android:id="@+id/endpoint" layout="@layout/server_fact" />
+
+            <include android:id="@+id/players" layout="@layout/server_fact" />
+
+            <include android:id="@+id/ping" layout="@layout/server_fact" />
+
+            <include android:id="@+id/mode" layout="@layout/server_fact" />
+
+            <include android:id="@+id/map" layout="@layout/server_fact" />
+
+            <include android:id="@+id/version" layout="@layout/server_fact" />
+
+            <include android:id="@+id/languages" layout="@layout/server_fact" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

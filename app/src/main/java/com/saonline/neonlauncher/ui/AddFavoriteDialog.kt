@@ -19,13 +19,14 @@ class AddFavoriteDialog : DialogFragment() {
         val context = requireContext()
         val binding = DialogAddFavoriteBinding.inflate(LayoutInflater.from(context))
         val prefs = PreferencesManager(context)
+        val quick = arguments?.getBoolean(QUICK_CONNECT) == true
         binding.editHost.doAfterTextChanged { binding.hostLayout.error = null }
         binding.editPort.doAfterTextChanged { binding.portLayout.error = null }
         val dialog = MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.add_favorite)
+            .setTitle(if (quick) R.string.browser_quick else R.string.add_favorite)
             .setView(binding.root)
             .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.add_server, null)
+            .setPositiveButton(if (quick) R.string.browser_connect else R.string.add_server, null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -35,12 +36,16 @@ class AddFavoriteDialog : DialogFragment() {
                 binding.portLayout.error = if (port == null) getString(R.string.server_port_invalid) else null
                 if (host == null || port == null) return@setOnClickListener
                 val address = ServerAddress(host, port)
-                if (prefs.isFavorite(address.key())) {
+                if (!quick && prefs.isFavorite(address.key())) {
                     binding.hostLayout.error = getString(R.string.server_already_favorite)
                     return@setOnClickListener
                 }
-                prefs.addFavorite(address.key())
-                parentFragmentManager.setFragmentResult(RESULT_KEY, bundleOf())
+                if (quick) {
+                    parentFragmentManager.setFragmentResult(QUICK_CONNECT, bundleOf("address" to address.key()))
+                } else {
+                    prefs.addFavorite(address.key())
+                    parentFragmentManager.setFragmentResult(RESULT_KEY, bundleOf())
+                }
                 context.getSystemService(InputMethodManager::class.java)
                     ?.hideSoftInputFromWindow(binding.editPort.windowToken, 0)
                 dismiss()
@@ -56,6 +61,7 @@ class AddFavoriteDialog : DialogFragment() {
     }
 
     companion object {
+        const val QUICK_CONNECT = "quick-connect"
         const val TAG = "add-favorite"
         const val RESULT_KEY = "favorite-added"
     }

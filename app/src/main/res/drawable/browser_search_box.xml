@@ -1,0 +1,4 @@
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/browser_panel"
+    android:insetTop="6dp"
+    android:insetBottom="6dp" />
