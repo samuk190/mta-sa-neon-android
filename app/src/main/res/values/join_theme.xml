@@ -1,0 +1,22 @@
+<resources>
+    <style name="Theme.WorldRPGNeon.Join" parent="Theme.WorldRPGNeon">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/browser_canvas</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="colorPrimary">@color/browser_amber</item>
+        <item name="colorOnPrimary">@color/browser_canvas</item>
+        <item name="colorSurface">@color/browser_card</item>
+        <item name="colorSurfaceContainerHighest">@color/browser_selected</item>
+        <item name="colorOnSurface">@color/browser_paper</item>
+        <item name="colorOnSurfaceVariant">@color/browser_muted</item>
+    </style>
+
+    <style name="JoinPanes" parent="">
+        <item name="android:orientation">vertical</item>
+    </style>
+    <style name="JoinPane" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+    </style>
+</resources>

@@ -1,177 +1,222 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Join dialog: the server on the left, nickname and play on the right (fits a landscape phone). -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:baselineAligned="false"
-    android:orientation="horizontal"
-    android:padding="@dimen/card_padding">
+    android:layout_height="match_parent"
+    android:background="@color/browser_canvas">
+
+    <ImageView
+        android:id="@+id/wallpaper"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:foreground="@drawable/browser_shade"
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop" />
 
     <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_weight="1"
+        android:id="@+id/joinContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:focusableInTouchMode="true"
         android:orientation="vertical">
 
-        <com.google.android.material.imageview.ShapeableImageView
-            android:id="@+id/joinLogo"
-            android:layout_width="@dimen/join_logo_size"
-            android:layout_height="@dimen/join_logo_size"
-            android:contentDescription="@string/server_logo"
-            android:scaleType="centerCrop"
-            app:shapeAppearanceOverlay="@style/ShapeAppearance.WorldRPGNeon.Logo" />
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true">
 
-        <TextView
-            android:id="@+id/joinName"
+            <LinearLayout
+                style="@style/JoinPanes"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:baselineAligned="false"
+                android:paddingHorizontal="@dimen/screen_padding"
+                android:paddingVertical="8dp">
+
+                <LinearLayout
+                    style="@style/JoinPane"
+                    android:background="@drawable/browser_panel"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.imageview.ShapeableImageView
+                            android:id="@+id/joinLogo"
+                            android:layout_width="@dimen/row_logo_size"
+                            android:layout_height="@dimen/row_logo_size"
+                            android:contentDescription="@string/server_logo"
+                            android:scaleType="centerCrop"
+                            app:shapeAppearanceOverlay="@style/ShapeAppearance.WorldRPGNeon.Logo" />
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/joinName"
+                                style="@style/BrowserText.Title"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content" />
+
+                            <TextView
+                                android:id="@+id/joinMode"
+                                style="@style/BrowserText.Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="4dp"
+                                android:ellipsize="end"
+                                android:maxLines="1" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <com.google.android.material.chip.ChipGroup
+                        android:id="@+id/joinChips"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        app:chipSpacingHorizontal="6dp">
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/joinPlayers"
+                            style="@style/Widget.WorldRPGNeon.InfoChip"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:chipIcon="@drawable/ic_group" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/joinPing"
+                            style="@style/Widget.WorldRPGNeon.InfoChip"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            app:chipIcon="@drawable/ping_dot"
+                            app:chipIconSize="8dp"
+                            app:iconStartPadding="8dp" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/joinVersion"
+                            style="@style/Widget.WorldRPGNeon.InfoChip"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </com.google.android.material.chip.ChipGroup>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/nicknameLayout"
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:hint="@string/nickname"
+                        app:counterEnabled="true"
+                        app:counterMaxLength="22"
+                        app:helperText="@string/nickname_helper"
+                        app:startIconDrawable="@drawable/ic_person">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/editNickname"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:imeOptions="actionGo|flagNoExtractUi|flagNoFullscreen"
+                            android:inputType="text|textNoSuggestions"
+                            android:maxLength="22"
+                            android:singleLine="true" />
+                    </com.google.android.material.textfield.TextInputLayout>
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="10dp"
+                    android:layout_height="10dp" />
+
+                <LinearLayout
+                    style="@style/JoinPane"
+                    android:background="@drawable/browser_panel"
+                    android:orientation="vertical"
+                    android:padding="@dimen/card_padding">
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:hint="@string/connection_mode">
+
+                        <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                            android:id="@+id/connectionMode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="none" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:hint="@string/server_release">
+
+                        <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                            android:id="@+id/serverRelease"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="none" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/pcNetwork"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/pc_network_option" />
+
+                    <TextView
+                        android:id="@+id/pcNetworkHint"
+                        style="@style/BrowserText.Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="32dp"
+                        android:text="@string/pc_network_hint"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/browser_line" />
+
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:ellipsize="end"
-            android:maxLines="2"
-            android:textAppearance="?attr/textAppearanceTitleLarge"
-            android:textColor="?attr/colorOnSurface" />
+            android:background="@color/browser_card"
+            android:gravity="end|center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/screen_padding">
 
-        <TextView
-            android:id="@+id/joinMode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textAppearance="?attr/textAppearanceBodyMedium"
-            android:textColor="?attr/colorOnSurfaceVariant" />
-
-        <com.google.android.material.chip.ChipGroup
-            android:id="@+id/joinChips"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            app:chipSpacingHorizontal="6dp">
-
-            <com.google.android.material.chip.Chip
-                android:id="@+id/joinPlayers"
-                style="@style/Widget.WorldRPGNeon.InfoChip"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCancel"
+                style="@style/BrowserButton.Secondary"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                app:chipIcon="@drawable/ic_group" />
+                android:text="@string/cancel" />
 
-            <com.google.android.material.chip.Chip
-                android:id="@+id/joinPing"
-                style="@style/Widget.WorldRPGNeon.InfoChip"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnPlay"
+                style="@style/BrowserButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                app:chipIcon="@drawable/ping_dot"
-                app:chipIconSize="8dp"
-                app:iconStartPadding="8dp" />
-
-            <com.google.android.material.chip.Chip
-                android:id="@+id/joinVersion"
-                style="@style/Widget.WorldRPGNeon.InfoChip"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-
-        </com.google.android.material.chip.ChipGroup>
-
+                android:layout_marginStart="8dp"
+                android:minWidth="112dp"
+                android:text="@string/play"
+                app:icon="@drawable/ic_play"
+                app:iconGravity="textStart" />
+        </LinearLayout>
     </LinearLayout>
-
-    <Space
-        android:layout_width="@dimen/pane_gap"
-        android:layout_height="0dp" />
-
-    <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center_vertical"
-        android:layout_weight="1"
-        android:orientation="vertical">
-
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/nicknameLayout"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/nickname"
-            app:counterEnabled="true"
-            app:counterMaxLength="22"
-            app:helperText="@string/nickname_helper"
-            app:startIconDrawable="@drawable/ic_person">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/editNickname"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:imeOptions="actionGo|flagNoExtractUi|flagNoFullscreen"
-                android:inputType="text|textNoSuggestions"
-                android:maxLength="22"
-                android:singleLine="true" />
-
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/connection_mode">
-
-            <com.google.android.material.textfield.MaterialAutoCompleteTextView
-                android:id="@+id/connectionMode"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="none" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- Server release: current Neon protocol or release 189 (ServerReleaseSettings). -->
-        <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/server_release">
-
-            <com.google.android.material.textfield.MaterialAutoCompleteTextView
-                android:id="@+id/serverRelease"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:inputType="none" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <!-- Join through MTA's PC netc.dll under emulation (cpp/netemu). -->
-        <com.google.android.material.checkbox.MaterialCheckBox
-            android:id="@+id/pcNetwork"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/pc_network_option" />
-
-        <TextView
-            android:id="@+id/pcNetworkHint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="32dp"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?android:attr/textColorSecondary"
-            android:visibility="gone" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnPlay"
-            style="@style/Widget.Material3.Button"
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/play_button_height"
-            android:layout_marginTop="12dp"
-            android:text="@string/play"
-            android:textAppearance="?attr/textAppearanceTitleMedium"
-            app:icon="@drawable/ic_play"
-            app:iconGravity="textStart" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnCancel"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/cancel" />
-
-    </LinearLayout>
-
-</LinearLayout>
+</FrameLayout>

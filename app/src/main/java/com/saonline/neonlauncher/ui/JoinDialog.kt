@@ -1,13 +1,20 @@
 package com.saonline.neonlauncher.ui
 
+import android.app.Dialog
 import android.content.res.ColorStateList
+import android.graphics.drawable.Drawable
 import android.view.LayoutInflater
 import android.view.View
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.updatePadding
 import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.saonline.neonlauncher.BuildConfig
 import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.databinding.DialogJoinBinding
@@ -18,10 +25,23 @@ import com.saonline.neonlauncher.utils.PreferencesManager
 /** Join step: shows the server, asks for the nickname, then plays. */
 object JoinDialog {
 
-    fun show(fragment: Fragment, server: ServerInfo) {
+    fun show(fragment: Fragment, server: ServerInfo, wallpaper: Drawable?) {
         val ctx = fragment.requireContext()
         val prefs = PreferencesManager(ctx)
-        val b = DialogJoinBinding.inflate(LayoutInflater.from(ctx))
+        val dialog = Dialog(ctx, R.style.Theme_WorldRPGNeon_Join)
+        val b = DialogJoinBinding.inflate(LayoutInflater.from(dialog.context))
+        b.wallpaper.setImageDrawable(wallpaper?.constantState?.newDrawable(ctx.resources))
+        dialog.setContentView(b.root)
+        val window = requireNotNull(dialog.window)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        ViewCompat.setOnApplyWindowInsetsListener(b.joinContent) { view, insets ->
+            val safe = insets.getInsets(WindowInsetsCompat.Type.displayCutout() or
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            view.updatePadding(left = safe.left, top = safe.top, right = safe.right, bottom = safe.bottom)
+            insets
+        }
         val modes = ctx.resources.getStringArray(R.array.connection_modes)
         var mode = com.saonline.neonlauncher.network.JoinProtocolSettings.read(ctx, server.ip, server.port)
         b.connectionMode.setSimpleItems(modes)
@@ -39,7 +59,6 @@ object JoinDialog {
         val netcBuild = PcNetworkSettings.buildFor(server)
         fun updatePcNetworkHint() {
             b.pcNetworkHint.visibility = if (b.pcNetwork.isChecked) View.VISIBLE else View.GONE
-            b.pcNetworkHint.setText(R.string.pc_network_hint)
         }
         fun askForModule() {
             b.pcNetwork.isEnabled = false  // until the module question is settled
@@ -83,10 +102,6 @@ object JoinDialog {
         b.editNickname.setSelection(b.editNickname.text?.length ?: 0)
         b.editNickname.doAfterTextChanged { b.nicknameLayout.error = null }
 
-        val dialog = MaterialAlertDialogBuilder(ctx)
-            .setView(b.root)
-            .create()
-
         fun play() {
             val nick = b.editNickname.text?.toString()?.trim().orEmpty()
             val error = when (NicknameRules.check(nick)) {
@@ -97,6 +112,7 @@ object JoinDialog {
             }
             if (error != null) {
                 b.nicknameLayout.error = ctx.getString(error)
+                b.editNickname.requestFocus()
                 return
             }
             prefs.username = nick
@@ -129,9 +145,9 @@ object JoinDialog {
         }
 
         dialog.show()
-        // Wide enough for the two columns, never wider than the screen.
-        val metrics = ctx.resources.displayMetrics
-        val maxWidth = (640 * metrics.density).toInt()
-        dialog.window?.setLayout(minOf(maxWidth, (metrics.widthPixels * 0.9f).toInt()), android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+        WindowCompat.getInsetsController(window, b.root).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
     }
 }

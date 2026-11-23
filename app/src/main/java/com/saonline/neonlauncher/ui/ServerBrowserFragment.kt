@@ -75,7 +75,7 @@ class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
                 detailOpen = !wide
                 render()
             },
-            onJoin = { JoinDialog.show(this, it) },
+            onJoin = ::openJoin,
             onFavorite = { server ->
                 val key = server.getKey()
                 if (prefs.isFavorite(key)) prefs.removeFavorite(key) else prefs.addFavorite(key)
@@ -177,11 +177,15 @@ class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
         })
     }
 
+    private fun openJoin(server: ServerInfo) {
+        JoinDialog.show(this, server, binding.wallpaper.drawable)
+    }
+
     private fun joinAddress(text: String): Boolean {
         val address = ServerAddress.fromKey(text) ?: return false
         val server = servers.firstOrNull { it.getKey() == address.key() }
             ?: ServerInfo(name = address.key(), ip = address.host, port = address.port, status = ServerInfo.Status.DIRECT)
-        JoinDialog.show(this, server)
+        openJoin(server)
         return true
     }
 
@@ -290,7 +294,7 @@ class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
         name.text = server.name
         description.text = server.description
         description.isVisible = server.description.isNotBlank()
-        connect.setOnClickListener { JoinDialog.show(this@ServerBrowserFragment, server) }
+        connect.setOnClickListener { openJoin(server) }
         copyIp.setOnClickListener {
             val key = server.getKey()
             requireContext().getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("IP", key))
