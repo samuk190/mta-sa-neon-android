@@ -1,5 +1,7 @@
 # MTA:SA Neon Android 客户端
 
+[官方网站](https://saonlinemobile.web.app/) · [下载 APK](https://saonlinemobile.web.app/download)
+
 这是 **Multi Theft Auto: San Andreas**（MTA:SA）的原生 ARM64 Android 客户端，基于 MTA Neon 和 Grand Theft Auto: San Andreas Mobile 游戏引擎。
 
 ## README 语言
@@ -18,7 +20,7 @@
 
 ## 安装并开始游戏
 
-1. 下载并安装 `mta-sa-neon-android-<版本>.apk`。首次打开启动器时，Android 会为应用创建目录。[发布页面](https://github.com/samuk190/mta-sa-neon-android/releases)
+1. 从[官方下载页面](https://saonlinemobile.web.app/download)下载并安装 APK，然后打开一次启动器，让 Android 创建应用目录。
 2. 如果 APK 配置了 `CDN_ROOT_URL`，请打开 **设置 → 同步游戏文件**。启动器会校验下载内容，并将游戏数据和三个 ARM64 原生库安装到应用的私有存储空间。未配置 CDN 的构建版本请按下方步骤手动安装。
 3. 在 **服务器** 中选择服务器，点按 **加入**，输入昵称后点按 **开始游戏**。如果服务器要求登录 SA:O，请在 **设置 → 使用 Discord 登录** 中绑定账号。
 
@@ -39,18 +41,35 @@ GTA 游戏的 APK 和 OBB 文件均为 ZIP 格式。请从原版游戏中提取�
 /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ├── lib/
 │   ├── libGTASA.so
-│   ├── libSCAnd.so
-│   └── libOpenAL64.so
-├── anim/  audio/  models/  Text/  Textures/
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
+├── anim/
+├── audio/
+│   ├── android/
+│   ├── SFX/
+│   └── STREAMS/
+├── cgui/
 ├── data/
+│   ├── default.dat
 │   ├── gta.dat
-│   └── handling.cfg
+│   ├── handling.cfg
+│   └── script/
+├── fonts/
+├── models/
+├── MTA/cgui/
+├── Text/american.gxt
+├── Textures/fonts/
 ├── texdb/
 │   ├── gta3.img
+│   ├── gta_int.img
 │   └── menu/menu.pvr.dat
-├── assetfile.txt
-└── scache.txt  scache_small.txt  scache_small_low.txt
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
 ```
+
+[查看完整参考目录树（410 个文件）](docs/game-assets-tree.txt)。其中列出了项目参考清单中的每个路径，包括 MTA 加载画面。手动安装时，将自己的 APK 中 `assets/` 的内容和 OBB 压缩包中的内容直接合并到 `game_assets/`。保留原始文件名和游戏副本中的其他文件，包括可能存在的 `assetfile.txt`。三个 ARM64 库直接放在 `lib/` 下。
 
 如果已在电脑上的 `gta_sa/` 目录中整理好文件，可通过 ADB 传输目录中的内容。
 
@@ -103,5 +122,5 @@ cp .env.example .env
 - [同步移植路线图与项目状态](README.md#project-roadmap-mta-sync-porting-plan-pc-to-android)
 - [客户端 Lua 函数目录](docs/lua-functions/README.md)和[兼容性矩阵](docs/PARITY_MATRIX.md)
 - [协议参考](docs/PROTOCOL_REFERENCE.md)和[同步规范](docs/MTA_SYNC_ANDROID_PORT.md)
-- [许可证和致谢](README.md#license--attribution)
+- 本项目采用 [GNU Affero 通用公共许可证第 3 版（AGPL-3.0-only）](LICENSE)。[致谢及第三方组件许可证](README.md#license--attribution)。
 - [Discord 社区](https://discord.gg/DKrpU3e4pF) · [在 Ko-fi 上支持项目](https://ko-fi.com/samuk190)

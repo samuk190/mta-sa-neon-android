@@ -1,5 +1,7 @@
 # MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
+[Official website](https://saonlinemobile.web.app/) · [Download the APK](https://saonlinemobile.web.app/en/download)
+
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
@@ -44,7 +46,7 @@ The APK on the Releases page includes the launcher and the MTA loading images. F
 
 ### 1. Install the APK
 
-Download `mta-sa-neon-android-<version>.apk` from the Releases page and install it. Open it once, then close it: Android creates the app's folder on the first start.
+Download the current APK from the [official download page](https://saonlinemobile.web.app/en/download) and install it. Open the launcher once to create its game folder.
 
 The launcher uses the Android application ID `com.saonline.neonlauncher`. Android installs it alongside older World RPG packages and gives it a new game-data directory and install key.
 
@@ -70,21 +72,38 @@ The default game folder is:
 Arrange the files like this (the three libraries go in `lib/`, everything else at the top):
 
 ```text
-game_assets/
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ├── lib/
-│   ├── libGTASA.so          <-- from the game APK, lib/arm64-v8a/
-│   ├── libSCAnd.so
-│   └── libOpenAL64.so
-├── anim/  audio/  models/  Text/  Textures/
+│   ├── libGTASA.so
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
+├── anim/
+├── audio/
+│   ├── android/
+│   ├── SFX/
+│   └── STREAMS/
+├── cgui/
 ├── data/
-│   ├── gta.dat              <-- required
-│   └── handling.cfg         <-- required
+│   ├── default.dat
+│   ├── gta.dat
+│   ├── handling.cfg
+│   └── script/
+├── fonts/
+├── models/
+├── MTA/cgui/
+├── Text/american.gxt
+├── Textures/fonts/
 ├── texdb/
-│   ├── gta3.img             <-- required
-│   └── menu/menu.pvr.dat    <-- required
-├── assetfile.txt
-└── scache.txt  scache_small.txt  scache_small_low.txt
+│   ├── gta3.img
+│   ├── gta_int.img
+│   └── menu/menu.pvr.dat
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
 ```
+
+[Show the complete reference tree (410 files)](docs/game-assets-tree.txt). It lists every path in the project’s reference manifest, including the MTA loading screens. For a manual install, merge the contents of your own APK’s `assets/` and the OBB archives directly into `game_assets/`. Preserve the original names and any extra files from your copy, including `assetfile.txt` when present. The three ARM64 libraries belong directly in `lib/`.
 
 With adb, after extracting both archives into one folder `gta_sa/` on your PC (with the libraries in `gta_sa/lib/`):
 
@@ -94,7 +113,7 @@ adb push gta_sa/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_asse
 
 ### 4. Play
 
-Open the app, pick a server, tap **Join**, enter your nickname and tap **Play**. If the three libraries are missing, the app names them and the folder it expects them in. If a required data file is missing (`data/gta.dat`, `data/handling.cfg`, `texdb/gta3.img`, `texdb/menu/menu.pvr.dat`), the game does not start: check the layout above.
+Open the app, pick a server, tap **Join**, enter your nickname and tap **Play**. If the three libraries are missing, the app names them and the folder it expects them in. If a required data file is missing (`data/default.dat`, `data/gta.dat`, `data/handling.cfg`, `texdb/gta3.img`, `texdb/menu/menu.pvr.dat`), the game does not start: check the layout above.
 
 The fourteen MTA desktop loading images (`MTA/cgui/images/loadscreens/loadsc1.jpg` ... `loadsc14.jpg`) are bundled in the APK. An image in the installed game folder takes precedence; if it is missing or cannot be decoded, the bundled image is used. The optional desktop font, `MTA/cgui/sabankgothic.ttf`, is read from that folder, with a bold system font as fallback.
 
@@ -415,6 +434,8 @@ This project is built upon decades of collective community research, open-source
 ---
 
 ## License & Attribution
+
+San Andreas Online for Android is licensed under the [GNU Affero General Public License, version 3 only (AGPL-3.0-only)](LICENSE). The [original MIT notice](NOTICE) accompanies previously distributed MIT code. Third-party components retain their respective license notices.
 
 - **Multi Theft Auto (MTA)**: Netcode concepts and algorithms derived from [Multi Theft Auto: Blue](https://github.com/multitheftauto/mtasa-blue) are subject to GPLv3 / BSD licensing.
 - **Lua 5.3**: Copyright © 1994–2020 Lua.org, PUC-Rio. Licensed under the [MIT License](https://www.lua.org/license.html).
