@@ -56,10 +56,10 @@ Two targets are supported, picked by the server's version: the Neon
 
 ## Licensing
 
-Unicorn is GPLv2. To keep the repository's MIT license clean, the emulator and
-these shims build into a **separate** shared library (`libsaonline_netemu.so`)
-that is loaded only when the compatibility option is on; the main
-`libsaonlineneon.so` does not link Unicorn.
+Unicorn is GPLv2; the repository is GPL-2.0-only, so the emulator links under
+the same terms. It still builds into a **separate** shared library
+(`libsaonline_netemu.so`) that is loaded only when the compatibility option is
+on, so players who never use it don't pay for it in memory or startup time.
 
 ## Fidelity notes
 

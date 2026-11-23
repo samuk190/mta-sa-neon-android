@@ -435,7 +435,7 @@ This project is built upon decades of collective community research, open-source
 
 ## License & Attribution
 
-San Andreas Online for Android is licensed under the [GNU Affero General Public License, version 3 only (AGPL-3.0-only)](LICENSE). The [original MIT notice](NOTICE) accompanies previously distributed MIT code. Third-party components retain their respective license notices.
+San Andreas Online for Android is licensed under the [GNU General Public License, version 2 only (GPL-2.0-only)](LICENSE). The [original MIT notice](NOTICE) accompanies previously distributed MIT code. Exception: `app/src/main/cpp/shared/SampMapParser.{h,cpp}` is ported from the Neon fork of Multi Theft Auto: Blue and stays under GPL-3.0, as its file header says. Third-party components retain their respective license notices.
 
 - **Multi Theft Auto (MTA)**: Netcode concepts and algorithms derived from [Multi Theft Auto: Blue](https://github.com/multitheftauto/mtasa-blue) are subject to GPLv3 / BSD licensing.
 - **Lua 5.3**: Copyright © 1994–2020 Lua.org, PUC-Rio. Licensed under the [MIT License](https://www.lua.org/license.html).

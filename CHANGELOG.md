@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - The Android launcher now ships and loads its native client as `libsaonlineneon.so`. The APK audit and runtime integrity checks use the same name.
 
+### License
+
+- The project is licensed under GPL-2.0-only again (was AGPL-3.0-only), so it can ship the GPLv2 Unicorn engine the PC Network emulation is built on. `LICENSE` holds the GPLv2 text, the MIT `NOTICE` stays for code first released under MIT, and the READMEs say so. `SampMapParser.{h,cpp}`, ported from the GPLv3 Neon/MTA fork, keeps its GPL-3.0 header as a marked exception.
+
 ### PC Network compatibility (netc emulation)
 
 - New `app/src/main/cpp/netemu` subsystem runs the PC `netc.dll` (x86/32-bit) under emulation on arm64, so the transport and join handshake behave like a real PC client. This backs the planned "Use PC Network — Compatibility" server option for joining servers without the mobile transport. It reuses MobileSA's approach only; no code from that APK is used, and `netc.dll` (MTA's binary) is supplied at runtime, never committed. See `app/src/main/cpp/netemu/README.md`.

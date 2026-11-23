@@ -1,7 +1,8 @@
 /*****************************************************************************/
 /*
  *  PROJECT:     Multi Theft Auto
- *  LICENSE:     See LICENSE in the top level directory
+ *  LICENSE:     GPL-3.0 (ported from the Neon fork of Multi Theft Auto: Blue).
+ *               This file is an exception to the repository's GPL-2.0-only LICENSE.
  *  FILE:        Client/mods/deathmatch/logic/CSampMapParser.h
  *  PURPOSE:     Parser for the literal map format exported by SA-MP editors
  *

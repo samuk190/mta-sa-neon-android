@@ -122,5 +122,5 @@ Para un servidor QUIC, abre **Favoritos → Añadir**, introduce el nombre de ho
 - [Plan de sincronización y estado del proyecto](README.md#project-roadmap-mta-sync-porting-plan-pc-to-android)
 - [Catálogo de funciones Lua del cliente](docs/lua-functions/README.md) y [matriz de compatibilidad](docs/PARITY_MATRIX.md)
 - [Referencia del protocolo](docs/PROTOCOL_REFERENCE.md) y [especificación de sincronización](docs/MTA_SYNC_ANDROID_PORT.md)
-- El proyecto se distribuye bajo la [GNU AGPL versión 3 (AGPL-3.0-only)](LICENSE). [Créditos y licencias de terceros](README.md#license--attribution).
+- El proyecto se distribuye bajo la [GNU GPL versión 2 (GPL-2.0-only)](LICENSE). [Créditos y licencias de terceros](README.md#license--attribution).
 - [Comunidad en Discord](https://discord.gg/DKrpU3e4pF) · [Apoya el proyecto en Ko-fi](https://ko-fi.com/samuk190)
