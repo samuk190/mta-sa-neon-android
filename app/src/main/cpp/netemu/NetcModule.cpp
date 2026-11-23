@@ -72,6 +72,7 @@ void NetcModule::Unload() {
 std::string NetcModule::LastError() const { return lastError_; }
 
 bool NetcModule::ProcessExitRequested() const { return state_ && state_->processExitRequested; }
+bool NetcModule::SessionOver() const { return ProcessExitRequested() || (machine_ && machine_->Wedged()); }
 
 uint32_t NetcModule::GuestString(const std::string& s) {
     uint32_t va = 0;
@@ -80,7 +81,8 @@ uint32_t NetcModule::GuestString(const std::string& s) {
 }
 
 void NetcModule::FreeGuest(uint32_t va) {
-    if (va) machine_->RunSync([&] { machine_->Mem().HeapFree(va); });
+    // A wedged machine may still be reading the buffer: leak it instead.
+    if (va && !machine_->Wedged()) machine_->RunSync([&] { machine_->Mem().HeapFree(va); });
 }
 
 uint32_t NetcModule::VCall(uint32_t index) const {
@@ -130,7 +132,14 @@ void NetcModule::InstallHostThunks() {
                 pkt->readOffsetBits = k2.result;
                 k2.Call(fData, {}, bs, [this, pkt](ShimCall& k3) {
                     const uint32_t bytes = (pkt->bits + 7) / 8;
-                    if (bytes && k3.result) {
+                    if (bytes && (!k3.result || !k3.mem.Valid(k3.result, bytes))) {
+                        // Bits but no readable data: never hand out a packet
+                        // whose payload was not copied.
+                        NETEMU_LOGE("netc packet %u: %u bits but no data at 0x%08X; dropped", pkt->id, pkt->bits, k3.result);
+                        k3.Return(1);
+                        return;
+                    }
+                    if (bytes) {
                         pkt->data.resize(bytes);
                         k3.mem.ReadBytes(k3.result, pkt->data.data(), bytes);
                     }
@@ -307,19 +316,26 @@ bool NetcModule::Load(const NetcConfig& config, std::string* error) {
     }
 
     if (const uint32_t check = image_->Export("CheckCompatibility")) {
-        auto moduleVersion = [&]() {
+        // CheckCompatibility(1, &out) reports netc's own version; 0 on a fault.
+        auto moduleVersion = [&](bool* callOk) {
             uint32_t out = 0;
             machine_->RunSync([&] { out = machine_->Mem().HeapAlloc(4, true); });
-            machine_->CallSync(check, 0, {1, out}, &ok);
-            const uint32_t version = machine_->Mem().Read32(out);
+            machine_->CallSync(check, 0, {1, out}, callOk);
+            const uint32_t version = *callOk ? machine_->Mem().Read32(out) : 0;
             FreeGuest(out);
             return version;
         };
-        const uint32_t wanted = config.netModuleVersion ? config.netModuleVersion : moduleVersion();
+        uint32_t wanted = config.netModuleVersion;
+        if (!wanted) {
+            wanted = moduleVersion(&ok);
+            if (!ok) return fail("CheckCompatibility faulted: " + machine_->LastFault());
+        }
         const uint64_t compatible = machine_->CallSync(check, 0, {wanted, 0}, &ok);
+        if (!ok) return fail("CheckCompatibility faulted: " + machine_->LastFault());
         if (!(compatible & 0xFF)) {
+            const uint32_t actual = moduleVersion(&ok);
             char msg[128];
-            std::snprintf(msg, sizeof(msg), "network module not compatible (expected 0x%X, got 0x%X)", wanted, moduleVersion());
+            std::snprintf(msg, sizeof(msg), "network module not compatible (expected 0x%X, got 0x%X)", wanted, actual);
             return fail(msg);
         }
         moduleVersion_ = wanted;

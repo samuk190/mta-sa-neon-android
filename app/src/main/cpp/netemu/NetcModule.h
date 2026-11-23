@@ -72,6 +72,8 @@ public:
     bool PopPacket(NetcPacket* out);
     std::string LastError() const;
     bool ProcessExitRequested() const;
+    // netc asked to end the process, or a guest call hung: unload and give up.
+    bool SessionOver() const;
     uint32_t ModuleVersion() const { return moduleVersion_; }
 
 private:

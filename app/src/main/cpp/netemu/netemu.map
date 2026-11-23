@@ -1,0 +1,5 @@
+/* Only the C ABI entry point leaves libsaonline_netemu.so (NetEmuApi.h). */
+{
+  global: netemu_get_api;
+  local: *;
+};

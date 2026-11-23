@@ -41,18 +41,35 @@ mirror image: Allocate → WriteBits → SendPacket → Deallocate as one guest 
 
 ## Where netc comes from
 
-`netc.dll` is MTA's binary, so it is never bundled in this repo. At runtime the
-launcher supplies it one of two ways (chosen in `.env`, only asked when the
-compatibility box is ticked):
+`netc.dll` is MTA's binary, so it is never committed here. `.env` picks how it
+reaches the phone (the question is only ever asked when the compatibility box
+is ticked):
 
-- **bundle in APK assets** (`.env` default for our own builds): ship the DLL we
-  are licensed to distribute under `assets/`, copied to app storage on first run;
-- **user imports it**: the player points the launcher at a file (their own PC
-  MTA install) or lets it download the stock module directly from MTA.
+- **Bundled** (`NETC_BUNDLE_IN_ASSETS=true`, our own builds): Gradle copies the
+  files named by `NETC_NEON_DLL` and `NETC_STOCK_DLL` into
+  `assets/netc/neon/netc.dll` and `assets/netc/stock/netc.dll`
+  (`prepareNetcAssets`); `BuildConfig.NETC_BUNDLED_NEON/STOCK` say which exist.
+- **Imported** (`false`, the default): the player picks a `netc.dll` from their
+  own PC install, or downloads the stock module from
+  `NETC_STOCK_DOWNLOAD_URL` (`BuildConfig.NETC_STOCK_DOWNLOAD_URL`).
 
-Two targets are supported, picked by the server's version: the Neon
-`netc` (for Neon servers without the mobile transport) and the stock MTA
-`netc` from `mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll`.
+Two targets are supported, picked by the server's version: the Neon `netc`
+(for Neon servers without the mobile transport) and the stock MTA `netc` from
+`mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll`.
+
+## Building
+
+`netemu/CMakeLists.txt` builds `libsaonline_netemu.so` (arm64, 16 KB pages,
+about 2.2 MB stripped) with Unicorn 2.1.4 linked in statically, x86 only.
+CMake downloads the pinned release (SHA-256 checked); set `UNICORN_SOURCE_DIR`
+in `.env` to an unpacked 2.1.4 tree to build offline. The library exports one
+symbol, `netemu_get_api`, which returns the C function table in
+`NetEmuApi.h`; nothing else (not even its static libc++) is visible to the
+main library.
+
+Host tools (link the host Unicorn): `tools/netemu/netemu_probe.cpp` loads a
+netc build and prints its identity; `tools/netemu/netemu_api_test.cpp` does
+the same through the C ABI.
 
 ## Licensing
 

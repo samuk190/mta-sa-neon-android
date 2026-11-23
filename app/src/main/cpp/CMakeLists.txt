@@ -54,6 +54,9 @@ add_subdirectory(third_party/hlslparser)
 add_subdirectory(third_party/cryptopp)
 add_subdirectory(third_party/bcrypt)
 
+# PC netc.dll emulator, a separate library loaded on demand (netemu/README.md).
+add_subdirectory(netemu)
+
 add_library(saonlineneon SHARED ${NATIVE_SOURCES})
 
 target_include_directories(saonlineneon PRIVATE

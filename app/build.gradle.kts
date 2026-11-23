@@ -26,6 +26,27 @@ val gameAssetsDir = envProperties.getProperty("GAME_ASSETS_DIR", "./game_assets"
 val deviceAssetsPath = envProperties.getProperty("DEVICE_ASSETS_PATH", "/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets")
 val cdnRootUrl = envProperties.getProperty("CDN_ROOT_URL", "")
 
+// PC Network compatibility: the x86 netc.dll runs under emulation (cpp/netemu).
+// NETC_BUNDLE_IN_ASSETS=true ships the DLLs named by NETC_NEON_DLL / NETC_STOCK_DLL
+// in assets/netc/<build>/netc.dll; otherwise the player imports netc.dll the first
+// time they tick "Use PC Network — Compatibility" (file picker or MTA download).
+val netcBundle = envProperties.getProperty("NETC_BUNDLE_IN_ASSETS", "false").trim().equals("true", ignoreCase = true)
+fun envPath(key: String): File? = envProperties.getProperty(key, "").trim().takeIf { it.isNotEmpty() }?.let { rootProject.file(it) }
+val netcNeonDll = if (netcBundle) envPath("NETC_NEON_DLL") else null
+val netcStockDll = if (netcBundle) envPath("NETC_STOCK_DLL") else null
+if (netcBundle) {
+    if (netcNeonDll == null && netcStockDll == null)
+        throw GradleException("NETC_BUNDLE_IN_ASSETS=true needs NETC_NEON_DLL and/or NETC_STOCK_DLL in .env")
+    listOfNotNull(netcNeonDll, netcStockDll).forEach {
+        if (!it.isFile) throw GradleException("netc.dll to bundle not found: $it")
+    }
+}
+val netcStockDownloadUrl = envProperties.getProperty(
+    "NETC_STOCK_DOWNLOAD_URL", "https://mirror-cdn.multitheftauto.com/bdata/fork-support/netc.dll").trim()
+// Optional unpacked Unicorn 2.1.4 tree for offline native builds; CMake downloads it otherwise.
+val unicornSourceDir = envPath("UNICORN_SOURCE_DIR")
+val netcAssetsDir = layout.buildDirectory.dir("generated/netcAssets")
+
 android {
     namespace = "com.saonline.neonlauncher"
     compileSdk = 34
@@ -61,6 +82,7 @@ android {
                     "-DANDROID_STL=c++_static",
                     "-DANDROID_ARM_NEON=TRUE"
                 )
+                if (unicornSourceDir != null) arguments += "-DFETCHCONTENT_SOURCE_DIR_UNICORN=${unicornSourceDir.absolutePath}"
             }
         }
 
@@ -75,6 +97,9 @@ android {
         buildConfigField("String", "GAME_ASSETS_DIR", "\"${gameAssetsDir.replace("\\", "\\\\")}\"")
         buildConfigField("String", "DEVICE_ASSETS_PATH", "\"${deviceAssetsPath.replace("\\", "\\\\")}\"")
         buildConfigField("String", "CDN_ROOT_URL", "\"${cdnRootUrl.replace("\\", "\\\\")}\"")
+        buildConfigField("boolean", "NETC_BUNDLED_NEON", (netcNeonDll != null).toString())
+        buildConfigField("boolean", "NETC_BUNDLED_STOCK", (netcStockDll != null).toString())
+        buildConfigField("String", "NETC_STOCK_DOWNLOAD_URL", "\"${netcStockDownloadUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     // Release signing from keystore.properties (git-ignored): storeFile, storePassword, keyAlias, keyPassword.
@@ -107,6 +132,8 @@ android {
             version = "3.22.1"
         }
     }
+
+    sourceSets["main"].assets.srcDir(netcAssetsDir)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -165,6 +192,26 @@ dependencies {
     // SVG renderer for the svgCreate family (MtaDxView.renderSvg). Android has none built in.
     implementation("com.caverock:androidsvg-aar:1.4")
 }
+
+// Copies the netc.dll builds named in .env into the generated assets. When not
+// bundling it empties that directory instead: a Sync with no sources is skipped as
+// NO-SOURCE and would leave DLLs from an earlier bundled build in the APK.
+val prepareNetcAssets = if (netcBundle) {
+    tasks.register<Sync>("prepareNetcAssets") {
+        group = "mta"
+        description = "Bundles netc.dll for PC Network compatibility (NETC_BUNDLE_IN_ASSETS)"
+        into(netcAssetsDir)
+        netcNeonDll?.let { from(it) { into("netc/neon"); rename { "netc.dll" } } }
+        netcStockDll?.let { from(it) { into("netc/stock"); rename { "netc.dll" } } }
+    }
+} else {
+    tasks.register<Delete>("prepareNetcAssets") {
+        group = "mta"
+        description = "Removes bundled netc.dll (NETC_BUNDLE_IN_ASSETS is off)"
+        delete(netcAssetsDir)
+    }
+}
+tasks.named("preBuild") { dependsOn(prepareNetcAssets) }
 
 tasks.register<Exec>("pushAssetsToDevice") {
     group = "mta"

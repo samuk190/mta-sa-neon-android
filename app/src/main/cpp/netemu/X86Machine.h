@@ -208,6 +208,10 @@ public:
     // From any host thread except the emu thread. Calls fn on the main guest
     // thread with ECX = ecx and the given stack arguments. Returns EDX:EAX.
     uint64_t CallSync(uint32_t fn, uint32_t ecx, const std::vector<uint32_t>& args, bool* ok, uint32_t timeoutMs = 30000);
+    // A guest call timed out while running: the machine is unusable, every
+    // later CallSync fails at once, and guest memory handed to the guest must
+    // not be freed (the stuck call may still read it).
+    bool Wedged() const { return wedged_.load(); }
     // Runs fn on the emu thread while no guest code executes.
     void RunSync(const std::function<void()>& fn);
     bool OnEmuThread() const;
@@ -288,6 +292,7 @@ private:
     std::atomic<uint64_t> eventGen_{0};
     std::atomic<bool> running_{false};
     std::atomic<bool> stopping_{false};
+    std::atomic<bool> wedged_{false};
     std::thread emuThread_;
     std::thread watchdog_;
     std::thread::id emuThreadId_;

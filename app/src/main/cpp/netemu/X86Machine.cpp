@@ -1061,6 +1061,7 @@ void Machine::FinishJob(bool ok, uint64_t result) {
 uint64_t Machine::CallSync(uint32_t fn, uint32_t ecx, const std::vector<uint32_t>& args, bool* ok, uint32_t timeoutMs) {
     if (ok) *ok = false;
     if (!running_.load() || OnEmuThread() || !fn) return 0;
+    if (wedged_.load()) return 0;  // an earlier call never came back; see below
     auto job = std::make_shared<Job>();
     job->fn = fn;
     job->ecx = ecx;
@@ -1070,6 +1071,12 @@ uint64_t Machine::CallSync(uint32_t fn, uint32_t ecx, const std::vector<uint32_t
     jobCv_.notify_all();
     if (!jobDoneCv_.wait_for(lk, std::chrono::milliseconds(timeoutMs), [&] { return job->done; })) {
         NETEMU_LOGE("guest call 0x%08X timed out after %u ms", fn, timeoutMs);
+        // Not started yet: drop it. Running: the guest may still use the
+        // caller's buffers and the main thread stays busy, so no later call
+        // can be trusted. Mark the machine wedged; callers keep their buffers.
+        auto queued = std::find(jobs_.begin(), jobs_.end(), job);
+        if (queued != jobs_.end()) jobs_.erase(queued);
+        else wedged_.store(true);
         lk.unlock();
         NETEMU_LOGE("%s", DescribeThreads().c_str());
         return 0;
