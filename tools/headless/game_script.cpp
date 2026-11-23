@@ -298,7 +298,15 @@ uint32_t g_hostNextPed = 0x300001u;
 // ---------------------------------------------------------------------------
 
 namespace WorldRPG::Headless {
-namespace { std::unordered_map<uint32_t, PedQueries::Snapshot> queryNative; }
+namespace {
+std::unordered_map<uint32_t, PedQueries::Snapshot> queryNative;
+PedSyncFields pedSyncFields;
+PlayerCombatUpdate combatUpdate;
+std::optional<VehicleSync::UnoccupiedUpdate> unoccupiedUpdate;
+}
+PlayerCombatUpdate TakePlayerCombatUpdate() { return std::exchange(combatUpdate, {}); }
+PedSyncFields TakePedSyncFields() { return std::exchange(pedSyncFields, {}); }
+std::optional<VehicleSync::UnoccupiedUpdate> TakeUnoccupiedUpdate() { return std::exchange(unoccupiedUpdate, std::nullopt); }
 void SetPedQueryNative(uint32_t id, const PedQueries::Snapshot& snapshot) { queryNative[id] = snapshot; }
 void ClearPedQueryNative() { queryNative.clear(); }
 bool CopyPedQueryNative(uint32_t id, PedQueries::Snapshot& snapshot) {
@@ -393,6 +401,7 @@ void CopyBody(float& x, float& y, float& z, float& heading,
 float CopyLocalArmor() { return 0.f; }
 // No libGTASA in this build, so getGroundPosition cannot query the world.
 bool FindGroundZFor3DPosition(float, float, float, float&) { return false; }
+bool IsAmbientSphereVisible(float, float, float, float, bool&) { return false; }
 uint32_t NoteScriptPed(int model, float x, float y, float z, float) {
     if (model < 0 || model > 312 || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return 0;
     for (auto& slot : g_hostPeds) {
@@ -472,10 +481,29 @@ bool CopyScriptPedFacts(uint32_t id, int& model, float&, bool&) {
 }
 void NoteLocalHealth(float) {}
 
-void NoteDamage(uint32_t, float, uint8_t) {}
-bool ConsumeDamage(uint32_t&, uint8_t&) { return false; }
-void NoteRemoteAim(uint32_t, float, float, int, int, bool, bool) {}
-void NoteRemoteWeapon(uint32_t, int) {}
+void NoteDamage(uint32_t, float, uint8_t, uint8_t) {}
+Combat::DamageReport PeekDamage() { return {}; }
+void AcknowledgeDamage(uint64_t) {}
+void NoteRemoteAim(uint32_t id, float, float, int, int, uint8_t buttons, bool, const PlayerWeaponSync::RemoteWeapon* weapon) {
+    Headless::combatUpdate.fire = (buttons & PlayerWeaponSync::kFire) != 0;
+    Headless::combatUpdate.buttons = buttons;
+    if (weapon) NoteRemotePlayerWeapon(id, *weapon);
+}
+PlayerWeaponSync::LocalWeapon CopyLocalWeapon() { return {}; }
+static std::unordered_map<uint32_t, bool> drivebyState;
+void NoteDriveby(uint32_t id, bool enabled) { drivebyState[id] = enabled; }
+bool IsDriveby(uint32_t id) { return drivebyState[id]; }
+void NoteVehicleCombat(uint32_t id, const PlayerWeaponSync::RemoteWeapon& weapon, uint8_t buttons, bool driveby) {
+    NoteDriveby(id, driveby);
+    NoteRemoteAim(id, 0.f, 0.f, 0, 0, driveby ? buttons : 0, false, &weapon);
+}
+void NoteRemotePlayerWeapon(uint32_t id, const PlayerWeaponSync::RemoteWeapon& weapon) {
+    Headless::combatUpdate.player = id;
+    Headless::combatUpdate.weapon = weapon;
+}
+void QueueRemoteBullet(const Combat::SBulletSync& shot) {
+    Headless::combatUpdate.bullet = shot;
+}
 bool CopySpatialScene(std::vector<Spatial::Element>&) { return false; }
 bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out) {
     if (!PedQueries::Copy(id, out)) return false;
@@ -484,10 +512,21 @@ bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out) {
 }
 bool RemoteFacingLocal(uint32_t, float, float) { return false; }
 void CopyOnFoot(float, float, float, OnFootKeys& keys) { keys = {}; }
-void ConsumeLocalJump() {}
-void ConsumeLocalAttack() {}
-void NoteRemotePlayerSync(uint32_t, float, float, float, float, float, float, float, bool, int, int, float, bool, bool, bool, float, bool, float) {}
+void ConsumeLocalJump(uint64_t) {}
+void ConsumeLocalAttack(uint64_t) {}
+void NoteRemotePlayerSync(uint32_t id, float, float, float, float, float, float, float, bool, int, int, float,
+                         uint8_t buttons, bool, const PlayerWeaponSync::RemoteWeapon& weapon, bool, float, bool, float) {
+    NoteRemoteAim(id, 0, 0, 0, 0, buttons, false, &weapon);
+}
 void NoteRemotePed(uint32_t, float, float, float, float, float, float, float, bool) {}
+void NoteObservedPedSync(uint32_t id, const float* position, const float* heading, const float* velocity, uint64_t) {
+    auto& fields = Headless::pedSyncFields;
+    fields = {};
+    fields.id = id;
+    if (position) fields.position = VehicleSync::Vec3{position[0], position[1], position[2]};
+    if (heading) fields.heading = *heading;
+    if (velocity) fields.velocity = VehicleSync::Vec3{velocity[0], velocity[1], velocity[2]};
+}
 void SetPedHost(uint32_t, bool) {}
 void ForgetRemote(uint32_t) {}
 void RequestRemoteReset() {}
@@ -527,7 +566,28 @@ void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], c
 void NoteRemoteSeat(uint32_t, uint32_t, uint8_t) {}
 void NoteRemoteUnseat(uint32_t) {}
 void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}
-void RequestWander(uint32_t, int) {}
+void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate& update) { Headless::unoccupiedUpdate = update; }
+void RpcSetVehiclePosition(uint32_t, float, float, float) {}
+void RpcSetVehicleHealth(uint32_t, float) {}
+void RpcSetVehicleRotation(uint32_t, float, float, float) {}
+void RpcSetVehicleVelocity(uint32_t, float, float, float, bool) {}
+bool SetOwnedPedControl(uint32_t, const char*, bool) { return false; }
+bool StartPedKillOnFoot(uint32_t, uint32_t) { return false; }
+bool PresentPedWeaponShot(uint32_t, unsigned, float, float, float) { return false; }
+bool StartPedWander(uint32_t, int, int, bool) { return false; }
+bool StartPedDriveWander(uint32_t, uint32_t, float, int) { return false; }
+bool ScanTrafficObstacle(uint32_t, bool, float, TrafficObstacleScan&) { return false; }
+bool IsTrafficPedTaskActive(uint32_t, TrafficPedTask) { return false; }
+bool KillNativePedTask(uint32_t, bool, int, bool) { return false; }
+bool IsNativeActorStreamed(uint32_t) { return false; }
+bool HasNativeTrafficCapability(const char*) { return false; }
+bool SetTrafficVehicleVelocity(uint32_t, float, float, float, bool) { return false; }
+bool SetTrafficVehicleRotation(uint32_t, float, float, float) { return false; }
+bool IsTrafficVehicleOnGround(uint32_t) { return false; }
+bool SetTrafficVehicleLoadCollision(uint32_t, bool) { return false; }
+bool CopyTrafficVehicleState(uint32_t, HostedCar&) { return false; }
+bool SetTrafficVehicleEngine(uint32_t, bool) { return false; }
+bool CopyRemotePedMotion(uint32_t, float&, float&, float&, float&) { return false; }
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
 int CopyHostedPeds(HostedPed*, int) { return 0; }
 int CopyHostedCars(HostedCar*, int) { return 0; }
@@ -545,6 +605,7 @@ uint32_t LocalVehicleId() {
     return g_drv.phase == Phase::InCar ? g_drv.carId : kNoVehicle;
 }
 
+void AcknowledgeVehicleFire(uint64_t) {}
 bool CopyLocalCar(LocalCarState& out) {
     Advance();
     if (!DriverActive() || g_drv.phase != Phase::InCar) return false;
@@ -583,16 +644,20 @@ bool CopyLocalCar(LocalCarState& out) {
 }
 
 // Scripted shots replace the CWeapon::Fire hook; the host never queues shots itself.
-void NoteLocalShot(int, const float*, const float*) {}
+void NoteLocalShot(int, const float*, const float*, const Combat::BulletHit&) {}
 
-bool ConsumeLocalShot(LocalShot& out) {
+void FinishLocalShot(uint64_t serial) {
+    if (!g_drv.shotsDue.empty() && uint64_t(g_drv.shotsDue.front() * 1000000) == serial)
+        g_drv.shotsDue.pop_front();
+}
+bool PeekLocalShot(LocalShot& out) {
     Advance();
     if (!DriverActive() || g_drv.shotsDue.empty()) return false;
     if (g_drv.phase != Phase::OnFoot) return false;
     const double now = WorldRPG::Headless::ElapsedSeconds();
     if (now < g_drv.shotsDue.front()) return false;
     const double due = g_drv.shotsDue.front();
-    g_drv.shotsDue.pop_front();
+    out.serial = uint64_t(due * 1000000);
 
     float fx = 0, fy = 0;
     Forward(g_foot.heading, fx, fy);
@@ -634,12 +699,12 @@ void UnlockPedVitals(uint32_t) {}
 void ForgetPedNativeTaskState(uint32_t) {}
 void SetPedVitals(uint32_t, float, float) {}
 void NoteRemoteClothes(uint32_t, const std::vector<WorldRPG::Entity::PedClothes>&) {}
-void NoteRemoteButtons(uint32_t, uint8_t) {}
 void RpcSetPosition(uint32_t id, float x, float y, float z) {
     if (id == WorldRPG::ServerWorld::LocalPlayer()) g_foot = {x, y, z, g_foot.heading};
 }
 void RpcSetFrozen(uint32_t, bool) {}
 void NoteRemoteWasted(uint32_t, int, int, int) {}
+bool CopyLocalCombatDeath(uint64_t&, HostedWasted&) { return false; }
 bool ConsumeHostedWasted(HostedWasted&) { return false; }
 void NoteRemoteSpawn(uint32_t) {}
 void RpcSetRotation(uint32_t, float) {}

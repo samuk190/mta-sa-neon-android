@@ -16,6 +16,7 @@
 
 #include "../../net/raknet/RakNetWrapper.h"
 #include "PedSpawn.h"
+#include "../VehicleColors.h"
 #include "../SpatialWorld.h"
 #include "WeaponSpawn.h"
 
@@ -92,8 +93,12 @@ struct Visual {
     float rotX = 0, rotY = 0;
     float health = -1.f;
     int vehicleDoorLock = 1;
+    bool vehicleFrozen = false;
+    bool vehicleEngineOn = false;
+    uint8_t vehicleAlpha = 255;
     uint16_t nitroUpgrade = 0;
     uint64_t nitroRevision = 0;
+    std::optional<VehicleColors> vehicleColors;
     bool hosted = false;
     // ENTITY_ADD common header. CClientPed::SetInterior / RequestCollision use it.
     uint8_t interior = 0;
@@ -117,6 +122,7 @@ struct Datum {
     bool boolean = false;
     double value = 0;
     std::string text;
+    bool element = false;
 };
 
 // Output of the common ENTITY_ADD header (reference order), including custom data and name.

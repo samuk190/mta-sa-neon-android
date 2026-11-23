@@ -401,11 +401,13 @@ int GetElementData(lua_State* L) {
     std::string text;
     bool isNumber = false;
     bool isBoolean = false;
-    if (!WorldRPG::ServerWorld::GetData(id, key, number, text, isNumber, &isBoolean)) {
+    bool isElement = false;
+    if (!WorldRPG::ServerWorld::GetData(id, key, number, text, isNumber, &isBoolean, &isElement)) {
         lua_pushnil(L);
         return 1;
     }
-    if (isBoolean) lua_pushboolean(L, number != 0 ? 1 : 0);
+    if (isElement) PushElement(L, static_cast<uint32_t>(number));
+    else if (isBoolean) lua_pushboolean(L, number != 0 ? 1 : 0);
     else if (isNumber) lua_pushnumber(L, number);
     else lua_pushlstring(L, text.data(), text.size());
     return 1;
@@ -754,7 +756,31 @@ int BitReplace(lua_State* L) {
 } // namespace
 
 void PushElement(lua_State* L, uint32_t id) {
+    // Desktop Lua exposes one object per live element. Police assignments use
+    // it as a table key and compare server-event sources with resourceRoot.
+    static char registryKey;
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &registryKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_newtable(L);
+        lua_pushliteral(L, "v");
+        lua_setfield(L, -2, "__mode");
+        lua_setmetatable(L, -2);
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &registryKey);
+    }
+    const auto generation = static_cast<lua_Integer>(ServerWorld::LuaHandleGeneration(id));
+    lua_rawgeti(L, -1, generation);
+    if (lua_istable(L, -1)) {
+        lua_remove(L, -2);
+        return;
+    }
+    lua_pop(L, 1);
     lua_newtable(L);
+    lua_pushvalue(L, -1);
+    lua_rawseti(L, -3, generation);
+    lua_remove(L, -2);
     lua_pushinteger(L, static_cast<lua_Integer>(id));
     lua_setfield(L, -2, "id");
     lua_pushboolean(L, 1);

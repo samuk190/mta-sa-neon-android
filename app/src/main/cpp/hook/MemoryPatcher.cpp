@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <link.h>
+#include <atomic>
 #include <cstring>
 #include <cerrno>
 #endif
@@ -250,6 +251,25 @@ uintptr_t MemoryPatcher::getLibraryBaseAddress(const char* libraryName)
 {
 #ifdef __ANDROID__
     if (!libraryName) return 0;
+
+    // System.load keeps GTA in this engine process for its lifetime. Its load bias
+    // serves every game-frame and HUD lookup. Retry if the library has yet to load.
+    if (std::strcmp(libraryName, "libGTASA.so") == 0) {
+        static std::atomic<uintptr_t> gtaBase{0};
+        uintptr_t address = gtaBase.load(std::memory_order_relaxed);
+        if (address) return address;
+        dl_iterate_phdr([](dl_phdr_info* info, size_t, void* result) {
+            if (!info->dlpi_name) return 0;
+            const char* slash = std::strrchr(info->dlpi_name, '/');
+            if (std::strcmp(slash ? slash + 1 : info->dlpi_name, "libGTASA.so") != 0) return 0;
+            *static_cast<uintptr_t*>(result) = info->dlpi_addr;
+            return 1;
+        }, &address);
+        uintptr_t empty = 0;
+        if (address && gtaBase.compare_exchange_strong(empty, address, std::memory_order_relaxed))
+            HOOK_LOGI("getLibraryBaseAddress: libGTASA.so -> %p", reinterpret_cast<void*>(address));
+        return address;
+    }
 
     FILE* maps = fopen("/proc/self/maps", "r");
     if (!maps) {

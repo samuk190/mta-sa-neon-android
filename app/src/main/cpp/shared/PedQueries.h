@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <vector>
+#include <utility>
 #include "entity/PedSpawn.h"
 
 namespace WorldRPG::Game { struct PedRpcOp; }
@@ -10,7 +12,7 @@ struct Weapon {
     uint32_t type = 0, total = 0, clip = 0;
 };
 struct Snapshot {
-    uint64_t generation = 0;
+    uint64_t generation = 0, revision = 0;
     bool player = false, streamed = false, dead = false, networkDead = false;
     bool onFire = false, inWater = false, ducked = false, choking = false;
     bool aim = false;
@@ -27,6 +29,12 @@ void Create(uint32_t id, bool player, const Entity::PedSpawn* spawn = nullptr);
 void Forget(uint32_t id);
 void Reset();
 bool Copy(uint32_t id, Snapshot& out);
+// A completed game frame supplies native state for weapon and death queries.
+// A changed inventory, respawn or expired frame requires a synchronous read.
+using Frame = std::vector<std::pair<uint32_t, Snapshot>>;
+void PublishFrame(Frame& frame);
+bool CopyFrame(uint32_t id, Snapshot& out);
+void InvalidateNative(uint32_t id);
 bool Current(uint32_t id, uint64_t generation);
 uint64_t Generation(uint32_t id);
 uint64_t WeaponRpc(uint32_t id, const Game::PedRpcOp& op);

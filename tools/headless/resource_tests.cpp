@@ -269,6 +269,43 @@ void WriteWeaponHeader(WorldRPG::Net::BitStreamWriter& w, uint32_t id, uint32_t 
     w.WriteCompressed(0u, 2); w.WriteCompressed(0u, 2); // custom count, name length (no syncTimeContext at 0x0030)
 }
 
+void CheckNativeWeaponFire(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    const auto shooter = ServerWorld::LocalPlayer();
+    const char key[] = "neon:policeSuspect";
+    Net::BitStreamWriter data;
+    data.WriteCompressed(sizeof(key) - 1, 2);
+    data.WriteBits(reinterpret_cast<const uint8_t*>(key), (sizeof(key) - 1) * 8);
+    WriteTestBits(data, 7, 4); // LUA_TUSERDATA
+    WriteTestBits(data, shooter, 17);
+    Net::BitStreamReader reader(data.GetData(), data.GetByteLength(), data.GetBitLength());
+    CHECK(ServerWorld::ReadSetElementDataRpc(shooter, reader));
+    RunLua(vm, "weapon-event-handlers", R"LUA(
+        local suspect = getElementData(localPlayer, 'neon:policeSuspect')
+        assert(suspect == localPlayer and ({[suspect] = true})[localPlayer])
+        assert(getAllElementData(localPlayer)['neon:policeSuspect'] == suspect)
+        weaponShotCount = 0
+        function nativePlayerShot(...)
+            assert(source == localPlayer and select('#', ...) == 10)
+            local weapon,total,clip,x,y,z,hit,sx,sy,sz = ...
+            assert(weapon == 22 and total == 8 and clip == 3 and hit == nil)
+            assert(x == 10 and y == 11 and z == 12 and sx == 1 and sy == 2 and sz == 3)
+            weaponShotCount = weaponShotCount + 1
+        end
+        function stalePedShot() weaponShotCount = weaponShotCount + 100 end
+        addEventHandler('onClientPlayerWeaponFire', localPlayer, nativePlayerShot)
+        addEventHandler('onClientPedWeaponFire', root, stalePedShot)
+    )LUA");
+    Script::QueueNativeWeaponFire({ServerWorld::LocalPlayer(), 0xFFFFFFFFu, 22, 8, 3, 10, 11, 12, 1, 2, 3, true});
+    Script::QueueNativeWeaponFire({12345, 0xFFFFFFFFu, 22, 8, 3, 10, 11, 12, 1, 2, 3, false});
+    vm.pumpDx();
+    RunLua(vm, "weapon-event-result", R"LUA(
+        assert(weaponShotCount == 1, 'emit the actual shot once and drop a stale hosted shot')
+        removeEventHandler('onClientPlayerWeaponFire', localPlayer, nativePlayerShot)
+        removeEventHandler('onClientPedWeaponFire', root, stalePedShot)
+    )LUA");
+}
+
 void CheckWeaponSnapshots(WorldRPG::Script::LuaVMStub& vm) {
     using namespace WorldRPG;
     RunLua(vm, "projectile-invalid-inputs", R"LUA(
@@ -1117,6 +1154,8 @@ void CheckCompatibilityAliases(WorldRPG::Script::LuaVMStub& vm) {
         assert(getPedStat(me, 24) == 0 and getPedStat(me, 400) == false, 'stat id range')
         assert(getPedTask(me, 'primary', 0) == false and getPedSimplestTask(me) == false, 'no task manager')
         assert(isPedDoingTask(me, 'TASK_SIMPLE_PLAYER_ON_FOOT') == false and getPedTarget(me) == false, 'no task or target')
+        assert(getPedTrafficObstacleScan(false) == nil and getPedTrafficObstacleScan(me, 0/0) == nil, 'invalid obstacle scan')
+        assert(getPedTrafficObstacleScan(me, 90) == nil, 'no hosted GTA body or collision world on headless')
         assert(setPedRotation(me, 90) == false, 'local rotation is not hooked')
         assert(attachElements(me, me) == false and detachElements(me) == false, 'no physical attach')
     )LUA");
@@ -1862,6 +1901,11 @@ void CheckGui(WorldRPG::Script::LuaVMStub& vm) {
     RunLua(vm, "gui-alpha-reset", "guiSetAlpha(win, 1)");
 
     // Font scale: desktop pricedown is 30 px, so the draw line carries scale 2.
+    RunLua(vm, "dx-color", R"LUA(
+        assert(tocolor(1, 2, 3, 127.9) == 0x7f010203)
+        assert(tocolor(-10, 300, "3.9", nil) == 0xff00ff03)
+        assert(tocolor() == 0xff000000 and tocolor(1, 2, false) == 0xff000000)
+    )LUA");
     RunLua(vm, "dx-font", R"LUA(
         assert(dxGetFontHeight(1, "default") == 15 and dxGetFontHeight(1, "pricedown") == 30)
         assert(dxGetFontHeight(2) == 30, 'default height at scale 2')
@@ -1945,7 +1989,21 @@ void CheckGui(WorldRPG::Script::LuaVMStub& vm) {
         assert(_G.chars == "Z", "dx character: " .. _G.chars)
         assert(_G.keys == "backspace,enter,", "dx keys: " .. _G.keys)
         assert(_G.blurred == 1, "blur")
-        guiSetInputEnabled(false)
+        _G.tapText = ''
+        _G.captureTap = function(button, state)
+            if button == 'left' and state == 'down' then tapText = chars; guiSetInputEnabled(false) end
+        end
+        addEventHandler('onClientClick', root, captureTap)
+
+    )LUA");
+    // Android can commit the last characters and tap Submit between two VM ticks.
+    WorldRPG::Script::ActiveVmQueueScriptInput("ab", 0, "");
+    WorldRPG::Script::ActiveVmQueueCursor(0, 700.f, 300.f);
+    WorldRPG::Script::ActiveVmQueueCursor(1, 700.f, 300.f);
+    WorldRPG::Script::ActiveVmPump();
+    RunLua(vm, "dx-submit-order", R"LUA(
+        assert(tapText == "Zab", "submit ran before the IME commit")
+        removeEventHandler('onClientClick', root, captureTap)
         destroyElement(edit)
     )LUA");
     frame = WorldRPG::Script::ActiveVmPump();
@@ -3592,7 +3650,9 @@ void CheckVehiclePackets() {
     bits(0, 16); bits(0, 16); bits(0, 16);
     spawn.Write(uint16_t(536));
     bits(2000, 12); bits(0, 2); // Health and blow state.
-    bits(0, 2); bits(0, 24); bits(0, 2); // One RGB colour and paintjob.
+    bits(1, 2); // Two distinct colors in an unaligned ENTITY_ADD.
+    for (uint8_t component : {19, 42, 201, 9, 77, 123}) spawn.Write(component);
+    bits(0, 2); // Paintjob.
     bits(0, 18); bits(0, 8); bits(0, 14); bits(0, 8); // Damage.
     bits(0, 16); bits(0, 12); // Variants and six closed door ratios.
     spawn.Write(uint8_t(2)); spawn.Write(uint8_t(10)); spawn.Write(uint8_t(86)); // Nitro and radio.
@@ -3604,6 +3664,10 @@ void CheckVehiclePackets() {
     ServerWorld::ActorSpawn vehicle;
     CHECK(ServerWorld::CopyVisual(id, vehicle) && vehicle.model == 536 && vehicle.vehicleDoorLock == 2);
     CHECK(vehicle.nitroUpgrade == 1010);
+    const VehicleRgb primary{19, 42, 201};
+    const VehicleRgb secondary{9, 77, 123};
+    CHECK(vehicle.vehicleColors && vehicle.vehicleColors->rgb[0] == primary &&
+          vehicle.vehicleColors->rgb[1] == secondary && vehicle.vehicleColors->rgb[2] == VehicleRgb{});
 
     Sync::PacketHandler handler;
     auto vehicleRpc = [&](uint8_t func, auto... arguments) {
@@ -3614,6 +3678,20 @@ void CheckVehiclePackets() {
         (rpc.Write(arguments), ...);
         return handler.handlePacket(99, rpc.GetData(), rpc.GetByteLength(), rpc.GetBitLength());
     };
+    Net::BitStreamWriter paint;
+    paint.Write(MtaIds::Packet::LuaElementRpc);
+    paint.Write(MtaIds::Rpc::SetVehicleColor);
+    WriteTestBits(paint, id, 17);
+    WriteTestBits(paint, 3, 2);
+    for (uint8_t c = 0; c < 12; ++c) paint.Write(uint8_t(240 - c));
+    CHECK(!handler.handlePacket(99, paint.GetData(), paint.GetByteLength(), paint.GetBitLength() - 1));
+    CHECK(ServerWorld::CopyVisual(id, vehicle) && vehicle.vehicleColors && vehicle.vehicleColors->rgb[0] == primary);
+    CHECK(handler.handlePacket(99, paint.GetData(), paint.GetByteLength(), paint.GetBitLength()));
+    CHECK(ServerWorld::CopyVisual(id, vehicle) && vehicle.vehicleColors);
+    if (vehicle.vehicleColors) {
+        for (unsigned c = 0; c < 12; ++c)
+            CHECK(vehicle.vehicleColors->rgb[c / 3][c % 3] == 240 - c);
+    }
     CHECK(!vehicleRpc(MtaIds::Rpc::SetVehicleLocked) && ServerWorld::VehicleDoorLockMode(id) == 2);
     CHECK(vehicleRpc(MtaIds::Rpc::SetVehicleLocked, uint8_t(0)) && ServerWorld::VehicleDoorLockMode(id) == 1);
     CHECK(vehicleRpc(MtaIds::Rpc::SetVehicleLocked, uint8_t(1)) && ServerWorld::VehicleDoorLockMode(id) == 2);
@@ -4660,6 +4738,7 @@ int main(int argc, char** argv) {
     CheckLowRiskLuaQueries(vm);
     CheckHelpers(vm);
     CheckAudioQueries(vm);
+    CheckNativeWeaponFire(vm);
     CheckWeaponSnapshots(vm);
     CheckGui(vm);
     CheckElementsGuiDx(vm);

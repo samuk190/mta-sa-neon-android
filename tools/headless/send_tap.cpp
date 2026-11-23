@@ -16,6 +16,7 @@
 
 namespace {
 std::map<uint8_t, uint64_t> g_sent;
+WorldRPG::Headless::TestTransport testSend = nullptr;
 }
 
 extern "C" bool __real__ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE(
@@ -33,6 +34,7 @@ extern "C" bool __wrap__ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitS
         const size_t length = stream.GetByteLength();
         const uint8_t gameId = data[0];
         ++g_sent[gameId];
+        if (testSend) return testSend(stream);
         const size_t bodyBits = stream.GetBitLength() >= 8 ? stream.GetBitLength() - 8 : (length - 1) * 8;
         const double t = WorldRPG::Headless::ElapsedSeconds();
         if (gameId == 58) {
@@ -72,6 +74,8 @@ extern "C" bool __wrap__ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitS
 }
 
 namespace WorldRPG::Headless {
+
+void SetTestTransport(TestTransport send) { testSend = send; }
 
 uint64_t SentCount(uint8_t gameId) {
     auto it = g_sent.find(gameId);

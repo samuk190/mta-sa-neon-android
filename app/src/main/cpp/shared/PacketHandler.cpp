@@ -8,12 +8,14 @@
 #include "entity/PedWire.h"
 #include "entity/PedSyncState.h"
 #include "PerformanceProfiler.h"
+#include "DebugFlags.h"
 #include "LuaVMStub.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
 #include "VehicleSync.h"
 #include "ServerWorld.h"
 #include "PedQueries.h"
+#include "PlayerWeaponSync.h"
 #include "CombatSync.h"
 #include "ResourceFiles.h"
 #include "../gtasa/RemoteCombat.h"
@@ -35,7 +37,6 @@ void PostGameLine(int kind, const char* text);
 namespace WorldRPG::Net {
 bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action);
 void ClearVehicleInOutPending();
-void ClearVehicleInOutConfirmed();
 bool SendVehicleJackAbort(uint32_t pedId, uint32_t vehicleId, uint8_t door);
 }
 
@@ -131,6 +132,7 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
     uint32_t id = 0;
     if (!reader.Read(func) || func >= Rpc::NumRpcFuncs || !ReadElementId(reader, id)) return false;
     const char* kind = WorldRPG::ServerWorld::ElementKindName(id);
+    const bool vehicleLike = kind && std::strcmp(kind, "vehicle") == 0;
     const bool pedLike = kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0);
     auto logUnported = [&](const char* why) {
         static bool seen[256] = {};
@@ -200,6 +202,12 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             return WorldRPG::ServerWorld::ReadSetElementDataRpc(id, reader);
         case Rpc::RemoveElementData:
             return WorldRPG::ServerWorld::ReadRemoveElementDataRpc(id, reader);
+        case Rpc::SetVehicleColor: {
+            WorldRPG::VehicleColors colors;
+            if (!WorldRPG::ReadVehicleColors(reader, colors)) return false;
+            WorldRPG::ServerWorld::SetVehicleColors(id, colors);
+            return true;
+        }
         case Rpc::SetVehicleLocked: {
             // CVehicleRPCs::SetVehicleLocked (161-175) reads a full byte.
             uint8_t locked = 0;
@@ -241,18 +249,42 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z) || !reader.Read(context)) return false;
             if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return false;
             WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
-            if(kind && std::strcmp(kind,"colshape")==0) { WorldRPG::ServerWorld::NoteElementPosition(id,x,y,z); return true; }
-            if (!pedLike) { WorldRPG::ServerWorld::NoteElementPosition(id,x,y,z); logUnported("native position on a non-ped element not ported; client pose stored"); return true; }
             WorldRPG::ServerWorld::NoteElementPosition(id, x, y, z);
-            PedSyncState::Teleport(id, {x, y, z});
-            WorldRPG::Game::RpcSetPosition(id, x, y, z);
+            if (pedLike) WorldRPG::Game::RpcSetPosition(id, x, y, z);
+            else if (kind && std::strcmp(kind, "vehicle") == 0) WorldRPG::Game::RpcSetVehiclePosition(id, x, y, z);
             return true;
         }
+        case Rpc::SetElementVelocity:
+        case Rpc::SetVehicleTurnSpeed: {
+            // CElementRPCs.cpp:172-214 and CVehicleRPCs.cpp:124-137.
+            float x = 0, y = 0, z = 0;
+            if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z)) return false;
+            if (vehicleLike) WorldRPG::Game::RpcSetVehicleVelocity(id, x, y, z, func == Rpc::SetVehicleTurnSpeed);
+            else logUnported("native velocity is unavailable for this element");
+            return true;
+        }
+        case Rpc::SetVehicleRotation: {
+            float x = 0, y = 0, z = 0;
+            uint8_t context = 0;
+            if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z) || !reader.Read(context)) return false;
+            if (vehicleLike) {
+                WorldRPG::Game::RpcSetVehicleRotation(id, x, y, z);
+                WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
+            }
+            return true;
+        }
+        case Rpc::SetVehicleEngineState: {
+            bool enabled = false;
+            if (!ReadFlag(reader, enabled)) return false;
+            if (vehicleLike) WorldRPG::Game::SetTrafficVehicleEngine(id, enabled);
+            return true;
+        }
+        case Rpc::SetVehicleFrozen:
         case Rpc::SetElementFrozen: {
             // CElementRPCs::SetElementFrozen (697-728): one bit.
             bool frozen = false;
             if (!ReadFlag(reader, frozen)) return false;
-            if (!pedLike) { logUnported("frozen on a non-ped element not ported"); return true; }
+            if (!pedLike && !vehicleLike) { logUnported("native frozen state is unavailable for this element"); return true; }
             if (id == WorldRPG::ServerWorld::LocalPlayer()) logUnported("local SetFrozen not ported");
             WorldRPG::Game::RpcSetFrozen(id, frozen);
             return true;
@@ -263,8 +295,11 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             uint8_t context = 0;
             if (!reader.Read(health) || !reader.Read(context)) return false;
             WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
-            if (!pedLike) { logUnported("health on a non-ped element not ported"); return true; }
-            if (id == WorldRPG::ServerWorld::LocalPlayer()) logUnported("local SetHealth / LockHealth not ported");
+            if (!pedLike) {
+                if (kind && std::strcmp(kind, "vehicle") == 0) WorldRPG::Game::RpcSetVehicleHealth(id, health);
+                else logUnported("health on a non-ped element not ported");
+                return true;
+            }
             bool healthLocked = false, armorLocked = false;
             float lockedHealth = 0.f, lockedArmor = 0.f;
             WorldRPG::Game::CopyPedVitalsLock(id, healthLocked, lockedHealth, armorLocked, lockedArmor);
@@ -278,7 +313,6 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             uint8_t armor = 0, context = 0;
             if (!reader.Read(armor) || !reader.Read(context)) return false;
             WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
-            if (id == WorldRPG::ServerWorld::LocalPlayer()) logUnported("local SetArmor / LockArmor not ported");
             WorldRPG::Game::RpcSetArmor(id, static_cast<float>(armor) / 1.25f);
             return true;
         }
@@ -294,23 +328,38 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             if (id == WorldRPG::ServerWorld::LocalPlayer()) logUnported("local SetCurrentRotation not ported");
             return true;
         }
+        case Rpc::SetPedDoingGangDriveby: {
+            bool enabled = false;
+            uint8_t context = 0;
+            if (!ReadFlag(reader, enabled) || !reader.Read(context)) return false;
+            if (pedLike) {
+                WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
+                WorldRPG::Game::NoteDriveby(id, enabled);
+            }
+            return true;
+        }
         case Rpc::WarpPedIntoVehicle: {
-            // CPedRPCs::WarpPedIntoVehicle (190-212): vehicle ElementID, u8 seat, u8 time context. Only the time context
-            // is ported (CanUpdateSync in PED_SYNC needs it); the warp itself is not (seat task fault 0x18f).
+            // CPedRPCs.cpp:190-212. Occupancy is available before the bodies stream in.
             uint32_t vehicle = 0;
             uint8_t seat = 0, context = 0;
             if (!ReadElementId(reader, vehicle) || !reader.Read(seat) || !reader.Read(context)) return false;
             if (pedLike) WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
-            logUnported("WarpPedIntoVehicle: time context stored, warp not ported");
+            if (pedLike &&
+                std::strcmp(WorldRPG::ServerWorld::ElementKindName(vehicle), "vehicle") == 0) {
+                WorldRPG::RemoteVehicle::SetOccupant(id, vehicle, seat);
+                WorldRPG::Game::NoteRemoteSeat(id, vehicle, seat);
+            }
             return true;
         }
         case Rpc::RemovePedFromVehicle: {
-            // CPedRPCs::RemovePedFromVehicle (214-236): u8 time context, stored when the ped left a vehicle. The removal
-            // is not ported; the context is stored so PED_SYNC is not dropped by CanUpdateSync.
+            // CPedRPCs.cpp:214-236. Release the seat and update its sync time context.
             uint8_t context = 0;
             if (!reader.Read(context)) return false;
             if (pedLike) WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
-            logUnported("RemovePedFromVehicle: time context stored, removal not ported");
+            if (pedLike) {
+                WorldRPG::RemoteVehicle::ClearOccupant(id);
+                WorldRPG::Game::NoteRemoteUnseat(id);
+            }
             return true;
         }
         case Rpc::SetElementInterior: {
@@ -337,7 +386,6 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
                 float x = 0, y = 0, z = 0;
                 if (!reader.Read(x) || !reader.Read(y) || !reader.Read(z)) return false;
                 WorldRPG::ServerWorld::NoteElementPosition(id, x, y, z);
-                PedSyncState::Teleport(id, {x, y, z});
                 WorldRPG::Game::RpcSetPosition(id, x, y, z);
             }
             return true;
@@ -483,7 +531,7 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             // CElementRPCs::SetElementAlpha (422-454): u8 alpha; peds and players -> CClientPed::SetAlpha.
             uint8_t alpha = 255;
             if (!reader.Read(alpha)) return false;
-            if (!pedLike) { logUnported("alpha on a non-ped element not ported"); return true; }
+            if (!pedLike && !vehicleLike) { logUnported("native alpha is unavailable for this element"); return true; }
             WorldRPG::Game::RpcSetAlpha(id, alpha);
             return true;
         }
@@ -606,6 +654,10 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
     uint8_t spawnInterior = 0;
     uint16_t spawnDimension = 0;
     const bool haveDimension = haveSkin && reader.Read(spawnInterior) && reader.Read(spawnDimension);
+    uint32_t team = 0;
+    uint8_t spawnContext = 0;
+    if (haveDimension && reader.GetRemainingBits() > 7 &&
+        (!ReadElementId(reader, team) || !reader.Read(spawnContext))) return false;
     char line[96];
     std::snprintf(line, sizeof(line), "Spawn %.0f %.0f %.0f", x, y, z);
     PKT_LOGI("PlayerSpawn: id=%u %s", playerId, line);
@@ -613,6 +665,10 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
     // recorded; once it is known, a spawn is ours only when its id matches.
     const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
     const bool mine = local == 0 || playerId == local;
+    if (!local) WorldRPG::ServerWorld::SetLocalPlayer(playerId);
+    if (!mine) WorldRPG::ServerWorld::NotePlayerSkin(playerId, static_cast<int>(skin));
+    WorldRPG::ServerWorld::SetSyncTimeContext(playerId, spawnContext);
+    WorldRPG::RemoteVehicle::ClearOccupant(playerId);
     WorldRPG::PedQueries::Ensure(playerId, true);
     WorldRPG::PedQueries::Spawn(playerId);
     WorldRPG::Game::PedRpcOp clearWeapons;
@@ -620,7 +676,7 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
     clearWeapons.queryGeneration = WorldRPG::PedQueries::Generation(playerId);
     WorldRPG::Game::QueuePedRpc(playerId, clearWeapons);
     if (mine) {
-        if (local == 0) WorldRPG::ServerWorld::SetLocalPlayer(playerId);
+        WorldRPG::Net::ClearVehicleInOutPending();
         if (haveDimension) {
             WorldRPG::ServerWorld::SetLocalDimension(spawnDimension);
             WorldRPG::ServerWorld::NoteElementInterior(playerId,spawnInterior);
@@ -631,7 +687,6 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
         WorldRPG::JniBridge::PostGameLine(1, line);
         return true;
     }
-    WorldRPG::ServerWorld::NotePlayerSkin(playerId, static_cast<int>(skin));
     if (haveDimension) {
         WorldRPG::ServerWorld::NoteElementDimension(playerId, spawnDimension);
         WorldRPG::ServerWorld::NoteElementInterior(playerId,spawnInterior);
@@ -716,20 +771,20 @@ bool ReadCompressedU16(WorldRPG::Net::BitStreamReader& reader, uint16_t& out) {
 }
 
 // Server -> client PLAYER_PURESYNC. CNetAPI::ReadPlayerPuresync (CNetAPI.cpp 830-1021).
-// One player per packet. The weapon and aim tail is not applied.
+// One player per packet. The server omits weapon type and total ammo from the relay.
 bool HandlePlayerPureSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t id = 0;
     uint8_t context = 0;
     uint16_t latency = 0;
-    if (!ReadElementId(reader, id) || !reader.Read(context) || !ReadCompressedU16(reader, latency))
-        return false;
+    if (!ReadElementId(reader, id) || !reader.Read(context)) return false;
+    if (!WorldRPG::ServerWorld::CanUpdateSync(id, context)) return true;
+    if (!ReadCompressedU16(reader, latency)) return false;
     uint8_t keys = 0;
     if (!reader.Read(keys)) return false;
     // SFullKeysyncSync: the first 8 bits are the button flags (SyncStructures.h 1004-1012); the analog reads below
     // reuse `keys`, so the flags are kept here for the remote controller (SetControllerState, CNetAPI.cpp 1001).
     const uint8_t buttonBits = keys;
-    WorldRPG::Game::NoteRemoteButtons(id, buttonBits);
     bool analog = false;
     if (!ReadFlag(reader, analog) || (analog && !reader.Read(keys))) return false;
     if (!ReadFlag(reader, analog) || (analog && !reader.Read(keys))) return false;
@@ -757,39 +812,38 @@ bool HandlePlayerPureSync(const uint8_t* body, size_t length, size_t bits) {
     // CNetAPI::ReadPlayerPuresync (CNetAPI.cpp 898-1004): health, armor, camera, then
     // SetMoveSpeed (already read), SetTargetPosition / SetTargetRotation, SetControllerState.
     // SPlayerHealthSync / SPlayerArmorSync are SFloatAsBitsSync<8> (SyncStructures.h 189-198).
-    uint8_t healthRaw = 0;
-    float health = 100.f, armor = 0.f;
-    bool hasHealth = false, hasArmor = false;
-    float camera = 0.f;
-    if (reader.Read(healthRaw)) {
-        hasHealth = true;
-        health = static_cast<float>(healthRaw);  // range 0..255, so the byte is the value
-        WorldRPG::Combat::RegisterVictimHealth(id, healthRaw, WorldRPG::ServerWorld::LocalPlayer());
-        uint8_t armorRaw = 0;
-        if (reader.Read(armorRaw)) {
-            hasArmor = true;
-            armor = 127.5f * (static_cast<float>(armorRaw) / 255.f);
-            uint8_t camRaw[2] = {};
-            if (reader.ReadBits(camRaw, 12)) {
-                const unsigned camValue = camRaw[0] | ((camRaw[1] & 0x0Fu) << 8);
-                camera = -3.14159265f + (static_cast<float>(camValue & 0xFFFu) / 4095.f) * (2.f * 3.14159265f);
-            }
-        }
-    } else {
-        PKT_LOGI("DIAG PURESYNC health read failed id=%u bit=%zu", id, reader.GetReadOffsetBits());
-    }
+    uint8_t healthRaw = 0, armorRaw = 0;
+    uint8_t camRaw[2] = {};
+    if (!reader.Read(healthRaw) || !reader.Read(armorRaw) || !reader.ReadBits(camRaw, 12)) return false;
+    const float health = static_cast<float>(healthRaw);
+    const float armor = static_cast<float>(armorRaw) * 0.5f;
+    const unsigned camValue = camRaw[0] | ((camRaw[1] & 0x0Fu) << 8);
+    const float camera = -pi + static_cast<float>(camValue) / 4095.f * (2.f * pi);
+
+    // The relay carries a four-bit slot and clip only. Use the original
+    // button byte to decide whether the aim vectors follow the arm angle.
+    WorldRPG::PlayerWeaponSync::RemoteWeapon weapon;
+    const bool hasWeapon = (flagBytes[1] & (WorldRPG::PlayerWeaponSync::kHasWeapon >> 8)) != 0;
+    if (hasWeapon && !WorldRPG::PlayerWeaponSync::ReadRelay(reader, weapon,
+            WorldRPG::PlayerWeaponSync::HasAimOrFire(buttonBits), false)) return false;
+    if (weapon.slot >= WorldRPG::PedQueries::Slots) return false;
+    weapon.aim.yaw = heading;
+    weapon.aim.akimboUp = (flagBytes[0] & 0x80u) != 0;
+
+    WorldRPG::Combat::RegisterVictimHealth(id, healthRaw, WorldRPG::ServerWorld::LocalPlayer());
     // SFullKeysyncSync stores the stick as short(char * 128/127) (SyncStructures.h 972-973).
     const int sx = static_cast<int>(static_cast<int8_t>(stickX)) * 128 / 127;
     const int sy = static_cast<int>(static_cast<int8_t>(stickY)) * 128 / 127;
     // ReadPlayerPuresync clears ShockButtonL and ducks from the flag (CNetAPI.cpp 986-1004).
     const bool ducked = (flagBytes[0] & 0x08) != 0;
-    const bool fire = (keys & 0x10u) != 0;
     if (id != WorldRPG::ServerWorld::LocalPlayer()) {
         WorldRPG::ServerWorld::NotePlayerSeen(id);
+        if (weapon.aim.full)
+            WorldRPG::PedQueries::Aim(id, weapon.aim.origin.x, weapon.aim.origin.y, weapon.aim.origin.z);
         WorldRPG::Game::NoteRemotePlayerSync(id, x, y, z, heading, vx, vy, vz, hasVelocity,
-            sx, sy, camera, fire, ducked, hasHealth, health, hasArmor, armor);
-        if (hasHealth) WorldRPG::Game::LockPedHealth(id, health);
-        if (hasArmor) WorldRPG::Game::LockPedArmor(id, armor);
+            sx, sy, camera, buttonBits, ducked, weapon, true, health, true, armor);
+        WorldRPG::Game::LockPedHealth(id, health);
+        WorldRPG::Game::LockPedArmor(id, armor);
         WorldRPG::Game::SetPedCameraRotation(id, camera);
     }
     static bool loggedGaps = false;
@@ -797,9 +851,9 @@ bool HandlePlayerPureSync(const uint8_t* body, size_t length, size_t bits) {
         loggedGaps = true;
         PKT_LOGI("DIAG ReadPlayerPuresync (CNetAPI.cpp 830-1021): applied controller, SetMoveSpeed, "
                  "health/armor at CPed +0x6AC/+0x6B4, target position and SetTargetRotation. "
-                 "Not run: CanUpdateSync (no per-player time context), SetLatency, SetHasJetPack, "
+                 "Not run: SetLatency, SetHasJetPack, "
                  "SetWearingGoggles, contact origin, SetChoking, SetOnFire, SetStealthAiming, "
-                 "AddChangeWeapon / SetAimInterpolated, RunClimbingTask, RunSwimTask. "
+                 "RunClimbingTask, RunSwimTask. "
                  "Duck is the flag PresentOnFoot passes to SetTaskDuckSecondary. "
                  "SetCameraRotation is stored; SwitchContext does not write TheCamera+0x154. "
                  "LockHealth is written each game tick from StreamedInPulse (CClientPed.cpp 4738-4748). "
@@ -836,7 +890,8 @@ using WorldRPG::Sync::kBitStreamNativeTaskPresentation;
 bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     int applied = 0;
-    PKT_LOGI("DIAG PED_SYNC body len=%zu bits=%zu", length, bits);
+    static const bool trace = WorldRPG::Debug::Flag("tracepedsync");
+    if (trace) PKT_LOGI("DIAG PED_SYNC body len=%zu bits=%zu", length, bits);
     // Reference Packet_PedSync: while (GetNumberOfUnreadBits() > 32). No entry cap.
     while (reader.GetRemainingBits() > 32) {
         uint32_t id = 0;
@@ -845,7 +900,7 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
             PKT_LOGI("DIAG PED_SYNC short header bit=%zu", reader.GetReadOffsetBits());
             break;
         }
-        PKT_LOGI("DIAG PED_SYNC id=%u ctx=%u flags=0x%02x flags2=0x%02x bit=%zu", id, ucSyncTimeContext, ucFlags, flags2, reader.GetReadOffsetBits());
+        if (trace) PKT_LOGI("DIAG PED_SYNC id=%u ctx=%u flags=0x%02x flags2=0x%02x bit=%zu", id, ucSyncTimeContext, ucFlags, flags2, reader.GetReadOffsetBits());
 
         // Native task blocks - read before spatial data per mta_neon wire order
         // Blocks exist on the wire only when the negotiated bitstream carries them
@@ -939,41 +994,40 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
                 continue;
             }
         }
-        if (hasPosition || (ucFlags & 0x02)) {
-            WorldRPG::Game::NoteRemotePed(id, x, y, z, heading, vx, vy, vz, (ucFlags & 0x04) != 0);
-            // Stage S4: observed peds interpolate to the target (reference SetTargetPosition /
-            // SetTargetRotation with the spatial receive interval). Hosted peds keep local authority.
+        if (std::strcmp(WorldRPG::ServerWorld::ElementKindName(id), "ped") != 0) continue;
+        // CPedSync applies each field independently. A presentation-only packet also
+        // needs to reach the ped, and an explicit zero velocity means it stopped.
+        if (!PedSyncState::IsHosted(id)) {
             if (ucFlags & 0x07) {
-                const uint64_t rate = PedSyncState::SpatialSyncRateMs(id, true);
-                if (!PedSyncState::IsHosted(id)) {
-                    if (hasPosition)
-                        PedSyncState::SetObserverPosition(id, {x, y, z}, {vx, vy, vz}, rate, (ucFlags & 0x04) != 0);
-                    if (ucFlags & 0x02)
-                        PedSyncState::SetObserverRotation(id, heading, rate);
-                }
+                const float position[3] = {x, y, z};
+                const float velocity[3] = {vx, vy, vz};
+                WorldRPG::Game::NoteObservedPedSync(id, hasPosition ? position : nullptr,
+                    (ucFlags & 0x02) ? &heading : nullptr, (ucFlags & 0x04) ? velocity : nullptr,
+                    PedSyncState::SpatialSyncRateMs(id));
             }
-            // Apply native task states to remote ped
+            if (ucFlags & 0x08) WorldRPG::Game::LockPedHealth(id, fHealth);
+            if (ucFlags & 0x10) WorldRPG::Game::LockPedArmor(id, fArmor);
+            if (flags2 & 0x01) WorldRPG::Game::SetPedCameraRotation(id, cameraRotation);
             if (hasLocomotion) WorldRPG::Game::SetPedNativeTaskLocomotion(id, nativeTaskLocomotion.data.uiMode);
             if (hasWeapon) WorldRPG::Game::SetPedNativeTaskWeapon(id, nativeTaskWeaponPresentation.data.ucWeaponType);
             if (hasAnimation) WorldRPG::Game::SetPedNativeTaskAnimation(id, nativeTaskAnimationPresentation.data.usAnimGroup, nativeTaskAnimationPresentation.data.usAnimId);
-            if (flags2 & 0x01) WorldRPG::Game::SetPedCameraRotation(id, cameraRotation);
-            WorldRPG::Game::SetPedOnFire(id, bOnFire);
-            WorldRPG::Game::SetPedInWater(id, bIsInWater);
-            WorldRPG::PedQueries::OnFire(id, bOnFire);
-            WorldRPG::PedQueries::InWater(id, bIsInWater);
             if (animationKilled) WorldRPG::Game::KillPedAnimation(id);
-            ++applied;
+            if (ucFlags & 0x20) {
+                WorldRPG::Game::SetPedOnFire(id, bOnFire);
+                WorldRPG::PedQueries::OnFire(id, bOnFire);
+            }
+            if (ucFlags & 0x40) {
+                WorldRPG::Game::SetPedInWater(id, bIsInWater);
+                WorldRPG::PedQueries::InWater(id, bIsInWater);
+            }
         }
-        // CPedSync::Packet_PedSync locks health and armor whenever those flags are set
-        // (CPedSync.cpp 439-442), including a packet that has no position.
-        if (ucFlags & 0x08) WorldRPG::Game::LockPedHealth(id, fHealth);
-        if (ucFlags & 0x10) WorldRPG::Game::LockPedArmor(id, fArmor);
+        ++applied;
     }
     if (applied > 0) {
         static int reports = 0;
         if (reports < 4) {
             ++reports;
-            PKT_LOGI("PedSync: placed %d server ped(s) with native tasks", applied);
+            PKT_LOGI("PedSync: accepted %d server ped updates", applied);
         }
     }
     return applied > 0;
@@ -982,10 +1036,6 @@ bool HandlePedSync(const uint8_t* body, size_t length, size_t bits) {
 float Angle12(unsigned raw) {
     constexpr float pi = 3.14159265f;
     return -pi + (static_cast<float>(raw & 0xFFFu) / 4095.f) * (2.f * pi);
-}
-
-bool SlotHasAmmo(unsigned slot) {
-    return slot != 0 && slot != 1 && slot != 10 && slot != 11 && slot != 12;
 }
 
 // Relayed CKeysyncPacket::Write. The client read is CNetAPI::ReadKeysync.
@@ -1015,47 +1065,23 @@ bool HandleKeySync(const uint8_t* body, size_t length, size_t bits) {
     const bool ducked = (flag & 0x01u) != 0;
     // SKeysyncFlags (SyncStructures.h 930-936): bit 0 ducked, bit 1 choking.
     const bool choking = (flag & 0x02u) != 0;
-    WorldRPG::PedQueries::Keys(id, ducked, choking);
-    const bool attack = (keys & 0x12u) != 0;
-    bool punch = false;
-    unsigned slot = 0;
+    const bool attack = WorldRPG::PlayerWeaponSync::HasAimOrFire(buttons);
+    WorldRPG::PlayerWeaponSync::RemoteWeapon weapon;
     if (attack) {
-        uint8_t slotByte = 0;
-        if (!reader.ReadBits(&slotByte, 4)) return true;
-        slot = slotByte & 0x0Fu;
-        if (slot <= 1) {
-            punch = true;
-            // ButtonCircle with a melee slot: the remote ped runs CTaskSimpleFight.
-            // No fixed damage is applied here. Hit damage comes from the engine fight task.
-            if ((buttons & 0x10u) != 0) WorldRPG::Combat::StartRemoteMelee(id, heading);
-        }
+        if (!WorldRPG::PlayerWeaponSync::ReadRelay(reader, weapon, true, true) ||
+            weapon.slot >= WorldRPG::PedQueries::Slots) return false;
+        if (weapon.aim.full)
+            WorldRPG::PedQueries::Aim(id, weapon.aim.origin.x, weapon.aim.origin.y, weapon.aim.origin.z);
     }
-    // CNetAPI::ReadKeysync (CNetAPI.cpp 713-723): ShockButtonL is cleared for an on-foot ped,
-    // then SetControllerState, SetCameraRotation, SetTargetRotation, Duck.
-    // NoteRemoteAim replaces the stick, including a zero stick over the previous one.
-    WorldRPG::Game::NoteRemoteAim(id, heading, camera, sx, sy, punch, ducked);
-    // SetControllerState: the button flags drive the remote ped's own controls (virtual touch, PlayerPedPort.cpp).
-    WorldRPG::Game::NoteRemoteButtons(id, buttons);
+    WorldRPG::PedQueries::Keys(id, ducked, choking);
+    uint32_t vehicleId = 0;
+    uint8_t seat = 0;
+    weapon.aim.inVehicle = WorldRPG::RemoteVehicle::FindOccupant(id, vehicleId, seat);
+    weapon.aim.akimboUp = (flag & 4u) != 0;
+    weapon.aim.yaw = heading;
+    WorldRPG::Game::NoteRemoteAim(id, heading, camera, sx, sy, buttons, ducked,
+                                  attack && (weapon.aim.inVehicle || !(flag & 0x08u)) ? &weapon : nullptr);
     WorldRPG::Game::SetPedCameraRotation(id, camera);
-    static bool loggedKeyGaps = false;
-    if (!loggedKeyGaps) {
-        loggedKeyGaps = true;
-        PKT_LOGI("DIAG ReadKeysync (CNetAPI.cpp 573-727): controller, camera, duck and choking are stored. "
-                 "Not run: weapon slot / aim (SetAimInterpolated), "
-                 "vehicle keysync tail, SwitchContext write of TheCamera+0x154.");
-    }
-    if (!attack || punch || !SlotHasAmmo(slot)) return true;
-    uint16_t clip = 0;
-    if (!ReadCompressedU16(reader, clip)) return true;
-    uint8_t armRaw[2] = {};
-    if (!reader.ReadBits(armRaw, 16)) return true;
-    float ox = 0, oy = 0, oz = 0;
-    if (!reader.Read(ox) || !reader.Read(oy) || !reader.Read(oz)) return true;
-    float nx = 0, nz = 0, ny = 0;
-    if (!ReadMtaNorm(reader, nx, nz, ny)) return true;
-    // CNetAPI::ReadKeysync aim origin. The muzzle bone and weapon range are not applied.
-    WorldRPG::PedQueries::Aim(id, ox, oy, oz);
-    (void)armRaw; (void)clip; (void)nx; (void)ny; (void)nz; (void)flag;
     return true;
 }
 
@@ -1067,9 +1093,8 @@ bool HandleBulletSync(const uint8_t* body, size_t length, size_t bits) {
     const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
     if (bullet.shooter == local) return true;
     if (!WorldRPG::Combat::AcceptPlayerBulletSync(bullet)) return true;
-    WorldRPG::Game::NoteRemoteWeapon(bullet.shooter, bullet.weapon);
-    WorldRPG::Combat::ShowRemoteTracer(bullet.shooter, bullet.weapon, bullet.start, bullet.end);
-    WorldRPG::Combat::ApplyBulletDamage(bullet, local);
+    if (WorldRPG::Combat::WeaponUsesBulletSync(bullet.weapon))
+        WorldRPG::Game::QueueRemoteBullet(bullet);
     return true;
 }
 
@@ -1146,6 +1171,8 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
 
     // SetPosition, SetCurrentRotation, SetMoveSpeed (CPedSync.cpp 251-253).
     WorldRPG::Game::NoteRemotePed(id, x, y, z, fRotation, vx, vy, vz);
+    WorldRPG::Game::RpcSetPosition(id, x, y, z);
+    WorldRPG::Game::RpcSetRotation(id, fRotation);
     // UnlockHealth, UnlockArmor, then SetHealth, SetArmor (CPedSync.cpp 256-261). The values used to be dropped, so
     // the new owner kept the observer lock and reported the old health back in its first PED_SYNC.
     WorldRPG::Game::UnlockPedVitals(id);
@@ -1157,7 +1184,7 @@ bool HandlePedStartSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Game::SetPedHost(id, true);
     // Reference CPedSync::AddPed: become syncer (SetSyncing true). No wander task is started here;
     // the ped keeps its own AI, exactly as the desktop client does.
-    PedSyncState::BeginHosted(id, {x, y, z}, fRotation, {vx, vy, vz});
+    PedSyncState::BeginHosted(id);
     WorldRPG::ServerWorld::SetActorHost(id, true);
     PKT_LOGI("PedStartSync: id=%u at %.0f %.0f %.0f physMode=%u", id, x, y, z, nativeTaskPhysicalTakeover.data.uiMode);
     return true;
@@ -1181,6 +1208,7 @@ bool HandlePedStopSync(const uint8_t* body, size_t length, size_t bits) {
 
     // Stage S4: release ownership and clear the wander task (reference RemovePed).
     PedSyncState::EndHosted(id);
+    WorldRPG::Game::SetPedHost(id, false);
     WorldRPG::ServerWorld::SetActorHost(id, false);
     PKT_LOGI("PedStopSync: id=%u locked and released", id);
     return true;
@@ -1256,8 +1284,8 @@ void ApplyRemoteVehicleInOut(uint8_t action, uint32_t pedId, uint32_t vehicleId,
         case 2:  // NOTIFY_IN_ABORT_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 1988)
         case 4:  // NOTIFY_OUT_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 2036)
         case 6:  // NOTIFY_FELL_OFF_RETURN: desktop RemoveFromVehicle (CPacketHandler.cpp 2084)
-            WorldRPG::RemoteVehicle::ClearOccupant(pedId);
-            WorldRPG::Game::NoteRemoteUnseat(pedId);
+            if (WorldRPG::RemoteVehicle::ClearMatchingSeat(pedId, vehicleId, seat))
+                WorldRPG::Game::NoteRemoteUnseat(pedId);
             break;
         // 3 REQUEST_OUT_CONFIRMED keeps the seat until its return (desktop GetOutOfVehicle, CPacketHandler.cpp 2015).
         // 7 and 8 are jacking, not ported. 9 ATTEMPT_FAILED has nothing to undo for a remote ped.
@@ -1303,6 +1331,8 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
         PKT_LOGI("VehInOut: %s ped=%u veh=%u seat=%u door=%u reason=%u", name, pedId, vehicleId,
                  static_cast<unsigned>(seat), static_cast<unsigned>(door), static_cast<unsigned>(reason));
         ApplyRemoteVehicleInOut(action, pedId, vehicleId, seat);
+        if (action == 1 || action == 4 || action == 6)
+            WorldRPG::Script::ActiveVmFireVehicleSeat(action == 1, pedId, vehicleId, seat);
         return true;
     }
     if (action == 9) {
@@ -1312,33 +1342,61 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
         PKT_LOGI("VehInOut: recv %s veh=%u seat=%u door=%u", name, vehicleId, static_cast<unsigned>(seat),
                  static_cast<unsigned>(door));
     }
+    if (action == 1 || action == 5) {
+        WorldRPG::RemoteVehicle::SetOccupant(pedId, vehicleId, seat);
+        if (action == 5) WorldRPG::Game::NoteRemoteSeat(pedId, vehicleId, seat);
+    }
+    if (action == 2 || action == 4 || action == 6) {
+        const bool removed = WorldRPG::RemoteVehicle::ClearMatchingSeat(pedId, vehicleId, seat);
+        uint32_t otherVehicle = 0;
+        uint8_t otherSeat = 0;
+        WorldRPG::Game::LocalCarState car;
+        if (removed || (!WorldRPG::RemoteVehicle::FindOccupant(pedId, otherVehicle, otherSeat) &&
+            WorldRPG::Game::CopyLocalCar(car) && car.vehicleId == vehicleId && car.seat == seat))
+            WorldRPG::Game::NoteRemoteUnseat(pedId);
+    }
     switch (action) {
         case 0:  // REQUEST_IN_CONFIRMED: the server allows the entry, so send NOTIFY_IN (1)
-            WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 1);
+            if (WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 1))
+                WorldRPG::RemoteVehicle::SetOccupant(pedId, vehicleId, seat);
             break;
-        case 3:  // REQUEST_OUT_CONFIRMED: the server allows the exit, so send NOTIFY_OUT (4)
-            WorldRPG::Net::ClearVehicleInOutConfirmed();
-            WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 4);
+        case 3: {  // REQUEST_OUT_CONFIRMED
+            uint32_t confirmedVehicle = 0;
+            uint8_t confirmedSeat = 0;
+            if (WorldRPG::RemoteVehicle::FindOccupant(pedId, confirmedVehicle, confirmedSeat) &&
+                (confirmedVehicle != vehicleId || confirmedSeat != seat))
+                WorldRPG::Net::ClearVehicleInOutPending();
+            else WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 4);
             break;
+        }
         case 7:  // REQUEST_JACK_CONFIRMED: jacking is not ported (no animation), so abort it like desktop does
             WorldRPG::Net::ClearVehicleInOutPending();
-            WorldRPG::Net::ClearVehicleInOutConfirmed();
             WorldRPG::Net::SendVehicleJackAbort(pedId, vehicleId, door);
             PKT_LOGI("VehInOut: jack not ported; sent notify_jack_abort for veh=%u, no packet 33", vehicleId);
             break;
-        case 9:  // ATTEMPT_FAILED: the server refused the request, so the ped is not seated
-            WorldRPG::Net::ClearVehicleInOutConfirmed();
+        case 9: {  // CPacketHandler::Packet_Vehicle_InOut restores the last confirmed seat on a denied exit.
+            uint32_t confirmedVehicle = 0;
+            uint8_t confirmedSeat = 0;
+            WorldRPG::Game::LocalCarState car;
+            if (WorldRPG::RemoteVehicle::FindOccupant(pedId, confirmedVehicle, confirmedSeat))
+                WorldRPG::Game::NoteRemoteSeat(pedId, confirmedVehicle, confirmedSeat);
+            else if (WorldRPG::Game::CopyLocalCar(car) && car.vehicleId == vehicleId)
+                WorldRPG::Game::NoteRemoteUnseat(pedId);
             WorldRPG::Net::ClearVehicleInOutPending();
             break;
+        }
         case 1:  // NOTIFY_IN_RETURN
         case 2:  // NOTIFY_IN_ABORT_RETURN
         case 4:  // NOTIFY_OUT_RETURN
         case 5:  // NOTIFY_OUT_ABORT_RETURN
+        case 6:  // NOTIFY_FELL_OFF_RETURN
             WorldRPG::Net::ClearVehicleInOutPending();
             break;
         default:
             break;
     }
+    if (action == 1 || action == 4 || action == 6)
+        WorldRPG::Script::ActiveVmFireVehicleSeat(action == 1, pedId, vehicleId, seat);
     return true;
 }
 
@@ -1361,6 +1419,32 @@ bool HandlePlayerVehiclePureSync(const uint8_t* body, size_t length, size_t bits
     if (!WorldRPG::VehicleSync::ReadOccupiedSync(reader, seat, sync)) {
         DIAG("PLAYER_VEHICLE_PURESYNC fail player=%u veh=%u seat=%u", playerId, vehicleId, static_cast<unsigned>(seat));
         return false;
+    }
+    if (!WorldRPG::ServerWorld::CanUpdateSync(playerId, sync.timeContext)) return true;
+    // ReadVehiclePuresync (CNetAPI.cpp 1514-1572): switch the occupied ped
+    // to the relayed slot, including the total and clip for a gang drive-by.
+    WorldRPG::PlayerWeaponSync::RemoteWeapon weapon;
+    if (sync.hasWeapon && sync.weapon.slot < WorldRPG::PedQueries::Slots) {
+        weapon.slot = sync.weapon.slot;
+        weapon.ammoSynced = sync.weapon.ammoSynced;
+        weapon.total = sync.weapon.totalAmmo;
+        weapon.clip = sync.weapon.ammoInClip;
+        weapon.aim = {sync.weapon.armRaw,
+            {sync.weapon.aimOrigin.x, sync.weapon.aimOrigin.y, sync.weapon.aimOrigin.z},
+            {sync.weapon.aimDirection.x, sync.weapon.aimDirection.y, sync.weapon.aimDirection.z}, sync.weapon.aimFull};
+    }
+    weapon.aim.inVehicle = true;
+    weapon.aim.drivebyDirection = sync.weapon.drivebyDirection;
+    const uint8_t buttons = (sync.keys.buttonCircle ? WorldRPG::PlayerWeaponSync::kFire : 0)
+                          | (sync.keys.rightShoulder1 ? WorldRPG::PlayerWeaponSync::kAim : 0);
+    if (playerId != WorldRPG::ServerWorld::LocalPlayer()) {
+        WorldRPG::Game::NoteVehicleCombat(playerId, weapon, buttons, sync.flags.gangDriveby);
+        WorldRPG::Game::SetPedVitals(playerId, sync.playerHealth, sync.playerArmor);
+        WorldRPG::Game::LockPedHealth(playerId, sync.playerHealth);
+        WorldRPG::Game::LockPedArmor(playerId, sync.playerArmor);
+        WorldRPG::Combat::RegisterVictimHealth(playerId, static_cast<uint8_t>(sync.playerHealth), WorldRPG::ServerWorld::LocalPlayer());
+        if (weapon.aim.full)
+            WorldRPG::PedQueries::Aim(playerId, weapon.aim.origin.x, weapon.aim.origin.y, weapon.aim.origin.z);
     }
     WorldRPG::RemoteVehicle::ApplyOccupied(playerId, vehicleId, seat, sync);
     // Driver move and turn speed: desktop CNetAPI::ReadVehiclePuresync sets them at CNetAPI.cpp 1420-1421 for the driver
@@ -1560,6 +1644,17 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 43) return HandleChatEcho(body, bodyLength, bodyBits);
         if (gameId == 31) return HandleKeySync(body, bodyLength, bodyBits);
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::PlayerNetworkStatus) {
+            Net::BitStreamReader reader(body, bodyLength, bodyBits);
+            uint8_t type = 0;
+            uint32_t ticks = 0;
+            if (!reader.Read(type) || !reader.Read(ticks)) return false;
+            if (const auto local = ServerWorld::LocalPlayer()) {
+                Combat::SetLocalNetworkInterrupted(type == 0);
+                Script::ActiveVmFirePlayerNetworkStatus(local, type, ticks);
+            }
+            return true;
+        }
         if (gameId == 98) return HandleBulletSync(body, bodyLength, bodyBits);
         if (gameId == 99) return HandleSyncSettings(body, bodyLength, bodyBits);
         if (gameId == 100) return HandleWeaponBulletSync(body, bodyLength, bodyBits);

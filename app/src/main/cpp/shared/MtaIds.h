@@ -26,6 +26,7 @@ constexpr uint8_t PedWasted = 64;
 constexpr uint8_t Lua = 76;
 constexpr uint8_t LuaElementRpc = 77;
 constexpr uint8_t PedTask = 101;
+constexpr uint8_t PlayerNetworkStatus = 103;
 }  // namespace Packet
 
 // eElementRPCFunctions (rpc_enums.h). NUM_RPC_FUNCS is 225.
@@ -50,12 +51,18 @@ constexpr uint8_t SetPedRotation = 26;
 constexpr uint8_t SetPedMoveAnim = 33;
 constexpr uint8_t WarpPedIntoVehicle = 34;
 constexpr uint8_t RemovePedFromVehicle = 35;
+constexpr uint8_t SetPedDoingGangDriveby = 36;
 constexpr uint8_t SetPedAnimation = 37;
 constexpr uint8_t SetPedAnimationProgress = 38;
 constexpr uint8_t SetPedOnFire = 39;
 constexpr uint8_t SetPedHeadless = 40;
 constexpr uint8_t SetPedFrozen = 41;
+constexpr uint8_t SetVehicleRotation = 46;
+constexpr uint8_t SetVehicleTurnSpeed = 47;
+constexpr uint8_t SetVehicleColor = 48;
 constexpr uint8_t SetVehicleLocked = 49;
+constexpr uint8_t SetVehicleEngineState = 59;
+constexpr uint8_t SetVehicleFrozen = 65;
 constexpr uint8_t AddVehicleUpgrade = 54;
 constexpr uint8_t AddAllVehicleUpgrades = 55;
 constexpr uint8_t RemoveVehicleUpgrade = 56;

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "../shared/PlayerWeaponSync.h"
 #include <cstdint>
+
+namespace WorldRPG::Combat { struct BulletHit; struct SBulletSync; }
 
 namespace WorldRPG::Game {
 
@@ -36,8 +39,30 @@ bool DestroyRemotePlayerPed(void* ped);
 // True when the body has its own CPlayerPedData and CPedClothesDesc (desktop CPlayerPedSA ctor), so model 0 can be dressed.
 bool HasPrivatePlayerData(void* ped);
 bool CanAttachPrivatePlayerData();
+// Returns -1 when neither the driver nor a passenger slot contains the ped.
+int NativeVehicleSeat(void* vehicle, void* ped);
+// Native vehicle tasks look up the ped through CWorld::Players, including during an abort.
+class SeatPlayerContext {
+public:
+    explicit SeatPlayerContext(void* ped);
+    ~SeatPlayerContext() { if (slot) *slot = previous; }
+    SeatPlayerContext(const SeatPlayerContext&) = delete;
+    SeatPlayerContext& operator=(const SeatPlayerContext&) = delete;
+    bool ready = false;
+private:
+    void** slot = nullptr;
+    void* previous = nullptr;
+};
+
+void* NativeDrivebyTask(void* ped);
+bool DrivebyAimHookReady();
+bool LocalTargetButtonHeld();
+bool SampleDrivebyButton(void* ped, bool& pressed);
+bool HasNativeDriveby(void* ped);
+void SetNativeDriveby(void* ped, void* vehicle, uint8_t seat, bool enabled);
+void SampleNativeWeaponAim(void* ped, PlayerWeaponSync::LocalWeapon& weapon, bool firstPersonAim);
 void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera = 0.f, bool hasCamera = false,
-                    uint8_t buttons = 0);
+                    uint8_t buttons = 0, const PlayerWeaponSync::Aim& aim = {});
 // True when remote bodies get their own virtual touch (CTouchInterface hooks installed).
 bool RemoteTouchActive();
 bool InRemoteControlContext();
@@ -47,6 +72,11 @@ void ClearRemoteStick(void* ped);
 // bullet-weapon id (22..34) the shot is queued with NoteLocalShot after the original runs. Returns false when
 // the symbol, FindPlayerPed or the hook is missing; no bullet sync is sent then.
 bool InstallLocalBulletFireHook();
+// Game-thread scope around a single native replay. Null ends the scope.
+bool SetBulletReplayRay(const Combat::SBulletSync* shot);
+void CaptureLocalBulletHit(void* attacker, int weapon, const Combat::BulletHit& hit);
+// Isolate remote aim and fire input from the local camera and touch widgets.
+void InstallWeaponAimHooks();
 
 // Driver seat for a remote ped (VEHICLE_INOUT, packet 58). Desktop CClientPed::InternalWarpIntoVehicle
 // (CClientPed.cpp 7441) and InternalRemoveFromVehicle (7464). Game thread only.

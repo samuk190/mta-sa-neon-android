@@ -270,6 +270,13 @@ int GetElementAngularVelocity(lua_State* L) {
     uint32_t id = 0;
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "getElementAngularVelocity", "element", 1);
     if (MotionOf(ClientElementTypeName(id)) != Motion::Full) return Fail(L);
+    Game::HostedCar traffic;
+    if (Game::CopyTrafficVehicleState(id, traffic)) {
+        lua_pushnumber(L, traffic.tx);
+        lua_pushnumber(L, traffic.ty);
+        lua_pushnumber(L, traffic.tz);
+        return 3;
+    }
     const auto found = g_turn.find(id);
     const Vec3 value = found == g_turn.end() ? Vec3{} : found->second;
     lua_pushnumber(L, value.x);
@@ -284,7 +291,12 @@ int SetElementVelocity(lua_State* L) {
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "setElementVelocity", "element", 1);
     float x = 0.f, y = 0.f, z = 0.f;
     if (!ReadVec(L, "setElementVelocity", 2, x, y, z)) return Fail(L);
-    if (ClientElementTypeName(id) == "radararea") z = 0.f;
+    const std::string type = ClientElementTypeName(id);
+    if (type == "vehicle" && ServerWorld::ActorHosted(id)) {
+        lua_pushboolean(L, Game::SetTrafficVehicleVelocity(id, x, y, z, false));
+        return 1;
+    }
+    if (type == "radararea") z = 0.f;
     StoreMove(id, x, y, z, 0);
     lua_pushboolean(L, MotionOf(ClientElementTypeName(id)) != Motion::None ? 1 : 0);
     return 1;
@@ -296,6 +308,10 @@ int SetElementAngularVelocity(lua_State* L) {
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "setElementAngularVelocity", "element", 1);
     float x = 0.f, y = 0.f, z = 0.f;
     if (!ReadVec(L, "setElementAngularVelocity", 2, x, y, z)) return Fail(L);
+    if (ClientElementTypeName(id) == "vehicle" && ServerWorld::ActorHosted(id)) {
+        lua_pushboolean(L, Game::SetTrafficVehicleVelocity(id, x, y, z, true));
+        return 1;
+    }
     StoreTurn(id, x, y, z, 0);
     lua_pushboolean(L, MotionOf(ClientElementTypeName(id)) == Motion::Full ? 1 : 0);
     return 1;

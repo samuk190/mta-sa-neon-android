@@ -5,9 +5,11 @@
 #include "../net/raknet/RakNetWrapper.h"
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <unordered_map>
 
 #ifdef __ANDROID__
@@ -26,7 +28,7 @@ constexpr uint32_t kElementIdBits = 17;
 constexpr uint32_t kInvalidElement = 0xFFFFFFFFu;
 constexpr int kMaxDiagLines = 24;
 
-int g_bulletDiag = 0;
+std::atomic<int> g_bulletDiag{0};
 int g_weaponDiag = 0;
 int g_healthDiag = 0;
 int g_settingsDiag = 0;
@@ -63,6 +65,9 @@ struct SPrevBullet {
     uint8_t order = 0;
 };
 
+std::mutex g_stateMutex;
+bool g_interrupted = false;
+std::chrono::steady_clock::time_point g_backupUntil{};
 std::unordered_map<uint32_t, SPrevBullet> g_prevBullets;
 std::unordered_map<uint32_t, uint8_t> g_victimHealth;
 
@@ -97,13 +102,42 @@ bool ReadSyncSettingsWeapons(WorldRPG::Net::BitStreamReader& reader) {
     uint64_t mask = 0;
     for (unsigned i = 0; i < count; ++i) {
         uint8_t weapon = 0;
-        if (!reader.Read(weapon)) break; // desktop keeps the ids read so far
+        if (!reader.Read(weapon)) return false;
         mask |= WeaponBit(weapon);
     }
     g_bulletSyncWeapons.store(mask, std::memory_order_relaxed);
     if (g_settingsDiag++ < kMaxDiagLines)
         COMBAT_LOGI("DIAG SYNC_SETTINGS bullet sync weapon mask=0x%llx count=%u", static_cast<unsigned long long>(mask), count);
     return true;
+}
+
+void ResetBulletSync() {
+    std::lock_guard lock(g_stateMutex);
+    g_interrupted = false;
+    g_backupUntil = {};
+    g_prevBullets.clear();
+    g_victimHealth.clear();
+    g_bulletSyncWeapons.store(kDefaultBulletSyncWeapons, std::memory_order_relaxed);
+}
+
+void ForgetShooter(uint32_t id) {
+    std::lock_guard lock(g_stateMutex);
+    g_prevBullets.erase(id);
+    g_victimHealth.erase(id);
+}
+
+void WriteBulletHit(Net::BitStreamWriter& w, const BulletHit& hit) {
+    // CBulletsyncPacket::ReadOptionalDamage rejects out-of-range backup damage.
+    // An unavailable backup must still leave a valid trajectory for the victim to trace.
+    const bool valid = hit.victim > 0 && hit.victim < 0x1FFFFu && hit.damage > 0.f &&
+                       hit.damage <= 200.f && hit.zone <= 9;
+    const uint8_t present = valid;
+    w.WriteBits(&present, 1);
+    if (valid) {
+        w.Write(hit.damage);
+        w.Write(hit.zone);
+        w.WriteBits(reinterpret_cast<const uint8_t*>(&hit.victim), kElementIdBits);
+    }
 }
 
 bool ReceivesBulletSyncWeapon(uint8_t weapon) {
@@ -167,6 +201,7 @@ bool ReadWeaponBulletSync(WorldRPG::Net::BitStreamReader& reader, SWeaponBulletS
 }
 
 bool AcceptPlayerBulletSync(const SBulletSync& bullet) {
+    std::lock_guard lock(g_stateMutex);
     SPrevBullet& prev = g_prevBullets[bullet.shooter];
     bool duplicate = SameVector(bullet.start, prev.start) && SameVector(bullet.end, prev.end);
     std::memcpy(prev.start, bullet.start, sizeof(prev.start));
@@ -177,20 +212,34 @@ bool AcceptPlayerBulletSync(const SBulletSync& bullet) {
     return !duplicate;
 }
 
-void ApplyBulletDamage(const SBulletSync& bullet, uint32_t localPlayer) {
-    if (!bullet.hit || bullet.victim != localPlayer || bullet.shooter == localPlayer) return;
-    if (!(bullet.damage > 0.f)) {
-        if (g_bulletDiag++ < kMaxDiagLines)
-            COMBAT_LOGI("DIAG BULLET_SYNC hit on local without damage value shooter=%u weapon=%u", bullet.shooter, bullet.weapon);
-        return;
-    }
-    WorldRPG::Game::NoteDamage(bullet.shooter, bullet.damage, bullet.weapon);
-    if (g_bulletDiag++ < kMaxDiagLines)
-        COMBAT_LOGI("DIAG BULLET_SYNC local hit shooter=%u weapon=%u damage=%.1f zone=%u", bullet.shooter, bullet.weapon, bullet.damage, bullet.zone);
+bool ApplyBackupDamage(float amount, float& health, float& armor) {
+    if (!(amount > 0.f && amount <= 200.f) || !(health > 0.f) || !std::isfinite(health) ||
+        !std::isfinite(armor) || armor < 0.f) return false;
+    const float absorbed = std::min(armor, amount);
+    armor -= absorbed;
+    health = std::max(0.f, health - (amount - absorbed));
+    return true;
+}
+
+void SetLocalNetworkInterrupted(bool interrupted) {
+    std::lock_guard lock(g_stateMutex);
+    g_interrupted = interrupted;
+    if (!interrupted) g_backupUntil = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+}
+
+float RemainingBackupDamage(const SBulletSync& bullet, uint32_t localPlayer, float nativeDamage,
+                            std::chrono::steady_clock::time_point now) {
+    if (!bullet.hit || !localPlayer || bullet.victim != localPlayer || bullet.shooter == localPlayer ||
+        !(bullet.damage > 0.f && bullet.damage <= 200.f) || bullet.zone > 9 ||
+        !std::isfinite(nativeDamage) || nativeDamage < 0.f) return 0.f;
+    std::lock_guard lock(g_stateMutex);
+    if (!g_interrupted && now >= g_backupUntil) return 0.f;
+    return std::max(0.f, bullet.damage - nativeDamage);
 }
 
 void RegisterVictimHealth(uint32_t id, uint8_t health, uint32_t localPlayer) {
     if (id == localPlayer || id == kInvalidElement) return;
+    std::lock_guard lock(g_stateMutex);
     auto it = g_victimHealth.find(id);
     if (it != g_victimHealth.end() && it->second == health) return;
     g_victimHealth[id] = health;

@@ -21,6 +21,8 @@ constexpr Block16 Offer{0xed,0xca,1,1,0xa8,4,0xe8,3,0,0,0xc8,4,0xe8,3,0,0};
 constexpr std::size_t ChunkBytes = 1000;
 constexpr std::size_t MaxAssemblyBytes = 16 * 1024 * 1024;
 constexpr std::size_t MaxPending = 2048;
+// Resource startup can produce hundreds of small ordered events per second.
+constexpr std::size_t MaxBufferedPackets = 16384;
 std::uint64_t Now() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -56,10 +58,10 @@ struct ClientTransport::Impl {
     std::array<std::map<std::uint32_t,ReliableMessage>,32> ordered;
     std::map<std::tuple<std::uint16_t,std::uint8_t,std::uint32_t,std::uint8_t>,SplitGroup> groups;
     std::deque<Event> events;
-    std::size_t assemblyBytes{}, eventBytes{}, orderedBytes{};
+    std::size_t assemblyBytes{}, eventBytes{}, orderedBytes{}, orderedCount{};
     std::optional<std::uint32_t> highestReceived;
     std::bitset<65536> received;
-    std::uint64_t began{}, lastOpen{}, lastReceive{}, lastClock{};
+    std::uint64_t began{}, lastOpen{}, lastReceive{}, lastClock{}, lastPoll{}, lastAck{};
     int ping{};
     std::uint64_t bytesSent{};
     std::uint64_t bytesReceived{};
@@ -67,12 +69,11 @@ struct ClientTransport::Impl {
     std::uint32_t packetsReceived{};
 
     void Queue(Bytes bytes, std::size_t bits = 0) {
-        // A sync burst can arrive faster than one packet per frame. Closing
-        // the socket here is the "connection lost" that shows up after the
-        // world starts streaming. Drop the oldest packet and keep the session.
-        while ((events.size() >= 2048 || eventBytes + bytes.size() > MaxAssemblyBytes) && !events.empty()) {
-            eventBytes -= std::min(eventBytes, events.front().bytes.size());
-            events.pop_front();
+        // Once acknowledged, an ordered event cannot be recovered from the peer.
+        // Keep it through dispatch, including when a retransmission releases a backlog.
+        if (events.size() >= MaxBufferedPackets || eventBytes + bytes.size() > MaxAssemblyBytes) {
+            Fail("MTA delivery queue limit");
+            return;
         }
         eventBytes += bytes.size();
         const auto count = bits ? bits : bytes.size()*8;
@@ -88,7 +89,7 @@ struct ClientTransport::Impl {
         state = State::Failed;
         pending.clear(); groups.clear(); assemblyBytes = 0;
         for (auto& queue : ordered) queue.clear();
-        orderedBytes = 0;
+        orderedCount = orderedBytes = 0;
         events.clear(); eventBytes = 0;
         events.push_back({Bytes{static_cast<std::uint8_t>(connected ? 20 : 15)},8});
         socket.Close();
@@ -138,12 +139,24 @@ struct ClientTransport::Impl {
         return true;
     }
     bool Duplicate(std::uint32_t number) {
-        if (!highestReceived) { highestReceived = number; received.set(0); return false; }
-        const auto forward = static_cast<std::int32_t>(number-*highestReceived);
-        if (forward > 0) { received <<= static_cast<std::size_t>(forward); highestReceived = number; received.set(0); return false; }
-        const auto behind = *highestReceived-number;
-        if (behind >= received.size() || received[behind]) return true;
-        received.set(behind); return false;
+        // Index the receive window by the low bits. An in-order arrival only
+        // touches one bit instead of shifting the entire 8 KiB history.
+        constexpr std::uint32_t mask = 65535;
+        const auto slot = number & mask;
+        if (highestReceived) {
+            const auto advance = static_cast<std::int32_t>(number - *highestReceived);
+            if (advance <= 0) {
+                if (*highestReceived - number >= received.size() || received[slot]) return true;
+                received.set(slot);
+                return false;
+            }
+            if (static_cast<std::size_t>(advance) >= received.size()) received.reset();
+            else for (std::uint32_t cursor = *highestReceived + 1; cursor != number; ++cursor)
+                received.reset(cursor & mask);
+        }
+        highestReceived = number;
+        received.set(slot);
+        return false;
     }
     void Deliver(ReliableMessage message) {
         if (message.payload.empty()) return;
@@ -178,17 +191,45 @@ struct ClientTransport::Impl {
             if (difference > 0) {
                 auto& queue = ordered[channel];
                 if (queue.contains(message.order)) return;
-                if (queue.size() >= 2048 || orderedBytes+message.payload.size() > MaxAssemblyBytes) { Fail("MTA ordered queue limit"); return; }
+                const bool full = orderedCount >= MaxBufferedPackets || orderedBytes + message.payload.size() > MaxAssemblyBytes;
+#ifdef __ANDROID__
+                if (queue.size() == 1023 || full) {
+                    unsigned parts = 0, total = 0;
+                    for (const auto& [key, group] : groups) {
+                        if (std::get<1>(key) == 3 && std::get<2>(key) == expectedOrder[channel]
+                                && std::get<3>(key) == channel) {
+                            parts = static_cast<unsigned>(group.parts.size());
+                            total = group.count;
+                        }
+                    }
+                    __android_log_print(ANDROID_LOG_WARN, "WorldRPGNeon",
+                        "MTA ordered backlog channel=%u expected=%u first=%u incoming=%u count=%zu bytes=%zu missingParts=%u/%u",
+                        static_cast<unsigned>(channel), expectedOrder[channel], queue.empty() ? message.order : queue.begin()->first,
+                        message.order, queue.size(), orderedBytes, parts, total);
+                }
+#endif
+                if (full) { Fail("MTA ordered queue limit"); return; }
+                ++orderedCount;
                 orderedBytes += message.payload.size(); queue.emplace(message.order,std::move(message)); return;
             }
             Deliver(std::move(message)); ++expectedOrder[channel];
             auto& queue = ordered[channel];
+#ifdef __ANDROID__
+            const auto waiting = queue.size();
+#endif
             while (state != State::Failed) {
                 auto found = queue.find(expectedOrder[channel]);
                 if (found == queue.end()) break;
+                --orderedCount;
                 auto next = std::move(found->second); orderedBytes -= next.payload.size(); queue.erase(found);
                 Deliver(std::move(next)); ++expectedOrder[channel];
             }
+#ifdef __ANDROID__
+            if (waiting >= 1024 && waiting - queue.size() >= 1024)
+                __android_log_print(ANDROID_LOG_INFO, "WorldRPGNeon",
+                    "MTA ordered recovery channel=%u delivered=%zu expected=%u", static_cast<unsigned>(channel),
+                    waiting - queue.size(), expectedOrder[channel]);
+#endif
         } else if (message.reliability == 1 || message.reliability == 4) {
             if (hasSequence[channel] && static_cast<std::int32_t>(message.order-newestSequence[channel]) <= 0) return;
             hasSequence[channel] = true; newestSequence[channel] = message.order;
@@ -204,7 +245,9 @@ struct ClientTransport::Impl {
         } else Deliver(std::move(message));
     }
     void Incoming(ReliableMessage message) {
-        if (Duplicate(message.number)) return;
+        // RakNet ReliabilityLayer tracks retransmissions only for reliable
+        // traffic. An unreliable sample must never suppress an ordered message.
+        if (message.reliability >= 2 && Duplicate(message.number)) return;
         if ((message.reliability == 1 || message.reliability == 4) && hasSequence[message.channel]
                 && static_cast<std::int32_t>(message.order-newestSequence[message.channel]) <= 0) return;
         if (!message.split) { Ordered(std::move(message)); return; }
@@ -265,6 +308,7 @@ struct ClientTransport::Impl {
         if (!frame) { Fail("Malformed MTA reliable frame"); return; }
         lastReceive = Now();
         if (frame->ackTime && Now() >= *frame->ackTime && Now()-*frame->ackTime <= 10000) ping = Now()-*frame->ackTime;
+        if (!frame->acknowledgments.empty()) lastAck = lastReceive;
         for (const auto& range : frame->acknowledgments) {
             auto entry = pending.lower_bound(range.first);
             while (entry != pending.end() && entry->first <= range.last) entry = pending.erase(entry);
@@ -276,6 +320,7 @@ struct ClientTransport::Impl {
     }
     void Pulse() {
         if (state == State::Idle || state == State::Failed) return;
+        lastPoll = Now();
         for (unsigned i = 0; i < 32 && state != State::Failed; ++i) {
             Bytes bytes; const auto result = socket.Receive(bytes,0);
             if (result < 0) { Fail(socket.Error()); return; }
@@ -297,7 +342,16 @@ struct ClientTransport::Impl {
         }
         for (auto& [number,entry] : pending) {
             (void)number;
-            if (now-entry.firstSent > 30000) { Fail("MTA reliable delivery timed out"); return; }
+            if (now-entry.firstSent > 30000) {
+#ifdef __ANDROID__
+                __android_log_print(ANDROID_LOG_WARN, "WorldRPGNeon",
+                    "MTA reliable timeout msg=%u wire=%u pending=%zu ordered=%zu events=%zu rxAgeMs=%llu ackAgeMs=%llu",
+                    number, static_cast<unsigned>(entry.message.payload.front()), pending.size(), orderedCount, events.size(),
+                    static_cast<unsigned long long>(now - lastReceive), static_cast<unsigned long long>(now - lastAck));
+#endif
+                Fail("MTA reliable delivery timed out");
+                return;
+            }
             if (now-entry.sent >= 300) { entry.sent = now; if (!Transmit(entry.message)) return; }
         }
         for (const auto& [identity,group] : groups) { (void)identity; if (now-group.created > 30000) { Fail("MTA fragment assembly timed out"); return; } }
@@ -328,7 +382,9 @@ bool ClientTransport::send(const unsigned char* data, int length, int priority, 
 }
 int ClientTransport::receive(unsigned char* buffer, int capacity, std::size_t* bits) {
     if (!buffer || capacity <= 0) return 0;
-    pImpl_->Pulse();
+    // The caller drains up to 48 events per pulse. Deliver the decoded batch
+    // first so polling another 32 datagrams per event cannot starve dispatch.
+    if (pImpl_->events.empty() || Now() - pImpl_->lastPoll >= 16) pImpl_->Pulse();
     if (pImpl_->events.empty()) return 0;
     if (pImpl_->events.front().bytes.size() > static_cast<std::size_t>(capacity)) {
         // A resource script bundle is often larger than the caller buffer.

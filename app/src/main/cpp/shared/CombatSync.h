@@ -3,18 +3,64 @@
 // Combat sync (S6): bullet packet decoders and damage registration.
 // Read orders follow mta_neon CNetAPI::ReadBulletsync / ReadWeaponBulletsync.
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace WorldRPG::Net {
 class BitStreamReader;
+class BitStreamWriter;
 }
 
 namespace WorldRPG::Combat {
 
+struct DamageReport {
+    uint64_t serial = 0;
+    uint32_t attacker = 0;
+    uint8_t weapon = 0, zone = 3;
+};
+
+// Pure sync carries the latest hit. A send can overlap another identical hit or a respawn.
+class PendingDamage {
+public:
+    void record(uint32_t attacker, uint8_t weapon, uint8_t zone) {
+        if (!attacker || attacker >= 0x1FFFFu) return;
+        std::lock_guard lock(mutex);
+        latest = {++sequence, attacker, weapon, uint8_t(zone >= 3 && zone <= 9 ? zone : 3)};
+    }
+    DamageReport peek() const {
+        std::lock_guard lock(mutex);
+        return latest;
+    }
+    void acknowledge(uint64_t serial) {
+        if (!serial) return;
+        std::lock_guard lock(mutex);
+        if (latest.serial == serial) latest = {};
+    }
+    void clear() {
+        std::lock_guard lock(mutex);
+        latest = {};
+    }
+private:
+    mutable std::mutex mutex;
+    uint64_t sequence = 0;
+    DamageReport latest;
+};
+
 // PLAYER_BULLETSYNC (98), after the 17-bit ElementID of the shooter:
 // weapon u8, start 3xfloat, end 3xfloat, order u8, hit bit,
 // [damage float, zone u8, victim ElementID(17 bits)] when hit.
+struct BulletHit {
+    uint32_t victim = 0xFFFFFFFFu;
+    float damage = 0.f;
+    uint8_t zone = 0;
+};
+
+void WriteBulletHit(Net::BitStreamWriter& w, const BulletHit& hit);
+void ResetBulletSync();
+void ForgetShooter(uint32_t id);
+
 struct SBulletSync {
     uint32_t shooter = 0;
     uint8_t weapon = 0;
@@ -42,9 +88,13 @@ bool ReadWeaponBulletSync(WorldRPG::Net::BitStreamReader& reader, SWeaponBulletS
 // Updates the per-shooter state. Returns false for duplicates.
 bool AcceptPlayerBulletSync(const SBulletSync& bullet);
 
-// Damage to the local player only, and only from a packet hit with a damage value.
-// No damage is fabricated from a weapon table.
-void ApplyBulletDamage(const SBulletSync& bullet, uint32_t localPlayer);
+// CClientPlayer::DischargeWeapon compensates a recently interrupted local victim
+// only for the part of the backup hit the native replay did not already apply.
+void SetLocalNetworkInterrupted(bool interrupted);
+float RemainingBackupDamage(const SBulletSync& bullet, uint32_t localPlayer, float nativeDamage,
+                            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+// Apply a confirmed backup hit to live vitals. Returns false for an invalid hit or a dead victim.
+bool ApplyBackupDamage(float amount, float& health, float& armor);
 
 // Victim health from PLAYER_PURESYNC. Remote players only. The shooter's
 // record is never written from this value.
@@ -56,7 +106,7 @@ bool WeaponUsesBulletSync(uint8_t weapon);
 
 // SYNC_SETTINGS (99), bullet weapon list. Reads uchar count, then count uchar weapon ids, and stores them as the
 // sender set (desktop CPacketHandler::Packet_SyncSettings, CPacketHandler.cpp 5839-5852). The rest of the packet
-// is not read. Returns false only when the count is missing; the set is then unchanged. Thread-safe.
+// is not read. An incomplete list leaves the previous set intact. Thread-safe.
 bool ReadSyncSettingsWeapons(WorldRPG::Net::BitStreamReader& reader);
 
 // Receive gate for PLAYER_BULLETSYNC (98) and WEAPON_BULLETSYNC (100). Reference CClientWeaponManager::HasWeaponBulletSync:

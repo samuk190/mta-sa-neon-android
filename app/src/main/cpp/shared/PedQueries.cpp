@@ -1,6 +1,7 @@
 #include "PedQueries.h"
 #include "../gtasa/GameEngine.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
@@ -12,6 +13,8 @@ std::mutex mutex;
 std::unordered_map<uint32_t, Entry> entries;
 std::unordered_map<uint32_t, Presentation> presentation;
 uint64_t generation = 0;
+Frame nativeFrame;
+std::chrono::steady_clock::time_point frameTime;
 Entry New(bool player, const Entity::PedSpawn* spawn) {
     Entry e;
     e.state.generation = ++generation;
@@ -69,6 +72,8 @@ void Reset() {
     std::lock_guard lock(mutex);
     entries.clear();
     presentation.clear();
+    nativeFrame.clear();
+    frameTime = {};
 }
 bool Copy(uint32_t id, Snapshot& out) {
     std::lock_guard lock(mutex);
@@ -76,6 +81,36 @@ bool Copy(uint32_t id, Snapshot& out) {
     if (it == entries.end()) return false;
     out = it->second.state;
     ApplyPresentation(id, out);
+    return true;
+}
+void PublishFrame(Frame& frame) {
+    std::lock_guard lock(mutex);
+    nativeFrame.swap(frame);
+    frameTime = std::chrono::steady_clock::now();
+}
+void InvalidateNative(uint32_t id) {
+    std::lock_guard lock(mutex);
+    auto it = entries.find(id);
+    if (it != entries.end()) ++it->second.state.revision;
+}
+bool CopyFrame(uint32_t id, Snapshot& out) {
+    std::lock_guard lock(mutex);
+    const auto it = entries.find(id);
+    if (it == entries.end() || std::chrono::steady_clock::now() - frameTime > std::chrono::milliseconds(200))
+        return false;
+    out = it->second.state;
+    ApplyPresentation(id, out);
+    for (const auto& [sampleId, sample] : nativeFrame) {
+        if (sampleId != id) continue;
+        if (!sample.streamed || sample.generation != out.generation || sample.revision != out.revision)
+            return false;
+        out.streamed = true;
+        out.taskType = sample.taskType;
+        out.health = sample.health;
+        out.currentSlot = sample.currentSlot;
+        out.weapons = sample.weapons;
+        break;
+    }
     return true;
 }
 bool CopyRestore(uint32_t id, Snapshot& out) {
@@ -136,6 +171,7 @@ uint64_t WeaponRpc(uint32_t id, const Game::PedRpcOp& op) {
             break;
         default: return 0;
     }
+    ++s.revision;
     return s.generation;
 }
 Presentation ReadPresentation(uint32_t id) {
@@ -175,6 +211,8 @@ void Health(uint32_t id, float health, bool clearDead) {
     std::lock_guard lock(mutex);
     auto it = entries.find(id);
     if (it == entries.end()) return;
+    if (it->second.state.health != std::max(health, 0.f) || (clearDead && health > 0.f && it->second.state.dead))
+        ++it->second.state.revision;
     it->second.state.health = std::max(health, 0.f);
     if (clearDead && health > 0.f) it->second.state.dead = false;
 }
@@ -183,6 +221,7 @@ void Wasted(uint32_t id) {
     auto it = entries.find(id);
     if (it == entries.end()) return;
     auto& s = it->second.state;
+    ++s.revision;
     s.dead = true;
     s.health = 0.f;
     s.networkDead = s.player;
@@ -199,6 +238,7 @@ void StreamOut(uint32_t id, const Snapshot& native) {
     if (it == entries.end() || native.generation != it->second.state.generation || !native.streamed) return;
     auto& s = it->second.state;
     // _DestroyModel stores ammo only for known ped weapons (CClientPed.cpp:6258-6274).
+    ++s.revision;
     s.currentSlot = native.currentSlot;
     if (!s.player) for (unsigned i = 0; i < Slots; ++i)
         if (s.weapons[i].type && s.weapons[i].type == native.weapons[i].type)
@@ -227,6 +267,7 @@ bool SetCurrentSlot(uint32_t id, unsigned slot, bool player) {
     std::lock_guard lock(mutex);
     auto it = entries.find(id);
     if (it == entries.end()) it = entries.emplace(id, New(player, nullptr)).first;
+    ++it->second.state.revision;
     it->second.state.currentSlot = slot;
     return true;
 }

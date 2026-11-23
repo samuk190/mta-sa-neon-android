@@ -99,12 +99,9 @@ bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& com
     uint8_t blowState = 0;  // 0 intact, 1 awaiting explosion sync, 2 blown
     if (!reader.ReadBits(&blowState, 2)) ENTITY_BODY_FAIL();
 
-    uint8_t extraColours = 0;  // ucNumColors: (n + 1) colours
-    if (!reader.ReadBits(&extraColours, 2)) ENTITY_BODY_FAIL();
-    for (unsigned i = 0; i <= extraColours; ++i) {
-        uint8_t r = 0, g = 0, b = 0;
-        if (!reader.Read(r) || !reader.Read(g) || !reader.Read(b)) ENTITY_BODY_FAIL();
-    }
+    VehicleColors colors;
+    if (!ReadVehicleColors(reader, colors)) ENTITY_BODY_FAIL();
+    visual.vehicleColors = colors;
 
     uint8_t paintjob = 0;  // SPaintjobSync
     if (!reader.ReadBits(&paintjob, 2)) ENTITY_BODY_FAIL();
@@ -212,6 +209,9 @@ bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& com
     visual.health = health;
     // CPacketHandler.cpp:3625,3648 reads the lock bit and calls SetDoorsLocked.
     visual.vehicleDoorLock = flags[4] ? 2 : 1;
+    visual.vehicleFrozen = flags[7];
+    visual.vehicleEngineOn = flags[3];
+    visual.vehicleAlpha = static_cast<uint8_t>(alpha);
     visual.nitroUpgrade = nitroUpgrade;
 
     DIAG("vehicle stored id=%u model=%u pos=%.2f,%.2f,%.2f health=%.1f blow=%u paint=%u rot=%.1f",
@@ -220,7 +220,6 @@ bool ReadEntityBodyVehicle(Net::BitStreamReader& reader, const EntityCommon& com
     (void)variant;
     (void)variant2;
     (void)overrideLights;
-    (void)alpha;
     return true;
 }
 

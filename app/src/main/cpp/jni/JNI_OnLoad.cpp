@@ -399,7 +399,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     JNI_LOGI("JNI_OnLoad: WorldRPGNeon native library loaded");
     // Engine process only: libGTASA is already loaded and its engine thread has not started yet.
     WorldRPG::Game::InstallGameHeap();
-    WorldRPG::Game::InstallRenderQueueCapacity();
+    WorldRPG::Game::InstallStreamingCapacities();
     WorldRPG::Game::InstallServerSessionHook();
     return JNI_VERSION_1_6;
 }

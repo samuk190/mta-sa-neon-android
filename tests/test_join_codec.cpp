@@ -23,6 +23,7 @@
 #include "../app/src/main/cpp/net/NeonJoinProtocol.cpp"
 #include "../app/src/main/cpp/net/NetJoinEnvelope.h"
 #undef private
+#include "../tools/headless/send_tap.h"
 #include "../app/src/main/cpp/shared/entity/EntityAddTypes.h"
 
 #include <cstdio>
@@ -518,7 +519,45 @@ static void TestWaterEntityWire() {
     }
 }
 
+static void TestPassengerTrigger() {
+    using namespace WorldRPG;
+    static bool accept = false;
+    static std::vector<uint8_t> packets;
+    Headless::SetTestTransport([](const BitStreamWriter& w) {
+        packets.push_back(w.GetData()[0]);
+        return accept;
+    });
+    RakNetWrapper transport;
+    NeonJoinClient client;
+    auto& sender = *client.pImpl_;
+    sender.net = &transport;
+    Game::LocalCarState car;
+    car.model = 400;
+    car.seat = 1;
+    car.firePress = 42;  // Touch already released on the game thread before the packet was sampled.
+    PlayerWeaponSync::LocalWeapon gun;
+    gun.valid = gun.gangDriveby = true;
+    gun.type = 28;
+    gun.slot = 4;
+    gun.clip = gun.total = 10;
+    PlayerWeaponSync::SetAimLine(gun.aim, {}, {0, 1, 0});
+    CHECK(!sender.SendDriverPuresync(car, gun) && !sender.lastSentDriverKeys.buttonCircle, "failed passenger send preserves input baseline");
+    accept = true;
+    CHECK(sender.SendDriverPuresync(car, gun) && sender.lastSentDriverKeys.buttonCircle, "packet 33 commits short passenger press");
+    car.firePress = 0;
+    accept = false;
+    sender.SendDriverKeySync(car, gun);
+    CHECK(sender.lastSentDriverKeys.buttonCircle, "rejected release remains pending for retry");
+    accept = true;
+    sender.SendDriverKeySync(car, gun);
+    sender.SendDriverKeySync(car, gun);
+    CHECK(!sender.lastSentDriverKeys.buttonCircle && packets == std::vector<uint8_t>({33, 33, 31, 31}),
+          "packet 31 releases the trigger once, against the accepted packet 33");
+    Headless::SetTestTransport(nullptr);
+}
+
 int main() {
+    TestPassengerTrigger();
     TestWaterEntityWire();
     TestNetworkJoinEnvelope();
     TestJoinProfilesAndData();

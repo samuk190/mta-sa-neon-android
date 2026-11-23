@@ -5,6 +5,8 @@ namespace WorldRPG::GameTasks {
 // after 200 ms; started mutations finish before their caller can return.
 void Service();
 bool Run(std::function<void()> task);
+// Read current GTA state on the game thread. Consecutive reads can share one pulse.
+bool RunQuery(std::function<void()> task);
 // Cleanup survives a caller timeout. False retries on the next game pulse.
 // Callers coalesce requests and retain ownership of captured data.
 void Defer(std::function<bool()> cleanup);

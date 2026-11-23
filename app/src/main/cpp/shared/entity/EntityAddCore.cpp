@@ -146,6 +146,13 @@ bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out) {
         out.text.assign(bytes.begin(), bytes.end());
         return true;
     }
+    if (kind == 2 || kind == 7) {
+        uint32_t id = 0;
+        if (!ReadElementId(reader, id)) LUA_FAIL();
+        out.element = true;
+        out.value = id;
+        return true;
+    }
     // The type nibble is already consumed. Skipping must not read it again.
     out.number = false;
     out.text.clear();

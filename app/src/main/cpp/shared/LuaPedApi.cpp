@@ -89,11 +89,15 @@ bool ReadWeaponSlot(lua_State* L, unsigned& slot) {
 }
 
 // CLuaPedDefs.cpp:685-709; CClientPed::GetWeaponType:4174-4189.
+bool ReadFramePed(uint32_t id, PedQueries::Snapshot& state) {
+    return PedQueries::CopyFrame(id, state) || Game::CopyPedQuery(id, state);
+}
+
 int GetPedWeapon(lua_State* L) {
     uint32_t id = 0;
     unsigned slot = 255;
     PedQueries::Snapshot state;
-    if (!ReadPed(L, id) || !ReadWeaponSlot(L, slot) || !Game::CopyPedQuery(id, state)) return PushFalse(L);
+    if (!ReadPed(L, id) || !ReadWeaponSlot(L, slot) || !ReadFramePed(id, state)) return PushFalse(L);
     if (slot == 255) slot = state.currentSlot;
     lua_pushnumber(L, slot < PedQueries::Slots ? state.weapons[slot].type : 0);
     return 1;
@@ -124,7 +128,7 @@ int GetPedTotalAmmo(lua_State* L) { return PedAmmo(L, false); }
 int IsPedDead(lua_State* L) {
     uint32_t id = 0;
     PedQueries::Snapshot state;
-    if (!ReadPed(L, id) || !Game::CopyPedQuery(id, state)) lua_pushnil(L);
+    if (!ReadPed(L, id) || !ReadFramePed(id, state)) lua_pushnil(L);
     else lua_pushboolean(L, PedQueries::IsDead(state));
     return 1;
 }
@@ -599,15 +603,12 @@ bool IsPed(lua_State* L, int index, uint32_t& id) {
     return kind && (std::strcmp(kind, "player") == 0 || std::strcmp(kind, "ped") == 0);
 }
 
-// Desktop CClientPed::GetOccupiedVehicle / GetOccupiedVehicleSeat. The local player is in the
-// car the game reports (WatchLocalVehicle); its seat is 0 because the phone only requests the
-// driver seat (NeonJoinProtocol.cpp VEHICLE_REQUEST_IN). Other peds are seated by
-// VEHICLE_INOUT (PacketHandler.cpp ApplyRemoteVehicleInOut). A ped that ENTITY_ADD placed in a
-// vehicle is not seated yet (the warp logs DIAG), so it reports no vehicle.
+// Local occupancy follows the native seat. Remote occupancy comes from server seat notifications.
 bool PedOccupiedVehicle(uint32_t pedId, uint32_t& vehicleId, uint8_t& seat) {
     if (pedId == ServerWorld::LocalPlayer()) {
         vehicleId = WorldRPG::Game::LocalVehicleId();
-        seat = 0;
+        WorldRPG::Game::LocalCarState car;
+        seat = WorldRPG::Game::CopyLocalCar(car) && car.vehicleId == vehicleId ? car.seat : 0;
     } else if (!WorldRPG::RemoteVehicle::FindOccupant(pedId, vehicleId, seat)) {
         return false;
     }
@@ -761,6 +762,10 @@ int SetPedControlState(lua_State* L) {
         std::lock_guard lock(g_controlMu);
         g_controls[id][control] = lua_toboolean(L, stateIndex) != 0;
     }
+    if (std::strcmp(ServerWorld::ElementKindName(id), "ped") == 0 && ServerWorld::ActorHosted(id)) {
+        lua_pushboolean(L, Game::SetOwnedPedControl(id, control.c_str(), lua_toboolean(L, stateIndex) != 0));
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG setPedControlState: CPad is not written; the control is stored for getPedControlState");
     lua_pushboolean(L, 1);
@@ -865,6 +870,27 @@ int GetPedSimplestTask(lua_State* L) {
     return 1;
 }
 
+int GetPedTrafficObstacleScan(lua_State* L) {
+    uint32_t id = 0;
+    bool resuming = !lua_isnoneornil(L, 2);
+    double heading = resuming ? lua_tonumber(L, 2) : 0;
+    Game::TrafficObstacleScan hit;
+    if (!IsPed(L, 1, id) || (resuming && !lua_isnumber(L, 2)) || !std::isfinite(heading) ||
+        std::abs(heading) > 360.0 || !Game::ScanTrafficObstacle(id, resuming, static_cast<float>(heading), hit))
+        return 0;
+    lua_pushstring(L, hit.mode);
+    lua_pushnumber(L, hit.heading);
+    lua_pushnumber(L, hit.floor);
+    lua_pushboolean(L, hit.frontBlocked);
+    lua_createtable(L, 8, 0);
+    for (int i = 0; i < 8; ++i) {
+        if (!hit.clear[i]) continue;
+        lua_pushnumber(L, hit.ground[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 5;
+}
+
 int IsPedDoingTask(lua_State* L) {
     uint32_t id = 0;
     if (!IsPed(L, 1, id) || lua_type(L, 2) != LUA_TSTRING) {
@@ -872,9 +898,18 @@ int IsPedDoingTask(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG isPedDoingTask: CTaskManager is not hooked");
-    lua_pushboolean(L, 0);
+    const char* name = lua_tostring(L, 2);
+    if (SameControl(name, "TASK_COMPLEX_CAR_DRIVE_WANDER")) {
+        lua_pushboolean(L, Game::IsTrafficPedTaskActive(id, Game::TrafficPedTask::DriveWander));
+    } else if (SameControl(name, "TASK_COMPLEX_KILL_PED_ON_FOOT")) {
+        lua_pushboolean(L, Game::IsTrafficPedTaskActive(id, Game::TrafficPedTask::KillOnFoot));
+    } else if (SameControl(name, "TASK_COMPLEX_WANDER")) {
+        lua_pushboolean(L, Game::IsTrafficPedTaskActive(id, Game::TrafficPedTask::Wander));
+    } else {
+        static bool once = false;
+        DiagOnce(once, "DIAG isPedDoingTask: only native traffic tasks can be queried");
+        lua_pushboolean(L, 0);
+    }
     return 1;
 }
 
@@ -892,7 +927,7 @@ int GetPedTarget(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:1552-1579. Slot 0..12 is stored. CPed::SetCurrentWeapon is not called.
+// CLuaPedDefs.cpp:1552-1579. Apply script selection through the same game-thread queue as the weapon RPC.
 int SetPedWeaponSlot(lua_State* L) {
     uint32_t id = 0;
     if (!IsPed(L, 1, id) || !lua_isnumber(L, 2)) {
@@ -911,8 +946,11 @@ int SetPedWeaponSlot(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedWeaponSlot: CPed::SetCurrentWeapon is not called; the client slot is stored");
+    Game::PedRpcOp op;
+    op.kind = Game::PedRpcOp::Kind::SetWeaponSlot;
+    op.slot = static_cast<uint8_t>(slot);
+    op.queryGeneration = PedQueries::Generation(id);
+    if (!Game::ScriptPedAlive(id)) Game::QueuePedRpc(id, op);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1599,8 +1637,7 @@ bool ApplyGang(uint32_t id, bool driveby) {
     state.haveGang = true;
     state.gang = driveby;
     StoreBody(id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedDoingGangDriveby: the gang driveby task is not started");
+    if (!Game::ScriptPedAlive(id)) Game::NoteDriveby(id, driveby);
     return true;
 }
 
@@ -1608,7 +1645,8 @@ bool ApplyGang(uint32_t id, bool driveby) {
 int IsPedDoingGangDriveby(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "isPedDoingGangDriveby", "ped", 1);
-    lua_pushboolean(L, LoadBody(ped.id).gang ? 1 : 0);
+    const bool enabled = Game::ScriptPedAlive(ped.id) ? LoadBody(ped.id).gang : Game::IsDriveby(ped.id);
+    lua_pushboolean(L, enabled);
     return 1;
 }
 
@@ -2853,14 +2891,23 @@ int SetPedGoToOffset(lua_State* L) {
 }
 
 // CLuaPedDefs.cpp:3145-3154.
+int PresentPedWeaponShot(lua_State* L) {
+    PedRef ped;
+    if (!TakePed(L, 1, ped) || !lua_isnumber(L, 2)) return TaskFalse(L);
+    float x, y, z;
+    if (!TakeVector(L, "presentPedWeaponShot", 3, x, y, z)) return TaskFalse(L);
+    const auto weapon = lua_tointeger(L, 2);
+    lua_pushboolean(L, weapon >= 22 && weapon <= 34 && Game::PresentPedWeaponShot(ped.id, weapon, x, y, z));
+    return 1;
+}
+
 int SetPedKillOnFoot(lua_State* L) {
     PedRef ped, target;
     if (!TakePed(L, 1, ped)) return RaiseArg(L, "setPedKillOnFoot", "ped", 1);
     if (!TakePed(L, 2, target)) return RaiseArg(L, "setPedKillOnFoot", "ped", 2);
     if (ped.id == target.id || !TaskOwner(ped) || !StreamedAlive(target.id)) return TaskFalse(L);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedKillOnFoot: CTaskComplexKillPedOnFoot is not created");
-    return TaskFalse(L);
+    lua_pushboolean(L, Game::StartPedKillOnFoot(ped.id, target.id));
+    return 1;
 }
 
 // CLuaPedDefs.cpp:4624-4629.
@@ -2985,9 +3032,22 @@ int SetPedDriveWander(lua_State* L) {
     uint8_t seat = 0;
     const bool driving = PedOccupiedVehicle(ped.id, occupied, seat) && occupied == vehicle && seat == 0;
     if (!TaskOwner(ped) || !std::isfinite(speed) || speed < 0 || speed > 255 || !driving) return TaskFalse(L);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedDriveWander: CTaskComplexCarDriveWander is not created");
-    return TaskFalse(L);
+    constexpr const char* names[] = {"stop_for_cars", "slow_down_for_cars", "avoid_cars", "plough_through",
+        "stop_for_cars_ignore_lights", "avoid_cars_obey_lights", "avoid_cars_stop_for_peds_obey_lights"};
+    int style = 0;
+    if (lua_type(L, 4) == LUA_TNUMBER) {
+        const double value = lua_tonumber(L, 4);
+        if (!std::isfinite(value) || value < 0 || value > 6 || value != std::floor(value)) return TaskFalse(L);
+        style = static_cast<int>(value);
+    } else if (lua_type(L, 4) == LUA_TSTRING) {
+        const char* name = lua_tostring(L, 4);
+        while (style < 7 && !IEq(name, names[style])) ++style;
+        if (style == 7) return TaskFalse(L);
+    } else if (!lua_isnoneornil(L, 4)) {
+        return TaskFalse(L);
+    }
+    lua_pushboolean(L, Game::StartPedDriveWander(ped.id, vehicle, static_cast<float>(speed), style));
+    return 1;
 }
 
 // CLuaPedDefs.cpp:2920-2942. Enter and exit need a streamed body.
@@ -3498,7 +3558,6 @@ int KillPedTask(lua_State* L) {
     const double slot = lua_tonumber(L, 3);
     bool graceful = true;
     if (!ReadOptBool(L, "killPedTask", 4, graceful, true)) return 1;
-    (void)graceful;
     if (!std::isfinite(slot) || slot < 0 || slot > 255 || slot != std::floor(slot)) return RaiseArg(L, "killPedTask", "number", 3);
     if (IEq(kind, "primary")) {
         if (static_cast<int>(slot) == 4) return luaL_error(L, "Killing TASK_PRIORITY_DEFAULT is not allowed");
@@ -3508,9 +3567,8 @@ int KillPedTask(lua_State* L) {
     } else {
         return RaiseArg(L, "killPedTask", "enum", 2);
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG killPedTask: CTaskManager::RemoveTask is not called");
-    return TaskFalse(L);
+    lua_pushboolean(L, Game::KillNativePedTask(ped.id, IEq(kind, "primary"), static_cast<int>(slot), graceful));
+    return 1;
 }
 
 // CLuaPedDefs.cpp:4644-4712. No cargo entry exists, so the state is "released" and every change fails.
@@ -3980,6 +4038,7 @@ void BindPedLua(lua_State* L) {
         {"getPedSimplestTask", GetPedSimplestTask},
         // CLuaCompatibilityDefs.cpp:28.
         {"getPlayerSimplestTask", GetPedSimplestTask},
+        {"getPedTrafficObstacleScan", GetPedTrafficObstacleScan},
         {"isPedDoingTask", IsPedDoingTask},
         // CLuaCompatibilityDefs.cpp:29.
         {"isPlayerDoingTask", IsPedDoingTask},
@@ -4094,6 +4153,7 @@ void BindPedLua(lua_State* L) {
         {"setPedTurnToFace", SetPedTurnToFace},
         {"setPedGoToOffset", SetPedGoToOffset},
         {"setPedKillOnFoot", SetPedKillOnFoot},
+        {"presentPedWeaponShot", PresentPedWeaponShot},
         {"setPedAchieveHeading", SetPedAchieveHeading},
         {"setPedAimAt", SetPedAimAt},
         {"setPedShootAt", SetPedShootAt},

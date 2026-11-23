@@ -1,6 +1,7 @@
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
+#include "VehicleColorPalette.h"
 #include "entity/EntityVehicleModels.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
@@ -632,17 +633,21 @@ int GetVehicleUpgradeSlotName(lua_State* L) {
 }
 
 // Desktop CClientVehicle::GetOccupant (CClientVehicle.cpp:1884-1897). The local player is the
-// driver of the car the game reports; other peds come from the seat table (see PedOccupiedVehicle
+// occupant of the native seat the game reports; other peds come from the seat table (see PedOccupiedVehicle
 // in LuaPedApi.cpp). A ped that left the session is not returned.
 uint32_t VehicleOccupant(uint32_t vehicleId, unsigned seat) {
     if (seat > 8) return 0;
     uint32_t ped = 0;
-    if (seat == 0 && WorldRPG::Game::LocalVehicleId() == vehicleId) {
+    WorldRPG::Game::LocalCarState localCar;
+    const bool localHere = WorldRPG::Game::LocalVehicleId() == vehicleId;
+    const unsigned localSeat = localHere && WorldRPG::Game::CopyLocalCar(localCar) ? localCar.seat : 0;
+    if (localHere && seat == localSeat) {
         ped = ServerWorld::LocalPlayer();
     } else if (!WorldRPG::RemoteVehicle::FindSeatOccupant(vehicleId, static_cast<uint8_t>(seat), ped)) {
         return 0;
     }
     if (ped == 0 || ped == 0xFFFFFFFFu) return 0;
+    if (ped == ServerWorld::LocalPlayer() && !(localHere && seat == localSeat)) return 0;
     const char* kind = ServerWorld::ElementKindName(ped);
     if (std::strcmp(kind, "player") != 0 && std::strcmp(kind, "ped") != 0) return 0;
     return ped;
@@ -734,9 +739,6 @@ struct VehicleFlags {
     float trainSpeed = 0.f;
     float trainPosition = -1.f;
     bool chainEngine = false;
-    bool colorRgb = false;
-    unsigned char palette[4] = {};
-    unsigned char rgb[12] = {};
     unsigned char variant = 255;
     unsigned char variant2 = 255;
     float wheelScale = 1.f;
@@ -959,7 +961,8 @@ int GetVehicleEngineState(lua_State* L) {
     uint32_t id = 0;
     if (!ReadVehicleId(L, "getVehicleEngineState", id, model)) return Fail(L);
     (void)model;
-    lua_pushboolean(L, CopyFlags(id).engine ? 1 : 0);
+    Game::HostedCar traffic;
+    lua_pushboolean(L, Game::CopyTrafficVehicleState(id, traffic) ? traffic.engineOn : CopyFlags(id).engine);
     return 1;
 }
 
@@ -969,7 +972,7 @@ int SetVehicleEngineState(lua_State* L) {
     if (!ReadElement(L, "setVehicleEngineState", id)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleEngineState", 2, on)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
+    Game::SetTrafficVehicleEngine(id, on);
     auto flags = CopyFlags(id);
     flags.engine = on;
     UpdateFlags(id, flags);
@@ -1112,7 +1115,7 @@ int SetVehicleFrozen(lua_State* L) {
     if (!ReadElement(L, "setVehicleFrozen", id)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleFrozen", 2, frozen)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
+    Game::RpcSetFrozen(id, frozen);
     auto flags = CopyFlags(id);
     flags.frozen = frozen;
     UpdateFlags(id, flags);
@@ -1466,7 +1469,7 @@ int IsVehicleOnGround(lua_State* L) {
     uint32_t id = 0;
     if (!ReadVehicleId(L, "isVehicleOnGround", id, model)) return Fail(L);
     (void)model;
-    lua_pushboolean(L, CopyFlags(id).onGround ? 1 : 0);
+    lua_pushboolean(L, Game::IsTrafficVehicleOnGround(id));
     return 1;
 }
 
@@ -1746,12 +1749,16 @@ int GetVehicleColor(lua_State* L) {
     (void)model;
     bool rgb = false;
     if (lua_type(L, 2) == LUA_TBOOLEAN) rgb = lua_toboolean(L, 2) != 0;
-    const auto flags = CopyFlags(id);
+    ServerWorld::ActorSpawn vehicle;
+    if (!ServerWorld::CopyVisual(id, vehicle)) return Fail(L);
+    const auto colors = vehicle.vehicleColors.value_or(VehicleColors{});
     if (rgb) {
-        for (int i = 0; i < 12; ++i) lua_pushnumber(L, flags.rgb[i]);
+        for (const auto& slot : colors.rgb)
+            for (auto component : slot) lua_pushnumber(L, component);
         return 12;
     }
-    for (int i = 0; i < 4; ++i) lua_pushnumber(L, flags.palette[i]);
+    for (size_t i = 0; i < colors.rgb.size(); ++i)
+        lua_pushnumber(L, colors.palette ? (*colors.palette)[i] : ClosestVehiclePalette(colors.rgb[i]));
     return 4;
 }
 
@@ -1775,17 +1782,17 @@ int SetVehicleColor(lua_State* L) {
         LogFull("setVehicleColor", "Bad usage", "Incorrect number of color arguments");
         return Fail(L);
     }
-    NoteNativeVehicleGap();
-    auto flags = CopyFlags(id);
+    VehicleColors colors;
     if (count == 4) {
-        flags.colorRgb = false;
-        for (int i = 0; i < 4; ++i) flags.palette[i] = values[i];
+        colors.palette.emplace();
+        for (unsigned i = 0; i < colors.rgb.size(); ++i) {
+            (*colors.palette)[i] = values[i];
+            if (values[i] < std::size(kVehiclePalette)) colors.rgb[i] = kVehiclePalette[values[i]];
+        }
     } else {
-        flags.colorRgb = true;
-        for (int i = 0; i < 12; ++i) flags.rgb[i] = 0;
-        for (int i = 0; i < count; ++i) flags.rgb[i] = values[i];
+        for (int i = 0; i < count; ++i) colors.rgb[i / 3][i % 3] = values[i];
     }
-    UpdateFlags(id, flags);
+    if (!ServerWorld::SetVehicleColors(id, colors)) return Fail(L);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2640,7 +2647,7 @@ int SetVehicleLoadCollisionFlag(lua_State* L) {
         return luaL_error(L, "%s", ParserError(L, "setVehicleLoadCollisionFlag", "vehicle", 1).c_str());
     if (lua_type(L, 2) != LUA_TBOOLEAN)
         return luaL_error(L, "%s", ParserError(L, "setVehicleLoadCollisionFlag", "boolean", 2).c_str());
-    NoteNativeVehicleGap();
+    Game::SetTrafficVehicleLoadCollision(ElementIdOf(L, 1), lua_toboolean(L, 2) != 0);
     auto flags = CopyFlags(ElementIdOf(L, 1));
     flags.loadCollision = lua_toboolean(L, 2) != 0;
     UpdateFlags(ElementIdOf(L, 1), flags);

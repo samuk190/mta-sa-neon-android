@@ -1,6 +1,8 @@
 #include "PlayerPedPort.h"
 #include "GameEngine.h"
 #include "../shared/DebugFlags.h"
+#include "../shared/LuaVMStub.h"
+#include "../shared/ServerWorld.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,6 +10,7 @@
 #include <cstdint>
 #include <chrono>
 #include <cstring>
+#include <iterator>
 #include <unordered_map>
 
 #ifdef __ANDROID__
@@ -469,6 +472,8 @@ struct RemoteStick {
     // SFullKeysyncSync button flags, and the flags seen on the previous ProcessControl (for the press edges).
     uint8_t buttons = 0;
     uint8_t prevButtons = 0;
+    PlayerWeaponSync::Aim aim;
+    std::array<uint8_t, 12> weaponCamera{};
     // Time of the last ButtonCircle press, for the follow-up tap (IsDoubleTapped on the attack widget).
     int64_t lastCirclePressMs = 0;
 };
@@ -558,6 +563,161 @@ IsHeldDownFn g_origIsHeldDown = nullptr;
 IsReleasedFn g_origIsReleased = nullptr;
 IsDoubleTappedFn g_origIsDoubleTapped = nullptr;
 bool g_touchHooks = false;
+
+#ifdef __ANDROID__
+using AimVector = PlayerWeaponSync::Vector;
+using CameraTargetFn = void (*)(void*, float, AimVector, AimVector&, AimVector&);
+CameraTargetFn g_originalCameraTarget = nullptr;
+const PlayerWeaponSync::Aim* g_remoteWeaponAim = nullptr;
+uint8_t* weaponCamera = nullptr;
+using CameraTargeting = bool (*)(void*);
+CameraTargeting originalTargeting = nullptr;
+std::chrono::steady_clock::time_point lastLocalTargetButton;
+bool localTargetHeld = false;
+uintptr_t drivebyButtonCaller = 0;
+void* drivebyButtonPed = nullptr;
+bool drivebyButtonHeld = false;
+bool drivebyButtonPressed = false;
+bool CameraIsTargeting(void* camera) {
+    if (g_remoteContext) return (g_remoteHeld & PlayerWeaponSync::kAim) != 0;
+    return originalTargeting(camera);
+}
+
+using WeaponHeldFn = int (*)(void*, void*, bool);
+using WeaponPressFn = bool (*)(void*, void*, bool, bool);
+WeaponHeldFn g_originalWeaponHeld = nullptr;
+WeaponPressFn g_originalWeaponPress = nullptr;
+using TargetButtonFn = bool (*)(void*, bool);
+TargetButtonFn g_originalTargetButton = nullptr;
+
+RemoteStick* FindStick(void* ped);
+constexpr int drivebyAnimations[2][4] = {{233, 231, 234, 232}, {237, 236, 238, 235}};
+using PlayerTarget = void (*)(void*, void*);
+using GunDirection = bool (*)(void*, float, float, bool, float);
+using UseGunProcess = bool (*)(void*, void*);
+using PointArm = void (*)(void*, char*, int, void*, void*, int, AimVector*, float, int, float);
+using Torso = void (*)(void*, const AimVector&);
+PlayerTarget originalPlayerTarget = nullptr, nativeAimGun = nullptr, nativeAbortIK = nullptr;
+GunDirection originalGunDirection = nullptr;
+UseGunProcess originalUseGunProcess = nullptr;
+PointArm originalPointArm = nullptr;
+Torso originalTorso = nullptr;
+void* lastLocalAimPed = nullptr;
+float lastLocalAimYaw = 0.f;
+std::chrono::steady_clock::time_point lastLocalDrivebyAim;
+bool useGunLayout = false;
+uintptr_t aimGunStart = 0;
+
+void DrivebyPlayerTarget(void* task, void* ped) {
+    auto* stick = FindStick(ped);
+    if (!stick && !g_remoteContext && !IsRemoteNetworkPlayer(ped)) {
+        originalPlayerTarget(task, ped);
+        return;
+    }
+    // PlayerTarget selects the window animation and marks aim/fire ready.
+    // GTA 2.10 stores the animation at 0x5e8c0c (ManageAnim loads it at
+    // 0x5e80c4), and sets both flags at 0x5e8aac (loads 0x5e8944/0x5e8164).
+    // Its remaining work switches the active player's global camera mode.
+    auto* bytes = static_cast<uint8_t*>(task);
+    const unsigned direction = stick && stick->aim.inVehicle ? stick->aim.drivebyDirection : 0;
+    *reinterpret_cast<int*>(bytes + 0x2c) = drivebyAnimations[bytes[0x12] != 0][direction & 3];
+    bytes[0x13] = bytes[0x14] = 1;
+}
+
+bool PointGun(void* ik, float yaw, float pitch, bool arm, float blend) {
+    void* ped = *static_cast<void**>(ik);
+    if (auto* stick = FindStick(ped); stick && stick->aim.full) {
+        const auto& aim = stick->aim;
+        yaw = aim.inVehicle ? aim.arm / PlayerWeaponSync::kArmUnits : aim.yaw;
+        pitch = aim.inVehicle ? 0.f : aim.arm / PlayerWeaponSync::kArmUnits;
+    } else if (!g_remoteContext && g_controlFindPlayerPed && ped == g_controlFindPlayerPed(-1) &&
+               HasNativeDriveby(ped)) {
+        lastLocalAimPed = ped;
+        lastLocalAimYaw = yaw;
+        lastLocalDrivebyAim = std::chrono::steady_clock::now();
+    }
+    return originalGunDirection(ik, yaw, pitch, arm, blend);
+}
+
+// Only redirect the arm and torso calls made by CTaskSimpleUseGun::AimGun.
+const PlayerWeaponSync::Aim* WeaponPose(void* ped, uintptr_t caller) {
+    if (!aimGunStart || caller <= aimGunStart || caller >= aimGunStart + 0x740) return nullptr;
+    auto* stick = FindStick(ped);
+    return stick && stick->aim.full && stick->aim.range > 0.f ? &stick->aim : nullptr;
+}
+
+AimVector AimTarget(const PlayerWeaponSync::Aim& aim) {
+    return {aim.origin.x + aim.direction.x * aim.range, aim.origin.y + aim.direction.y * aim.range,
+            aim.origin.z + aim.direction.z * aim.range};
+}
+void AimArm(void* chains, char* name, int arm, void* ped, void* entity, int bone, AimVector* offset,
+            float speed, int duration, float priority) {
+    AimVector target;
+    const auto* aim = WeaponPose(ped, reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+    if (aim && (offset || entity) && !(aim->akimboUp && entity == ped)) {
+        // AimGun itself uses (nullptr, -1, worldPoint) at 0x5df178-0x5df198.
+        entity = nullptr;
+        bone = -1;
+        target = AimTarget(*aim);
+        offset = &target;
+    }
+    originalPointArm(chains, name, arm, ped, entity, bone, offset, speed, duration, priority);
+}
+void AimTorso(void* ik, const AimVector& position) {
+    const auto* aim = WeaponPose(*static_cast<void**>(ik), reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+    originalTorso(ik, aim ? AimTarget(*aim) : position);
+}
+bool ProcessWeaponTask(void* task, void* ped) {
+    const bool finished = originalUseGunProcess(task, ped);
+    auto* stick = FindStick(ped);
+    if (finished || !stick || !stick->aim.full || !stick->aim.akimbo) return finished;
+    auto* bytes = static_cast<uint8_t*>(task);
+    if (bytes[0x18] >= 1 && bytes[0x18] <= 3 && (bytes[0x16] != 0) != stick->aim.akimboUp) {
+        // ProcessPed stores skip-aim at 0x5dea9c and tests it at 0x5deab0.
+        bytes[0x16] = stick->aim.akimboUp;
+        (stick->aim.akimboUp ? nativeAbortIK : nativeAimGun)(task, ped);
+    }
+    return finished;
+}
+
+bool RemoteTargetButton(void* pad, bool checkCamera) {
+    if (g_remoteContext) return (g_remoteHeld & PlayerWeaponSync::kAim) != 0;
+    const bool held = g_originalTargetButton && g_originalTargetButton(pad, checkCamera);
+    localTargetHeld = held;
+    lastLocalTargetButton = std::chrono::steady_clock::now();
+    return held;
+}
+
+int RemoteWeaponHeld(void* pad, void* ped, bool targeting) {
+    if (g_remoteContext) return (g_remoteHeld & PlayerWeaponSync::kFire) ? 255 : 0;
+    const int value = g_originalWeaponHeld ? g_originalWeaponHeld(pad, ped, targeting) : 0;
+    if (reinterpret_cast<uintptr_t>(__builtin_return_address(0)) == drivebyButtonCaller &&
+        ped && g_controlFindPlayerPed && ped == g_controlFindPlayerPed(-1)) {
+        drivebyButtonPressed |= value != 0 && (drivebyButtonPed != ped || !drivebyButtonHeld);
+        drivebyButtonHeld = value != 0;
+        drivebyButtonPed = ped;
+    }
+    return value;
+}
+
+bool RemoteWeaponPress(void* pad, void* ped, bool targeting, bool checkHeld) {
+    if (g_remoteContext) return (g_remotePressed & PlayerWeaponSync::kFire) != 0;
+    return g_originalWeaponPress && g_originalWeaponPress(pad, ped, targeting, checkHeld);
+}
+
+void RemoteCameraTarget(void* camera, float range, AimVector muzzle, AimVector& origin, AimVector& target) {
+    if (g_remoteContext && g_remoteWeaponAim && g_remoteWeaponAim->full) {
+        const auto& aim = *g_remoteWeaponAim;
+        origin = aim.origin;
+        target = {origin.x + aim.direction.x * range,
+                  origin.y + aim.direction.y * range,
+                  origin.z + aim.direction.z * range};
+        return;
+    }
+    if (g_originalCameraTarget) g_originalCameraTarget(camera, range, muzzle, origin, target);
+}
+#endif
+
 
 bool HookIsTouched(int widget, void* out, int arg) {
     if (g_remoteContext) {
@@ -663,8 +823,8 @@ void RemotePlayerProcessControl(void* self) {
     const float savedCamera = camera ? *camera : 0.f;
     if (camera) *camera = entry->camera;
     const uint8_t held = entry ? entry->buttons : 0;
-    g_remoteHeld = g_touchHooks ? held : 0;
-    g_remotePressed = g_touchHooks && entry ? static_cast<uint8_t>(held & ~entry->prevButtons) : 0;
+    g_remoteHeld = held;
+    g_remotePressed = entry ? static_cast<uint8_t>(held & ~entry->prevButtons) : 0;
     // CPad::MeleeAttackJustDown (0x4ddf84) continues a combo on IsDoubleTapped(0x1), then ClearTapHistory(0x1): on
     // touch the follow-up hit and the kick come from a second tap. A remote press that follows the previous one within
     // kCircleFollowUpMs answers it. The window is an estimate, not a value read from libGTASA.
@@ -681,7 +841,25 @@ void RemotePlayerProcessControl(void* self) {
     void** playerSlot = WorldRPG::Debug::Flag("nocontextswap") ? nullptr : LocalPlayerSlot(localPed);
     if (playerSlot) *playerSlot = self;
     g_remoteContext = true;
+#ifdef __ANDROID__
+    g_remoteWeaponAim = entry ? &entry->aim : nullptr;
+    // IsTargetingActive loads the weapon mode at 0x4b819c. SetNewPlayerWeaponMode
+    // stores mode, duration and zoom limits at 0x4bf27c-0x4bf288. Keep these
+    // camera fields per player during native weapon control, as with the pad.
+    std::array<uint8_t, 12> savedWeaponCamera{}, emptyWeaponCamera{};
+    if (weaponCamera) {
+        std::memcpy(savedWeaponCamera.data(), weaponCamera, savedWeaponCamera.size());
+        std::memcpy(weaponCamera, entry ? entry->weaponCamera.data() : emptyWeaponCamera.data(), savedWeaponCamera.size());
+    }
+#endif
     g_originalControl(self);
+#ifdef __ANDROID__
+    if (weaponCamera) {
+        if (entry) std::memcpy(entry->weaponCamera.data(), weaponCamera, savedWeaponCamera.size());
+        std::memcpy(weaponCamera, savedWeaponCamera.data(), savedWeaponCamera.size());
+    }
+    g_remoteWeaponAim = nullptr;
+#endif
     g_remoteContext = false;
     if (playerSlot) *playerSlot = localPed;
     g_remoteHeld = 0;
@@ -788,17 +966,118 @@ using BulletImpactFn = void (*)(void*, void*, void*, void*, void*, void*, int);
 BulletImpactFn g_originalBulletImpact = nullptr;
 struct FireCapture {
     bool active = false;
+    int weapon = 0;
+    Combat::BulletHit hit;
+    uint32_t collision = 0xFFFFFFFFu;
+    float impact[3]{};
     void* owner = nullptr;
     bool have = false;
     bool fullLine = false;  // captured from a call with incrementalHit == 0
     float start[3] = {0, 0, 0};
     float end[3] = {0, 0, 0};
 };
-FireCapture g_fireCapture;
+thread_local FireCapture g_fireCapture;
+thread_local const Combat::SBulletSync* g_replayRay = nullptr;
+
+#if defined(__ANDROID__) && defined(__aarch64__)
+using ShotLineFn = void (*)(const void*, const void*);
+ShotLineFn g_originalShotLine = nullptr;
+uintptr_t g_instantHitAddress = 0;
+struct ShotLineCall { uintptr_t offset; uint32_t instruction; };
+constexpr ShotLineCall kShotLineCalls[] = {
+    {0x3bc, 0x97ec7290}, {0x500, 0x97ec723f}, {0x6cc, 0x97ec71cc},
+    {0x1064, 0x97ec6f66}
+    // +0xcf4 is the continuation from an impact (0x702164-0x702188).
+    // GTA advances its origin there; replaying the primary ray would rewind it.
+};
+
+// Two primary traces join the impact path without the windscreen check used
+// by the camera-specific trace at 0x702650. These calls return the collision
+// by reference, before GTA decides whether to damage a vehicle or its occupant.
+using ShotSightFn = bool (*)(const AimVector&, const AimVector&, void*, void**, bool, bool, bool, bool, bool, bool, bool, bool);
+using CheckOccupantFn = void (*)(void**, void*, int, const AimVector&, const AimVector&);
+ShotSightFn originalShotSight = nullptr;
+CheckOccupantFn checkVehicleOccupant = nullptr;
+bool* includeTyres = nullptr;
+bool ShotSight(const AimVector& start, const AimVector& end, void* point, void** entity,
+               bool buildings, bool vehicles, bool peds, bool objects, bool dummies,
+               bool seeThrough, bool cameraIgnore, bool shootThrough) {
+    const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0)) - g_instantHitAddress;
+    const bool remotePrimary = g_replayRay && (caller == 0x544 || caller == 0x714);
+    if (!remotePrimary)
+        return originalShotSight(start, end, point, entity, buildings, vehicles, peds, objects, dummies,
+                                 seeThrough, cameraIgnore, shootThrough);
+    const bool previous = *includeTyres;
+    *includeTyres = true;
+    const bool hit = originalShotSight(start, end, point, entity, buildings, vehicles, peds, objects, dummies,
+                                       seeThrough, cameraIgnore, shootThrough);
+    *includeTyres = previous;
+    // The native helper first checks entity type (0x704b50-0x704b5c).
+    if (hit && entity && *entity) checkVehicleOccupant(entity, point, g_replayRay->weapon, start, end);
+    return hit;
+}
+
+// FireInstantHit passes two mutable stack CVectors to CBirds immediately before
+// tracing them. The verified call sites below exclude calls from other GTA code.
+// Desktop HandleRemoteInstantHit replaces precisely these ray endpoints.
+void SyncShotLine(const void* start, const void* end) {
+    const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    const auto offset = caller - g_instantHitAddress;
+    if (g_instantHitAddress && (g_replayRay || g_fireCapture.active) &&
+        std::any_of(std::begin(kShotLineCalls), std::end(kShotLineCalls),
+            [offset](const ShotLineCall& call) { return offset == call.offset + sizeof(uint32_t); })) {
+        if (g_replayRay) {
+            std::memcpy(const_cast<void*>(start), g_replayRay->start, sizeof g_replayRay->start);
+            std::memcpy(const_cast<void*>(end), g_replayRay->end, sizeof g_replayRay->end);
+        } else if (!g_fireCapture.have) {
+            std::memcpy(g_fireCapture.start, start, sizeof g_fireCapture.start);
+            std::memcpy(g_fireCapture.end, end, sizeof g_fireCapture.end);
+            g_fireCapture.have = g_fireCapture.fullLine = true;
+        }
+    }
+    g_originalShotLine(start, end);
+}
+
+using SniperBulletFn = void (*)(void*, int, AimVector, AimVector);
+SniperBulletFn g_originalSniperBullet = nullptr;
+void CaptureSniperBullet(void* owner, int weapon, AimVector start, AimVector velocity) {
+    if (g_fireCapture.active && g_fireCapture.owner == owner && weapon == 34) {
+        // FireSniper uses CBulletInfo::AddBullet (0x702c6c), outside the
+        // instant-hit path. NoteLocalShot clips the line to the rifle's range.
+        const float length = std::hypot(velocity.x, velocity.y, velocity.z);
+        const float range = NativeWeaponRange(weapon);
+        if (length > 0.f && std::isfinite(length) && range > 0.f && std::isfinite(range)) {
+            const float scale = range / length;
+            const AimVector end{start.x + velocity.x * scale, start.y + velocity.y * scale, start.z + velocity.z * scale};
+            std::memcpy(g_fireCapture.start, &start, sizeof start);
+            std::memcpy(g_fireCapture.end, &end, sizeof end);
+            g_fireCapture.have = g_fireCapture.fullLine = true;
+        }
+    }
+    g_originalSniperBullet(owner, weapon, start, velocity);
+}
+#endif
 
 void LocalBulletImpactHook(void* self, void* owner, void* victim, void* startPoint, void* endPoint, void* colPoint,
     int incrementalHit) {
+    // FireInstantHit calls DoBulletImpact before GenerateDamageEvent (0x7063e0).
+    // The authority processes the true collision on the server. A replay on the
+    // mobile owner must not simulate another impact on this particular body.
+    if (g_replayRay && victim) {
+        const uint32_t id = EntityElementId(victim);
+        if (id != 0xFFFFFFFFu && ServerWorld::ActorHosted(id)) {
+            double value = 0;
+            std::string text;
+            bool number = false, boolean = false;
+            if (ServerWorld::GetData(id, "neon:serverBulletDamage", value, text, number, &boolean) && boolean && value != 0)
+                return;
+        }
+    }
     FireCapture& cap = g_fireCapture;
+    if (cap.active && cap.owner == owner && cap.collision == 0xFFFFFFFFu && victim && colPoint) {
+        cap.collision = EntityElementId(victim);
+        std::memcpy(cap.impact, colPoint, sizeof cap.impact); // CColPoint begins with the collision position.
+    }
     // The first call of this shot is kept. A later call replaces it only when it is the full line (incrementalHit 0)
     // and the kept one is not: the pellet and pass-through calls (0x7020c0) pass a collision point as the end.
     if (cap.active && owner && owner == cap.owner && startPoint && endPoint &&
@@ -821,24 +1100,32 @@ bool LocalBulletFireHook(void* self, void* owner, void* vecOrigin, void* vecEffe
     // In a remote body's ProcessControl FindPlayerPed() is that body (player context switch), so a shot fired there
     // must not be taken for the local player's.
     const bool local = !g_remoteContext && self && owner && g_findPlayerPed && owner == g_findPlayerPed(-1);
-    const int weapon = local ? *static_cast<const int*>(self) : 0;
-    const bool synced = local && weapon >= kFirstBulletSyncWeapon && weapon <= kLastBulletSyncWeapon;
+    const int weapon = self ? *static_cast<const int*>(self) : 0;
+    const bool supportsBulletSync = weapon >= kFirstBulletSyncWeapon && weapon <= kLastBulletSyncWeapon;
+    // The desktop discharges server-synced bullets separately from the pad.
+    // Keep the animation running while preventing a second, local-only hit.
+    if (!local && supportsBulletSync && Combat::WeaponUsesBulletSync(static_cast<uint8_t>(weapon)) &&
+        IsRemoteNetworkPlayer(owner)) return true;
+    const uint32_t pedId = supportsBulletSync ? EntityElementId(owner) : 0xFFFFFFFFu;
+    const bool hosted = !local && pedId != 0xFFFFFFFFu && ServerWorld::ActorHosted(pedId);
+    const bool synced = supportsBulletSync && (local || hosted);
 
     // Capture the vectors FireInstantHit computes (LocalBulletImpactHook). The previous state is restored so a
     // nested Fire cannot leave the capture armed.
     const FireCapture outer = g_fireCapture;
+    g_fireCapture = {};
     if (synced) {
-        g_fireCapture = FireCapture{};
         g_fireCapture.active = true;
         g_fireCapture.owner = owner;
+        g_fireCapture.weapon = weapon;
     }
     // The original runs first. Its return value is passed through. The desktop does not gate on it either.
     const bool result = g_originalFire
         ? g_originalFire(self, owner, vecOrigin, vecEffectPos, targetEntity, vecTarget, vecAlt)
         : false;
-    if (!synced) return result;
     const FireCapture shot = g_fireCapture;
     g_fireCapture = outer;
+    if (!synced) return result;
 
     const auto* origin = static_cast<const float*>(vecOrigin);
     const auto* muzzle = static_cast<const float*>(vecEffectPos);
@@ -857,13 +1144,22 @@ bool LocalBulletFireHook(void* self, void* owner, void* vecOrigin, void* vecEffe
     }
     // Desktop shotsync (multiplayer_shotsync.cpp 1582-1583): the 2D length from the aimed start to the end
     // is checked against 0.0001. When it is degenerate, the non-aimed start (the muzzle position) is used.
-    // DIAG gap: the desktop also trims the end to the weapon range (1585-1593); the range is not read here.
+    // NoteLocalShot trims the resulting ray to the weapon range.
     if (start && muzzle) {
         const float dx = end[0] - start[0];
         const float dy = end[1] - start[1];
         if (dx * dx + dy * dy < 0.0001f) start = muzzle;
     }
-    NoteLocalShot(weapon, start, end);
+    if (result || shot.have) {
+        if (pedId != 0xFFFFFFFFu && start && !g_replayRay) {
+            const auto* native = static_cast<const int*>(self);
+            const float* point = shot.collision != 0xFFFFFFFFu ? shot.impact : end;
+            Script::QueueNativeWeaponFire({pedId, shot.collision, weapon, native[3], native[2],
+                point[0], point[1], point[2], start[0], start[1], start[2], local});
+        }
+        if (local) NoteLocalShot(weapon, start, end, shot.hit);
+    }
+    if (hosted) return result;
 
     static int reported = 0;
     if (reported < 4) {
@@ -875,6 +1171,21 @@ bool LocalBulletFireHook(void* self, void* owner, void* vecOrigin, void* vecEffe
 
 }  // namespace
 
+bool SetBulletReplayRay(const Combat::SBulletSync* shot) {
+#if defined(__ANDROID__) && defined(__aarch64__)
+    if (shot && !g_originalShotLine) return false;
+    g_replayRay = shot;
+    return true;
+#else
+    return false;
+#endif
+}
+
+void CaptureLocalBulletHit(void* attacker, int weapon, const Combat::BulletHit& hit) {
+    if (g_fireCapture.active && attacker == g_fireCapture.owner && weapon == g_fireCapture.weapon)
+        g_fireCapture.hit = hit;
+}
+
 bool InstallLocalBulletFireHook() {
 #ifdef __ANDROID__
     if (g_bulletFireHook) return true;
@@ -882,8 +1193,9 @@ bool InstallLocalBulletFireHook() {
     if (!handle) return false;
     void* target = dlsym(handle, "_ZN7CWeapon4FireEP7CEntityP7CVectorS3_S1_S3_S3_");
     g_findPlayerPed = reinterpret_cast<FindPlayerPedFn>(dlsym(handle, "_Z13FindPlayerPedi"));
-    if (!target || !g_findPlayerPed) {
-        ENGINE_LOGE("Local bullet fire hook: missing CWeapon::Fire=%p FindPlayerPed=%p",
+    constexpr uint32_t firePrologue[] = {0xd10243ff, 0x6d0223e9, 0xa9036ffc, 0xa90467fa};
+    if (!target || !g_findPlayerPed || std::memcmp(target, firePrologue, sizeof firePrologue) != 0) {
+        ENGINE_LOGE("DIAG local fire hook unavailable for CWeapon::Fire=%p FindPlayerPed=%p",
             target, reinterpret_cast<void*>(g_findPlayerPed));
         return false;
     }
@@ -898,18 +1210,18 @@ bool InstallLocalBulletFireHook() {
     g_bulletFireHook = true;
     ENGINE_LOGI("Local CWeapon::Fire hook installed (PLAYER_BULLETSYNC source)");
 
-    // End point source for shots with a null vecTarget (see LocalBulletImpactHook). Without it those shots are not
-    // synced, which is logged per shot; the Fire hook still works for shots that carry a target.
+    // Fallback endpoint when the shot reaches an impact without a captured full ray.
     void* impact = dlsym(handle, "_ZN7CWeapon14DoBulletImpactEP7CEntityS1_P7CVectorS3_P9CColPointi");
-    if (!impact) {
-        ENGINE_LOGE("DIAG local bullet end point: CWeapon::DoBulletImpact not found; free-aim shots are not synced");
+    constexpr uint32_t impactPrologue[] = {0xd10343ff, 0x6d0623e9, 0xa9076ffc, 0xa90867fa};
+    if (!impact || std::memcmp(impact, impactPrologue, sizeof impactPrologue) != 0) {
+        ENGINE_LOGE("DIAG local bullet impact fallback unavailable for this GTA binary");
         return true;
     }
     static Hook::MemoryPatcher impactPatcher;
     const auto impactHooked = impactPatcher.installHook(reinterpret_cast<uintptr_t>(impact),
         reinterpret_cast<uintptr_t>(&LocalBulletImpactHook));
     if (!impactHooked.success) {
-        ENGINE_LOGE("DIAG local bullet end point: DoBulletImpact hook failed: %s; free-aim shots are not synced",
+        ENGINE_LOGE("DIAG local bullet end point: local bullet impact fallback hook failed: %s",
             impactHooked.errorMessage.c_str());
         return true;
     }
@@ -918,6 +1230,167 @@ bool InstallLocalBulletFireHook() {
     return true;
 #else
     return false;
+#endif
+}
+
+bool SampleDrivebyButton(void* ped, bool& pressed) {
+    pressed = false;
+#if defined(__ANDROID__) && defined(__aarch64__)
+    if (ped && ped == drivebyButtonPed) {
+        pressed = drivebyButtonPressed;
+        drivebyButtonPressed = false;
+        return drivebyButtonHeld;
+    }
+    drivebyButtonPed = nullptr;
+    drivebyButtonHeld = drivebyButtonPressed = false;
+#endif
+    return false;
+}
+
+bool LocalTargetButtonHeld() {
+#ifdef __ANDROID__
+    return localTargetHeld && std::chrono::steady_clock::now() - lastLocalTargetButton < std::chrono::milliseconds(100);
+#else
+    return false;
+#endif
+}
+
+bool DrivebyAimHookReady() {
+#if defined(__ANDROID__) && defined(__aarch64__)
+    return originalPlayerTarget && originalGunDirection;
+#else
+    return false;
+#endif
+}
+
+void SampleNativeWeaponAim(void* ped, PlayerWeaponSync::LocalWeapon& weapon, bool firstPersonAim) {
+#if defined(__ANDROID__) && defined(__aarch64__)
+    static void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!lib || !ped) return;
+    static void* camera = dlsym(lib, "TheCamera");
+    static auto pitch = reinterpret_cast<float (*)(void*)>(dlsym(lib, "_ZN7CCamera26Find3rdPersonQuickAimPitchEv"));
+    auto& aim = weapon.aim;
+    aim.inVehicle = weapon.gangDriveby;
+    float angle = aim.arm / PlayerWeaponSync::kArmUnits;
+    if (aim.inVehicle) {
+        const bool fresh = lastLocalAimPed == ped && std::chrono::steady_clock::now() - lastLocalDrivebyAim <
+            std::chrono::milliseconds(150);
+        angle = fresh ? lastLocalAimYaw : std::atan2(-aim.direction.x, aim.direction.y);
+        if (auto* task = static_cast<const uint8_t*>(NativeDrivebyTask(ped)); task && originalPlayerTarget) {
+            const auto& animations = drivebyAnimations[task[0x12] != 0];
+            for (uint8_t i = 0; i < 4; ++i)
+                if (*reinterpret_cast<const int*>(task + 0x2c) == animations[i]) aim.drivebyDirection = i;
+        }
+    } else if (camera && pitch && weapon.aiming && !firstPersonAim) {
+        angle = pitch(camera);
+    }
+    if (std::isfinite(angle)) {
+        angle = std::remainder(angle, 6.283185307f);
+        aim.arm = static_cast<int16_t>(angle * PlayerWeaponSync::kArmUnits);
+    }
+    static auto gunTask = reinterpret_cast<void* (*)(void*)>(dlsym(lib, "_ZNK16CPedIntelligence13GetTaskUseGunEv"));
+    if (useGunLayout && gunTask && PlayerWeaponSync::IsAkimbo(weapon.type)) {
+        void* intel = *reinterpret_cast<void**>(static_cast<uint8_t*>(ped) + 0x538);
+        if (auto* task = intel ? static_cast<const uint8_t*>(gunTask(intel)) : nullptr) aim.akimboUp = task[0x16] != 0;
+    }
+#endif
+}
+
+void InstallWeaponAimHooks() {
+#if defined(__ANDROID__) && defined(__aarch64__)
+    void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!lib) {
+        ENGINE_LOGE("DIAG weapon aim: libGTASA is unavailable");
+        return;
+    }
+    static Hook::MemoryPatcher patcher;
+    // The native pad getters also check the local camera and touch widgets.
+    // Give the remote control context its own buttons and shot line instead.
+    auto install = [&](const char* symbol, const uint32_t (&prologue)[4], uintptr_t replacement) -> uintptr_t {
+        const auto* entry = static_cast<const uint8_t*>(dlsym(lib, symbol));
+        if (entry && std::memcmp(entry, prologue, sizeof prologue) == 0) {
+            const auto hook = patcher.installHook(reinterpret_cast<uintptr_t>(entry), replacement);
+            if (hook.success) return hook.trampolineAddress;
+        }
+        ENGINE_LOGE("DIAG could not install the remote weapon hook for %s", symbol);
+        return 0;
+    };
+    const char* targetingName = "_ZN7CCamera17IsTargetingActiveEv";
+    const auto* targetingCode = static_cast<const uint32_t*>(dlsym(lib, targetingName));
+    const auto* setMode = static_cast<const uint32_t*>(dlsym(lib, "_ZN7CCamera22SetNewPlayerWeaponModeEsss"));
+    auto* camera = static_cast<uint8_t*>(dlsym(lib, "TheCamera"));
+    constexpr uint32_t modeStores[] = {0x79101801, 0x79102c03, 0x79102802, 0xb908101f};
+    if (camera && setMode && targetingCode && targetingCode[0x48 / 4] == 0x79501a68 &&
+        std::memcmp(setMode, modeStores, sizeof modeStores) == 0) weaponCamera = camera + 0x80c;
+    constexpr uint32_t cameraHead[] = {0xf81e0ff3, 0xa9017bfd, 0x910043fd, 0xaa0003f3};
+    originalTargeting = reinterpret_cast<CameraTargeting>(install(targetingName, cameraHead, reinterpret_cast<uintptr_t>(&CameraIsTargeting)));
+    constexpr uint32_t directionHead[] = {0xd10183ff, 0xfd000bea, 0x6d01a3e9, 0xf90017f7};
+    originalGunDirection = reinterpret_cast<GunDirection>(install("_ZN6CPedIK19PointGunInDirectionEffbf",
+        directionHead, reinterpret_cast<uintptr_t>(&PointGun)));
+    const char* targetName = "_ZN22CTaskSimpleGangDriveBy12PlayerTargetEP4CPed";
+    const auto* targetCode = static_cast<const uint32_t*>(dlsym(lib, targetName));
+    constexpr uint32_t drivebyHead[] = {0xd10103ff, 0xfd000be8, 0xa9024ff4, 0xa9037bfd};
+    if (targetCode && targetCode[0x4c / 4] == 0x78013289 && targetCode[0x15c / 4] == 0x39404a88 &&
+        targetCode[0x1ac / 4] == 0xb9002e88)
+        originalPlayerTarget = reinterpret_cast<PlayerTarget>(install(targetName, drivebyHead, reinterpret_cast<uintptr_t>(&DrivebyPlayerTarget)));
+    nativeAimGun = reinterpret_cast<PlayerTarget>(dlsym(lib, "_ZN17CTaskSimpleUseGun6AimGunEP4CPed"));
+    nativeAbortIK = reinterpret_cast<PlayerTarget>(dlsym(lib, "_ZN17CTaskSimpleUseGun7AbortIKEP4CPed"));
+    aimGunStart = reinterpret_cast<uintptr_t>(nativeAimGun);
+    const char* processName = "_ZN17CTaskSimpleUseGun10ProcessPedEP4CPed";
+    const auto* process = static_cast<const uint32_t*>(dlsym(lib, processName));
+    useGunLayout = process && process[0xc74 / 4] == 0x39c06268 && process[0xc84 / 4] == 0x39405a68;
+    constexpr uint32_t useGunHead[] = {0xd102c3ff, 0xfd002bea, 0x6d0623e9, 0xa9075ff8};
+    if (useGunLayout && nativeAimGun && nativeAbortIK)
+        originalUseGunProcess = reinterpret_cast<UseGunProcess>(install(processName, useGunHead, reinterpret_cast<uintptr_t>(&ProcessWeaponTask)));
+    constexpr uint32_t armHead[] = {0x6db82beb, 0x6d0123e9, 0xf90013fb, 0xa90367fa};
+    originalPointArm = reinterpret_cast<PointArm>(install("_ZN16IKChainManager_c8PointArmEPciP4CPedP7CEntityiP5RwV3dfif",
+        armHead, reinterpret_cast<uintptr_t>(&AimArm)));
+    constexpr uint32_t torsoHead[] = {0xfc1d0fe8, 0xa9014ff4, 0xa9027bfd, 0x910083fd};
+    originalTorso = reinterpret_cast<Torso>(install("_ZN6CPedIK17RotateTorsoForArmERK7CVector",
+        torsoHead, reinterpret_cast<uintptr_t>(&AimTorso)));
+    constexpr uint32_t padPrologue[] = {0xa9be4ff4, 0xa9017bfd, 0x910043fd, 0x79422008};
+    const auto* drivebyProcess = static_cast<const uint32_t*>(dlsym(lib, "_ZN22CTaskSimpleGangDriveBy10ProcessPedEP4CPed"));
+    // ProcessPed passes the local ped to CPad::GetWeapon at 0x5e87e8. Observe that read once.
+    if (drivebyProcess && drivebyProcess[0x578 / 4] == 0x97f0fd56)
+        drivebyButtonCaller = reinterpret_cast<uintptr_t>(drivebyProcess) + 0x57c;
+    else ENGINE_LOGI("DIAG drive-by fire input call site unavailable");
+    g_originalWeaponHeld = reinterpret_cast<WeaponHeldFn>(install("_ZN4CPad9GetWeaponEP4CPedb",
+        padPrologue, reinterpret_cast<uintptr_t>(&RemoteWeaponHeld)));
+    g_originalWeaponPress = reinterpret_cast<WeaponPressFn>(install("_ZN4CPad14WeaponJustDownEP4CPedbb",
+        padPrologue, reinterpret_cast<uintptr_t>(&RemoteWeaponPress)));
+    constexpr uint32_t targetPrologue[] = {0xa9be4ff4, 0xa9017bfd, 0x910043fd, 0xaa0003f3};
+    g_originalTargetButton = reinterpret_cast<TargetButtonFn>(install("_ZN4CPad9GetTargetEb",
+        targetPrologue, reinterpret_cast<uintptr_t>(&RemoteTargetButton)));
+    g_instantHitAddress = reinterpret_cast<uintptr_t>(dlsym(lib, "_ZN7CWeapon14FireInstantHitEP7CEntityP7CVectorS3_S1_S3_S3_bb"));
+    constexpr uint32_t linePrologue[] = {0xd101c3ff, 0xf90023f5, 0xa9054ff4, 0xa9067bfd};
+    if (g_instantHitAddress && std::all_of(std::begin(kShotLineCalls), std::end(kShotLineCalls),
+        [](const ShotLineCall& call) {
+            return *reinterpret_cast<const uint32_t*>(g_instantHitAddress + call.offset) == call.instruction;
+        })) {
+        g_originalShotLine = reinterpret_cast<ShotLineFn>(install("_ZN6CBirds13HandleGunShotEPK7CVectorS2_",
+            linePrologue, reinterpret_cast<uintptr_t>(&SyncShotLine)));
+    } else {
+        ENGINE_LOGE("DIAG FireInstantHit shot-line call sites differ from GTA 2.10 ARM64");
+    }
+    const auto* instant = reinterpret_cast<const uint32_t*>(g_instantHitAddress);
+    checkVehicleOccupant = reinterpret_cast<CheckOccupantFn>(dlsym(lib,
+        "_ZN7CWeapon31CheckForShootingVehicleOccupantEPP7CEntityP9CColPoint11eWeaponTypeRK7CVectorS8_"));
+    includeTyres = static_cast<bool*>(dlsym(lib, "_ZN6CWorld16bIncludeCarTyresE"));
+    if (instant && instant[0x540 / 4] == 0x97ec8c5b && instant[0x710 / 4] == 0x97ec8be7 &&
+        checkVehicleOccupant && includeTyres) {
+        constexpr uint32_t sightHead[] = {0xd104c3ff, 0xfd005bea, 0x6d0c23e9, 0xa90d6ffc};
+        originalShotSight = reinterpret_cast<ShotSightFn>(install(
+            "_ZN6CWorld18ProcessLineOfSightERK7CVectorS2_R9CColPointRP7CEntitybbbbbbbb", sightHead,
+            reinterpret_cast<uintptr_t>(&ShotSight)));
+    } else ENGINE_LOGE("DIAG remote bullet vehicle occupant check unavailable");
+    constexpr uint32_t sniperPrologue[] = {0x6dbb33ed, 0x6d012beb, 0x6d0223e9, 0xa9034ff4};
+    g_originalSniperBullet = reinterpret_cast<SniperBulletFn>(install("_ZN11CBulletInfo9AddBulletEP7CEntity11eWeaponType7CVectorS3_",
+        sniperPrologue, reinterpret_cast<uintptr_t>(&CaptureSniperBullet)));
+    constexpr uint32_t rayPrologue[] = {0x6db933ed, 0x6d012beb, 0x6d0223e9, 0xa9035ff8};
+    g_originalCameraTarget = reinterpret_cast<CameraTargetFn>(install(
+        "_ZN7CCamera28Find3rdPersonCamTargetVectorEf7CVectorRS0_S1_",
+        rayPrologue, reinterpret_cast<uintptr_t>(&RemoteCameraTarget)));
+    dlclose(lib);
 #endif
 }
 
@@ -937,7 +1410,8 @@ bool InRemoteControlContext() {
 #endif
 }
 
-void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera, bool hasCamera, uint8_t buttons) {
+void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera, bool hasCamera,
+                    uint8_t buttons, const PlayerWeaponSync::Aim& aim) {
     if (!ped) return;
     RemoteStick* entry = FindStick(ped);
     if (!entry) {
@@ -956,6 +1430,7 @@ void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera, 
     entry->camera = camera;
     entry->hasCamera = hasCamera && std::isfinite(camera);
     entry->buttons = buttons;
+    entry->aim = aim;
 }
 
 void ClearRemoteStick(void* ped) {
@@ -971,16 +1446,18 @@ struct SeatFns {
     bool ready = false;
     bool complete = false;
     // CTaskSimpleCarSetPedInAsDriver(CVehicle*, CTaskUtilityLineUpPedWithCar*) with a null utility, as CTasksSA passes.
+    bool (*isDriver)(const void*, const void*) = nullptr;
+    bool (*isPassenger)(const void*, const void*) = nullptr;
     void (*driverCtor)(void*, void*, void*) = nullptr;
-    void (*driverProcess)(void*, void*) = nullptr;
+    bool (*driverProcess)(void*, void*) = nullptr;
     void (*driverDtor)(void*) = nullptr;
     // CTaskSimpleCarSetPedOut(CVehicle*, int door, bool switchOffEngine).
     void (*outCtor)(void*, void*, int, bool) = nullptr;
-    void (*outProcess)(void*, void*) = nullptr;
+    bool (*outProcess)(void*, void*) = nullptr;
     void (*outDtor)(void*) = nullptr;
     // CTaskSimpleCarSetPedInAsPassenger(CVehicle*, int door, CTaskUtilityLineUpPedWithCar*) with a null utility, as CTasksSA passes.
     void (*passengerCtor)(void*, void*, int, void*) = nullptr;
-    void (*passengerProcess)(void*, void*) = nullptr;
+    bool (*passengerProcess)(void*, void*) = nullptr;
     void (*passengerDtor)(void*) = nullptr;
 };
 
@@ -993,21 +1470,23 @@ SeatFns& SeatApi() {
     if (!handle) return api;
     api.driverCtor = reinterpret_cast<void (*)(void*, void*, void*)>(
         dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriverC1EP8CVehicleP28CTaskUtilityLineUpPedWithCar"));
-    api.driverProcess = reinterpret_cast<void (*)(void*, void*)>(
+    api.driverProcess = reinterpret_cast<bool (*)(void*, void*)>(
         dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriver10ProcessPedEP4CPed"));
     api.outCtor = reinterpret_cast<void (*)(void*, void*, int, bool)>(
         dlsym(handle, "_ZN23CTaskSimpleCarSetPedOutC1EP8CVehicleib"));
-    api.outProcess = reinterpret_cast<void (*)(void*, void*)>(
+    api.outProcess = reinterpret_cast<bool (*)(void*, void*)>(
         dlsym(handle, "_ZN23CTaskSimpleCarSetPedOut10ProcessPedEP4CPed"));
     api.outDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN23CTaskSimpleCarSetPedOutD1Ev"));
     api.driverDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN30CTaskSimpleCarSetPedInAsDriverD1Ev"));
     api.passengerCtor = reinterpret_cast<void (*)(void*, void*, int, void*)>(
         dlsym(handle, "_ZN33CTaskSimpleCarSetPedInAsPassengerC1EP8CVehicleiP28CTaskUtilityLineUpPedWithCar"));
-    api.passengerProcess = reinterpret_cast<void (*)(void*, void*)>(
+    api.passengerProcess = reinterpret_cast<bool (*)(void*, void*)>(
         dlsym(handle, "_ZN33CTaskSimpleCarSetPedInAsPassenger10ProcessPedEP4CPed"));
     api.passengerDtor = reinterpret_cast<void (*)(void*)>(dlsym(handle, "_ZN33CTaskSimpleCarSetPedInAsPassengerD1Ev"));
+    api.isDriver = reinterpret_cast<decltype(api.isDriver)>(dlsym(handle, "_ZNK8CVehicle8IsDriverEPK4CPed"));
+    api.isPassenger = reinterpret_cast<decltype(api.isPassenger)>(dlsym(handle, "_ZNK8CVehicle11IsPassengerEPK4CPed"));
     api.complete = api.driverCtor && api.driverProcess && api.driverDtor && api.outCtor && api.outProcess && api.outDtor &&
-                   api.passengerCtor && api.passengerProcess && api.passengerDtor;
+                   api.passengerCtor && api.passengerProcess && api.passengerDtor && api.isDriver && api.isPassenger;
     if (!api.complete) {
         ENGINE_LOGI("Remote seat tasks missing: driver=%p/%p out=%p/%p/%p passenger=%p/%p/%p",
             reinterpret_cast<void*>(api.driverCtor), reinterpret_cast<void*>(api.driverProcess),
@@ -1100,6 +1579,39 @@ bool IsBikeOrQuadBike(int model) {
 
 }  // namespace
 
+// On ARM64, CPlayerPed::GetPlayerInfoForThisPlayerPed (0x5c7a2c-0x5c7a54)
+// searches the two CWorld::Players slots by ped pointer. The native seat
+// tasks call CPed::RemoveWeaponWhenEnteringVehicle, which dereferences that
+// result at 0x59bad4. Register the remote ped only during the synchronous
+// native task on the game thread, and restore the slot as soon as it returns.
+SeatPlayerContext::SeatPlayerContext(void* ped) {
+#ifdef __ANDROID__
+    static auto* players = []() -> unsigned char* {
+        if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL))
+            return static_cast<unsigned char*>(dlsym(handle, "_ZN6CWorld7PlayersE"));
+        return nullptr;
+    }();
+    if (!players) {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            ENGINE_LOGE("DIAG vehicle seat: CWorld::Players is unavailable");
+        }
+        return;
+    }
+    auto** local = reinterpret_cast<void**>(players);
+    auto** remote = reinterpret_cast<void**>(players + 0x1d8);
+    if (*local != ped && *remote != ped) {
+        slot = remote;
+        previous = *slot;
+        *slot = ped;
+    }
+    ready = true;
+#else
+    (void)ped;
+#endif
+}
+
 bool SeatRemotePedInCar(void* ped, void* car) {
     if (!ped || !car) return false;
     SeatFns& api = SeatApi();
@@ -1107,28 +1619,33 @@ bool SeatRemotePedInCar(void* ped, void* car) {
     // Desktop InternalWarpIntoVehicle (CClientPed.cpp 7441): CreateTaskSimpleCarSetPedInAsDriver, SetIsWarpingPedIntoCar,
     // ProcessPed, Destroy. The destructor must run: the constructor registers a vehicle reference at task+0x20
     // (CEntity::RegisterReference) and D1 clears it. Skipping it leaves the car pointing into this stack frame.
+    SeatPlayerContext context(ped);
+    if (!context.ready) return false;
     alignas(16) unsigned char task[kSeatTaskBytes] = {};
     api.driverCtor(task, car, nullptr);
     task[kDriverWarpingOffset] = 1;
     api.driverProcess(task, ped);
     api.driverDtor(task);
-    return true;
+    return api.isDriver(car, ped);
 }
 
 bool UnseatRemotePedFromCar(void* ped, void* car) {
     if (!ped || !car) return false;
     SeatFns& api = SeatApi();
     if (!api.complete) return false;
+    if (!api.isDriver(car, ped) && !api.isPassenger(car, ped)) return true;
     // Desktop InternalRemoveFromVehicle (CClientPed.cpp 7464): CreateTaskSimpleCarSetPedOut(vehicle, 1, false),
     // SetKnockedOffBike, ProcessPed, Destroy. SetIsWarpingPedOutOfCar is not set: no verified offset for that flag, so
     // the ped leaves with the knocked-off exit instead of an instant warp. See the report for the gap.
+    SeatPlayerContext context(ped);
+    if (!context.ready) return false;
     alignas(16) unsigned char task[kSeatTaskBytes] = {};
     api.outCtor(task, car, kDesktopOutDoor, false);
     task[kOutSwitchEngineOffset] = 0;
     task[kOutKnockedOffOffset] = 1;
     api.outProcess(task, ped);
     api.outDtor(task);
-    return true;
+    return !api.isDriver(car, ped) && !api.isPassenger(car, ped);
 }
 
 unsigned char PassengerGameDoor(int model, unsigned char seatIndex) {
@@ -1179,12 +1696,14 @@ bool SeatRemotePedAsPassenger(void* ped, void* car, int gameDoor) {
     if (!api.complete) return false;
     // Desktop InternalWarpIntoVehicle passenger branch (CClientPed.cpp 3441-3462): CreateTaskSimpleCarSetPedInAsPassenger
     // (vehicle, door), SetIsWarpingPedIntoCar, ProcessPed, Destroy. The destructor always runs, as in SeatRemotePedInCar.
+    SeatPlayerContext context(ped);
+    if (!context.ready) return false;
     alignas(16) unsigned char task[kSeatTaskBytes] = {};
     api.passengerCtor(task, car, gameDoor, nullptr);
     task[kPassengerWarpingOffset] = 1;
     api.passengerProcess(task, ped);
     api.passengerDtor(task);
-    return true;
+    return api.isPassenger(car, ped);
 }
 
 }  // namespace WorldRPG::Game

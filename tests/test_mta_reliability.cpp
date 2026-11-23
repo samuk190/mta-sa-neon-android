@@ -61,6 +61,16 @@ static void StateTests() {
     Check(client.events.size() == 3, "stale sequenced state delivered");
     Check(client.Order(3,0) == 0 && client.Order(1,0) == 0 && client.Order(3,0) == 1 && client.Order(4,0) == 1,
           "sequenced messages created a gap in ordered channel");
+    ClientTransport::Impl burst; burst.state = ClientTransport::Impl::State::Connected;
+    // The S25 accumulated 2048 small messages behind a missing order in nine seconds.
+    // The retransmission must release the whole burst to the game in wire order.
+    for (unsigned index = 1; index <= 4304; ++index) burst.Incoming(Message(index, index));
+    Check(burst.events.empty() && burst.orderedCount == 4304, "ordered burst disconnected or dispatched early");
+    burst.Incoming(Message(0, 0));
+    Check(burst.orderedCount == 0 && burst.orderedBytes == 0 && burst.events.size() == 4305,
+          "ordered burst dropped during recovery");
+    for (unsigned index = 0; index < burst.events.size(); ++index)
+        Check(burst.events[index].bytes[1] == static_cast<std::uint8_t>(index), "lost ordered event");
     ClientTransport::Impl fragments; fragments.state = ClientTransport::Impl::State::Connected;
     auto tail = Message(51,0); tail.payload = {0x40}; tail.bitLength = 3; tail.split = SplitInfo{9,1,2};
     auto head = Message(50,0); head.payload = {106}; head.bitLength = 8; head.split = SplitInfo{9,0,2};
@@ -71,6 +81,14 @@ static void StateTests() {
     fragments.Incoming(tail); Check(fragments.events.size() == 1, "duplicate fragment delivered");
     ClientTransport::Impl wrap;
     Check(!wrap.Duplicate(0xfffffffeu) && !wrap.Duplicate(0xffffffffu) && !wrap.Duplicate(0) && wrap.Duplicate(0xfffffffeu), "message-number wrap handling");
+    Check(!wrap.Duplicate(65536) && wrap.Duplicate(0) && !wrap.Duplicate(65535), "dedup history renewal");
+    ClientTransport::Impl overlap;
+    overlap.state = ClientTransport::Impl::State::Connected;
+    overlap.Incoming(Message(17, 0, 0));
+    overlap.Incoming(Message(17, 0, 3));
+    overlap.Incoming(Message(17, 0, 3));
+    Check(overlap.events.size() == 2 && overlap.expectedOrder[0] == 1,
+          "unreliable message hid a reliable message");
     ClientTransport::Impl malformed; malformed.state = ClientTransport::Impl::State::Connected;
     head.split->count = 2; malformed.Incoming(head);
     tail.number = 52; tail.split->count = 3; malformed.Incoming(tail);

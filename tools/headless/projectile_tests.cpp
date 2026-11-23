@@ -30,6 +30,25 @@ int main() {
     running.join();
     check(changes == 2, "nested work executes once");
     check(noNative, "no fake projectile without a native engine");
+    std::atomic<bool> finished{false};
+    int pulse = 0, readPulses[12]{}, mutationPulse = 0;
+    std::thread gameLoop([&] {
+        while (!finished.load()) {
+            ++pulse;
+            WorldRPG::GameTasks::Service();
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        }
+    });
+    for (int& readPulse : readPulses) {
+        check(WorldRPG::GameTasks::RunQuery([&] { readPulse = pulse; }), "traffic read completes");
+    }
+    check(WorldRPG::GameTasks::Run([&] { mutationPulse = pulse; }), "queued write completes");
+    finished.store(true);
+    gameLoop.join();
+    bool sharedPulse = false;
+    for (unsigned i = 1; i < 12; ++i) sharedPulse |= readPulses[i] == readPulses[i - 1];
+    check(sharedPulse, "consecutive traffic reads share a game pulse");
+    check(mutationPulse > readPulses[11], "a following mutation waits for its normal pulse");
     WorldRPG::Projectiles::Snapshot out;
     check(!WorldRPG::Projectiles::Copy(0x62000001, out), "failed native creation has no live element");
     check(!WorldRPG::Projectiles::Release(0x62000001), "unknown handle cannot remove native objects");

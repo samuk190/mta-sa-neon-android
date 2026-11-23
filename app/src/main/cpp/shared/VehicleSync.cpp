@@ -19,8 +19,6 @@ using WorldRPG::Entity::ReadPosition;
 using WorldRPG::Entity::ReadRotationDegrees;
 using WorldRPG::Entity::ReadVehicleHealth;
 
-// SYNC_POSITION_LIMIT (SyncStructures.h 28).
-constexpr float kSyncPositionLimit = 100000.0f;
 constexpr float kPi = 3.14159265f;
 
 // Early return on a failed read. DIAG names the source line and bit offset.
@@ -97,36 +95,13 @@ bool ReadFullKeys(Reader& r, FullKeys& k) {
     return true;
 }
 
-// SWeaponAimSync (SyncStructures.h 1569), full variant. The reference ignores the bool returned by
-// Read(&aim) and stops reading after a failed origin limit check, so the same stop point is kept here.
+// Decode the whole aim before consuming the following two-bit direction.
 bool ReadWeaponAim(Reader& r, WeaponState& w) {
-    uint16_t arm = 0;
-    VS_TRY(r.Read(arm));
-    w.armRaw = static_cast<int16_t>(arm);
-
-    float ox = 0.0f, oy = 0.0f, oz = 0.0f;
-    VS_TRY(r.Read(ox));
-    w.aimOrigin.x = ox;
-    if (!(ox > -kSyncPositionLimit && ox < kSyncPositionLimit)) {
-        w.aimFull = false;
-        return true;
-    }
-    VS_TRY(r.Read(oy));
-    w.aimOrigin.y = oy;
-    if (!(oy > -kSyncPositionLimit && oy < kSyncPositionLimit)) {
-        w.aimFull = false;
-        return true;
-    }
-    VS_TRY(r.Read(oz));
-    w.aimOrigin.z = oz;
-    if (!(oz > -kSyncPositionLimit && oz < kSyncPositionLimit)) {
-        w.aimFull = false;
-        return true;
-    }
-    // The reference maps the norm vector as (X, Z, Y); only the bit count matters for parsing.
-    Vec3 dir;
-    VS_TRY(ReadNormVector(r, dir));
-    w.aimDirection = dir;
+    PlayerWeaponSync::Aim aim;
+    if (!PlayerWeaponSync::ReadAim(r, aim, true)) return false;
+    w.armRaw = aim.arm;
+    w.aimOrigin = {aim.origin.x, aim.origin.y, aim.origin.z};
+    w.aimDirection = {aim.direction.x, aim.direction.y, aim.direction.z};
     w.aimFull = true;
     return true;
 }
@@ -254,7 +229,8 @@ bool ReadWeaponBlock(Reader& r, const VehicleFlags& flags, WeaponState& w) {
     uint8_t slotBits[1] = {};
     VS_TRY(r.ReadBits(slotBits, 4));
     w.slot = static_cast<uint8_t>(slotBits[0] & 0x0Fu);
-    const bool slotHasAmmo = !(w.slot == 0 || w.slot == 1 || w.slot == 10 || w.slot == 11 || w.slot == 12);
+    if (w.slot > 12) return false;
+    const bool slotHasAmmo = PlayerWeaponSync::SlotHasAmmo(w.slot);
     if (!flags.gangDriveby || !slotHasAmmo) return true;
 
     w.ammoSynced = true;
@@ -468,7 +444,9 @@ bool WriteUnoccupiedEntry(Writer& w, const UnoccupiedUpdate& in) {
 bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
     const uint32_t model = static_cast<uint32_t>(in.model);
     // Refuse before writing anything: the reader would expect a train block or a weapon block here.
-    if (VM::IsTrainModel(model) || in.flags.hasWeapon) return false;
+    if (in.seat > 15 || VM::IsTrainModel(model)) return false;
+    if (in.flags.hasWeapon && (!in.weapon.valid || in.weapon.slot >= in.weapon.totalBySlot.size() ||
+        (in.flags.gangDriveby && PlayerWeaponSync::SlotHasAmmo(in.weapon.slot) && !in.weapon.aim.full))) return false;
 
     // Sync context and SFullKeysyncSync (CNetAPI 1618-1623; reader 68-80).
     w.Write(in.timeContext);
@@ -483,17 +461,14 @@ bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
     // Camera orientation (CNetAPI 1657 WriteCameraOrientation; reader 118 ReadCameraOrientation).
     WriteCameraOrientation(w, in.cameraRotZ, in.cameraRotX);
 
-    // SOccupiedSeatSync, 4 bits. The phone only drives seat 0 (CNetAPI 1660; reader 122-130).
-    WriteBitsValue(w, 0, 4);
-
-    // Driver block, desktop uses the seat==0 branch (CNetAPI 1664-1719; reader 134-154).
-    WriteVec3Rotation(w, in.rotation);       // SRotationDegreesSync(false)
-    WriteVelocity(w, in.velocity);           // SVelocitySync, move speed
-    WriteVelocity(w, in.turnVelocity);       // SVelocitySync, turn speed
-    WriteVehicleHealth(w, in.vehicleHealth); // SVehicleHealthSync, 12 bits (reader 154)
-
-    // Trailer chain (CNetAPI 1720-1723; reader 272). No trailer source: continuation bit clear.
-    WriteFlag(w, false);
+    WriteBitsValue(w, in.seat, 4);
+    if (in.seat == 0) {
+        WriteVec3Rotation(w, in.rotation);
+        WriteVelocity(w, in.velocity);
+        WriteVelocity(w, in.turnVelocity);
+        WriteVehicleHealth(w, in.vehicleHealth);
+        WriteFlag(w, false);  // end of trailer chain
+    }
 
     // Damage block (CNetAPI 1724-1753; reader 387-400). One-shot: bit, ElementID, 6-bit weapon type,
     // 3-bit body part. Body part raw 0 is torso, as the on-foot writer does.
@@ -501,7 +476,7 @@ bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
     if (in.hasDamage) {
         WriteElementId(w, in.damagerId);
         WriteBitsValue(w, in.damageWeapon & 0x3Fu, 6);
-        WriteBitsValue(w, 0, 3);
+        WriteBitsValue(w, in.damageBodyPart - 3u, 3);
     }
 
     // Player health and armor (CNetAPI 1754-1766; reader 405-456). Health 0-255, armor 0-127.5.
@@ -520,28 +495,38 @@ bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
     if (fl.inWater) flagBits |= 0x040u;
     if (fl.derailed) flagBits |= 0x080u;
     if (fl.aircraft) flagBits |= 0x100u;
-    if (fl.hasWeapon) flagBits |= 0x200u;  // always false here, see the refusal above
+    if (fl.hasWeapon) flagBits |= 0x200u;
     if (fl.heliSearchLight) flagBits |= 0x400u;
     WriteBitsValue(w, flagBits, 11);
 
-    // No weapon block: flags.hasWeapon is false (CNetAPI 1783; reader 515 is skipped).
+    if (fl.hasWeapon) {
+        WriteBitsValue(w, in.weapon.slot, 4);
+        if (fl.gangDriveby && PlayerWeaponSync::SlotHasAmmo(in.weapon.slot)) {
+            w.WriteCompressed(in.weapon.total, 2);
+            w.WriteCompressed(in.weapon.clip, 2);
+            PlayerWeaponSync::WriteAim(w, in.weapon.aim, true);
+            WriteBitsValue(w, in.weapon.aim.drivebyDirection, 2);
+        }
+    }
 
     // WriteFullVehicleSpecific (CNetAPI 2005, called at 1815; reader 555 and CVehiclePuresyncPacket::ReadVehicleSpecific 832).
     // Each block is gated by the model, so the reader expects it whatever the phone knows.
-    if (VM::HasTurret(model)) {
-        // SVehicleTurretSync: two int16 angles. Turret angle is not sampled, so 0 (centred).
-        w.Write(static_cast<uint16_t>(0));
-        w.Write(static_cast<uint16_t>(0));
-    }
-    if (VM::HasAdjustableProperty(model)) {
-        // uint16 adjustable property. Not sampled, so 0.
-        w.Write(static_cast<uint16_t>(0));
-    }
-    if (VM::HasDoors(model)) {
-        // SDoorOpenRatioSync for doors 2..5. Not sampled, so 0 (closed): flag 0, flag 0 (SyncStructures 1424-1470).
-        for (int door = 0; door < 4; ++door) {
-            WriteFlag(w, false);
-            WriteFlag(w, false);
+    if (in.seat == 0) {
+        if (VM::HasTurret(model)) {
+            // SVehicleTurretSync: two int16 angles. Turret angle is not sampled, so 0 (centred).
+            w.Write(static_cast<uint16_t>(0));
+            w.Write(static_cast<uint16_t>(0));
+        }
+        if (VM::HasAdjustableProperty(model)) {
+            // uint16 adjustable property. Not sampled, so 0.
+            w.Write(static_cast<uint16_t>(0));
+        }
+        if (VM::HasDoors(model)) {
+            // SDoorOpenRatioSync for doors 2..5. Not sampled, so 0 (closed): flag 0, flag 0 (SyncStructures 1424-1470).
+            for (int door = 0; door < 4; ++door) {
+                WriteFlag(w, false);
+                WriteFlag(w, false);
+            }
         }
     }
 
@@ -579,16 +564,13 @@ void WriteDriverKeysync(Writer& w, const DriverKeysyncIn& in) {
 
     // SKeysyncFlags, 4 bits (SyncStructures.h 920-937): ducked, choking, akimbo target up, syncing vehicle.
     // Only bSyncingVehicle is set: the driver is in seat 0 (CNetAPI 748).
-    WriteBitsValue(w, 0x8u, 4);
+    WriteBitsValue(w, (in.seat == 0 ? 8u : 0u) | (in.weapon.aim.akimboUp ? 4u : 0u), 4);
 
-    // Weapon block when fire or aim/handbrake is held (CNetAPI 754-797; reader 56-134). The phone has no local weapon
-    // source, so the weapon is written as fists, as the on-foot keysync does: has-weapon bit, type 0, slot 0 (4 bits).
-    // Slot 0 has no ammo, so nothing else follows.
-    if (in.keys.buttonCircle || in.keys.rightShoulder1) {
-        WriteFlag(w, true);
-        w.Write(static_cast<uint8_t>(0));
-        WriteBitsValue(w, 0, 4);
-    }
+    // Handbrake shares RightShoulder1 with aim. The server still expects a weapon block.
+    if (in.keys.buttonCircle || in.keys.rightShoulder1)
+        PlayerWeaponSync::WriteKeys(w, in.weapon);
+
+    if (in.seat != 0) return;
 
     // WriteSmallVehicleSpecific (CNetAPI 1952-1963; reader 138-141): SVehicleTurretSync for turret models. The turret
     // angle is not sampled, so 0 (centred), as in WriteDriverPuresync.

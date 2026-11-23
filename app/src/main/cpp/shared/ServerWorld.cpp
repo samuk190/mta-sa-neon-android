@@ -1,5 +1,6 @@
 #include "ServerWorld.h"
 #include "PedQueries.h"
+#include "CombatSync.h"
 #include "ResourceFiles.h"
 #include "ConnectionLoading.h"
 #include "../gtasa/GameEngine.h"
@@ -35,7 +36,9 @@ std::mutex g_lock;
 bool g_currentWaterFlags = true;
 bool g_preferExtendedEntityHeader = false;
 uint32_t g_local = 0;
+uint8_t g_localSyncContext = 0;  // guarded by g_lock, including before the local player has a Visual
 uint64_t g_generation = 0, g_localGeneration = 0;
+std::unordered_map<uint32_t, uint64_t> g_luaHandleGenerations;
 // CClientGame::SetAllDimensions: the local player's dimension (PLAYER_SPAWN, PLAYER_LIST, SET_ELEMENT_DIMENSION).
 std::atomic<uint16_t> g_localDimension{0};
 std::atomic<uint8_t> g_localInterior{0};
@@ -175,12 +178,10 @@ void ResolveBlips() {
     if (!reader.ReadBits(health, 12)) return false;
     uint8_t blow = 0;
     if (!reader.ReadBits(&blow, 2)) return false;
-    uint8_t colorCount = 0;
-    if (!reader.ReadBits(&colorCount, 2)) return false;
-    for (int i = 0; i <= (colorCount & 3); ++i) {
-        uint8_t rgb[3] = {};
-        if (!reader.ReadBits(rgb, 24)) return false;
-    }
+    VehicleColors colors;
+    if (!ReadVehicleColors(reader, colors)) return false;
+    visual.vehicleColors = colors;
+
     uint8_t paint = 0;
     if (!reader.ReadBits(&paint, 2)) return false;
     uint8_t damage[8] = {};
@@ -268,6 +269,7 @@ void ForgetElementReferences(uint32_t id) {
 } // namespace
 
 void ResetSession() {
+    Combat::ResetBulletSync();
     std::vector<uint32_t> peds;
     {
         std::lock_guard<std::mutex> lock(g_lock);
@@ -275,10 +277,12 @@ void ResetSession() {
             if (visual.blipLive) g_staleBlips.push_back(visual.blipHandle);
             if (visual.kind == 14) peds.push_back(id);
         }
+        g_luaHandleGenerations.clear();
         g_visuals.clear();
         g_teamOrder.clear();
         PedQueries::Reset();
         g_localGeneration = ++g_generation;
+        g_localSyncContext = 0;
         g_attachments.clear();
         g_attachmentOrder.clear();
         g_data.clear();
@@ -298,7 +302,11 @@ void ResetSession() {
 
 void SetLocalPlayer(uint32_t id) {
     std::lock_guard lock(g_lock);
-    if (g_local != id || !g_localGeneration) g_localGeneration = ++g_generation;
+    if (g_local != id || !g_localGeneration) {
+        g_localGeneration = ++g_generation;
+        const auto found = g_visuals.find(id);
+        g_localSyncContext = found == g_visuals.end() ? 0 : found->second.syncTimeContext;
+    }
     g_local = id; PedQueries::Ensure(id, true);
 }
 uint32_t LocalPlayer() { return g_local; }
@@ -330,8 +338,12 @@ int CopyActors(ActorSpawn* out, int capacity, int pedLimit, int vehicleLimit) {
         slot.rotY = visual.rotY;
         slot.health = visual.health;
         slot.vehicleDoorLock = visual.vehicleDoorLock;
+        slot.vehicleFrozen = visual.vehicleFrozen;
+        slot.vehicleEngineOn = visual.vehicleEngineOn;
+        slot.vehicleAlpha = visual.vehicleAlpha;
         slot.nitroUpgrade = visual.nitroUpgrade;
         slot.nitroRevision = visual.nitroRevision;
+        slot.vehicleColors = visual.vehicleColors;
         slot.hosted = visual.hosted;
         slot.interior = visual.interior;
     };
@@ -400,6 +412,7 @@ bool CopyVisual(uint32_t id, ActorSpawn& out) {
     out.vehicleDoorLock = found->second.vehicleDoorLock;
     out.nitroUpgrade = found->second.nitroUpgrade;
     out.nitroRevision = found->second.nitroRevision;
+    out.vehicleColors = found->second.vehicleColors;
     out.hosted = found->second.hosted;
     out.interior = found->second.interior;
     return true;
@@ -461,9 +474,15 @@ bool UpdateColshape(uint32_t id,const std::function<bool(Spatial::Geometry&)>& u
 
 uint8_t SyncTimeContext(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_lock);
+    if (id == g_local) return g_localSyncContext;
     auto found = g_visuals.find(id);
     if (found == g_visuals.end()) return 0;
     return found->second.syncTimeContext;
+}
+
+bool CanUpdateSync(uint32_t id, uint8_t received) {
+    const auto current = SyncTimeContext(id);
+    return !current || !received || current == received;
 }
 
 bool CopyPedSpawn(uint32_t id, Entity::PedSpawn& out) {
@@ -638,7 +657,14 @@ int ModelOf(uint32_t id) {
     return found->second.model;
 }
 
-bool GetData(uint32_t id, const char* key, double& number, std::string& text, bool& isNumber, bool* isBoolean) {
+uint64_t LuaHandleGeneration(uint32_t id) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto& generation = g_luaHandleGenerations[id];
+    if (!generation) generation = ++g_generation;
+    return generation;
+}
+
+bool GetData(uint32_t id, const char* key, double& number, std::string& text, bool& isNumber, bool* isBoolean, bool* isElement) {
     if (!key) return false;
     std::lock_guard<std::mutex> lock(g_lock);
     auto element = g_data.find(id);
@@ -647,6 +673,7 @@ bool GetData(uint32_t id, const char* key, double& number, std::string& text, bo
     if (found == element->second.end()) return false;
     isNumber = found->second.number;
     if (isBoolean) *isBoolean = found->second.boolean;
+    if (isElement) *isElement = found->second.element;
     number = found->second.value;
     text = found->second.text;
     return true;
@@ -662,6 +689,7 @@ void CopyElementData(uint32_t id, std::vector<std::pair<std::string, ElementData
         ElementDataValue value;
         value.number = datum.number;
         value.boolean = datum.boolean;
+        value.element = datum.element;
         value.value = datum.value;
         value.text = datum.text;
         out.emplace_back(key, std::move(value));
@@ -733,7 +761,7 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     // Desktop CPacketHandler::Packet_EntityAdd (CPacketHandler.cpp:2989-2995): status, then the entity
     // percentage through CCore::UpdateDummyProgress(index * 100 / count, "%").
     ConnectionLoading::Update(ConnectionLoading::Phase::World, "Preparing world", 0.0f);
-    std::lock_guard<std::mutex> lock(g_lock);
+    std::unique_lock<std::mutex> lock(g_lock);
     struct IncomingEntity { EntityCommon common; Visual visual; };
     struct Batch { std::vector<IncomingEntity> entities; bool complete = false; };
     const auto readBatch = [&](bool extendedHeader) {
@@ -772,6 +800,8 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> attachments;
+    struct Seat { uint32_t ped, vehicle; uint8_t index; };
+    std::vector<Seat> seats;
     for (auto& [common, visual] : batch.entities) {
         if (common.id == 0 || common.id == 0xFFFFFFFFu) continue;
         for (auto& [key, value] : common.customData) g_data[common.id][key] = std::move(value);
@@ -779,6 +809,8 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
         visual.syncTimeContext = common.syncTimeContext;
         visual.dimension = static_cast<uint16_t>(common.dimension);
         if (common.type != kTypePlayer) Remember(common.id, visual);
+        if (visual.ped && visual.ped->vehicleId != 0xFFFFFFFFu)
+            seats.push_back({common.id, visual.ped->vehicleId, visual.ped->seat});
         Attachment attachment;
         if (common.attached) {
             attachment.position[0] = common.attachedX; attachment.position[1] = common.attachedY; attachment.position[2] = common.attachedZ;
@@ -797,6 +829,11 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
         g_attachmentOrder.erase(std::remove(g_attachmentOrder.begin(), g_attachmentOrder.end(), child), g_attachmentOrder.end());
         g_attachmentOrder.push_back(child);
     }
+    lock.unlock();
+    for (const auto& seat : seats) {
+        RemoteVehicle::SetOccupant(seat.ped, seat.vehicle, seat.index);
+        Game::NoteRemoteSeat(seat.ped, seat.vehicle, seat.index);
+    }
     DIAG("ENTITY_ADD stored %zu/%u", batch.entities.size(), static_cast<unsigned>(count));
 }
 
@@ -814,6 +851,7 @@ void OnEntityRemove(const uint8_t* body, size_t length, size_t bits) {
                 DIAG("ENTITY_REMOVE id=%u is a player (desktop protocol error 45); packet stopped", id);
                 return;
             }
+            g_luaHandleGenerations.erase(id);
             g_visuals.erase(id);
             g_teamOrder.erase(std::remove(g_teamOrder.begin(), g_teamOrder.end(), id), g_teamOrder.end());
             PedQueries::Forget(id);
@@ -835,6 +873,7 @@ void OnEntityRemove(const uint8_t* body, size_t length, size_t bits) {
 
 void SetSyncTimeContext(uint32_t id, uint8_t context) {
     std::lock_guard<std::mutex> lock(g_lock);
+    if (id == g_local) g_localSyncContext = context;
     auto found = g_visuals.find(id);
     if (found != g_visuals.end()) found->second.syncTimeContext = context;
 }
@@ -898,6 +937,14 @@ void NoteVehicle(uint32_t id, int model) {
     stored.model = model;
 }
 
+bool SetVehicleColors(uint32_t id, const VehicleColors& colors) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    const auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 2) return false;
+    found->second.vehicleColors = colors;
+    return true;
+}
+
 int VehicleDoorLockMode(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_lock);
     const auto found = g_visuals.find(id);
@@ -953,9 +1000,11 @@ bool IsKnownPlayer(uint32_t id) {
 }
 
 void OnPlayerQuit(uint32_t id) {
+    Combat::ForgetShooter(id);
     if (id == 0 || id == 0xFFFFFFFFu || id == g_local) return;
     {
         std::lock_guard<std::mutex> lock(g_lock);
+        g_luaHandleGenerations.erase(id);
         g_visuals.erase(id);
         g_teamOrder.erase(std::remove(g_teamOrder.begin(), g_teamOrder.end(), id), g_teamOrder.end());
         PedQueries::Forget(id);
@@ -1079,6 +1128,8 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
     bool showInChat = false;
     if (!ReadFlag(reader, showInChat)) return;
     (void)showInChat;
+    struct PlayerSeat { uint32_t player, vehicle; uint8_t index; };
+    std::vector<PlayerSeat> seats;
     std::vector<std::pair<uint32_t, Game::PedRpcOp>> weapons;
     std::unique_lock<std::mutex> lock(g_lock);
     int players = 0;
@@ -1117,6 +1168,8 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
         if (!ReadCompressed(reader, 2, model)) { DIAG("PLAYER_LIST id=%u stop at model bit=%zu", id, reader.GetReadOffsetBits()); break; }
         Visual visual;
         visual.kind = 1;
+        visual.syncTimeContext = context;
+        if (id == g_local) g_localSyncContext = context;
         visual.model = static_cast<int>(model);
         Remember(id, visual);
         g_nicks[id] = nick;
@@ -1128,9 +1181,9 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
             if (!ReadElementId(reader, team)) break;
         }
         const bool inVehicle = (flags & 0x20) != 0;
+        uint32_t vehicle = 0;
+        uint8_t seat = 0;
         if (inVehicle) {
-            uint32_t vehicle = 0;
-            uint8_t seat = 0;
             if (!ReadElementId(reader, vehicle) || !reader.ReadBits(&seat, 4)) break;
         } else {
             float x = 0, y = 0, z = 0;
@@ -1183,8 +1236,13 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
                 break;
             DIAG("PLAYER_LIST id=%u animation %s/%s (not applied)", id, block.c_str(), anim.c_str());
         }
+        if (inVehicle) seats.push_back({id, vehicle, seat});
     }
     lock.unlock();
+    for (const auto& entry : seats) {
+        RemoteVehicle::SetOccupant(entry.player, entry.vehicle, entry.index);
+        Game::NoteRemoteSeat(entry.player, entry.vehicle, entry.index);
+    }
     // Never acquire the game registry lock while holding the world registry.
     for (const auto& [id, give] : weapons) Game::QueuePedRpc(id, give);
     if (players > 0) SW_LOGI("PLAYER_LIST stored %d player model(s), %zu bits left", players, reader.GetRemainingBits());
@@ -1209,6 +1267,7 @@ void ForgetPlaceholder(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_lock);
     auto found = g_visuals.find(id);
     if (found == g_visuals.end() || found->second.kind != 0) return;
+    g_luaHandleGenerations.erase(found->first);
     g_visuals.erase(found);
     ForgetElementReferences(id);
     if (g_resourceRoot == id) g_resourceRoot = 0;

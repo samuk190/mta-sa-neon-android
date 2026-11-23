@@ -33,6 +33,7 @@ struct Component {
     std::uintptr_t sites[2];
     std::uint32_t saved[2];
     bool visible;
+    bool applied = false;
 };
 
 Component g_components[] = {
@@ -57,6 +58,7 @@ bool WriteWord(std::uintptr_t address, std::uint32_t word) {
 
 // Caller holds g_mutex.
 bool ApplyLocked(Component& c, bool visible) {
+    if (c.applied && c.visible == visible) return true;
     const std::uintptr_t base = Hook::MemoryPatcher::getLibraryBaseAddress("libGTASA.so");
     if (!base) return false;
     bool ok = true;
@@ -80,14 +82,20 @@ bool ApplyLocked(Component& c, bool visible) {
             ok = WriteWord(address, c.saved[i]) && ok;
         }
     }
+    c.applied = ok;
     if (ok) c.visible = visible;
     return ok;
 }
 
 bool SetRadarLocked(bool visible) {
-    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
-    auto* flag = handle ? static_cast<unsigned char*>(dlsym(handle, "_ZN4CHud23bScriptDontDisplayRadarE")) : nullptr;
-    if (!flag) return false;
+    static unsigned char* flag = nullptr;
+    if (!flag) {
+        void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_NOW);
+        if (!handle) return false;
+        flag = static_cast<unsigned char*>(dlsym(handle, "_ZN4CHud23bScriptDontDisplayRadarE"));
+        dlclose(handle);
+        if (!flag) return false;
+    }
     *flag = visible ? 0 : 1;
     g_radarVisible = visible;
     return true;

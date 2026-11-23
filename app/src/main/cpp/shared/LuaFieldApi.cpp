@@ -194,6 +194,11 @@ bool HeadingOf(uint32_t id, float& degrees) {
         degrees = Wrap360(radians * (180.f / 3.14159265f));
         return true;
     }
+    float vx = 0, vy = 0, vz = 0;
+    if (Game::CopyRemotePedMotion(id, radians, vx, vy, vz)) {
+        degrees = Wrap360(radians * (180.f / 3.14159265f));
+        return true;
+    }
     ServerWorld::ActorSpawn visual;
     if (!ServerWorld::CopyVisual(id, visual)) return false;
     if (visual.kind != 1 && visual.kind != 2 && visual.kind != 14) return false;
@@ -233,6 +238,13 @@ int l_getElementRotation(lua_State* L) {
         lua_pushnumber(L, car.rotX);
         lua_pushnumber(L, car.rotY);
         lua_pushnumber(L, car.rotZ);
+        return 3;
+    }
+    Game::HostedCar traffic;
+    if (Game::CopyTrafficVehicleState(id, traffic)) {
+        lua_pushnumber(L, traffic.rotX);
+        lua_pushnumber(L, traffic.rotY);
+        lua_pushnumber(L, traffic.rotZ);
         return 3;
     }
     float z = 0.f;
@@ -336,7 +348,10 @@ int l_setElementAlpha(lua_State* L) {
     }
     g_fields[id].alphaSet = true;
     g_fields[id].alpha = static_cast<unsigned char>(value);
-    Diag(g_diagAlpha, "DIAG setElementAlpha: CEntity::SetAlpha is not hooked; the value is stored");
+    if (kind == Kind::Player || kind == Kind::Ped || kind == Kind::Vehicle)
+        Game::RpcSetAlpha(id, static_cast<uint8_t>(value));
+    else
+        Diag(g_diagAlpha, "DIAG setElementAlpha: the marker alpha is stored");
     lua_pushboolean(L, 1);
     return 1;
 }

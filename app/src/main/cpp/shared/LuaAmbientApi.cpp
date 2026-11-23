@@ -1,3 +1,4 @@
+#include "../gtasa/GameEngine.h"
 // Ambient ped model lease.
 // Desktop CLuaWorldDefs.cpp 742-755 and CLuaFunctionParser.h vector3 parsing.
 // CGameSA.cpp 1550-1587 returns false when the navigation zone array is missing.
@@ -432,13 +433,18 @@ int IsAmbientPedSphereVisible(lua_State* L) {
         return luaL_error(L, "Bad argument @ 'isAmbientPedSphereVisible' [Expected number at argument 4, got %s]",
                           std::isnan(radius) ? "NaN" : "inf");
     }
-    // CGameSA.cpp 2274-2277. An out-of-range radius is not visible. A valid query needs the camera.
     if (radius < 0.0 || radius > 100.0) return FailBool(L);
+    bool visible = false;
+    if (Game::IsAmbientSphereVisible(lua_tonumber(L, 1), lua_tonumber(L, 2), lua_tonumber(L, 3), radius, visible)) {
+        lua_pushboolean(L, visible);
+        return 1;
+    }
     if (!g_diagVisible) {
         g_diagVisible = true;
-        LUA_LOGE("DIAG isAmbientPedSphereVisible: CCamera::IsSphereVisible is not hooked");
+        LUA_LOGE("DIAG isAmbientPedSphereVisible: game-thread camera query unavailable");
     }
-    return FailBool(L);
+    // The second return value lets the resource distinguish a failed query from off-screen traffic.
+    return FailReason(L, "visibility-unavailable");
 }
 
 void Register(lua_State* L) {

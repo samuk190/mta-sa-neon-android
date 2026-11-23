@@ -154,8 +154,17 @@ std::string ClientElementTypeName(uint32_t id);
 // (CStaticFunctionDefinitions.cpp RUN_CHILDREN).
 void CopyClientChildren(uint32_t id, std::vector<uint32_t>& out);
 bool ClientCallPropagationEnabled(uint32_t id);
+void ActiveVmFirePlayerNetworkStatus(uint32_t player, uint8_t type, uint32_t ticks);
+void ActiveVmFireVehicleSeat(bool entered, uint32_t ped, uint32_t vehicle, uint8_t seat);
 void ActiveVmFireSpatialEvent(const char* name,uint32_t source,uint32_t other,bool matching);
 // onClientBirdShot. True when the event was not cancelled.
+struct NativeWeaponFire {
+    uint32_t ped, hit;
+    int weapon, total, clip;
+    float x, y, z, sx, sy, sz;
+    bool player;
+};
+void QueueNativeWeaponFire(NativeWeaponFire shot);
 bool ActiveVmFireBirdShot(uint32_t bird, uint32_t attacker, int weapon, float x, float y, float z);
 // The element an event is triggered on, then each parent while call propagation
 // is enabled. An element that is not in the tree still reaches the root.

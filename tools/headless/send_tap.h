@@ -4,7 +4,12 @@
 
 #include <cstdint>
 
+namespace WorldRPG::Net { class BitStreamWriter; }
 namespace WorldRPG::Headless {
+
+// Tests can exercise the actual sender with an accepting or rejecting local transport.
+using TestTransport = bool (*)(const Net::BitStreamWriter&);
+void SetTestTransport(TestTransport send);
 
 // Number of application packets sent with this game id (ePacketID) so far.
 uint64_t SentCount(uint8_t gameId);

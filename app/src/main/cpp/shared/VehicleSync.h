@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "entity/EntityAddTypes.h"
+#include "PlayerWeaponSync.h"
 
 namespace WorldRPG::VehicleSync {
 
@@ -155,9 +156,10 @@ bool ReadUnoccupiedEntry(WorldRPG::Net::BitStreamReader& reader, UnoccupiedUpdat
 // Only the fields whose sync flag is set are written. Always returns true.
 bool WriteUnoccupiedEntry(WorldRPG::Net::BitStreamWriter& writer, const UnoccupiedUpdate& in);
 
-// Input for the driver form of PLAYER_VEHICLE_PURESYNC (packet 33, seat 0), client to server.
+// Input for PLAYER_VEHICLE_PURESYNC (packet 33), client to server.
 // Fields without a phone source are written in their absent form (see WriteDriverPuresync).
 struct DriverPuresyncIn {
+    uint8_t seat = 0;
     uint8_t timeContext = 0;
     FullKeys keys;               // driving keys from the local pad (steering, accelerate, brake, handbrake, horn)
     int32_t model = 0;           // GTA model id (400-611)
@@ -170,22 +172,26 @@ struct DriverPuresyncIn {
     float playerArmor = 0;       // 0 - 127.5
     float cameraRotZ = 0;        // camera heading, radians, -pi..pi
     float cameraRotX = 0;        // camera pitch, radians, -pi..pi
-    VehicleFlags flags;          // flags.hasWeapon must be false (weapon block not ported)
+    VehicleFlags flags;
+    PlayerWeaponSync::LocalWeapon weapon;
     bool lookLeft = false;       // aircraft only, used when flags.aircraft
     bool lookRight = false;
     bool hasDamage = false;      // one-shot damage block (desktop DamageSent)
     uint32_t damagerId = 0xFFFFFFFFu;
+    uint8_t damageBodyPart = 3;  // ePedPieceTypes (torso..head)
     uint8_t damageWeapon = 0;    // 6-bit weapon type
 };
 
-// Writes the driver body of packet 33 (desktop CNetAPI::WriteVehiclePuresync, seat 0), field by field in
+// Writes the occupant body of packet 33 (desktop CNetAPI::WriteVehiclePuresync), field by field in
 // the order the server reader CVehiclePuresyncPacket::Read consumes it. The caller writes the packet id
 // (33) first. Returns false without writing when the body cannot match the reader: train models (the
-// train block is not ported) and flags.hasWeapon (the weapon block is not ported).
+// train block is not ported), or missing fields for the requested weapon form.
 bool WriteDriverPuresync(WorldRPG::Net::BitStreamWriter& writer, const DriverPuresyncIn& in);
 
-// Input for PLAYER_KEYSYNC (packet 31) while the local ped drives a vehicle (seat 0), client to server.
+// Input for PLAYER_KEYSYNC (packet 31) from a driver or passenger to the server.
 struct DriverKeysyncIn {
+    uint8_t seat = 0;
+    PlayerWeaponSync::LocalWeapon weapon;
     FullKeys keys;               // same 8 bits, analog bytes and sticks as SSmallKeysyncSync
     int32_t model = 0;           // GTA model id of the driven vehicle (400-611)
     float playerRotation = 0;    // ped heading, radians

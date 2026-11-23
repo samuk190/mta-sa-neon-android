@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../shared/PlayerWeaponSync.h"
+#include "../shared/CombatSync.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -19,6 +21,8 @@
 #define ENGINE_LOGI(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
 #define ENGINE_LOGE(...) do { fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 #endif
+
+namespace WorldRPG::VehicleSync { struct UnoccupiedUpdate; }
 
 namespace WorldRPG::Game {
 
@@ -161,6 +165,7 @@ float CopyLocalArmor();
 // the game thread. False when the symbol is missing or that thread does not
 // run the call; out is then unchanged.
 bool FindGroundZFor3DPosition(float x, float y, float z, float& out);
+bool IsAmbientSphereVisible(float x, float y, float z, float radius, bool& visible);
 
 // Client-only ped for createPed (CStaticFunctionDefinitions::CreatePed 2815-2852).
 // The id is not a server element. The body is created on the game thread.
@@ -191,12 +196,23 @@ bool CopyScriptPedFacts(uint32_t id, int& model, float& headingRadians, bool& fr
 // CClientPed::SetHealth for the local player. Clamped and written through the existing health lock.
 void NoteLocalHealth(float health);
 // Another player shot this ped. Health is reported in the next pure sync.
-void NoteDamage(uint32_t attacker, float amount, uint8_t weapon);
-bool ConsumeDamage(uint32_t& attacker, uint8_t& weapon);
+void NoteDamage(uint32_t attacker, float amount, uint8_t weapon, uint8_t zone);
+Combat::DamageReport PeekDamage();
+void AcknowledgeDamage(uint64_t serial);
 // Keysync between pure-sync samples. Camera rotation is the left-stick basis:
 // stick Y negative is forward along that camera, matching CNetAPI / CClientPed.
-void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int stickY, bool fire, bool duck);
-void NoteRemoteWeapon(uint32_t id, int weapon);
+void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int stickY, uint8_t buttons, bool duck,
+                   const PlayerWeaponSync::RemoteWeapon* weapon);
+PlayerWeaponSync::LocalWeapon CopyLocalWeapon();
+void NoteDriveby(uint32_t id, bool enabled);
+bool IsDriveby(uint32_t id);
+void NoteVehicleCombat(uint32_t id, const PlayerWeaponSync::RemoteWeapon& weapon, uint8_t buttons, bool driveby);
+void NoteRemotePlayerWeapon(uint32_t id, const PlayerWeaponSync::RemoteWeapon& weapon);
+void QueueRemoteBullet(const Combat::SBulletSync& shot);
+// Native bullet hooks use these on the game thread.
+bool IsRemoteNetworkPlayer(void* entity);
+uint32_t EntityElementId(void* entity); // Game-thread lookup; never retains the GTA pointer.
+float NativeWeaponRange(int type);
 // One game-thread snapshot; false on unavailable native data or a stale element.
 bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out);
 // Enrich known elements with game-thread body positions and model bounds; adds script peds.
@@ -205,6 +221,7 @@ bool CopySpatialScene(std::vector<Spatial::Element>& elements);
 bool RemoteFacingLocal(uint32_t id, float facing, float reach);
 // Buttons the local ped is actually using, so outgoing keysync can set them.
 struct OnFootKeys {
+    uint64_t attackPress = 0, jumpPress = 0;
     bool fire = false;
     bool duck = false;
     // ButtonCross held (CPad::GetSprint) and a ButtonSquare press (jump) to send once.
@@ -221,9 +238,9 @@ struct OnFootKeys {
 };
 void CopyOnFoot(float heading, float vx, float vy, OnFootKeys& keys);
 // Clears the jump press after an on-foot packet with ButtonSquare was written.
-void ConsumeLocalJump();
+void ConsumeLocalJump(uint64_t serial);
 // Clears the attack tap after an on-foot packet with ButtonCircle was written.
-void ConsumeLocalAttack();
+void ConsumeLocalAttack(uint64_t serial);
 // A server ped from PACKET_ID_PED_SYNC or ENTITY_ADD. Applied on the game thread.
 void NoteRemotePed(uint32_t id, float x, float y, float z, float heading,
     float vx = 0, float vy = 0, float vz = 0, bool applyVelocity = true);
@@ -232,7 +249,7 @@ void NoteRemotePed(uint32_t id, float x, float y, float z, float heading,
 // Health and armor are applied to CPed +0x6AC / +0x6B4 on the game thread.
 void NoteRemotePlayerSync(uint32_t id, float x, float y, float z, float heading,
     float vx, float vy, float vz, bool hasVelocity,
-    int stickX, int stickY, float camera, bool fire, bool duck,
+    int stickX, int stickY, float camera, uint8_t buttons, bool duck, const PlayerWeaponSync::RemoteWeapon& weapon,
     bool hasHealth, float health, bool hasArmor, float armor);
 void SetPedHost(uint32_t id, bool host);
 void ForgetRemote(uint32_t id);
@@ -251,17 +268,42 @@ void NoteRemoteUnseat(uint32_t pedId);
 // Driver block of PLAYER_VEHICLE_PURESYNC (packet 33): move speed and turn speed of a remote car. Applied once per packet
 // on the game thread (desktop CNetAPI::ReadVehiclePuresync, CClientVehicle::SetMoveSpeed / SetTurnSpeed).
 void NoteRemoteVehicleMotion(uint32_t id, float mx, float my, float mz, float tx, float ty, float tz);
-void RequestWander(uint32_t id, int direction);
+void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate& update);
+void RpcSetVehiclePosition(uint32_t id, float x, float y, float z);
+void RpcSetVehicleHealth(uint32_t id, float health);
+void RpcSetVehicleRotation(uint32_t id, float x, float y, float z);
+void RpcSetVehicleVelocity(uint32_t id, float x, float y, float z, bool angular);
+bool SetOwnedPedControl(uint32_t id, const char* control, bool enabled);
+enum class TrafficPedTask : int { DriveWander = 711, Wander = 912, KillOnFoot = 1000 };
+bool StartPedKillOnFoot(uint32_t id, uint32_t target);
+bool PresentPedWeaponShot(uint32_t id, unsigned weapon, float x, float y, float z);
+bool StartPedWander(uint32_t id, int moveState, int direction, bool sensible);
+bool StartPedDriveWander(uint32_t pedId, uint32_t vehicleId, float speed, int drivingStyle);
+// A single game-thread snapshot of the owner's task and the walkable corridors.
+struct TrafficObstacleScan {
+    const char* mode = "pause";
+    float heading = 0, floor = 0;
+    bool frontBlocked = false;
+    bool clear[8]{};
+    float ground[8]{};
+};
+bool ScanTrafficObstacle(uint32_t id, bool resuming, float originalHeading, TrafficObstacleScan& out);
+bool IsTrafficPedTaskActive(uint32_t id, TrafficPedTask task);
+bool KillNativePedTask(uint32_t id, bool primary, int slot, bool gracefully);
+bool IsNativeActorStreamed(uint32_t id);
+bool HasNativeTrafficCapability(const char* name);
+bool SetTrafficVehicleVelocity(uint32_t id, float x, float y, float z, bool angular);
+bool SetTrafficVehicleRotation(uint32_t id, float rx, float ry, float rz);
+bool IsTrafficVehicleOnGround(uint32_t id);
+bool SetTrafficVehicleLoadCollision(uint32_t id, bool enabled);
+bool CopyTrafficVehicleState(uint32_t id, struct HostedCar& out);
+bool SetTrafficVehicleEngine(uint32_t id, bool enabled);
 bool CopyRemotePose(uint32_t id, float& x, float& y, float& z);
-// Stage S4 (defined in shared/entity/PedSyncState.cpp). SetPedWander starts the
-// hosted ped's wander task (RequestWander); ClearPedWander releases hosting,
-// which clears the task in ApplyRemotePeds (SetPedHost(false)).
-void SetPedWander(uint32_t id, int direction);
-void ClearPedWander(uint32_t id);
-// Stage S4: one observer pose (already interpolated) for the ped. Same
-// effect as NoteRemotePed; called by PedSyncState::SamplePose.
-void ApplyPedTarget(uint32_t id, float x, float y, float z, float heading,
-    float vx, float vy, float vz);
+bool CopyRemotePedMotion(uint32_t id, float& heading, float& vx, float& vy, float& vz);
+// CPedSync::Packet_PedSync: null means that the corresponding field was absent.
+void NoteObservedPedSync(uint32_t id, const float* position, const float* heading,
+    const float* velocity, uint64_t intervalMs);
+
 
 // Native task presentation — matches mta_neon CClientPed interface.
 // Locomotion mode: SNativeTaskLocomotionSync::eMode (NONE/WALK/RUN/SPRINT).
@@ -300,9 +342,6 @@ void ForgetPedNativeTaskState(uint32_t id);
 void SetPedVitals(uint32_t id, float health, float armor);
 // PLAYER_CLOTHES (Packet_PlayerClothes): the clothes of a remote CJ, applied on the game thread.
 void NoteRemoteClothes(uint32_t id, const std::vector<WorldRPG::Entity::PedClothes>& clothes);
-// SFullKeysyncSync button flags of a remote player (0x01 L1, 0x02 R1, 0x04 Square, 0x08 Cross, 0x10 Circle,
-// 0x20 Triangle, 0x40 ShockL, 0x80 PedWalk; SyncStructures.h 1004-1012).
-void NoteRemoteButtons(uint32_t id, uint8_t buttons);
 // Element RPCs (packet 77) applied to peds and players. The game thread writes the body (ApplyRemotePeds).
 void RpcSetPosition(uint32_t id, float x, float y, float z);
 void RpcSetFrozen(uint32_t id, bool frozen);
@@ -317,6 +356,7 @@ struct HostedWasted {
     float x = 0, y = 0, z = 0;
 };
 bool ConsumeHostedWasted(HostedWasted& out);
+bool CopyLocalCombatDeath(uint64_t& life, HostedWasted& out);
 // PED_WASTED (64) / PLAYER_WASTED (27): CClientPed::Kill on the game thread.
 void NoteRemoteWasted(uint32_t id, int weapon, int animGroup, int animId);
 // PLAYER_SPAWN of a remote player: alive again (CClientPlayer::Spawn).
@@ -383,6 +423,7 @@ struct HostedCar {
     float tx = 0, ty = 0, tz = 0;
     // CVehicle::m_fHealth (+0x634 on libGTASA 2.10 arm64).
     float health = 1000.f;
+    bool engineOn = false;
 };
 int CopyHostedCars(HostedCar* out, int max);
 // Local player (CJ) enter/exit of a server vehicle, for VEHICLE_INOUT (packet 58). The game thread
@@ -391,6 +432,7 @@ int CopyHostedCars(HostedCar* out, int max);
 struct LocalVehicleEvent {
     uint32_t vehicleId = 0xFFFFFFFFu;
     bool entered = false;
+    uint8_t seat = 0;
 };
 // Pops the oldest queued event. Returns false when the queue is empty.
 bool ConsumeLocalVehicleEvent(LocalVehicleEvent& out);
@@ -400,6 +442,10 @@ uint32_t LocalVehicleId();
 // WatchLocalVehicle with SampleHostedCar, so the units match HostedCar: rotation in degrees [0, 360), move and
 // turn speed per frame from the body. health is CVehicle::m_fHealth (+0x634).
 struct LocalCarState {
+    uint64_t firePress = 0;
+    float camera = 0.f;
+    uint8_t seat = 0;
+    bool fire = false;
     uint32_t vehicleId = 0xFFFFFFFFu;
     int model = 0;
     float x = 0, y = 0, z = 0;
@@ -422,6 +468,7 @@ struct LocalCarState {
 };
 // False when the local ped is not in a mapped vehicle (always false off Android).
 bool CopyLocalCar(LocalCarState& out);
+void AcknowledgeVehicleFire(uint64_t serial);
 
 // Screen-relative bounds of the visible native driving controls.
 struct VehicleTouchRect {
@@ -435,13 +482,16 @@ std::vector<VehicleTouchRect> CopyVehicleTouchControlBounds();
 // CClientGame::BulletFire (CClientGame.cpp 6242-6257) sets the start/end vectors that PostWeaponFire (6024-6026)
 // sends as PLAYER_BULLETSYNC (98). weapon is the eWeaponType id, start/end are world coordinates.
 struct LocalShot {
+    uint64_t serial = 0;
+    Combat::BulletHit hit;
     int weapon = 0;
     float sx = 0, sy = 0, sz = 0;
     float ex = 0, ey = 0, ez = 0;
 };
 // Queues one shot. start null means the live ped position (CopyPose). end null is ignored. Game thread.
-void NoteLocalShot(int weapon, const float* start, const float* end);
-// Pops the oldest queued shot. Returns false when the queue is empty. Network thread.
-bool ConsumeLocalShot(LocalShot& out);
+void NoteLocalShot(int weapon, const float* start, const float* end, const Combat::BulletHit& hit);
+// The network thread removes this exact shot after the transport accepts it.
+bool PeekLocalShot(LocalShot& out);
+void FinishLocalShot(uint64_t serial);
 
 } // namespace WorldRPG::Game

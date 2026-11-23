@@ -1,6 +1,7 @@
 #include "../shared/DebugFlags.h"
 #include "GameEngine.h"
 #include "GameTasks.h"
+#include "VehiclePaint.h"
 #include "SpatialNative.h"
 #include "ProjectileEngine.h"
 #include "PlayerPedPort.h"
@@ -8,7 +9,9 @@
 #include "RenderGuard.h"
 #include "GTASAOffsets.h"
 #include "../shared/ServerWorld.h"
-#include "../shared/entity/PedSyncState.h"
+#include "PedInterpolator.h"
+#include "../shared/VehicleSync.h"
+#include "../shared/entity/EntityVehicleModels.h"
 
 namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
 #include "../hook/SymbolResolver.h"
@@ -17,15 +20,16 @@ namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <strings.h>
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <deque>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <memory>
 
@@ -85,12 +89,12 @@ static std::atomic<float> g_velY{0.f};
 static std::atomic<float> g_velZ{0.f};
 static std::atomic<float> g_health{100.f};
 static std::atomic<float> g_armor{0.f};
-static std::atomic<bool> g_healthOwned{false};
-static std::atomic<bool> g_damagePending{false};
-static std::atomic<uint32_t> g_damager{0xFFFFFFFFu};
-static std::atomic<uint8_t> g_damageWeapon{0};
-static std::atomic<int64_t> g_lastDamageMs{0};
-static std::atomic<int64_t> g_lastMeleeMs{0};
+// Server and Lua vitals writes are applied once to the body on the game thread.
+static std::atomic<float> g_pendingLocalHealth{-1.f}, g_pendingLocalArmor{-1.f};
+static std::atomic<uint64_t> g_localLife{0};
+// Publish the attacker, weapon and body part from one damage event as a unit.
+static Combat::PendingDamage g_pendingDamage;
+static uint64_t g_nativeDamageEvents = 0;  // game thread, including synchronous replay callbacks
 static std::atomic<bool> g_localFire{false};
 static std::atomic<bool> g_localDuck{false};
 // The game thread publishes the position after all native work for this request.
@@ -102,10 +106,11 @@ static uint64_t g_appliedPlacement = 0;
 static std::atomic<int> g_pendingLocalInterior{-1};
 // ButtonCross (sprint) held, and a ButtonSquare (jump) press waiting for the next on-foot packet.
 static std::atomic<bool> g_localSprint{false};
-static std::atomic<bool> g_localJumpLatch{false};
+static uint64_t g_controlPressSequence = 0;  // game-thread producer for on-foot input
+static std::atomic<uint64_t> g_localJumpLatch{0};
 // ButtonCircle: the attack widget held now, and a tap waiting for the next on-foot packet.
 static std::atomic<bool> g_localAttackHeld{false};
-static std::atomic<bool> g_localAttackLatch{false};
+static std::atomic<uint64_t> g_localAttackLatch{0};
 // CPad::GetPad(0) NewState shorts. LeftStickX is +0, LeftStickY is +2
 // (PlayerPedPort.cpp, CPad::GetPedWalkLeftRight / GetPedWalkUpDown).
 static std::atomic<int> g_padStickX{0};
@@ -167,10 +172,11 @@ static void ResolvePlayerFns() {
     g_switchOff = reinterpret_cast<SwitchOffFn>(dlsym(handle, "_Z20Menu_SwitchOffToGamev"));
 }
 
-static void QueueLocalPlacement(float x, float y, float z) {
+static void QueueLocalPlacement(float x, float y, float z, bool newLife = false) {
     std::lock_guard lock(g_localPlacementMutex);
     g_localPlacement = {x, y, z};
     ++g_requestedPlacement;
+    if (newLife) ++g_localLife;
 }
 
 bool LocalPlacementPending() {
@@ -222,10 +228,18 @@ static bool PlausiblePosition(float x, float y, float z) {
 // CPlaceable on 2.10: matrix pointer at +0x18 (position at matrix+0x30),
 // otherwise the embedded transform at +0x08 and heading at +0x14.
 static void SampleLocalTasks(void* ped);
+static void SampleLocalWeapon(void* ped, Vec3 position, float heading);
+static void* g_sampledLocalPed = nullptr;  // game thread only
+static uint64_t g_sampledLife = UINT64_MAX;
 static void SampleLocalPose() {
     if (!g_findPlayer) return;
     auto* ped = static_cast<unsigned char*>(g_findPlayer(0));
+    g_sampledLocalPed = ped;
     if (!ped) return;
+    {
+        std::lock_guard lock(g_localPlacementMutex);
+        if (g_requestedPlacement == g_appliedPlacement) g_sampledLife = g_localLife.load();
+    }
     float x = 0, y = 0, z = 0, heading = g_poseH.load(), radarHeading = g_radarH.load();
     auto* matrix = *reinterpret_cast<unsigned char**>(ped + 0x18);
     const auto matrixAddr = reinterpret_cast<uintptr_t>(matrix);
@@ -267,13 +281,9 @@ static void SampleLocalPose() {
     // writes `CPed*` (x1) at the same +0x6B4.
     auto* armor = reinterpret_cast<float*>(ped + 0x6B4);
     auto* speed = reinterpret_cast<float*>(ped + 0x68);
-    if (g_healthOwned.load()) {
-        const float owned = g_health.load();
-        if (*health + 0.5f < owned) g_health = *health;
-        else *health = owned;
-    } else if (*health > 0.f && *health < 1000.f) {
-        g_health = *health;
-    }
+    if (float value = g_pendingLocalHealth.exchange(-1.f); value >= 0.f) *health = value;
+    if (float value = g_pendingLocalArmor.exchange(-1.f); value >= 0.f) *armor = value;
+    if (*health >= 0.f && *health < 1000.f) g_health = *health;
     if (std::isfinite(*armor) && *armor >= 0.f && *armor < 1000.f) g_armor = *armor;
     g_velX = speed[0];
     g_velY = speed[1];
@@ -286,6 +296,7 @@ static void SampleLocalPose() {
     g_poseH = heading;
     g_radarH = radarHeading;
     SampleLocalTasks(ped);
+    SampleLocalWeapon(ped, {x, y, z}, heading);
     if (dx * dx + dy * dy > 9.f) {
         static int reports = 0;
         if (reports < 8) {
@@ -302,8 +313,10 @@ struct RemotePed {
     float health = 100.f;
     float armor = 0.f;
     float cameraRotation = 0.f;
-    int weapon = 0;
-    int wanderDir = 0;
+    PlayerWeaponSync::RemoteWeapon syncWeapon;
+    uint64_t weaponRevision = 0;
+    uint64_t aimRevision = 0;
+    bool gangDriveby = false;
     // Native task presentation — matches mta_neon SLastSyncedPedData fields.
     unsigned int nativeTaskLocomotionMode = 0;   // SNativeTaskLocomotionSync::eMode
     uint8_t nativeTaskWeaponType = 0;             // SNativeTaskWeaponPresentationSync weapon type
@@ -320,7 +333,6 @@ struct RemotePed {
     bool inWater = false;
     bool duck = false;
     bool hosted = false;
-    bool wander = false;
     bool animationKilled = false;
     bool healthLocked = false;
     bool armorLocked = false;
@@ -344,8 +356,18 @@ struct RemotePed {
     bool spawnApplied = false;
     // CClientPed::SetFrozen state of the element (ENTITY_ADD bIsFrozen, later SET_ELEMENT_FROZEN).
     bool frozen = false;
+    bool frozenChanged = false;
     // A PLAYER_PURESYNC position not yet handed to SetTargetPosition (ReadPlayerPuresync, CNetAPI.cpp 998).
     bool newTarget = false;
+    // Lua controller state for an owned server ped (traffic routes).
+    uint8_t ownedControls = 0;
+    bool observerHasPosition = false;
+    bool observerHasHeading = false;
+    uint64_t observerPositionInterval = 0;
+    uint64_t observerHeadingInterval = 0;
+    int64_t lastObserverPositionMs = 0;
+    int64_t lastObserverMotionMs = 0;
+    int64_t observerMotionUntilMs = 0;
     // CClientPlayerClothes from PLAYER_CLOTHES (Packet_PlayerClothes, CPacketHandler.cpp 5160-5195). Empty: the
     // desktop default outfit (CClientPlayerClothes::DefaultClothes 467-474). Applied when the body is model 0.
     std::vector<WorldRPG::Entity::PedClothes> clothes;
@@ -354,20 +376,23 @@ struct RemotePed {
     uint8_t buttons = 0;
     // SET_ELEMENT_POSITION / SET_ELEMENT_INTERIOR with a position: CClientPed::SetPosition with interpolation reset.
     bool teleport = false;
+    Vec3 teleportPosition{};
     // SET_PED_ROTATION: SetCurrentRotation at once.
     bool headingSnap = false;
+    float snapHeading = 0;
     // PED_WASTED / PLAYER_WASTED (Packet_PlayerWasted -> CClientPed::Kill): a kill waiting for the game thread, and the
     // m_bDead state after it. PLAYER_SPAWN clears dead and replaces the body.
     bool killPending = false;
     bool dead = false;
-    bool respawn = false;
     int killWeapon = 0;
     int killAnimGroup = 0;
     int killAnimId = 0;
     // CClientPed::m_ucAlpha (SetAlpha) and m_bUsesCollision (SetUsesCollision): ENTITY_ADD, then SET_ELEMENT_ALPHA /
     // SET_ELEMENT_COLLISIONS_ENABLED. Every new body gets them (_CreateModel).
     uint8_t alpha = 255;
+    bool alphaChanged = false;
     bool collisions = true;
+    bool collisionsChanged = false;
     // CClientPed::m_AnimationCache: the last named animation, run again on a new body (RunAnimationFromCache).
     bool hasAnimCache = false;
     WorldRPG::Game::PedRpcOp animCache;
@@ -381,12 +406,18 @@ static constexpr size_t kMaxPedRpcOps = 32;
 static std::atomic<int> g_localAlpha{255};
 static std::atomic<int> g_localCollisions{1};
 struct RemoteBody {
+    bool networkPlayer = false;
     uint64_t queryGeneration = 0;
+    uint64_t spatialGeneration = 0;
     void* ped = nullptr;
     std::unique_ptr<std::byte[]> owned;
-    int weapon = -1;
-    int wanderDir = -1;
+    uint64_t appliedWeaponRevision = 0;
+    uint64_t aimRevision = 0;
+    PlayerWeaponSync::AimInterpolation aimInterpolation;
+    int aimSlot = -1;
+    int trafficTask = 0;
     bool ducked = false;
+    bool observerWalking = false;
     int64_t lastFight = 0;
     // CClientPed::ArmRemoteStreamInTransformFence (CClientPed.cpp 5914-5945) holds a remote
     // ped until collision is loaded. Owners use the same bIsStaticWaitingForCollision bit
@@ -412,6 +443,7 @@ struct RemoteBody {
         int64_t finishMs = 0;  // 0: no target (HasTargetPosition false)
         float lastAlpha = 0;
     } interp;
+    Interp::RotationInterp rotationInterp;
     // Last area code written by ApplyPedInterior. Unset until the first write.
     bool interiorWritten = false;
     uint8_t interior = 0;
@@ -428,11 +460,18 @@ struct CarSeed {
     float x = 0, y = 0, z = 0;
     bool hasRotation = false;
     float rotX = 0, rotY = 0, rotZ = 0;
-    bool hasMotion = false;
+    bool hasMoveSpeed = false;
+    bool hasTurnSpeed = false;
     float move[3] = {0, 0, 0};
     float turn[3] = {0, 0, 0};
     bool hasHealth = false;
     float health = 0;
+};
+struct CarInterpolation {
+    VehicleSync::Vec3 target{};
+    VehicleSync::Vec3 error{};
+    int64_t startMs = 0;
+    float lastAlpha = 0.f;
 };
 struct RemoteCar {
     uint64_t spatialGeneration = 0;
@@ -451,9 +490,26 @@ struct RemoteCar {
     // Server state the body has to take once (ApplyCarSeed). Filled from the ENTITY_ADD actor (rotation, health)
     // and from VEHICLE_STARTSYNC (everything). Guarded by g_remoteMutex.
     CarSeed seed;
+    std::optional<VehicleSync::UnoccupiedUpdate> observedVehicle;
+    bool useUnoccupiedSync = false; // guarded by g_remoteMutex
+    // Only the game thread reads or writes the active interpolation.
+    CarInterpolation unoccupiedPosition;
+    CarInterpolation unoccupiedRotation;
     bool actorSeeded = false;
+    std::optional<bool> frozen;
+    std::optional<bool> engineOn;
+    std::optional<bool> loadCollision;
+    std::optional<uint8_t> alpha;
+    int appliedFrozen = -1;
+    int appliedEngineOn = -1;
+    int appliedLoadCollision = -1;
+    int appliedAlpha = -1;
+    std::optional<HostedCar> lastBodyPose;
     int doorLockMode = 1;
     int appliedDoorLockMode = -1;
+    std::optional<VehicleColors> colors;
+    std::optional<std::array<VehicleRgb, 4>> appliedColors;
+    void* paintClump = nullptr;
     uint16_t nitroUpgrade = 0;
     uint64_t nitroRevision = 0;
     uint16_t appliedNitroUpgrade = 0;
@@ -464,6 +520,8 @@ static std::vector<uint32_t> g_forget;
 static std::atomic<bool> g_remoteResetPending{false};
 static std::vector<HostedPed> g_hostedSnap;
 static std::vector<HostedCar> g_hostedCarSnap;
+// Immutable IDs from the last completed game-thread streaming pass.
+static std::vector<std::pair<uint32_t, uint64_t>> g_streamedActors;
 static std::unordered_map<uint32_t, RemoteBody> g_remoteBodies;
 // Phone body caps, kept apart the way desktop keeps the two streamers apart
 // (CClientManager.cpp 27-28, Common.h 16-17). Desktop stops at 110 peds and 64 vehicles.
@@ -474,15 +532,32 @@ static constexpr int kMaxRemoteVehicleRecords = 48;
 // Local player vehicle state and the queue for VEHICLE_INOUT. Both guarded by g_remoteMutex.
 static constexpr uint32_t kNoVehicle = 0xFFFFFFFFu;
 static uint32_t g_localVehicleId = kNoVehicle;
+static uint8_t g_localSeat = 0;
 // Live sample of that car for packet 33 (CopyLocalCar). Written in WatchLocalVehicle, under g_remoteMutex.
 static LocalCarState g_localCar;
 static bool g_localCarValid = false;
+static uint64_t g_vehicleFireSequence = 0;
 static std::vector<VehicleTouchRect> g_vehicleTouchBounds;
 static std::vector<LocalVehicleEvent> g_localVehicleEvents;
 static constexpr size_t kMaxLocalVehicleEvents = 16;
-// Local bullet-weapon shots (NoteLocalShot / ConsumeLocalShot). Guarded by g_remoteMutex.
+// Local bullet-weapon shots (NoteLocalShot / PeekLocalShot). Guarded by g_remoteMutex.
 static std::vector<LocalShot> g_localShots;
+static uint64_t g_localShotSerial = 0;
+static PlayerWeaponSync::LocalWeapon g_localWeapon;
+static int g_localDrivebyRequest = -1;  // protected by g_remoteMutex
+static PlayerWeaponSync::Aim g_lastLocalShotAim;
+static int g_lastLocalShotWeapon = 0;
+static std::chrono::steady_clock::time_point g_lastLocalShotTime;
 static constexpr size_t kMaxLocalShots = 32;
+struct RemoteBullet {
+    uint64_t localLife = 0;
+    Combat::SBulletSync shot;
+    uint64_t generation = 0;
+    std::chrono::steady_clock::time_point deadline;
+    PedRpcOp weaponRequest;
+};
+static std::deque<RemoteBullet> g_remoteBullets;
+static constexpr size_t kMaxRemoteBullets = 64;
 
 // HasModelLoaded is not exported. HasVehicleUpgradeLoaded (0x395098) reads
 // ms_aInfoForModel[id] with stride 0x14 and treats the byte at +0x10 as loaded
@@ -692,26 +767,13 @@ static void DressLocalPlayer() {
     DressCj(g_findPlayer(0), false);
 }
 
-static void ArmRemote(void* body, RemoteBody& stored, int weapon) {
-    if (!body || weapon <= 0 || stored.weapon == weapon) return;
-    using GiveWeaponFn = void (*)(void*, int, unsigned, bool);
-    static GiveWeaponFn giveWeapon = nullptr;
-    static bool looked = false;
-    if (!looked) {
-        looked = true;
-        void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
-        if (handle)
-            giveWeapon = reinterpret_cast<GiveWeaponFn>(dlsym(handle, "_ZN4CPed10GiveWeaponE11eWeaponTypejb"));
-    }
-    if (!giveWeapon) return;
-    giveWeapon(body, weapon, 60u, true);
-    stored.weapon = weapon;
-}
-
 struct TaskFns {
     bool ready = false;
     void* (*taskNew)(unsigned long) = nullptr;
     void (*wanderCtor)(void*, int, unsigned char, bool, float) = nullptr;
+    void (*driveWanderCtor)(void*, void*, int, float) = nullptr;
+    void* (*findTaskByType)(const void*, int) = nullptr;
+    void (*setPrimary)(void*, void*, int, bool) = nullptr;
     void (*addPrimary)(void*, void*, bool) = nullptr;
     void (*setSecondary)(void*, void*, int) = nullptr;
     void* (*getSecondary)(void*, int) = nullptr;
@@ -792,6 +854,15 @@ static TaskFns& Tasks() {
     api.padLookLeft = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad11GetLookLeftEb"));
     api.padLookRight = reinterpret_cast<bool (*)(void*, bool)>(dlsym(handle, "_ZN4CPad12GetLookRightEb"));
     api.padNitroFired = reinterpret_cast<decltype(api.padNitroFired)>(dlsym(handle, "_ZN4CPad13GetNitroFiredEv"));
+    api.driveWanderCtor = reinterpret_cast<decltype(api.driveWanderCtor)>(
+        dlsym(handle, "_ZN26CTaskComplexCarDriveWanderC1EP8CVehicleif"));
+    if (!api.driveWanderCtor)
+        api.driveWanderCtor = reinterpret_cast<decltype(api.driveWanderCtor)>(
+            dlsym(handle, "_ZN26CTaskComplexCarDriveWanderC2EP8CVehicleif"));
+    api.findTaskByType = reinterpret_cast<decltype(api.findTaskByType)>(
+        dlsym(handle, "_ZNK16CPedIntelligence14FindTaskByTypeEi"));
+    api.setPrimary = reinterpret_cast<decltype(api.setPrimary)>(
+        dlsym(handle, "_ZN12CTaskManager7SetTaskEP5CTaskib"));
     api.wanderVtable = dlsym(handle, "_ZTV26CTaskComplexWanderStandard");
     return api;
 }
@@ -822,7 +893,7 @@ static void SampleLocalPadAndCamera() {
         g_padStickValid = false;
         g_localSprint = false;
         g_localAttackHeld = false;
-        g_localAttackLatch = false;
+        g_localAttackLatch = 0;
     } else if (!api.getPad) {
         g_padStickValid = false;
         static bool loggedPad = false;
@@ -874,17 +945,25 @@ static void SampleLocalPadAndCamera() {
             // Desktop sends the button, so each tap is a separate press; the phone used to send "an attack task
             // exists", which stays set through a whole combo, so desktop only played the first punch.
             static bool (*isTouched)(int, void*, int) = nullptr;
+            static int (*getWeapon)(void*, void*, bool) = nullptr;
             static bool lookedTouch = false;
             if (!lookedTouch) {
                 lookedTouch = true;
-                if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL))
+                if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL)) {
                     isTouched = reinterpret_cast<bool (*)(int, void*, int)>(
                         dlsym(handle, "_ZN15CTouchInterface9IsTouchedENS_9WidgetIDsEP9CVector2Di"));
+                    getWeapon = reinterpret_cast<int (*)(void*, void*, bool)>(
+                        dlsym(handle, "_ZN4CPad9GetWeaponEP4CPedb"));
+                }
             }
-            if (isTouched) {
+            if (isTouched || getWeapon) {
                 float vec[2] = {0.f, 0.f};
-                const bool held = isTouched(0x1, vec, 0);
-                if (held && !g_localAttackHeld.load()) g_localAttackLatch = true;
+                void* ped = g_findPlayer ? g_findPlayer(0) : nullptr;
+                // GetWeapon reads the fire widgets used with a weapon camera in
+                // addition to widget 1 (libGTASA 2.10, 0x4ddb20-0x4ddcf8).
+                const bool held = (getWeapon && ped && getWeapon(pad, ped, false)) ||
+                    (isTouched && isTouched(0x1, vec, 0));
+                if (held && !g_localAttackHeld.load()) g_localAttackLatch = ++g_controlPressSequence;
                 g_localAttackHeld = held;
             }
             static int stickReports = 0;
@@ -928,6 +1007,62 @@ static void* PedIntel(void* ped) {
     return intel;
 }
 
+int NativeVehicleSeat(void* vehicle, void* ped) {
+    if (!vehicle || !ped) return -1;
+    auto& api = Tasks();
+    if (api.isVehicleDriver && api.isVehicleDriver(vehicle, ped)) return 0;
+    static void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    static auto* code = lib ? static_cast<const uint32_t*>(dlsym(lib, "_ZNK8CVehicle11IsPassengerEPK4CPed")) : nullptr;
+    // Eight sequential passenger pointers in CVehicle::IsPassenger(CPed const*).
+    if (!code || code[1] != 0xf942d408 || code[0x58 / 4] != 0xf942f008) return -1;
+    auto seats = reinterpret_cast<void* const*>(static_cast<const uint8_t*>(vehicle) + 0x5a8);
+    for (int i = 0; i < 8; ++i) if (seats[i] == ped) return i + 1;
+    return -1;
+}
+
+void* NativeDrivebyTask(void* ped) {
+    void* intel = PedIntel(ped);
+    if (!intel) return nullptr;
+    void* task = reinterpret_cast<void**>(static_cast<uint8_t*>(intel) + 8)[3];
+    static void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    static auto* vtable = lib ? static_cast<void**>(dlsym(lib, "_ZTV22CTaskSimpleGangDriveBy")) : nullptr;
+    return task && vtable && *static_cast<void***>(task) == vtable + 2 ? task : nullptr;
+}
+
+bool HasNativeDriveby(void* ped) { return NativeDrivebyTask(ped) != nullptr; }
+
+void SetNativeDriveby(void* ped, void* vehicle, uint8_t seat, bool enabled) {
+    auto& api = Tasks();
+    void* intel = PedIntel(ped);
+    if (!intel) return;
+    static void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!lib) return;
+    using Abort = bool (*)(void*, void*, int, const void*);
+    using Construct = void (*)(void*, void*, const Vec3*, float, int8_t, int8_t, bool);
+    using Open = void (*)(void*, uint8_t);
+    static const auto abort = reinterpret_cast<Abort>(dlsym(lib, "_ZN22CTaskSimpleGangDriveBy13MakeAbortableEP4CPediPK6CEvent"));
+    static const auto construct = reinterpret_cast<Construct>(dlsym(lib, "_ZN22CTaskSimpleGangDriveByC1EP7CEntityPK7CVectorfaab"));
+    static const auto window = reinterpret_cast<Open>(dlsym(lib, "_ZN8CVehicle17SetWindowOpenFlagEh"));
+    if (void* task = NativeDrivebyTask(ped)) {
+        if (!enabled && abort) {
+            SeatPlayerContext context(ped);
+            if (context.ready) abort(task, ped, 1, nullptr);
+        }
+        return;
+    }
+    static const auto* clone = static_cast<const uint32_t*>(dlsym(lib, "_ZNK22CTaskSimpleGangDriveBy5CloneEv"));
+    if (!enabled || !vehicle || !DrivebyAimHookReady() || !clone || clone[0x1c / 4] != 0x321b07e0 ||
+        !api.taskNew || !api.setPrimary || !construct) return;
+    SeatPlayerContext context(ped);
+    if (!context.ready) return;
+    if (void* task = api.taskNew(0x60)) {
+        construct(task, nullptr, nullptr, 0.f, 0, 0, (seat & 1u) != 0);
+        api.setPrimary(static_cast<uint8_t*>(intel) + 8, task, 3, false);
+        constexpr uint8_t windowNodes[] = {10, 8, 11, 9};
+        if (seat < 4 && window) window(vehicle, windowNodes[seat]);
+    }
+}
+
 static void SampleLocalTasks(void* ped) {
     TaskFns& api = Tasks();
     void* intel = PedIntel(ped);
@@ -953,22 +1088,38 @@ static void SampleLocalTasks(void* ped) {
     static bool wasInAir = false;
     const bool inAir = getInAir && getInAir(intel) != nullptr;
     const float vz = reinterpret_cast<const float*>(static_cast<unsigned char*>(ped) + 0x68)[2];
-    if (inAir && !wasInAir && vz > 0.04f) g_localJumpLatch = true;
+    if (inAir && !wasInAir && vz > 0.04f) g_localJumpLatch = ++g_controlPressSequence;
     wasInAir = inAir;
 }
 
-static void StartWander(void* body, int direction) {
+static bool StartWander(void* body, int moveState, int direction, bool sensible) {
     TaskFns& api = Tasks();
     void* intel = PedIntel(body);
-    if (!intel || !api.taskNew || !api.wanderCtor || !api.addPrimary) return;
+    if (!intel || !api.taskNew || !api.wanderCtor || !api.wanderVtable || !api.addPrimary) {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            ENGINE_LOGI("DIAG setPedWander: native WanderStandard dispatch is unavailable");
+        }
+        return false;
+    }
     void* task = api.taskNew(0x40);
-    if (!task) return;
+    if (!task) return false;
     std::memset(task, 0, 0x40);
-    const unsigned char dir = static_cast<unsigned char>(std::clamp(direction, 0, 7));
-    api.wanderCtor(task, 4, dir, true, 0.f);
-    if (api.wanderVtable)
-        *reinterpret_cast<void**>(task) = static_cast<unsigned char*>(api.wanderVtable) + 16;
+    api.wanderCtor(task, moveState, static_cast<unsigned char>(direction), sensible, 0.f);
+    *reinterpret_cast<void**>(task) = static_cast<unsigned char*>(api.wanderVtable) + 16;
+    // CPedIntelligence::AddTaskPrimaryMaybeInGroup owns and destroys the input task.
     api.addPrimary(intel, task, false);
+    return true;
+}
+
+static void StopLostTrafficTask(RemoteBody& stored) {
+    if (!stored.trafficTask) return;
+    void* intel = PedIntel(stored.ped);
+    auto& api = Tasks();
+    if (intel && api.findTaskByType && api.setPrimary && api.findTaskByType(intel, stored.trafficTask))
+        api.setPrimary(static_cast<unsigned char*>(intel) + 8, nullptr, 3, false);
+    stored.trafficTask = 0;
 }
 
 static void PlayPunch(void* body) {
@@ -983,16 +1134,45 @@ static void PlayPunch(void* body) {
     api.setSecondary(static_cast<unsigned char*>(intel) + 8, task, 0);
 }
 
+// Optional on-device verification reads the actual gait association left by the previous
+// GTA frame. SetBlend (0x4620e4) uses +0x30 and SetCurrentTime (0x461fc4) uses +0x38.
+static void TraceObserverGait(uint32_t id, void* body, float speed, bool driving, int64_t lease, int64_t now) {
+    static const bool enabled = Debug::Flag("traceobservergait");
+    static int64_t nextMoving = 0, nextIdle = 0;
+    auto& next = speed > 0.009f ? nextMoving : nextIdle;
+    if (!enabled || now < next) return;
+    next = now + (speed > 0.009f ? 1000 : 10000);
+    using Lookup = void* (*)(void*, unsigned);
+    static const Lookup association = [] {
+        void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        return handle ? reinterpret_cast<Lookup>(dlsym(handle, "_Z30RpAnimBlendClumpGetAssociationP7RpClumpj")) : nullptr;
+    }();
+    void* clump = *reinterpret_cast<void**>(static_cast<uint8_t*>(body) + 0x20);
+    ENGINE_LOGI("Observer controller id=%u speed=%.3f driving=%d lease=%lld lookup=%d", id, speed,
+        int(driving), static_cast<long long>(lease - now), int(association != nullptr));
+    if (!clump || !association) return;
+    for (unsigned animation = 0; animation <= 3; ++animation) {
+        auto* assoc = static_cast<uint8_t*>(association(clump, animation));
+        if (assoc)
+            ENGINE_LOGI("Observer gait id=%u speed=%.3f anim=%u blend=%.3f phase=%.3f", id, speed, animation,
+                *reinterpret_cast<float*>(assoc + 0x30), *reinterpret_cast<float*>(assoc + 0x38));
+    }
+}
+
 static void PresentOnFoot(void* body, RemoteBody& stored, const RemotePed& ped, bool scriptedPunch = true) {
     TaskFns& api = Tasks();
     const float speed = std::sqrt(ped.vx * ped.vx + ped.vy * ped.vy);
-    // A zero packet speed must not force PEDMOVE_STILL every tick. Desktop
-    // SetMoveSpeed runs only when the ped-sync velocity flag is set
-    // (CPedSync.cpp 434-437). Stamping still here froze the stand and the walk.
-    if (api.setMoveState && api.setMoveAnim && speed > 0.03f) {
-        const int state = speed > 0.14f ? 6 : 4;
-        api.setMoveState(body, state);
-        api.setMoveAnim(body);
+    // The 0x0030 peer sees spatial velocity only. Match the server's legacy
+    // traffic presentation thresholds and settle to idle once after a stop.
+    if (api.setMoveState && api.setMoveAnim && !ped.hasAnimCache &&
+        !(ped.serverPed && RemoteControlHookActive())) {
+        const bool moving = std::isfinite(speed) && speed > (ped.serverPed ? 0.02f : 0.03f);
+        if (moving || (ped.serverPed && stored.observerWalking)) {
+            const int state = !moving ? 1 : speed > 0.27f && ped.serverPed ? 7 : speed > 0.14f ? 6 : 4;
+            api.setMoveState(body, state);
+            api.setMoveAnim(body);
+        }
+        stored.observerWalking = moving;
     }
     void* intel = PedIntel(body);
     if (!intel) return;
@@ -1076,7 +1256,7 @@ static bool WriteBodyRotation(void* body, float rotXDeg, float rotYDeg, float ro
 // Desktop CClientVehicle::SetHealth. CVehicle::m_fHealth is at +0x634 (see SampleHostedCar). The wire range of
 // SVehicleHealthSync is 0 - 2047.5.
 static void WriteBodyHealth(void* body, float health) {
-    if (!std::isfinite(health) || health < 0.f || health > 2047.5f) return;
+    if (!std::isfinite(health) || health < 0.f) return;
     *reinterpret_cast<float*>(static_cast<unsigned char*>(body) + 0x634) = health;
 }
 
@@ -1135,6 +1315,8 @@ static bool SampleHostedCar(void* body, HostedCar& out) {
     out.ty = turn[1];
     out.tz = turn[2];
     out.health = *reinterpret_cast<const float*>(raw + 0x634);
+    // CAEVehicleAudioEntity::ProcessDummyVehicleEngine reads bit 4 at +0x568 (0x48e85c-0x48e860).
+    out.engineOn = (raw[0x568] & 0x10) != 0;
 
     const float values[] = {out.health, out.x, out.y, out.z, out.rotX, out.rotY, out.rotZ, out.vx, out.vy, out.vz, out.tx, out.ty, out.tz};
     for (float v : values) {
@@ -1450,91 +1632,53 @@ static void ArmPedCollisionFence(void* body, const RemotePed& ped, RemoteBody& s
     cols.request(&pos, ped.interior);
 }
 
-// One getGroundPosition waiting on the game thread. Lua runs on mta-net
-// (nativePulse), and CWorld::FindGroundZFor3DCoord reads collision.
-struct GroundRequest {
-    float x = 0, y = 0, z = 0;
-    float result = 0;
-    bool ok = false;
-    bool done = false;
-    bool cancelled = false;
-    std::mutex mu;
-    std::condition_variable cv;
-};
-static std::mutex g_groundMu;
-static std::shared_ptr<GroundRequest> g_groundWaiter;
-static thread_local bool t_onGameThread = false;
+// Lua runs on mta-net. The game thread services GTA world and camera queries
+// from WorldRPG_NoStoryScript, where the collision and camera state are valid.
+enum class WorldQuery { GroundZ, SphereVisible };
 
-static void ServiceGroundQueries() {
-    std::shared_ptr<GroundRequest> req;
-    {
-        std::lock_guard<std::mutex> lock(g_groundMu);
-        req = std::move(g_groundWaiter);
+static bool RunWorldQuery(WorldQuery kind, const Vec3& position, float radius, float& result) {
+    if (kind == WorldQuery::GroundZ) {
+        auto findGround = Ground().findGround;
+        if (!findGround) return false;
+        // CWorldSA.cpp:708-729. Both pointers are optional in libGTASA 2.10 (0x50f460, 0x50f46c).
+        result = findGround(position.x, position.y, position.z, nullptr, nullptr);
+        return true;
     }
-    if (!req) return;
-    {
-        std::lock_guard<std::mutex> lock(req->mu);
-        if (req->cancelled) return;
-    }
-    auto& api = Ground();
-    float result = 0.f;
-    const bool ok = api.findGround != nullptr;
-    if (ok) {
-        // CWorldSA::FindGroundZFor3DPosition (CWorldSA.cpp 708-729) passes null, null.
-        // libGTASA 2.10 arm64 null-checks both (cbz x20 at 0x50f460, cbz x19 at 0x50f46c)
-        // and returns 0 when the vertical line misses.
-        result = api.findGround(req->x, req->y, req->z, nullptr, nullptr);
-    }
-    {
-        std::lock_guard<std::mutex> lock(req->mu);
-        if (req->cancelled) return;
-        req->result = result;
-        req->ok = ok;
-        req->done = true;
-    }
-    req->cv.notify_one();
+    // CGameSA.cpp:2272-2279. The ARM64 member takes a CVector const& and the radius.
+    struct CameraApi {
+        void* camera = nullptr;
+        bool (*sphereVisible)(void*, const Vec3&, float) = nullptr;
+    };
+    static const auto camera = [] {
+        CameraApi api;
+        if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL)) {
+            api.camera = dlsym(handle, "TheCamera");
+            api.sphereVisible = reinterpret_cast<decltype(api.sphereVisible)>(
+                dlsym(handle, "_ZN7CCamera15IsSphereVisibleERK7CVectorf"));
+        }
+        return api;
+    }();
+    if (!camera.camera || !camera.sphereVisible) return false;
+    result = camera.sphereVisible(camera.camera, position, radius) ? 1.f : 0.f;
+    return true;
+}
+
+static bool QueryGameWorld(WorldQuery kind, const Vec3& position, float radius, float& out) {
+    bool ok = false;
+    return GameTasks::RunQuery([&] { ok = RunWorldQuery(kind, position, radius, out); }) && ok;
 }
 
 bool FindGroundZFor3DPosition(float x, float y, float z, float& out) {
-    auto& api = Ground();
-    if (!api.findGround) {
-        // DIAG: CWorld::FindGroundZFor3DCoord is not in this libGTASA.
-        static bool logged = false;
-        if (!logged) {
-            logged = true;
-            ENGINE_LOGE("DIAG getGroundPosition: CWorld::FindGroundZFor3DCoord missing "
-                        "(_ZN6CWorld21FindGroundZFor3DCoordEfffPbPP7CEntity)");
-        }
-        return false;
-    }
-    if (t_onGameThread) {
-        out = api.findGround(x, y, z, nullptr, nullptr);
-        return true;
-    }
-    auto req = std::make_shared<GroundRequest>();
-    req->x = x;
-    req->y = y;
-    req->z = z;
-    {
-        std::lock_guard<std::mutex> lock(g_groundMu);
-        g_groundWaiter = req;
-    }
-    std::unique_lock<std::mutex> lock(req->mu);
-    // Serviced on the game thread from WorldRPG_NoStoryScript (the CRunningScript::Process hook).
-    const bool finished = req->cv.wait_for(lock, std::chrono::milliseconds(200), [&] { return req->done; });
-    if (!finished) {
-        req->cancelled = true;
-        lock.unlock();
-        {
-            std::lock_guard<std::mutex> slot(g_groundMu);
-            if (g_groundWaiter == req) g_groundWaiter.reset();
-        }
-        ENGINE_LOGE("DIAG getGroundPosition: game thread did not run CWorld::FindGroundZFor3DCoord "
-                    "(hook CRunningScript::Process, WorldRPG_NoStoryScript)");
-        return false;
-    }
-    if (!req->ok) return false;
-    out = req->result;
+    if (QueryGameWorld(WorldQuery::GroundZ, {x, y, z}, 0, out)) return true;
+    static std::atomic_bool reported{false};
+    if (!reported.exchange(true)) ENGINE_LOGE("DIAG getGroundPosition: game-thread collision query unavailable");
+    return false;
+}
+
+bool IsAmbientSphereVisible(float x, float y, float z, float radius, bool& visible) {
+    float result = 0;
+    if (!QueryGameWorld(WorldQuery::SphereVisible, {x, y, z}, radius, result)) return false;
+    visible = result != 0;
     return true;
 }
 
@@ -1545,18 +1689,17 @@ struct RemoteSeatRequest {
     uint8_t seat = 0;
     bool seated = false;
     uint32_t serial = 0;
-    int ticks = 0;
 };
 static std::unordered_map<uint32_t, RemoteSeatRequest> g_seatRequests;
 static uint32_t g_seatSerial = 0;
-// About 10 s at 60 fps. A request whose ped or car body never appears is dropped after this.
-constexpr int kSeatRequestTicks = 600;
 // Game thread only: the car each remote ped is seated in by ApplyRemoteSeat.
 struct SeatedPed {
     uint32_t vehicleId = 0xFFFFFFFFu;
     uint8_t seat = 0;
 };
 static std::unordered_map<uint32_t, SeatedPed> g_seatedPeds;
+// Game-thread-only reverse lookup for native damage callbacks, including those during a seat task.
+static std::unordered_map<void*, uint32_t> g_vehicleBodyIds;
 
 // Ends a seat this thread applied earlier. The caller holds g_remoteMutex. The car body must still exist; without it
 // the record is only forgotten. Reads g_remoteBodies and g_remoteCars directly.
@@ -1567,8 +1710,10 @@ static void UnseatLocked(uint32_t pedId) {
     g_seatedPeds.erase(seated);
     auto b = g_remoteBodies.find(pedId);
     auto c = g_remoteCars.find(vehicleId);
-    if (b == g_remoteBodies.end() || !b->second.ped) return;
-    if (c == g_remoteCars.end() || !c->second.body) return;
+    if (b == g_remoteBodies.end() || !b->second.ped || IsPlaceableVtable(b->second.ped)) return;
+    if (c == g_remoteCars.end() || !c->second.body || IsPlaceableVtable(c->second.body)) return;
+    SetNativeDriveby(b->second.ped, c->second.body, 0, false);
+    ClearRemoteStick(b->second.ped);
     UnseatRemotePedFromCar(b->second.ped, c->second.body);
 }
 
@@ -1605,17 +1750,42 @@ static bool EjectLocalPedFrom(void* body) {
 // destroyed under it: a destroyed vehicle with the player inside leaves the ped with a dangling vehicle pointer.
 static void DropCarLocked(uint32_t id, RemoteCar& car) {
     if (!car.body) return;
+    VehiclePaint::Forget(car.paintClump);
+    car.paintClump = nullptr;
+    car.appliedColors.reset();
     if (EjectLocalPedFrom(car.body)) {
         DropBody(car.body, true, !car.owned);
     } else {
         ENGINE_LOGE("DIAG vehicle %u body kept: the local ped is still inside (no seat-out task available)", id);
         (void)car.owned.release();  // the game still uses this memory
     }
+    g_vehicleBodyIds.erase(car.body);
     car.body = nullptr;
 }
 
 // One request on the game thread. True when it is finished (applied, or nothing to do). False keeps it for the next tick.
 static bool ApplyRemoteSeat(uint32_t pedId, const RemoteSeatRequest& req) {
+    if (pedId == ServerWorld::LocalPlayer()) {
+        void* ped = g_findPlayer ? g_findPlayer(0) : nullptr;
+        auto& api = Tasks();
+        if (!ped || !api.findPlayerVehicle) return false;
+        void* old = api.findPlayerVehicle(-1, false);
+        if (!req.seated) return !old || EjectLocalPedFrom(old);
+        void* car = nullptr;
+        int model = 0;
+        {
+            std::lock_guard lock(g_remoteMutex);
+            auto it = g_remoteCars.find(req.vehicleId);
+            if (it == g_remoteCars.end() || !it->second.body) return false;
+            car = it->second.body;
+            model = it->second.model;
+        }
+        if (old == car && NativeVehicleSeat(car, ped) == req.seat) return true;
+        const uint8_t door = req.seat ? PassengerGameDoor(model, req.seat) : 0;
+        if (door == 0xff) return true;
+        if (old && !EjectLocalPedFrom(old)) return false;
+        return req.seat ? SeatRemotePedAsPassenger(ped, car, door) : SeatRemotePedInCar(ped, car);
+    }
     if (!req.seated) {
         UnseatApplied(pedId);
         return true;
@@ -1637,7 +1807,22 @@ static bool ApplyRemoteSeat(uint32_t pedId, const RemoteSeatRequest& req) {
             model = c->second.model;
         }
     }
-    if (!body || !car) return false;
+    if (!body || !car || IsPlaceableVtable(body) || IsPlaceableVtable(car)) return false;
+    // CPedRPCs::WarpPedIntoVehicle releases the on-foot collision fence first.
+    auto stored = g_remoteBodies.find(pedId);
+    RemoteBody& remoteBody = stored->second;
+    if (remoteBody.collisionFence) {
+        SetStaticWaitingForCollision(body, remoteBody.fencePrevStaticWaiting);
+        remoteBody.collisionFence = false;
+    }
+    remoteBody.replicaFence = false;
+    remoteBody.interp.finishMs = 0;
+    remoteBody.rotationInterp = {};
+    {
+        std::lock_guard lock(g_remoteMutex);
+        auto remote = g_remotePeds.find(pedId);
+        if (remote != g_remotePeds.end()) ApplyPedFreezeState(body, remoteBody, remote->second);
+    }
     // Desktop WarpIntoVehicle (CClientPed.cpp 3383) calls RemoveFromVehicle before it seats the ped.
     if (seated != g_seatedPeds.end()) UnseatApplied(pedId);
     // Driver seat 0 is the driver door. A passenger seat is mapped to its game door by the desktop table, and a seat
@@ -1666,17 +1851,14 @@ static void ApplyRemoteSeats() {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         for (const auto& [pedId, req] : g_seatRequests) work.emplace_back(pedId, req);
     }
+    // A seat reassignment can enqueue an exit and an entry in the same tick.
+    std::stable_partition(work.begin(), work.end(), [](const auto& entry) { return !entry.second.seated; });
     for (const auto& [pedId, req] : work) {
         const bool done = ApplyRemoteSeat(pedId, req);
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         auto it = g_seatRequests.find(pedId);
         if (it == g_seatRequests.end() || it->second.serial != req.serial) continue;  // replaced while applying
-        if (done) {
-            g_seatRequests.erase(it);
-        } else if (++it->second.ticks >= kSeatRequestTicks) {
-            ENGINE_LOGI("VehInOut: seat request for ped %u dropped, body not ready", pedId);
-            g_seatRequests.erase(it);
-        }
+        if (done) g_seatRequests.erase(it);
     }
 }
 
@@ -1691,29 +1873,132 @@ static void ApplyCarSeed(uint32_t vehicleId, void* body, bool localVehicle) {
         if (found == g_remoteCars.end() || !found->second.seed.pending) return;
         seed = found->second.seed;
         found->second.seed = CarSeed{};
+        if (seed.hasRotation && !localVehicle) {
+            found->second.unoccupiedRotation = {};
+            found->second.shownH = seed.rotZ * (3.14159265f / 180.f);
+        }
         if (seed.hasPose && !localVehicle) {
+            found->second.unoccupiedPosition = {};
             found->second.shownX = seed.x;
             found->second.shownY = seed.y;
             found->second.shownZ = seed.z;
         }
     }
     if (!localVehicle) {
-        if (seed.hasPose) WriteBodyPos(body, seed.x, seed.y, seed.z);
-        if (seed.hasRotation) WriteBodyRotation(body, seed.rotX, seed.rotY, seed.rotZ);
-        if (seed.hasMotion) {
-            auto* raw = static_cast<unsigned char*>(body);
-            std::memcpy(raw + 0x68, seed.move, sizeof seed.move);
-            std::memcpy(raw + 0x74, seed.turn, sizeof seed.turn);
+        if (seed.hasPose) {
+            WriteBodyPos(body, seed.x, seed.y, seed.z);
         }
+        if (seed.hasRotation) WriteBodyRotation(body, seed.rotX, seed.rotY, seed.rotZ);
+        auto* raw = static_cast<unsigned char*>(body);
+        if (seed.hasMoveSpeed) std::memcpy(raw + 0x68, seed.move, sizeof seed.move);
+        if (seed.hasTurnSpeed) std::memcpy(raw + 0x74, seed.turn, sizeof seed.turn);
     }
     if (seed.hasHealth) WriteBodyHealth(body, seed.health);
     static int reported = 0;
     if (reported < 6) {
         ++reported;
         ENGINE_LOGI("Server vehicle %u seeded: pose %d rot %d (%.1f %.1f %.1f) motion %d health %d (%.1f)%s", vehicleId,
-            seed.hasPose ? 1 : 0, seed.hasRotation ? 1 : 0, seed.rotX, seed.rotY, seed.rotZ, seed.hasMotion ? 1 : 0,
+            seed.hasPose ? 1 : 0, seed.hasRotation ? 1 : 0, seed.rotX, seed.rotY, seed.rotZ, seed.hasMoveSpeed || seed.hasTurnSpeed,
             seed.hasHealth ? 1 : 0, seed.health, localVehicle ? " [local vehicle: health only]" : "");
     }
+}
+
+// CClientVehicle.cpp:3925-4157. At iUnoccupiedVehicle=400, the full
+// error is applied over 400 ms, on top of the body's native movement.
+constexpr float kUnoccupiedVehicleInterval = 400.f;
+
+static float NextCarCompensation(CarInterpolation& state, int64_t now, float maxAlpha) {
+    const float alpha = std::clamp((now - state.startMs) / kUnoccupiedVehicleInterval, 0.f, maxAlpha);
+    const float step = alpha - state.lastAlpha;
+    state.lastAlpha = alpha;
+    if (alpha == maxAlpha) state.startMs = 0;
+    return step;
+}
+
+static void ApplyCarObserverTargets(RemoteCar& car, void* body, HostedCar& pose, int64_t now) {
+    auto& position = car.unoccupiedPosition;
+    auto& rotation = car.unoccupiedRotation;
+    if (position.startMs) {
+        const float step = NextCarCompensation(position, now, 1.5f);
+        const float error = std::hypot(pose.x - position.target.x, pose.y - position.target.y, pose.z - position.target.z);
+        const float threshold = 15.f + 10.f * std::hypot(pose.vx, pose.vy, pose.vz);
+        if (error <= threshold) {
+            pose.x += position.error.x * step;
+            pose.y += position.error.y * step;
+            pose.z += position.error.z * step;
+        } else {
+            pose.x = position.target.x;
+            pose.y = position.target.y;
+            pose.z = position.target.z;
+            position.startMs = 0;
+            if (rotation.startMs) {
+                WriteBodyRotation(body, rotation.target.x, rotation.target.y, rotation.target.z);
+                pose.rotX = rotation.target.x;
+                pose.rotY = rotation.target.y;
+                pose.rotZ = rotation.target.z;
+                rotation.startMs = 0;
+            }
+        }
+        WriteBodyPos(body, pose.x, pose.y, pose.z);
+    }
+    if (rotation.startMs) {
+        const float step = NextCarCompensation(rotation, now, 1.f);
+        pose.rotX += rotation.error.x * step;
+        pose.rotY += rotation.error.y * step;
+        pose.rotZ += rotation.error.z * step;
+        WriteBodyRotation(body, pose.rotX, pose.rotY, pose.rotZ);
+    }
+}
+
+static void ApplyUnoccupiedVehicleSync(uint32_t id, int model, RemoteCar& car, void* body) {
+    auto* raw = static_cast<unsigned char*>(body);
+    const auto now = GameNowMs();
+    HostedCar pose;
+    if (!SampleHostedCar(body, pose)) return;
+    std::optional<VehicleSync::UnoccupiedUpdate> update;
+    {
+        std::lock_guard lock(g_remoteMutex);
+        update = std::exchange(car.observedVehicle, std::nullopt);
+    }
+    ApplyCarObserverTargets(car, body, pose, now);
+    if (update) {
+        const uint8_t context = ServerWorld::SyncTimeContext(id);
+        if (context && update->timeContext && context != update->timeContext) update.reset();
+    }
+    if (update) {
+        const auto& u = *update;
+        if (u.syncPosition) {
+            car.unoccupiedPosition = {u.position, {u.position.x - pose.x, u.position.y - pose.y, u.position.z - pose.z}, now};
+        }
+        if (u.syncRotation) {
+            car.unoccupiedRotation = {u.rotation, {
+                std::remainder(u.rotation.x - pose.rotX, 360.f), std::remainder(u.rotation.y - pose.rotY, 360.f),
+                std::remainder(u.rotation.z - pose.rotZ, 360.f)}, now};
+        }
+        if (u.syncVelocity) {
+            const float velocity[] = {u.velocity.x, u.velocity.y, u.velocity.z};
+            std::memcpy(raw + 0x68, velocity, sizeof velocity);
+        }
+        if (u.syncTurnVelocity) {
+            const float turnSpeed[] = {u.turnVelocity.x, u.turnVelocity.y, u.turnVelocity.z};
+            std::memcpy(raw + 0x74, turnSpeed, sizeof turnSpeed);
+        }
+        if (u.syncHealth) WriteBodyHealth(body, u.health);
+        // CTaskSimpleCarSetPedInAsDriver::ProcessPed writes this bit at 0x611488-0x6114a4.
+        raw[0x568] = (raw[0x568] & ~0x10) | (u.engineOn ? 0x10 : 0);
+        if (Entity::VehicleModels::IsTrainModel(static_cast<uint32_t>(model))) {
+            static bool reported = false;
+            if (!reported) {
+                reported = true;
+                ENGINE_LOGI("DIAG CClientVehicle::SetDerailed: train engine hook is unavailable");
+            }
+        }
+    }
+    std::lock_guard lock(g_remoteMutex);
+    car.shownX = pose.x;
+    car.shownY = pose.y;
+    car.shownZ = pose.z;
+    car.shownH = pose.rotZ * (3.14159265f / 180.f);
 }
 
 // Packet 33 driver block: desktop CClientVehicle::SetMoveSpeed and SetTurnSpeed, called from CNetAPI::ReadVehiclePuresync
@@ -1737,6 +2022,64 @@ static void ApplyCarMotion(uint32_t vehicleId, void* body) {
     auto* raw = static_cast<unsigned char*>(body);
     std::memcpy(raw + 0x68, move, sizeof move);
     std::memcpy(raw + 0x74, turn, sizeof turn);
+}
+
+static void ApplyVehiclePresentation(uint32_t id, RemoteCar& car, void* body) {
+    // CVehicle::SetupRender (0x6a5f1c) obtains this instance's RpClump from CEntity+0x20.
+    void* clump = *reinterpret_cast<void**>(static_cast<uint8_t*>(body) + 0x20);
+    if (clump != car.paintClump) {
+        VehiclePaint::Forget(car.paintClump);
+        car.paintClump = clump;
+        car.appliedColors.reset();
+    }
+    if (clump && car.colors && car.appliedColors != car.colors->rgb) {
+        VehiclePaint::Track(clump, id, *car.colors);
+        car.appliedColors = car.colors->rgb;
+    }
+    std::optional<bool> frozen, engine, loadCollision;
+    std::optional<uint8_t> alpha;
+    {
+        std::lock_guard lock(g_remoteMutex);
+        frozen = car.frozen;
+        engine = car.engineOn;
+        loadCollision = car.loadCollision;
+        alpha = car.alpha;
+    }
+    auto* raw = static_cast<unsigned char*>(body);
+    if (frozen && car.appliedFrozen != *frozen) {
+        car.appliedFrozen = *frozen;
+        SetPhysicalFrozen(body, *frozen);
+        if (*frozen) {
+            const float zero[3] = {};
+            std::memcpy(raw + 0x68, zero, sizeof zero);
+            std::memcpy(raw + 0x74, zero, sizeof zero);
+        }
+    }
+    if (engine && car.appliedEngineOn != *engine) {
+        car.appliedEngineOn = *engine;
+        // Driver ProcessPed at 0x611488-0x6114a4, audio reader at 0x48e85c-0x48e860.
+        raw[0x568] = (raw[0x568] & ~0x10) | (*engine ? 0x10 : 0);
+    }
+    if (loadCollision && car.appliedLoadCollision != *loadCollision) {
+        car.appliedLoadCollision = *loadCollision;
+        // CRunningScript::ProcessCommands1400To1499 writes CPhysical flags 0x4000 at 0x420acc-0x420ad0.
+        auto& flags = *reinterpret_cast<uint32_t*>(raw + 0x64);
+        flags = (flags & ~0x4000u) | (*loadCollision ? 0 : 0x4000u);
+    }
+    if (alpha && car.appliedAlpha != *alpha) {
+        using SetAlpha = void (*)(void*, int);
+        static auto setAlpha = [] {
+            void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+            return handle ? reinterpret_cast<SetAlpha>(dlsym(handle, "_ZN18CVisibilityPlugins13SetClumpAlphaEP7RpClumpi")) : nullptr;
+        }();
+        auto* clump = *reinterpret_cast<void**>(raw + 0x20);
+        if (clump && setAlpha) {
+            setAlpha(clump, *alpha);
+            auto& flags = *reinterpret_cast<uint32_t*>(raw + 0x28);
+            flags = (flags & ~(1u << 7)) | (*alpha ? (1u << 7) : 0);
+            car.appliedAlpha = *alpha;
+        }
+    }
 }
 
 static void ApplyCarDoorLock(RemoteCar& car) {
@@ -1959,13 +2302,34 @@ static void WatchLocalVehicle() {
     }
     // Packet 33 source (CopyLocalCar). Sampled every frame while the ped is in a mapped standard car, before
     // the unchanged-vehicle return below, so the snapshot stays current. SampleHostedCar does not take the mutex.
+    const int seat = vehicle ? NativeVehicleSeat(vehicle, g_sampledLocalPed) : -1;
+    if (seat < 0) current = kNoVehicle;
+    if (g_localVehicleId != kNoVehicle && current == kNoVehicle) g_localDrivebyRequest = 0;
+    // A Lua drive-by toggle and its weapon selection can arrive on opposite
+    // sides of a game frame. Start once the selected slot is available.
+    const bool armed = g_localWeapon.valid && PlayerWeaponSync::SlotHasAmmo(g_localWeapon.slot);
+    if (g_localDrivebyRequest == 0 || (g_localDrivebyRequest == 1 && seat >= 0 && armed)) {
+        const bool enable = g_localDrivebyRequest != 0;
+        SetNativeDriveby(g_sampledLocalPed, vehicle, seat >= 0 ? seat : 0, enable);
+        if (HasNativeDriveby(g_sampledLocalPed) == enable) {
+            g_localWeapon.gangDriveby = enable;
+            g_localDrivebyRequest = -1;
+        }
+    }
     HostedCar sample;
     const bool sampled = current != kNoVehicle && model >= 400 && model <= 611 && SampleHostedCar(vehicle, sample);
+    bool pressed = false;
+    const bool driveby = sampled && g_localWeapon.gangDriveby;
+    const bool held = SampleDrivebyButton(driveby ? g_sampledLocalPed : nullptr, pressed);
+    const bool sameSeat = g_localCarValid && g_localCar.vehicleId == current && g_localCar.seat == seat;
+    const uint64_t pendingPress = driveby && sameSeat ? g_localCar.firePress : 0;
     g_localCarValid = sampled;
     if (sampled) {
         LocalCarState& c = g_localCar;
         c = LocalCarState{};
         c.vehicleId = current;
+        c.seat = static_cast<uint8_t>(seat);
+        c.camera = g_cameraRotValid ? g_cameraRot.load() : -sample.rotZ * 3.14159265f / 180.f;
         c.model = model;
         c.x = sample.x;
         c.y = sample.y;
@@ -1980,16 +2344,19 @@ static void WatchLocalVehicle() {
         c.ty = sample.ty;
         c.tz = sample.tz;
         c.health = sample.health;
-        SamplePadControls(api, c);
+        if (seat == 0) SamplePadControls(api, c);
+        c.fire = held;
+        c.firePress = pressed ? ++g_vehicleFireSequence : pendingPress;
     }
     SampleVehicleTouchControlBounds(vehicle != nullptr);
-    if (current == g_localVehicleId) return;
+    if (current == g_localVehicleId && (current == kNoVehicle || seat == g_localSeat)) return;
+    g_localAttackLatch = 0;
     if (g_localVehicleId != kNoVehicle) {
-        g_localVehicleEvents.push_back(LocalVehicleEvent{g_localVehicleId, false});
+        g_localVehicleEvents.push_back(LocalVehicleEvent{g_localVehicleId, false, g_localSeat});
         ENGINE_LOGI("VehInOut: local ped left vehicle %u", g_localVehicleId);
     }
     if (current != kNoVehicle) {
-        g_localVehicleEvents.push_back(LocalVehicleEvent{current, true});
+        g_localVehicleEvents.push_back(LocalVehicleEvent{current, true, static_cast<uint8_t>(seat)});
         ENGINE_LOGI("VehInOut: local ped entered vehicle %u", current);
     }
     if (g_localVehicleEvents.size() > kMaxLocalVehicleEvents) {
@@ -1997,6 +2364,7 @@ static void WatchLocalVehicle() {
         g_localVehicleEvents.erase(g_localVehicleEvents.begin());
     }
     g_localVehicleId = current;
+    g_localSeat = seat >= 0 ? static_cast<uint8_t>(seat) : 0;
 }
 
 // CNetAPI::ReadPlayerPuresync writes that arrived on the network thread.
@@ -2188,19 +2556,77 @@ static void KillRemoteBody(uint32_t id, void* body, int weapon, int group, int a
 using AffectsPedFn = bool (*)(const void*, void*);
 static AffectsPedFn g_origAffectsPed = nullptr;
 static std::vector<HostedWasted> g_hostedWasted;  // g_remoteMutex
+static std::mutex g_localDeathMutex;
+static uint64_t g_deathLife = UINT64_MAX;
+static HostedWasted g_localDeath;
+bool CopyLocalCombatDeath(uint64_t& life, HostedWasted& out) {
+    std::lock_guard lock(g_localDeathMutex);
+    if (g_deathLife != g_localLife.load() || life == g_deathLife) return false;
+    life = g_deathLife;
+    out = g_localDeath;
+    return true;
+}
 
 // CEventDamage on libGTASA 2.10 (ctor C2 0x444628): inflictor CEntity* at +0x18 (str x1, [x8, #0x18]!, registered as a
 // reference), weapon at +0x24 (w3), ped piece at +0x28 (w4), death anim group / id at +0x30 / +0x34 (the ctor stores 0 and
 // 0xbf = ANIM_ID_NO_ANIMATION_SET, as PC). CClientGame's GetDeathAnim (CClientGame.cpp 4446-4460) calls
 // ComputeDeathAnim(ped, false) and reads them.
-static uint32_t EntityElementId(void* entity) {
+bool IsRemoteNetworkPlayer(void* entity) {
+    if (!entity) return false;
+    for (const auto& [id, body] : g_remoteBodies)
+        if (body.ped == entity) return body.networkPlayer;
+    return false;
+}
+uint32_t EntityElementId(void* entity) {
     if (!entity) return 0xFFFFFFFFu;
-    if (g_findPlayer && entity == g_findPlayer(0)) return ServerWorld::LocalPlayer();
     for (const auto& [bodyId, stored] : g_remoteBodies)
         if (stored.ped == entity) return bodyId;
-    for (const auto& [carId, car] : g_remoteCars)
-        if (car.body == entity) return carId;
+    if (entity == g_sampledLocalPed) return ServerWorld::LocalPlayer();
+    auto car = g_vehicleBodyIds.find(entity);
+    if (car != g_vehicleBodyIds.end()) return car->second;
     return 0xFFFFFFFFu;
+}
+
+static HostedWasted ReadDeathEvent(uint32_t id, void* event, void* ped) {
+    static void (*computeDeathAnim)(void*, void*, bool) = nullptr;
+    static bool looked = false;
+    if (!looked) {
+        looked = true;
+        if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL))
+            computeDeathAnim = reinterpret_cast<void (*)(void*, void*, bool)>(
+                dlsym(handle, "_ZN12CEventDamage16ComputeDeathAnimEP4CPedb"));
+    }
+    auto* ev = static_cast<unsigned char*>(event);
+    HostedWasted out;
+    out.id = id;
+    out.damager = EntityElementId(*reinterpret_cast<void**>(ev + 0x18));
+    out.weapon = *reinterpret_cast<int*>(ev + 0x24) & 0x3F;
+    out.bodyPart = *reinterpret_cast<int*>(ev + 0x28);
+    if (computeDeathAnim) {
+        computeDeathAnim(event, ped, false);
+        out.animGroup = *reinterpret_cast<int*>(ev + 0x30);
+        out.animId = *reinterpret_cast<int*>(ev + 0x34);
+    }
+    float heading = 0.f;
+    ReadBodyPos(ped, out.x, out.y, out.z, heading);
+    return out;
+}
+
+static void NoteLocalCombatDeath(void* ped, void* event, uint32_t attacker, uint8_t weapon, uint8_t zone) {
+    if (*reinterpret_cast<float*>(static_cast<unsigned char*>(ped) + 0x6AC) > 0.f) return;
+    std::lock_guard lock(g_localDeathMutex);
+    const auto life = g_localLife.load();
+    if (g_sampledLife != life || g_deathLife == life || !ServerWorld::LocalPlayer()) return;
+    g_deathLife = life;
+    g_localDeath = event ? ReadDeathEvent(ServerWorld::LocalPlayer(), event, ped) : HostedWasted{};
+    g_localDeath.id = ServerWorld::LocalPlayer();
+    g_localDeath.damager = attacker;
+    g_localDeath.weapon = weapon;
+    g_localDeath.bodyPart = zone;
+    if (!event) {
+        float heading = 0.f;
+        ReadBodyPos(ped, g_localDeath.x, g_localDeath.y, g_localDeath.z, heading);
+    }
 }
 
 // ApplyPedDamageFromGame for a ped this client syncs (CClientGame.cpp 4813-4826): when its health goes from above 0 to
@@ -2216,27 +2642,7 @@ static void NoteHostedDeath(uint32_t id, void* event, void* ped, RemoteBody& sto
     if (!wasAlive || stored.wastedSent) return;
     stored.wastedSent = true;
     PedQueries::Wasted(id);
-    static void (*computeDeathAnim)(void*, void*, bool) = nullptr;
-    static bool looked = false;
-    if (!looked) {
-        looked = true;
-        if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL))
-            computeDeathAnim = reinterpret_cast<void (*)(void*, void*, bool)>(
-                dlsym(handle, "_ZN12CEventDamage16ComputeDeathAnimEP4CPedb"));
-    }
-    auto* ev = static_cast<unsigned char*>(event);
-    HostedWasted out;
-    out.id = id;
-    out.damager = EntityElementId(*reinterpret_cast<void**>(ev + 0x18));
-    out.weapon = *reinterpret_cast<int*>(ev + 0x24) & 0x3F;
-    out.bodyPart = *reinterpret_cast<int*>(ev + 0x28) & 0x7;
-    if (computeDeathAnim) {
-        computeDeathAnim(event, ped, false);
-        out.animGroup = *reinterpret_cast<int*>(ev + 0x30);
-        out.animId = *reinterpret_cast<int*>(ev + 0x34);
-    }
-    float heading = 0.f;
-    ReadBodyPos(ped, out.x, out.y, out.z, heading);
+    const auto out = ReadDeathEvent(id, event, ped);
     g_hostedWasted.push_back(out);  // caller holds g_remoteMutex
     ENGINE_LOGI("DIAG hosted ped %u died: damager=%u weapon=%d part=%d anim=%d/%d", id, out.damager, out.weapon,
         out.bodyPart, out.animGroup, out.animId);
@@ -2252,6 +2658,35 @@ static bool HookAffectsPed(const void* event, void* ped) {
             id = bodyId;
             storedBody = &stored;
             break;
+        }
+    }
+    // On 2.10 CEventDamage::AffectsPed (0x444bc4) tests the calculated flag
+    // at +0x4A. The ctor clears the two damage floats at +0x40 (0x44469c).
+    const auto* ev = static_cast<const unsigned char*>(event);
+    if (ev[0x4A]) {
+        const float amount = *reinterpret_cast<const float*>(ev + 0x40)
+                           + *reinterpret_cast<const float*>(ev + 0x44);
+        const int weapon = *reinterpret_cast<const int*>(ev + 0x24);
+        const int zone = *reinterpret_cast<const int*>(ev + 0x28);
+        void* inflictor = *reinterpret_cast<void* const*>(ev + 0x18);
+        if (std::isfinite(amount) && amount > 0.f && weapon >= 0 && weapon <= 63 && zone >= 0 && zone <= 9) {
+            if (storedBody && storedBody->networkPlayer) {
+                CaptureLocalBulletHit(inflictor, weapon, {id, amount, static_cast<uint8_t>(zone)});
+            } else if (!id && ped == g_sampledLocalPed && g_sampledLife == g_localLife.load()) {
+                // FindPlayerPed can refer to the attacker inside remote ProcessControl.
+                // Only the actual local body sampled on the game thread owns our health.
+                const auto* raw = static_cast<const unsigned char*>(ped);
+                const float health = *reinterpret_cast<const float*>(raw + 0x6AC);
+                const float armor = *reinterpret_cast<const float*>(raw + 0x6B4);
+                if (health < g_health.load() || armor < g_armor.load()) {
+                    g_health = health;
+                    g_armor = armor;
+                    const auto attacker = EntityElementId(inflictor);
+                    if (attacker && attacker < 0x1FFFFu) ++g_nativeDamageEvents;
+                    g_pendingDamage.record(attacker, weapon, zone);
+                    NoteLocalCombatDeath(ped, const_cast<void*>(event), attacker, weapon, zone);
+                }
+            }
         }
     }
     if (id == 0) return affects;
@@ -2294,12 +2729,12 @@ static void ApplyPedSpawnRecord(uint32_t id, RemotePed& live) {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         live.spawnApplied = true;
         // SetFrozen (4068). _CreateModel applies it through ApplyPhysicalFreezeState.
-        live.frozen = spawn.frozen;
+        if (!live.frozenChanged) live.frozen = spawn.frozen;
         // SetAlpha (4073) and SetUsesCollision (4148): element state, written to the body by ApplyRemotePeds.
-        live.alpha = spawn.alpha;
-        live.collisions = spawn.collisions;
+        if (!live.alphaChanged) live.alpha = spawn.alpha;
+        if (!live.collisionsChanged) live.collisions = spawn.collisions;
         auto& queue = g_pedRpcOps[id];
-        if (spawn.animation.present && !spawn.animation.block.empty() && !spawn.animation.name.empty()) {
+        if (!live.hasAnimCache && spawn.animation.present && !spawn.animation.block.empty() && !spawn.animation.name.empty()) {
             PedRpcOp anim;
             anim.kind = PedRpcOp::Kind::Animation;
             anim.block = spawn.animation.block;
@@ -2317,24 +2752,26 @@ static void ApplyPedSpawnRecord(uint32_t id, RemotePed& live) {
     }
     // SetHealth, SetArmor (4057-4058): written next tick by ApplySyncedPlayerFields (+0x6AC / +0x6B4, the
     // store sites already used for player sync). Then LockHealth / LockArmor when bSynced (4059-4063).
-    SetPedVitals(id, spawn.health, spawn.armor);
-    if (spawn.synced) {
-        LockPedHealth(id, spawn.health);
-        LockPedArmor(id, spawn.armor);
-    }
-    // WarpIntoVehicle (4064-4065) is NOT run. Routing it through the seat queue crashed on device (2026-11-14 01:51:17
-    // and 01:51:41, S25, fault addr 0x18f): SeatRemotePedInCar -> CTaskSimpleCarSetPedInAsDriver::ProcessPed ->
-    // CPed::RemoveWeaponWhenEnteringVehicle (0x59ba8c). For a ped whose type word at +0x720 is <= 1 it calls
-    // CPlayerPed::GetPlayerInfoForThisPlayerPed, which returns null for a remote CPlayerPed body, then loads
-    // [x0, #0x18f] (0x59bad4). Needs a CPlayerInfo for remote bodies (desktop multiplayer_sa) before it can run.
-    if (spawn.vehicleId != 0xFFFFFFFFu) {
-        static int seatNoted = 0;
-        if (seatNoted < 4) {
-            ++seatNoted;
-            ENGINE_LOGI("DIAG ped spawn id=%u WarpIntoVehicle(%u, seat %u) not run: driver-warp task needs "
-                        "GetPlayerInfoForThisPlayerPed for a remote body", id, spawn.vehicleId, static_cast<unsigned>(spawn.seat));
+    bool healthLocked = false, armorLocked = false;
+    float health = 0, armor = 0;
+    CopyPedVitalsLock(id, healthLocked, health, armorLocked, armor);
+    bool lockSpawnHealth = false, lockSpawnArmor = false;
+    {
+        std::lock_guard lock(g_remoteMutex);
+        if (!live.syncHealth && !healthLocked) {
+            live.health = spawn.health;
+            live.syncHealth = true;
+            lockSpawnHealth = spawn.synced && !live.hosted;
+        }
+        if (!live.syncArmor && !armorLocked) {
+            live.armor = spawn.armor;
+            live.syncArmor = true;
+            lockSpawnArmor = spawn.synced && !live.hosted;
         }
     }
+    if (lockSpawnHealth) LockPedHealth(id, spawn.health);
+    if (lockSpawnArmor) LockPedArmor(id, spawn.armor);
+
     // Steps that need a hook the phone does not have yet. Each keeps its place in the desktop order.
     static int noted = 0;
     if (noted < 6) {
@@ -2507,13 +2944,15 @@ static unsigned char* PedWeaponAt(void* ped, int slot) {
 static int& WeaponType(unsigned char* w) { return *reinterpret_cast<int*>(w); }
 static int& WeaponClip(unsigned char* w) { return *reinterpret_cast<int*>(w + 0x8); }
 static int& WeaponTotal(unsigned char* w) { return *reinterpret_cast<int*>(w + 0xC); }
+// CWeapon::Update (0x707778 / 0x7078c0) loads and stores the weapon state at +4.
+static bool WeaponReloading(const unsigned char* w) { return *reinterpret_cast<const int*>(w + 4) == 2; }
 static int CurrentWeaponSlot(void* ped) { return *(reinterpret_cast<signed char*>(ped) + 0x8dc); }
 
 // Read-only Lua inventory queries use the same verified 2.10 layout as the RPCs.
 // SetCurrentWeapon+0x1c/0x24 (0x59b7cc/0x59b7d4) loads slot/type;
 // CWeapon::Reload+0x10/+0x50 (0x700a3c/0x700a7c) loads total/stores clip.
 // Refuse other layouts instead of reading a guessed CPed structure.
-static bool ReadPedInventory(void* ped, PedQueries::Snapshot& out) {
+static bool WeaponLayoutValid() {
     static const bool layout = [] {
         void* h = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
         auto* set = h ? static_cast<const unsigned char*>(dlsym(h, "_ZN4CPed16SetCurrentWeaponEi")) : nullptr;
@@ -2525,7 +2964,11 @@ static bool ReadPedInventory(void* ped, PedQueries::Snapshot& out) {
         if (!ok) ENGINE_LOGI("DIAG ped query: unsupported weapon layout");
         return ok;
     }();
-    if (!ped || !layout) return false;
+    return layout;
+}
+
+static bool ReadPedInventory(void* ped, PedQueries::Snapshot& out) {
+    if (!ped || !WeaponLayoutValid()) return false;
     const int slot = CurrentWeaponSlot(ped);
     if (slot < 0 || slot >= kWeaponSlots) return false;
     out.currentSlot = slot;
@@ -2551,6 +2994,179 @@ static const unsigned char* WeaponInfoOf(int type) {
     if (!f.weaponInfo || type < 0 || type > 46) return nullptr;
     return static_cast<const unsigned char*>(f.weaponInfo(type, 1));
 }
+float NativeWeaponRange(int type) {
+    const auto* info = WeaponInfoOf(type);
+    // FireInstantHit (0x7018b0) reads CWeaponInfo::m_fWeaponRange.
+    return info ? *reinterpret_cast<const float*>(info + 0x08) : 0.f;
+}
+
+// CClientPed::GetShotData and AdjustShotOriginForWalls (8020-8139).
+static bool TraceWeaponAim(const PlayerWeaponSync::Vector& start, const PlayerWeaponSync::Vector& end,
+                           void* ignorePed, PlayerWeaponSync::Vector& hit) {
+    using Vector = PlayerWeaponSync::Vector;
+    struct alignas(16) CollisionPoint { Vector position; uint8_t rest[0x30 - sizeof(Vector)]; };
+    using Trace = bool (*)(const Vector&, const Vector&, CollisionPoint&, void*&, bool, bool, bool, bool, bool, bool, bool, bool);
+    static void* const lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    static const auto trace = lib ? reinterpret_cast<Trace>(dlsym(lib,
+        "_ZN6CWorld18ProcessLineOfSightERK7CVectorS2_R9CColPointRP7CEntitybbbbbbbb")) : nullptr;
+    static auto** const ignore = lib ? static_cast<void**>(dlsym(lib, "_ZN6CWorld13pIgnoreEntityE")) : nullptr;
+    // CColPoint::operator= copies XYZ at +0, +4, +8 and depth at +0x28 (ARM64 0x3a4ca8-0x3a4cec).
+    static const bool layout = [] {
+        const auto* copy = lib ? static_cast<const uint32_t*>(dlsym(lib, "_ZN9CColPointaSERKS_")) : nullptr;
+        return copy && copy[1] == 0xb9000808 && copy[3] == 0xf9000008 && copy[0x44 / 4] == 0xb9002808;
+    }();
+    if (!trace || !ignore || !layout) {
+        static bool logged = false;
+        if (!logged) ENGINE_LOGI("DIAG weapon aim collision query unavailable");
+        logged = true;
+        return false;
+    }
+    CollisionPoint point{};
+    void* entity = nullptr;
+    void* previous = *ignore;
+    *ignore = ignorePed;
+    const bool found = trace(start, end, point, entity, true, true, true, true, true, false, false, false);
+    *ignore = previous;
+    if (found) hit = point.position;
+    return found;
+}
+
+static void SampleLocalWeapon(void* ped, Vec3 position, float heading) {
+    using namespace PlayerWeaponSync;
+    LocalWeapon weapon;
+    if (WeaponLayoutValid()) {
+        const int slot = CurrentWeaponSlot(ped);
+        if (slot >= 0 && slot < kWeaponSlots) {
+            auto* native = PedWeaponAt(ped, slot);
+            const int type = WeaponType(native);
+            if (type >= 0 && type <= 46) {
+                weapon.valid = true;
+                weapon.slot = static_cast<uint8_t>(slot);
+                weapon.type = static_cast<uint8_t>(type);
+                weapon.clip = static_cast<uint16_t>(std::clamp(WeaponClip(native), 0, 65535));
+                weapon.reloading = WeaponReloading(native);
+                for (int i = 0; i < kWeaponSlots; ++i)
+                    weapon.totalBySlot[i] = static_cast<uint16_t>(std::clamp(WeaponTotal(PedWeaponAt(ped, i)), 0, 65535));
+                weapon.total = weapon.totalBySlot[slot];
+            }
+        }
+    }
+    bool firstPersonAim = false;
+    weapon.gangDriveby = HasNativeDriveby(ped);
+    if (weapon.valid && SlotHasAmmo(weapon.slot)) {
+        using BoneFn = void (*)(void*, Vector&, unsigned, bool);
+        using TargetVectorFn = void (*)(void*, float, Vector, Vector&, Vector&);
+        using TargetingFn = bool (*)(void*);
+        static void* const lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        static void* const camera = lib ? dlsym(lib, "TheCamera") : nullptr;
+        static const auto bone = lib ? reinterpret_cast<BoneFn>(
+            dlsym(lib, "_ZN4CPed26GetTransformedBonePositionER5RwV3djb")) : nullptr;
+        static const auto targetVector = lib ? reinterpret_cast<TargetVectorFn>(
+            dlsym(lib, "_ZN7CCamera28Find3rdPersonCamTargetVectorEf7CVectorRS0_S1_")) : nullptr;
+        static const auto targeting = lib ? reinterpret_cast<TargetingFn>(
+            dlsym(lib, "_ZN7CCamera17IsTargetingActiveEv")) : nullptr;
+        static const bool haveAimHooks = camera && bone && targetVector && targeting;
+        if (!haveAimHooks) {
+            static bool logged = false;
+            if (!logged) ENGINE_LOGI("DIAG GetShotData: missing camera or muzzle symbol; using the ped heading");
+            logged = true;
+        }
+
+        // CClientPed::GetShotData (7995-8107): muzzle at the right wrist, then
+        // crosshair ray if aiming, or ped heading when firing from the hip.
+        // FireInstantHit (0x701624 / 0x7018b0) reads CWeaponInfo range at +0x8;
+        // CTaskSimpleUseGun::FireGun (0x5dfd7c-0x5dfd88) loads the offset at +0x24.
+        const auto* info = WeaponInfoOf(weapon.type);
+        Vector muzzle{position.x, position.y, position.z + 0.7f};
+        float range = 1.f;
+        if (info) {
+            const float nativeRange = *reinterpret_cast<const float*>(info + 0x8);
+            if (std::isfinite(nativeRange) && nativeRange > 0.f) range = nativeRange;
+            const auto* rawPed = static_cast<const unsigned char*>(ped);
+            if (bone && *reinterpret_cast<void* const*>(rawPed + 0x20) &&
+                *reinterpret_cast<void* const*>(rawPed + 0x18)) {
+                std::memcpy(&muzzle, info + 0x24, sizeof muzzle);
+                bone(ped, muzzle, 24, false);  // BONE_RIGHTWRIST
+            }
+        }
+        // CPad::GetTarget itself mutates native vehicle and touch state. Use
+        // the genuine getter result captured while GTA processed local input.
+        weapon.aiming = LocalTargetButtonHeld() || (camera && targeting && targeting(camera));
+        Vector origin = muzzle;
+        Vector target{muzzle.x - std::sin(heading) * range, muzzle.y + std::cos(heading) * range, muzzle.z};
+        // LoadWeaponData 0x5613d8 stores the weapon flags. FireSniper 0x702bac-0x702c14
+        // selects the active CCam and copies its front and source into the projectile call.
+        static const bool cameraLayout = [] {
+            const auto* sniper = lib ? static_cast<const uint32_t*>(dlsym(lib, "_ZN7CWeapon10FireSniperEP4CPedP7CEntityP7CVector")) : nullptr;
+            const auto* load = lib ? static_cast<const uint32_t*>(dlsym(lib, "_ZN11CWeaponInfo14LoadWeaponDataEv")) : nullptr;
+            const bool valid = sniper && load && load[0x530 / 4] == 0xb9001b69 &&
+                sniper[0x8c / 4] == 0x52804509 && sniper[0x98 / 4] == 0x39417d0a &&
+                sniper[0xcc / 4] == 0x910bb10a && sniper[0xdc / 4] == 0xf9417108;
+            if (!valid) ENGINE_LOGI("DIAG first-person camera layout unavailable");
+            return valid;
+        }();
+        if (info && camera && cameraLayout && (*reinterpret_cast<const uint32_t*>(info + 0x18) & 4u)) {
+            const auto* bytes = static_cast<const uint8_t*>(camera);
+            const unsigned index = bytes[0x5f];
+            if (index < 3) {
+                const auto* cam = bytes + index * 0x228;
+                Vector front, source;
+                std::memcpy(&front, cam + 0x2e0, sizeof front);
+                std::memcpy(&source, cam + 0x2ec, sizeof source);
+                firstPersonAim = SetFirstPersonAim(weapon.aim, source, front);
+            }
+        }
+        if (!firstPersonAim) {
+            if (camera && targetVector && weapon.aiming) {
+                targetVector(camera, range, muzzle, origin, target);
+            } else if (camera && targetVector && weapon.gangDriveby) {
+                using CameraPosition = const Vector& (*)(void*);
+                static const auto cameraPosition = reinterpret_cast<CameraPosition>(
+                    dlsym(lib, "_ZN7CCamera18GetGameCamPositionEv"));
+                if (cameraPosition) {
+                    const Vector source = cameraPosition(camera);
+                    Vector rayOrigin = source, collision;
+                    targetVector(camera, range, source, rayOrigin, target);
+                    if (TraceWeaponAim(source, target, nullptr, collision)) target = collision;
+                } else {
+                    static bool logged = false;
+                    if (!logged) ENGINE_LOGI("DIAG drive-by camera position unavailable");
+                    logged = true;
+                    targetVector(camera, range, muzzle, origin, target);
+                }
+            }
+            SetAimLine(weapon.aim, origin, target);
+        }
+        if (weapon.aim.full && (weapon.aiming || firstPersonAim)) {
+            const float pullback = firstPersonAim ? 2.5f : 0.5f;
+            const Vector dir = weapon.aim.direction;
+            const Vector source = weapon.aim.origin;
+            const Vector behind{source.x - pullback * dir.x, source.y - pullback * dir.y, source.z - pullback * dir.z};
+            const Vector ahead{source.x + dir.x, source.y + dir.y, source.z + dir.z};
+            Vector hit;
+            if (TraceWeaponAim(behind, ahead, ped, hit)) {
+                const float dist = std::hypot(hit.x - behind.x, hit.y - behind.y, hit.z - behind.z);
+                if (dist < pullback) weapon.aim.origin = hit;
+            }
+        }
+    }
+
+    std::lock_guard lock(g_remoteMutex);
+    // A shot captured from the GTA engine gives a more exact source than a
+    // pose sampled before the shot. Restrict the fallback to the same weapon.
+    if (weapon.valid && !weapon.aiming && !firstPersonAim && g_lastLocalShotWeapon == weapon.type &&
+        std::chrono::steady_clock::now() - g_lastLocalShotTime < std::chrono::milliseconds(150)
+        && g_lastLocalShotAim.full)
+        weapon.aim = g_lastLocalShotAim;
+    if (weapon.aim.full) {
+        const auto& dir = weapon.aim.direction;
+        const float pitch = std::atan2(dir.z, std::hypot(dir.x, dir.y));
+        weapon.aim.arm = static_cast<int16_t>(pitch * (90.f * 180.f / 3.14159265f));
+    }
+    if (weapon.aim.full) SampleNativeWeaponAim(ped, weapon, firstPersonAim);
+    if (g_sampledLife == g_localLife.load()) g_localWeapon = weapon;
+}
+
 static int WeaponInfoModel(int type) {
     const unsigned char* info = WeaponInfoOf(type);
     return info ? *reinterpret_cast<const int*>(info + 0xC) : -1;
@@ -2682,7 +3298,7 @@ static void PedSetCurrentWeaponSlot(void* ped, int slot, bool local) {
                 WeaponTotal(again) = total;
             }
         }
-        // Gang driveby is not tracked on the phone (IsDoingGangDriveby).
+        if (HasNativeDriveby(ped)) SetNativeDriveby(ped, nullptr, 0, false);
         return;
     }
     unsigned char* w = PedWeaponAt(ped, slot);
@@ -2802,7 +3418,145 @@ static void PedAnimationProgressOrSpeed(void* ped, const PedRpcOp& op) {
     f.setCurrentTime(assoc, *reinterpret_cast<float*>(hierarchy + 0x18) * op.value);
 }
 
-// Runs one queued RPC. False: the op waits for streaming and stays at the head of the queue.
+// CClientPlayer::DischargeWeapon (260-296), CWeaponSA::FireBullet (95-144).
+// Explicitly replay the received ray. The control hook still animates the gun,
+// but suppresses the separate native fire call for weapons using bullet sync.
+static bool DischargeRemoteBullet(void* body, RemoteBullet& bullet) {
+    using Vector = PlayerWeaponSync::Vector;
+    using FireFn = bool (*)(void*, void*, Vector*, Vector*, void*, Vector*, Vector*, bool, bool);
+    using BoneFn = void (*)(void*, Vector&, unsigned, bool);
+    static void* const lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    static const auto fire = lib ? reinterpret_cast<FireFn>(
+        dlsym(lib, "_ZN7CWeapon14FireInstantHitEP7CEntityP7CVectorS3_S1_S3_S3_bb")) : nullptr;
+    static const auto bone = lib ? reinterpret_cast<BoneFn>(
+        dlsym(lib, "_ZN4CPed26GetTransformedBonePositionER5RwV3djb")) : nullptr;
+    static auto** const ignore = lib ? static_cast<void**>(dlsym(lib, "_ZN6CWorld13pIgnoreEntityE")) : nullptr;
+    if (!fire || !ignore || !WeaponLayoutValid()) {
+        static bool logged = false;
+        if (!logged) ENGINE_LOGI("DIAG FireBullet: instant-hit or ignore-entity hook is unavailable");
+        logged = true;
+        return false;
+    }
+    const auto& shot = bullet.shot;
+    // CClientPlayer::DischargeWeapon checks the live server settings after receiving the packet.
+    // A settings change can enable native pad fire while an earlier bullet is still queued.
+    if (!Combat::WeaponUsesBulletSync(shot.weapon)) {
+        const float remaining = Combat::RemainingBackupDamage(shot, ServerWorld::LocalPlayer(), 0.f);
+        if (remaining > 0.f) NoteDamage(shot.shooter, remaining, shot.weapon, shot.zone);
+        return true;
+    }
+    auto* weapon = PedWeaponOfType(body, shot.weapon);
+    const int slot = WeaponInfoSlot(shot.weapon);
+    if (!weapon || CurrentWeaponSlot(body) != slot) {
+        if (!PedGiveWeapon(body, shot.weapon, 99, true, false, &bullet.weaponRequest)) return false;
+        weapon = PedWeaponOfType(body, shot.weapon);
+        if (!weapon || CurrentWeaponSlot(body) != slot) return false;
+    }
+
+    Vector start{shot.start[0], shot.start[1], shot.start[2]};
+    Vector target{shot.end[0], shot.end[1], shot.end[2]};
+    Vector muzzle = start;
+    const auto* rawPed = static_cast<const unsigned char*>(body);
+    if (const auto* info = WeaponInfoOf(shot.weapon);
+        info && bone && *reinterpret_cast<void* const*>(rawPed + 0x20) &&
+        *reinterpret_cast<void* const*>(rawPed + 0x18)) {
+        std::memcpy(&muzzle, info + 0x24, sizeof muzzle);
+        bone(body, muzzle, 24, false);
+    }
+    if (!SetBulletReplayRay(&shot)) return false;
+    const auto local = ServerWorld::LocalPlayer();
+    auto* victim = g_findPlayer ? static_cast<unsigned char*>(g_findPlayer(0)) : nullptr;
+    if (victim != g_sampledLocalPed) victim = nullptr;
+    const auto damageBefore = g_nativeDamageEvents;
+    auto vitals = [victim]() {
+        return victim ? *reinterpret_cast<const float*>(victim + 0x6AC) +
+                        *reinterpret_cast<const float*>(victim + 0x6B4) : 0.f;
+    };
+    const float before = vitals();
+    void* previous = *ignore;
+    *ignore = body;
+    fire(weapon, body, &start, &muzzle, nullptr, &target, nullptr, false, true);
+    SetBulletReplayRay(nullptr);
+    *ignore = previous;
+    if (victim && bullet.localLife == g_localLife.load()) {
+        const float nativeDamage = std::max(0.f, before - vitals());
+        if (nativeDamage > 0.f) {
+            // A native ray can hit us even if the shooter did not report a victim.
+            // Keep the body part from AffectsPed when it reported this same hit.
+            g_health = *reinterpret_cast<const float*>(victim + 0x6AC);
+            g_armor = *reinterpret_cast<const float*>(victim + 0x6B4);
+            const uint8_t zone = shot.hit && shot.victim == local && shot.zone >= 3 && shot.zone <= 9 ? shot.zone : 3;
+            if (g_nativeDamageEvents == damageBefore)
+                g_pendingDamage.record(shot.shooter, shot.weapon, zone);
+            NoteLocalCombatDeath(victim, nullptr, shot.shooter, shot.weapon, zone);
+        }
+        const float remaining = Combat::RemainingBackupDamage(shot, local, nativeDamage);
+        if (remaining > 0.f) NoteDamage(shot.shooter, remaining, shot.weapon, shot.zone);
+    }
+    // CPedSA::AddWeaponAudioEvent(FIRE). Verified against Android CWeapon::Fire:
+    // 0x7011a0 adds 0x470 to the ped, 0x7011a4 selects event 0x91.
+    using AudioFn = void (*)(void*, int);
+    static const auto audio = reinterpret_cast<AudioFn>(dlsym(lib, "_ZN23CAEPedWeaponAudioEntity13AddAudioEventEi"));
+    if (audio) audio(static_cast<unsigned char*>(body) + 0x470, 0x91);
+    else {
+        static bool logged = false;
+        if (!logged) ENGINE_LOGI("DIAG remote weapon fire audio symbol unavailable");
+        logged = true;
+    }
+    return true;
+}
+
+static void ApplyRemoteBullets() {
+    std::deque<RemoteBullet> bullets;
+    {
+        std::lock_guard lock(g_remoteMutex);
+        bullets.swap(g_remoteBullets);
+    }
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& bullet : bullets) {
+        if (now >= bullet.deadline || bullet.localLife != g_localLife.load() ||
+            !PedQueries::Current(bullet.shot.shooter, bullet.generation) ||
+            ServerWorld::DimensionOf(bullet.shot.shooter) != ServerWorld::LocalDimension()) continue;
+        const auto body = g_remoteBodies.find(bullet.shot.shooter);
+        if (g_sampledLife == bullet.localLife && body != g_remoteBodies.end() &&
+            body->second.queryGeneration == bullet.generation &&
+            !IsPlaceableVtable(body->second.ped) &&
+            DischargeRemoteBullet(body->second.ped, bullet)) continue;
+        std::lock_guard lock(g_remoteMutex);
+        if (g_remoteBullets.size() < kMaxRemoteBullets) g_remoteBullets.push_back(std::move(bullet));
+    }
+}
+
+// CClientPed::AddChangeWeapon / UpdateKeysync (2864-2878, 5605-5631).
+// Read the type from the inventory created by PLAYER_LIST and weapon RPCs.
+// If the weapon is still loading, leave the revision pending for another frame.
+static bool ApplyRemotePlayerWeapon(void* body, RemoteBody& stored, const RemotePed& ped) {
+    if (!ped.weaponRevision) return true;
+    if (!WeaponLayoutValid() || ped.syncWeapon.slot >= kWeaponSlots) return false;
+
+    const auto& sync = ped.syncWeapon;
+    auto* weapon = PedWeaponAt(body, sync.slot);
+    const int type = WeaponType(weapon);
+    if (sync.slot && (type <= 0 || type > 46)) return false;
+
+    if (stored.appliedWeaponRevision != ped.weaponRevision) {
+        if (sync.ammoSynced) {
+            WeaponTotal(weapon) = sync.total;
+            // Desktop avoids overwriting the clip while GTA plays a reload.
+            if (!WeaponReloading(weapon)) WeaponClip(weapon) = sync.clip;
+        } else if (sync.slot && !PlayerWeaponSync::SlotHasAmmo(sync.slot) && WeaponTotal(weapon) == 0) {
+            // PLAYER_LIST carries the type only. GTA requires one unit to select even a melee weapon.
+            WeaponTotal(weapon) = 1;
+        }
+        PedSetCurrentWeaponSlot(body, sync.slot, false);
+        if (CurrentWeaponSlot(body) != sync.slot) return false;
+        stored.appliedWeaponRevision = ped.weaponRevision;
+    }
+    // Goggles, detonators and cameras must not use the generic fire input.
+    return CurrentWeaponSlot(body) == sync.slot && sync.slot != 11 && sync.slot != 12 && type != 43;
+}
+
+// False keeps this RPC at the head of the queue while its model streams.
 static bool RunPedRpcOp(uint32_t id, void* ped, PedRpcOp& op, bool local, RemoteBody* stored) {
     using K = PedRpcOp::Kind;
     switch (op.kind) {
@@ -3017,6 +3771,10 @@ static void ApplyRemotePeds() {
         g_vehicleTouchBounds.clear();
         g_localVehicleEvents.clear();
         g_localShots.clear();
+        g_remoteBullets.clear();
+        g_localWeapon = {};
+        g_localDrivebyRequest = 0;
+        g_lastLocalShotAim = {};
         g_hostedSnap.clear();
         g_hostedCarSnap.clear();
         g_pedRpcOps.clear();
@@ -3028,39 +3786,39 @@ static void ApplyRemotePeds() {
         ServerWorld::ActorSpawn actors[kMaxRemotePedBodies + kMaxRemoteVehicleRecords];
         const int count = ServerWorld::CopyActors(actors, kMaxRemotePedBodies + kMaxRemoteVehicleRecords,
                                                    kMaxRemotePedBodies, kMaxRemoteVehicleRecords);
-        // Observer interpolation (PedSyncState). Runs before g_remoteMutex is taken, because
-        // SamplePose pushes the pose through NoteRemotePed, which locks the same mutex.
-        for (int i = 0; i < count; ++i) {
-            if (actors[i].kind == 14) WorldRPG::Sync::PedSyncState::SamplePose(actors[i].id);
-        }
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         for (int i = 0; i < count; ++i) {
             const auto& actor = actors[i];
             if (actor.kind == 14) {
-                const bool firstSeen = g_remotePeds.find(actor.id) == g_remotePeds.end();
                 auto& ped = g_remotePeds[actor.id];
+                const bool firstSeen = !ped.serverPed;
                 ped.serverPed = true;
                 if (firstSeen) ENGINE_LOGI("DIAG ped actor id=%u model=%d hosted=%d pos=%.1f,%.1f,%.1f", actor.id, actor.model, actor.hosted ? 1 : 0, actor.x, actor.y, actor.z);
                 ped.hosted = actor.hosted;
                 ped.interior = actor.interior;
-                if (!ped.dirty && !ped.shown && actor.model >= 0) {
-                    ped.x = actor.x;
-                    ped.y = actor.y;
-                    ped.z = actor.z;
-                    ped.heading = actor.heading;
-                    ped.dirty = true;
+                if (firstSeen) {
+                    if (!ped.observerHasPosition) {
+                        ped.x = actor.x;
+                        ped.y = actor.y;
+                        ped.z = actor.z;
+                    }
+                    if (!ped.observerHasHeading) ped.heading = actor.heading;
                 }
             } else if (actor.kind == 2 && actor.model >= 400) {
                 auto& car = g_remoteCars[actor.id];
                 car.model = actor.model;
                 car.hosted = actor.hosted;
                 car.doorLockMode = actor.vehicleDoorLock;
+                car.colors = actor.vehicleColors;
                 car.nitroUpgrade = actor.nitroUpgrade;
                 car.nitroRevision = actor.nitroRevision;
                 // Desktop Packet_EntityAdd, vehicle case: SetRotationDegrees and SetHealth. Once per record; a
                 // VEHICLE_STARTSYNC seed that arrived first is newer and is kept.
                 if (!car.actorSeeded) {
                     car.actorSeeded = true;
+                    if (!car.frozen) car.frozen = actor.vehicleFrozen;
+                    if (!car.engineOn) car.engineOn = actor.vehicleEngineOn;
+                    if (!car.alpha) car.alpha = actor.vehicleAlpha;
                     if (!car.seed.pending) {
                         constexpr float kRadToDeg = 180.f / 3.14159265f;
                         car.seed.hasRotation = true;
@@ -3128,10 +3886,48 @@ static void ApplyRemotePeds() {
         for (auto& [id, ped] : g_remotePeds) pending.emplace(id, ped);
     }
     for (auto& [id, ped] : pending) {
+        // PLAYER_LIST omits the position of a seated player. Stream that player
+        // at the vehicle while its GTA seat task is waiting for both bodies.
+        {
+            std::lock_guard lock(g_remoteMutex);
+            auto req = g_seatRequests.find(id);
+            if (req != g_seatRequests.end() && req->second.seated) {
+                auto car = g_remoteCars.find(req->second.vehicleId);
+                if (car != g_remoteCars.end()) {
+                    ped.x = car->second.x;
+                    ped.y = car->second.y;
+                    ped.z = car->second.z;
+                }
+            }
+        }
         if (!PlausiblePosition(ped.x, ped.y, ped.z)) continue;
-        auto live = g_remotePeds.find(id);
-        if (live == g_remotePeds.end()) continue;
+        RemotePed* live = nullptr;
+        {
+            std::lock_guard lock(g_remoteMutex);
+            auto found = g_remotePeds.find(id);
+            if (found == g_remotePeds.end()) continue;
+            live = &found->second; // Only this thread erases records.
+        }
         if (id == ServerWorld::LocalPlayer()) continue;
+        // PLAYER_SPAWN starts a fresh inventory even when the player was alive.
+        // Discard the previous body's controls and weapons before restoring this life.
+        auto previous = g_remoteBodies.find(id);
+        if (previous != g_remoteBodies.end() && previous->second.networkPlayer &&
+            !PedQueries::Current(id, previous->second.queryGeneration)) {
+            UnseatApplied(id);
+            ClearRemoteStick(previous->second.ped);
+            DropBody(previous->second.ped, false);
+            g_remoteBodies.erase(previous);
+            std::lock_guard lock(g_remoteMutex);
+            live->shown = false;
+            if (auto queued = g_pedRpcOps.find(id); queued != g_pedRpcOps.end()) {
+                // Restore commands belong to the discarded body. Network RPCs carry a life token.
+                std::erase_if(queued->second, [playerId = id](const PedRpcOp& op) {
+                    return op.kind >= PedRpcOp::Kind::GiveWeapon && op.kind <= PedRpcOp::Kind::SetWeaponSlot &&
+                           (!op.queryGeneration || !PedQueries::Current(playerId, op.queryGeneration));
+                });
+            }
+        }
         // CClientStreamer streams out a ped whose dimension is not the local player's (CClientGame::SetAllDimensions ->
         // the player streamer). The body is dropped, as on stream-out, and made again when the dimensions match.
         if (ServerWorld::DimensionOf(id) != ServerWorld::LocalDimension()) {
@@ -3145,7 +3941,7 @@ static void ApplyRemotePeds() {
                 SavePedInventory(id, out->second);
                 DropBody(out->second.ped, false);
                 g_remoteBodies.erase(out);
-                live->second.shown = false;
+                live->shown = false;
                 continue;
             }
         }
@@ -3207,19 +4003,20 @@ static void ApplyRemotePeds() {
             body = CreateRemotePlayerPed(model, pos.x, pos.y, pos.z, ped.heading);
             if (!body) continue;
             // A new body starts undressed: the clothes are applied on the next frame (one rebuild per frame).
-            live->second.clothesDirty = true;
+            live->clothesDirty = true;
             RemoteBody stored;
-            ArmRemote(body, stored, ped.weapon);
             stored.ped = body;
+            stored.spatialGeneration = ServerWorld::ElementGeneration(id);
             stored.model = model;
             // ENTITY_ADD state first: the fence early-outs read frozen (CClientPed.cpp 5917).
-            const bool restreamed = live->second.spawnApplied;
-            ApplyPedSpawnRecord(id, live->second);
+            const bool restreamed = live->spawnApplied;
+            ApplyPedSpawnRecord(id, *live);
             // _CreateModel restores the last body inventory before any RPCs waiting
             // for this body. Do not replay ENTITY_ADD after later weapon changes.
             PedQueries::Snapshot restore;
             if (PedQueries::CopyRestore(id, restore)) {
                 stored.queryGeneration = restore.generation;
+                stored.networkPlayer = restore.player;
                 std::deque<PedRpcOp> base;
                 for (const auto& w : restore.weapons) if (w.type) {
                     PedRpcOp give;
@@ -3241,16 +4038,16 @@ static void ApplyRemotePeds() {
             // The cached start time / progress is not restored (the animation starts from the beginning).
             if (restreamed) {
                 std::lock_guard<std::mutex> lock(g_remoteMutex);
-                if (live->second.hasAnimCache) {
-                    PedRpcOp replay = live->second.animCache;
+                if (live->hasAnimCache) {
+                    PedRpcOp replay = live->animCache;
                     replay.waits = 0;
                     replay.requested = false;
                     g_pedRpcOps[id].push_front(replay);
                 }
             }
-            ArmPedCollisionFence(body, live->second, stored);
+            ArmPedCollisionFence(body, *live, stored);
             // A frozen ped skips the fence, so its freeze bit is written here (_CreateModel -> ApplyPhysicalFreezeState).
-            if (!stored.collisionFence) ApplyPedFreezeState(body, stored, live->second);
+            if (!stored.collisionFence) ApplyPedFreezeState(body, stored, *live);
             {
                 static int spawnLists = 0;
                 if (spawnLists < 8) {
@@ -3264,16 +4061,19 @@ static void ApplyRemotePeds() {
             // CClientPed::SetInterior 1101-1119).
             ApplyPedInterior(body, stored, ped.interior);
             g_remoteBodies.emplace(id, std::move(stored));
-            live->second.shownX = pos.x;
-            live->second.shownY = pos.y;
-            live->second.shownZ = pos.z;
-            live->second.shownH = ped.heading;
-            live->second.shown = true;
+            {
+                std::lock_guard lock(g_remoteMutex);
+                live->shownX = pos.x;
+                live->shownY = pos.y;
+                live->shownZ = pos.z;
+                live->shownH = ped.heading;
+                live->shown = true;
+            }
             ApplySyncedPlayerFields(id, body);
             // A ped that is dead on the network and gets a new body (model change, far-drop at the cap) is created dead
             // again; otherwise it stands up and the dead branch below leaves it frozen with no sync.
-            if (live->second.dead)
-                KillRemoteBody(id, body, live->second.killWeapon, live->second.killAnimGroup, live->second.killAnimId);
+            if (live->dead)
+                KillRemoteBody(id, body, live->killWeapon, live->killAnimGroup, live->killAnimId);
             DebugPedPose("H1", "spawn", id, body, ped, true);
             static int created = 0;
             if (created < 6) {
@@ -3298,47 +4098,32 @@ static void ApplyRemotePeds() {
                 SavePedInventory(id, found->second);
                 DropBody(body, false);
                 g_remoteBodies.erase(found);
-                live->second.shown = false;
+                live->shown = false;
                 continue;
             }
         }
         // ProcessRebuildPlayer: at most one rebuild per frame (CClientPed.cpp 6609-6626).
-        if (model == 0 && live->second.clothesDirty && HasPrivatePlayerData(body)) {
+        if (model == 0 && live->clothesDirty && HasPrivatePlayerData(body)) {
             static int rebuiltFrame = -1;
             if (rebuiltFrame != g_gameFrame) {
                 rebuiltFrame = g_gameFrame;
                 std::vector<WorldRPG::Entity::PedClothes> clothes;
                 {
                     std::lock_guard<std::mutex> lock(g_remoteMutex);
-                    clothes = live->second.clothes;
+                    clothes = live->clothes;
                 }
                 if (DressRemoteCj(body, clothes)) {
                     std::lock_guard<std::mutex> lock(g_remoteMutex);
-                    live->second.clothesDirty = false;
+                    live->clothesDirty = false;
                 }
             }
         }
-        ApplyPedInterior(body, found->second, live->second.interior);
+        ApplyPedInterior(body, found->second, live->interior);
         // SET_ELEMENT_FROZEN -> CClientPed::SetFrozen -> ApplyPhysicalFreezeState (CClientPed.cpp 3904-3944).
         // Desktop SetFrozen(true) also removes the primary and event-response tasks; that step is not run (DIAG).
-        if (found->second.frozenApplied != (live->second.frozen ? 1 : 0)) {
-            found->second.frozenApplied = live->second.frozen ? 1 : 0;
-            ApplyPedFreezeState(body, found->second, live->second);
-        }
-        // PLAYER_SPAWN of a remote player that died: CClientPlayer::Spawn re-creates the model alive. The body is
-        // dropped here and the spawn branch makes a new one next frame.
-        if (live->second.respawn) {
-            {
-                std::lock_guard<std::mutex> lock(g_remoteMutex);
-                live->second.respawn = false;
-            }
-            if (!g_seatedPeds.count(id)) {
-                ClearRemoteStick(body);
-                DropBody(body, false);
-                g_remoteBodies.erase(found);
-                live->second.shown = false;
-                continue;
-            }
+        if (found->second.frozenApplied != (live->frozen ? 1 : 0)) {
+            found->second.frozenApplied = live->frozen ? 1 : 0;
+            ApplyPedFreezeState(body, found->second, *live);
         }
         // SET_ELEMENT_ALPHA / SET_ELEMENT_INTERIOR (UpdateAlphaAndVisibility), SET_ELEMENT_COLLISIONS_ENABLED, then the
         // queued animation and weapon RPCs.
@@ -3347,29 +4132,30 @@ static void ApplyRemotePeds() {
             bool collisions = true;
             {
                 std::lock_guard<std::mutex> lock(g_remoteMutex);
-                alpha = live->second.alpha;
-                collisions = live->second.collisions;
+                alpha = live->alpha;
+                collisions = live->collisions;
             }
-            ApplyPedAlphaAndVisibility(body, alpha, live->second.interior, found->second.alphaApplied);
+            ApplyPedAlphaAndVisibility(body, alpha, live->interior, found->second.alphaApplied);
             ApplyPedCollisions(body, collisions, found->second.collisionsApplied);
             RunPedRpcOps(id, body, false, &found->second);
         }
-        if (live->second.killPending) {
+        if (live->killPending) {
             int weapon = 0, group = 0, anim = 0;
             {
                 std::lock_guard<std::mutex> lock(g_remoteMutex);
-                live->second.killPending = false;
-                weapon = live->second.killWeapon;
-                group = live->second.killAnimGroup;
-                anim = live->second.killAnimId;
+                live->killPending = false;
+                weapon = live->killWeapon;
+                group = live->killAnimGroup;
+                anim = live->killAnimId;
             }
-            if (!live->second.dead) {
-                live->second.dead = true;
+            if (!live->dead) {
+                live->dead = true;
                 KillRemoteBody(id, body, weapon, group, anim);
             }
         }
         // A dead body is left to its death task: no position, rotation or stick from the phone.
-        if (live->second.dead) {
+        if (live->dead) {
+            ClearRemoteStick(body);
             ApplySyncedPlayerFields(id, body);
             continue;
         }
@@ -3377,24 +4163,32 @@ static void ApplyRemotePeds() {
         // SetCurrentRotation (CPedRPCs.cpp 62-90).
         {
             bool teleport = false, headingSnap = false;
+            Vec3 position{};
+            float heading = 0;
             {
                 std::lock_guard<std::mutex> lock(g_remoteMutex);
-                teleport = live->second.teleport;
-                headingSnap = live->second.headingSnap;
-                live->second.teleport = false;
-                live->second.headingSnap = false;
+                teleport = live->teleport;
+                headingSnap = live->headingSnap;
+                position = live->teleportPosition;
+                heading = live->snapHeading;
+                live->teleport = false;
+                live->headingSnap = false;
             }
             if (teleport) {
-                PlaceRemotePlayerPed(body, live->second.x, live->second.y, live->second.z, live->second.heading);
+                PlaceRemotePlayerPed(body, position.x, position.y, position.z,
+                    headingSnap ? heading : live->shownH);
                 found->second.interp.finishMs = 0;
-                live->second.shownX = live->second.x;
-                live->second.shownY = live->second.y;
-                live->second.shownZ = live->second.z;
-                live->second.shownH = live->second.heading;
-                live->second.shown = true;
-            } else if (headingSnap) {
-                SetRemotePedHeading(body, live->second.heading);
-                live->second.shownH = live->second.heading;
+                std::lock_guard lock(g_remoteMutex);
+                live->shownX = position.x;
+                live->shownY = position.y;
+                live->shownZ = position.z;
+                live->shown = true;
+            }
+            if (headingSnap) {
+                found->second.rotationInterp = {};
+                SetRemotePedHeading(body, heading);
+                std::lock_guard lock(g_remoteMutex);
+                live->shownH = heading;
             }
         }
         // A ped in a seat is placed by the seat task. The stream-in fence returns
@@ -3404,42 +4198,80 @@ static void ApplyRemotePeds() {
             if (found->second.collisionFence) {
                 SetStaticWaitingForCollision(body, found->second.fencePrevStaticWaiting);
                 found->second.collisionFence = false;
-                ApplyPedFreezeState(body, found->second, live->second);
+                ApplyPedFreezeState(body, found->second, *live);
             }
-        } else if (HoldPedCollisionFence(body, found->second, live->second)) {
+        } else if (HoldPedCollisionFence(body, found->second, *live)) {
             ApplySyncedPlayerFields(id, body);
-            DebugPedPose("H5", "fence", id, body, live->second, true);
+            DebugPedPose("H5", "fence", id, body, *live, true);
             continue;
         }
         // StreamedInPulse -> UpdateRemoteReplicaPhysicsFence (CClientPed.cpp 7140-7152), after the stream-in fence.
-        UpdateRemoteReplicaPhysicsFence(body, found->second, live->second, g_seatedPeds.count(id) != 0);
-        ArmRemote(body, found->second, ped.weapon);
-        // A seated ped is placed by the seat task (ApplyRemoteSeat), so the on-foot pose below must not move it.
-        if (g_seatedPeds.count(id)) continue;
-        if (ped.hosted && ped.wander && found->second.wanderDir != ped.wanderDir) {
-            StartWander(body, ped.wanderDir);
-            found->second.wanderDir = ped.wanderDir;
+        UpdateRemoteReplicaPhysicsFence(body, found->second, *live, g_seatedPeds.count(id) != 0);
+        const bool weaponReady = ApplyRemotePlayerWeapon(body, found->second, ped);
+        const auto nowAim = GameNowMs();
+        auto& presentation = found->second;
+        if (presentation.aimSlot != ped.syncWeapon.slot) {
+            presentation.aimInterpolation = {};
+            presentation.aimSlot = ped.syncWeapon.slot;
         }
-        if (!ped.hosted && found->second.wanderDir >= 0) {
-            TaskFns& api = Tasks();
-            void* intel = PedIntel(body);
-            if (intel && api.clearTasks) api.clearTasks(intel, true, true);
-            found->second.wanderDir = -1;
+        if (presentation.aimRevision != ped.aimRevision) {
+            presentation.aimInterpolation.update(ped.syncWeapon.aim, nowAim);
+            presentation.aimRevision = ped.aimRevision;
         }
-        const bool controlled = !ped.hosted && ped.keysync && RemoteControlHookActive();
+        const bool showAim = ped.gangDriveby || PlayerWeaponSync::HasAimOrFire(ped.buttons);
+        auto aim = weaponReady && showAim ? presentation.aimInterpolation.sample(nowAim) : PlayerWeaponSync::Aim{};
+        if (aim.full && weaponReady) {
+            const int type = WeaponType(PedWeaponAt(body, ped.syncWeapon.slot));
+            aim.akimbo = PlayerWeaponSync::IsAkimbo(type);
+            aim.range = NativeWeaponRange(type);
+        }
+        if (!ped.hosted) StopLostTrafficTask(found->second);
+        // Native seats own the transform. Publish the occupant's live pose for
+        // Lua queries without running the on-foot interpolator over it.
+        if (auto seated = g_seatedPeds.find(id); seated != g_seatedPeds.end()) {
+            const bool driveby = ped.gangDriveby && weaponReady && PlayerWeaponSync::SlotHasAmmo(ped.syncWeapon.slot) &&
+                                 RemoteControlHookActive();
+            if (driveby) {
+                aim.inVehicle = true;
+                SetRemoteStick(body, 0, 0, ped.fire, ped.cameraRotation, true, ped.buttons, aim);
+            } else {
+                ClearRemoteStick(body);
+            }
+            void* vehicle = nullptr;
+            {
+                std::lock_guard lock(g_remoteMutex);
+                auto car = g_remoteCars.find(seated->second.vehicleId);
+                if (car != g_remoteCars.end()) vehicle = car->second.body;
+            }
+            SetNativeDriveby(body, vehicle, seated->second.seat, driveby);
+            float x = 0, y = 0, z = 0, heading = 0;
+            if (ReadBodyPos(body, x, y, z, heading)) {
+                std::lock_guard lock(g_remoteMutex);
+                live->shownX = x;
+                live->shownY = y;
+                live->shownZ = z;
+                live->shownH = heading;
+                live->shown = true;
+            }
+            continue;
+        }
+        const bool controlled = !ped.serverPed && !ped.hosted && ped.keysync && RemoteControlHookActive();
         if (controlled) {
             // Plan step A: the stick drives CPlayerPed::ProcessControl. The per-tick
             // matrix lerp below would fight it, so only re-anchor when the body
             // drifts more than 8 m from the server position.
-            SetRemoteStick(body, ped.stickX, ped.stickY, ped.fire, ped.cameraRotation, true, ped.buttons);
+            const auto buttons = weaponReady ? ped.buttons :
+                static_cast<uint8_t>(ped.buttons & ~(PlayerWeaponSync::kAim | PlayerWeaponSync::kFire));
+            SetRemoteStick(body, ped.stickX, ped.stickY, weaponReady && ped.fire,
+                           ped.cameraRotation, true, buttons, PlayerWeaponSync::HasAimOrFire(buttons) ? aim : PlayerWeaponSync::Aim{});
             // ReadPlayerPuresync: SetTargetPosition(position, TICK_RATE) then SetTargetRotation(rotation)
             // (CNetAPI.cpp 998-999); Interpolate -> UpdateTargetPosition every frame. Replaces the old rule that
             // only re-placed the body past 8 m, which let the stick physics drift up to 8 m from the real position.
             bool fresh = false;
             {
                 std::lock_guard<std::mutex> lock(g_remoteMutex);
-                fresh = live->second.newTarget;
-                live->second.newTarget = false;
+                fresh = live->newTarget;
+                live->newTarget = false;
             }
             if (fresh) {
                 SetTargetPosition(body, found->second, ped.x, ped.y, ped.z, kPureSyncTickMs);
@@ -3447,33 +4279,58 @@ static void ApplyRemotePeds() {
                 SetRemotePedHeading(body, ped.heading);
             }
             UpdateTargetPosition(body, found->second);
-            live->second.shown = true;
+            live->shown = true;
             // The pad hook only drives the stick. libGTASA reads fire from the touch widget, not from the pad
             // (PlayerPedPort.cpp, RemotePlayerProcessControl), so the punch for a remote fire key comes from
             // PresentOnFoot, as it does without the hook.
             // With the virtual touch the attack comes from ButtonCircle through GTA's own melee code (combos,
             // weapon swings), as on desktop. The scripted CTaskSimpleFight punch is only the fallback.
-            PresentOnFoot(body, found->second, ped, !RemoteTouchActive());
+            PresentOnFoot(body, found->second, ped, weaponReady && ped.syncWeapon.slot <= 1 && !RemoteTouchActive());
             ApplySyncedPlayerFields(id, body);
             DebugPedPose("H4", "stick", id, body, ped, false);
             continue;
         }
-        ClearRemoteStick(body);
-        const float dx = ped.x - live->second.shownX;
-        const float dy = ped.y - live->second.shownY;
-        const float dz = ped.z - live->second.shownZ;
+        if (!ped.hosted && ped.serverPed) {
+            // A 0x30 viewer receives velocity instead of the newer locomotion block.
+            // Project onto a zero-heading virtual camera, like CaptureNativeTaskLocomotion.
+            // The replica physics fence leaves world movement to packet interpolation.
+            const float speed = std::hypot(ped.vx, ped.vy);
+            const bool walking = nowAim < ped.observerMotionUntilMs && !ped.frozen && !ped.duck &&
+                !ped.inWater && !ped.hasAnimCache && !ped.physicalTakeoverPending &&
+                ped.nativeTaskAnimId == 0 && std::isfinite(speed) && speed > 0.009f;
+            TraceObserverGait(id, body, speed, walking, ped.observerMotionUntilMs, nowAim);
+            if (walking) {
+                const int magnitude = speed > 0.27f ? 128 : speed > 0.14f ? 108 : 59;
+                SetRemoteStick(body, std::lround(magnitude * ped.vx / speed),
+                    std::lround(-magnitude * ped.vy / speed), false, 0.f, true, speed > 0.27f ? 0x08 : 0);
+            } else {
+                ClearRemoteStick(body);
+            }
+        } else if (!ped.hosted || !ped.ownedControls) {
+            ClearRemoteStick(body);
+        }
+        const float dx = ped.x - live->shownX;
+        const float dy = ped.y - live->shownY;
+        const float dz = ped.z - live->shownZ;
         const float dist2 = dx * dx + dy * dy + dz * dz;
-        if (ped.hosted && live->second.shown && dist2 < 64.f) {
-            float hx = 0, hy = 0, hz = 0, hh = live->second.shownH;
+        if (ped.hosted) {
+            if (ped.ownedControls) {
+                const int magnitude = (ped.ownedControls & 0x10) ? 59 : 108;
+                const int x = ((ped.ownedControls & 0x08) != 0) - ((ped.ownedControls & 0x04) != 0);
+                const int y = ((ped.ownedControls & 0x02) != 0) - ((ped.ownedControls & 0x01) != 0);
+                const uint8_t buttons = (ped.ownedControls & 0x20) ? 0x08 : 0;
+                SetRemoteStick(body, x * magnitude, y * magnitude, false, -live->shownH, true, buttons);
+            }
+            ApplySyncedPlayerFields(id, body);
+            found->second.interp.finishMs = 0;
+            found->second.rotationInterp = {};
+            float hx = 0, hy = 0, hz = 0, hh = live->shownH;
             if (ReadBodyPos(body, hx, hy, hz, hh)) {
                 auto* speed = reinterpret_cast<float*>(static_cast<unsigned char*>(body) + 0x68);
-                live->second.shownX = hx;
-                live->second.shownY = hy;
-                live->second.shownZ = hz;
-                live->second.shownH = hh;
+
                 std::lock_guard<std::mutex> lock(g_remoteMutex);
                 auto snap = g_remotePeds.find(id);
-                if (snap != g_remotePeds.end()) {
+                if (snap != g_remotePeds.end() && snap->second.hosted && !snap->second.teleport) {
                     snap->second.x = hx;
                     snap->second.y = hy;
                     snap->second.z = hz;
@@ -3487,16 +4344,48 @@ static void ApplyRemotePeds() {
                     snap->second.shownH = hh;
                 }
             }
-            ApplySyncedPlayerFields(id, body);
             DebugPedPose("H2", "hosted", id, body, ped, false);
             continue;
         }
-        if (!live->second.shown || dist2 > 20.f * 20.f) {
-            live->second.shownX = ped.x;
-            live->second.shownY = ped.y;
-            live->second.shownZ = ped.z;
-            live->second.shownH = ped.heading;
-            live->second.shown = true;
+        if (ped.serverPed) {
+            // CPedSync::Packet_PedSync (428-437) uses the same position interpolation
+            // as remote players. Rotation uses the delayed CClientPed overload.
+            uint64_t positionInterval = 0, headingInterval = 0;
+            float x = 0, y = 0, z = 0, heading = 0;
+            {
+                std::lock_guard lock(g_remoteMutex);
+                positionInterval = std::exchange(live->observerPositionInterval, 0);
+                headingInterval = std::exchange(live->observerHeadingInterval, 0);
+                x = live->x;
+                y = live->y;
+                z = live->z;
+                heading = live->heading;
+            }
+            if (positionInterval) SetTargetPosition(body, found->second, x, y, z, positionInterval);
+            UpdateTargetPosition(body, found->second);
+            const auto now = static_cast<uint64_t>(GameNowMs());
+            auto& rotation = found->second.rotationInterp;
+            float renderedHeading = live->shownH;
+            if (headingInterval) {
+                Interp::StepRotation(rotation, renderedHeading, now);
+                Interp::BeginRotation(rotation, renderedHeading, heading, headingInterval, now);
+            }
+            if (Interp::StepRotation(rotation, renderedHeading, now))
+                SetRemotePedHeading(body, renderedHeading);
+            float ignoredHeading = 0;
+            if (ReadBodyPos(body, x, y, z, ignoredHeading)) {
+                std::lock_guard lock(g_remoteMutex);
+                live->shownX = x;
+                live->shownY = y;
+                live->shownZ = z;
+                live->shownH = renderedHeading;
+            }
+        } else if (!live->shown || dist2 > 20.f * 20.f) {
+            live->shownX = ped.x;
+            live->shownY = ped.y;
+            live->shownZ = ped.z;
+            live->shownH = ped.heading;
+            live->shown = true;
             PlaceRemotePlayerPed(body, ped.x, ped.y, ped.z, ped.heading);
             ApplySyncedPlayerFields(id, body);
             DebugPedPose("H1", "snap", id, body, ped, false);
@@ -3512,39 +4401,39 @@ static void ApplyRemotePeds() {
                             "(CClientPed.cpp 8765-8822) is not wired; keeping the 0.35 position step. "
                             "CPed::SetTargetRotation is SetRemotePedHeading (+0x6C4/+0x6C8).");
             }
-            live->second.shownX += dx * 0.35f;
-            live->second.shownY += dy * 0.35f;
-            live->second.shownZ += dz * 0.35f;
+            live->shownX += dx * 0.35f;
+            live->shownY += dy * 0.35f;
+            live->shownZ += dz * 0.35f;
             if (ped.keysync) {
                 // CClientPed::SetTargetRotation(float) (CClientPed.cpp 5332-5339) writes
                 // the heading at once. ReadPlayerPuresync and ReadKeysync use that overload.
-                live->second.shownH = ped.heading;
+                live->shownH = ped.heading;
             } else {
-                float turn = ped.heading - live->second.shownH;
+                float turn = ped.heading - live->shownH;
                 constexpr float pi = 3.14159265f;
                 while (turn > pi) turn -= 2.f * pi;
                 while (turn < -pi) turn += 2.f * pi;
-                live->second.shownH += turn * 0.35f;
+                live->shownH += turn * 0.35f;
             }
             auto* raw = static_cast<unsigned char*>(body);
             auto* matrix = *reinterpret_cast<unsigned char**>(raw + 0x18);
             const auto matrixAddr = reinterpret_cast<uintptr_t>(matrix);
             if (matrix && (matrixAddr & 3u) == 0 && matrixAddr > 0x10000u) {
-                *reinterpret_cast<float*>(matrix + 0x30) = live->second.shownX;
-                *reinterpret_cast<float*>(matrix + 0x34) = live->second.shownY;
-                *reinterpret_cast<float*>(matrix + 0x38) = live->second.shownZ;
+                *reinterpret_cast<float*>(matrix + 0x30) = live->shownX;
+                *reinterpret_cast<float*>(matrix + 0x34) = live->shownY;
+                *reinterpret_cast<float*>(matrix + 0x38) = live->shownZ;
             }
-            *reinterpret_cast<float*>(raw + 0x08) = live->second.shownX;
-            *reinterpret_cast<float*>(raw + 0x0C) = live->second.shownY;
-            *reinterpret_cast<float*>(raw + 0x10) = live->second.shownZ;
+            *reinterpret_cast<float*>(raw + 0x08) = live->shownX;
+            *reinterpret_cast<float*>(raw + 0x0C) = live->shownY;
+            *reinterpret_cast<float*>(raw + 0x10) = live->shownZ;
             DebugPedPose("H3", "lerp", id, body, ped, false);
         }
         // CPlaceable::SetHeading is not exported on libGTASA 2.10. Yaw is
         // CMatrix::SetRotateZOnly plus fCurrentRotation / fTargetRotation.
-        SetRemotePedHeading(body, live->second.shownH);
+        if (!ped.serverPed) SetRemotePedHeading(body, live->shownH);
         // The snap branch already consumed the one-shot flags. The lerp branch has not.
         ApplySyncedPlayerFields(id, body);
-        if (std::fabs(ped.vx) + std::fabs(ped.vy) + std::fabs(ped.vz) > 0.001f) {
+        if (!ped.serverPed && std::fabs(ped.vx) + std::fabs(ped.vy) + std::fabs(ped.vz) > 0.001f) {
             static SetMoveSpeedFn setMove = nullptr;
             static bool looked = false;
             if (!looked) {
@@ -3571,7 +4460,7 @@ static void ApplyRemotePeds() {
             TaskFns& api = Tasks();
             void* intel = PedIntel(found->second.ped);
             if (intel && api.clearTasks) api.clearTasks(intel, true, true);
-            live->second.animationKilled = false;
+            live->animationKilled = false;
         }
         // ped.fire is the attack button from NoteRemotePlayerSync / NoteRemoteAim, not
         // CPed::IsOnFire. Copying it into ducked made an attacking ped duck.
@@ -3579,12 +4468,6 @@ static void ApplyRemotePeds() {
         if (ped.inWater) {
             // IsInWater state — tracked for future native call integration.
             // No immediate GTA native available without further dlsym work.
-        }
-        if (ped.nativeTaskLocomotionMode != 0 && !ped.hosted) {
-            // SNativeTaskLocomotionSync::eMode applied via controller state stick inputs.
-            // WALK/RUN/SPRINT modes map to left-stick magnitude thresholds matching
-            // mta_neon CClientPed::ApplyNativeTaskLocomotionPresentation.
-            // Full implementation requires CTaskManagerSA equivalent on Android.
         }
         if (ped.nativeTaskWeaponType != 0 && !ped.hosted) {
             // SNativeTaskWeaponPresentationSync weapon type — future integration
@@ -3599,17 +4482,20 @@ static void ApplyRemotePeds() {
             // Physical takeover from PED_START_SYNC seeds airborne/climb anchor.
             // Matches mta_neon CClientPed::SetNativeTaskPhysicalTakeoverState.
             // Full implementation requires CTaskSimpleClimb equivalent on Android.
-            live->second.physicalTakeoverPending = false;
+            live->physicalTakeoverPending = false;
         }
 
         RemotePed animPed = ped;
-        if (std::fabs(animPed.vx) + std::fabs(animPed.vy) < 0.02f) {
+        if (ped.serverPed && (nowAim >= ped.observerMotionUntilMs || ped.frozen || ped.duck || ped.inWater))
+            animPed.vx = animPed.vy = 0.f;
+        if (!ped.serverPed && std::fabs(animPed.vx) + std::fabs(animPed.vy) < 0.02f) {
             const float step = std::sqrt(dx * dx + dy * dy);
             if (step > 0.02f && step < 8.f) {
                 animPed.vx = dx * 0.35f;
                 animPed.vy = dy * 0.35f;
             }
         }
+        if (!weaponReady || ped.syncWeapon.slot > 1) animPed.fire = false;
         if (!ped.hosted) PresentOnFoot(body, found->second, animPed);
     }
     std::vector<HostedPed> hosted;
@@ -3631,7 +4517,8 @@ static void ApplyRemotePeds() {
             // and GetCurrentRotation (CPedSA.h 433). That float is CPed +0x6C4 on libGTASA 2.10
             // (CPed::UpdatePosition 0x597b3c). Health and armour stay +0x6AC and +0x6B4.
             auto bodyIt = g_remoteBodies.find(id);
-            void* body = bodyIt == g_remoteBodies.end() ? nullptr : bodyIt->second.ped;
+            if (bodyIt == g_remoteBodies.end() || !bodyIt->second.ped) continue;
+            void* body = bodyIt->second.ped;
             if (body) {
                 float hx = 0, hy = 0, hz = 0, hh = sample.heading;
                 if (ReadBodyPos(body, hx, hy, hz, hh)) {
@@ -3666,6 +4553,7 @@ static void ApplyRemotePeds() {
         int model;
         float x, y, z, heading;
         bool hosted;
+        bool useUnoccupiedSync;
     };
     std::vector<CarPose> cars;
     {
@@ -3674,17 +4562,27 @@ static void ApplyRemotePeds() {
         // Only the game thread erases vehicle records. References survive insertions and rehashes
         // by the packet thread, so use these pointers without looking up the map again unlocked.
         for (auto& [id, car] : g_remoteCars)
-            cars.push_back({id, &car, car.model, car.x, car.y, car.z, car.heading, car.hosted});
+            cars.push_back({id, &car, car.model, car.x, car.y, car.z, car.heading, car.hosted, car.useUnoccupiedSync});
     }
     // The car the local ped is in. Its body is moved by the local driver, not by server poses.
-    void* const localVehicle = api.findPlayerVehicle ? api.findPlayerVehicle(-1, false) : nullptr;
+    void* localVehicle = api.findPlayerVehicle ? api.findPlayerVehicle(-1, false) : nullptr;
+    // Only the driver integrates the car. A passenger follows the network driver.
+    if (localVehicle && NativeVehicleSeat(localVehicle, g_sampledLocalPed) != 0) localVehicle = nullptr;
+    const float localX = g_poseX.load();
+    const float localY = g_poseY.load();
+    const auto distance = [&](const CarPose& car) { return std::hypot(car.x - localX, car.y - localY); };
+    std::stable_sort(cars.begin(), cars.end(), [&](const CarPose& a, const CarPose& b) {
+        if (a.hosted != b.hosted) return a.hosted;
+        return distance(a) < distance(b);
+    });
+    auto bodies = std::count_if(cars.begin(), cars.end(), [](const auto& car) { return car.record->body != nullptr; });
     for (const auto& car : cars) {
         const uint32_t id = car.id;
         if (!PlausiblePosition(car.x, car.y, car.z) || car.model < 400 || car.model > 611) continue;
         RemoteCar& record = *car.record;
         void* body = record.body;
         if (!body) {
-            if (!EnsureWorldModel(car.model) || cars.size() > static_cast<size_t>(kMaxRemoteVehicleRecords)) continue;
+            if (bodies >= kMaxRemoteVehicleRecords || !EnsureWorldModel(car.model)) continue;
             if (api.createCarForScript) {
                 // Desktop CPoolsSA::AddVehicle: CCarCtrl::CreateCarForScript(model, CVector(), 0) (pool-owned, added to the world).
                 body = api.createCarForScript(car.model, Vec3{car.x, car.y, car.z}, 0);
@@ -3697,10 +4595,12 @@ static void ApplyRemotePeds() {
                 api.carCtor(body, car.model, 2, 0);
                 g_worldAdd(body);
             }
+            ++bodies;
             const uint64_t generation = ServerWorld::ElementGeneration(id);
             {
                 std::lock_guard lock(g_remoteMutex);
                 record.body = body;
+                g_vehicleBodyIds[body] = id;
                 record.spatialGeneration = generation;
                 record.shownX = car.x;
                 record.shownY = car.y;
@@ -3718,6 +4618,8 @@ static void ApplyRemotePeds() {
             // Server rotation and health from ENTITY_ADD or VEHICLE_STARTSYNC. A new body starts upright at the
             // constructor health of 1000, which packets 56 and 33 would otherwise report back to the server.
             ApplyCarSeed(id, body, false);
+            ApplyVehiclePresentation(id, record, body);
+            if (!car.hosted && car.useUnoccupiedSync) ApplyUnoccupiedVehicleSync(id, car.model, record, body);
             static int created = 0;
             if (created < 6) {
                 ++created;
@@ -3728,6 +4630,7 @@ static void ApplyRemotePeds() {
         ApplyCarDoorLock(record);
         ApplyCarNitro(id, record, api);
         ApplyCarSeed(id, body, body == localVehicle);
+        ApplyVehiclePresentation(id, record, body);
         if (body == localVehicle) {
             // The local ped is in this car. The desktop applies remote vehicle state (CNetAPI::ReadVehiclePuresync,
             // Packet_UnoccupiedVehicleSync) only to vehicles other players sync; the local player's own vehicle is
@@ -3745,11 +4648,24 @@ static void ApplyRemotePeds() {
                 // Same heading convention as the server's rz (CarPose heading is rz in radians).
                 if (sampled) record.heading = record.shownH = pose.rotZ * 3.14159265f / 180.f;
                 record.motionPending = false;
+                record.observedVehicle.reset();
             }
+            record.unoccupiedPosition = {};
+            record.unoccupiedRotation = {};
             continue;
         }
-        if (!car.hosted) ApplyCarMotion(id, body);
-        if (car.hosted) continue;
+        if (car.hosted) {
+            record.unoccupiedPosition = {};
+            record.unoccupiedRotation = {};
+            continue;
+        }
+        if (car.useUnoccupiedSync) {
+            ApplyUnoccupiedVehicleSync(id, car.model, record, body);
+            continue;
+        }
+        record.unoccupiedPosition = {};
+        record.unoccupiedRotation = {};
+        ApplyCarMotion(id, body);
         Vec3 position;
         {
             std::lock_guard lock(g_remoteMutex);
@@ -3774,23 +4690,34 @@ static void ApplyRemotePeds() {
 
     // Hosted vehicles for packet 56 (SendUnoccupiedVehicleSync). Sampled here on the game thread,
     // then swapped in as one snapshot, the same way g_hostedSnap is built above.
+    std::vector<std::pair<uint32_t, uint64_t>> streamed;
+    streamed.reserve(g_remoteBodies.size() + cars.size());
+    for (auto& [id, remote] : g_remoteBodies) {
+        if (!remote.ped || IsPlaceableVtable(remote.ped)) continue;
+        if (!remote.spatialGeneration) remote.spatialGeneration = ServerWorld::ElementGeneration(id);
+        streamed.emplace_back(id, remote.spatialGeneration);
+    }
     std::vector<HostedCar> hostedCars;
     for (const auto& car : cars) {
-        if (!car.hosted) continue;
-        void* body = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(g_remoteMutex);
-            auto found = g_remoteCars.find(car.id);
-            if (found != g_remoteCars.end() && found->second.hosted) body = found->second.body;
-        }
+        void* body = car.record->body;
         HostedCar sample;
-        if (!body || !SampleHostedCar(body, sample)) continue;
+        if (!body || IsPlaceableVtable(body)) continue;
+        if (!car.record->spatialGeneration) car.record->spatialGeneration = ServerWorld::ElementGeneration(car.id);
+        streamed.emplace_back(car.id, car.record->spatialGeneration);
+        if (!SampleHostedCar(body, sample)) continue;
         sample.id = car.id;
-        hostedCars.push_back(sample);
+        std::lock_guard lock(g_remoteMutex);
+        car.record->lastBodyPose = sample;
+        car.record->shownX = sample.x;
+        car.record->shownY = sample.y;
+        car.record->shownZ = sample.z;
+        car.record->shownH = sample.rotZ * (3.14159265f / 180.f);
+        if (car.record->hosted && body != localVehicle) hostedCars.push_back(sample);
     }
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         g_hostedCarSnap.swap(hostedCars);
+        if (!g_remoteResetPending.load()) g_streamedActors.swap(streamed);
     }
     // After the car loop, so the car bodies that a seat needs exist for this tick.
     ApplyRemoteSeats();
@@ -4202,7 +5129,7 @@ bool CopyScriptWeather(int& weather) {
 }
 
 bool CopySpatialScene(std::vector<Spatial::Element>& elements) {
-    return GameTasks::Run([&] {
+    return GameTasks::RunQuery([&] {
         auto sample=[](Spatial::Element& e,void* body) {
             if(!body || IsPlaceableVtable(body)) return;
             float x=0,y=0,z=0,h=0;
@@ -4230,10 +5157,55 @@ bool CopySpatialScene(std::vector<Spatial::Element>& elements) {
     });
 }
 
+static bool ReadNativePedQuery(uint32_t id, void* body, PedQueries::Snapshot& result) {
+    if (IsPlaceableVtable(body) || !ReadPedInventory(body, result)) return false;
+    result.health = *reinterpret_cast<const float*>(static_cast<const unsigned char*>(body) + 0x6AC);
+    if (!std::isfinite(result.health)) return false;
+    bool hl = false, al = false;
+    float health = 0, armor = 0;
+    CopyPedVitalsLock(id, hl, health, al, armor);
+    if (hl) result.health = health;
+    // CPedIntelligence +8 is CTaskManager, primary[2] is the
+    // event-response-nontemp root (SetTask 0x64e098/0x64e0c0).
+    if (void* intel = PedIntel(body)) {
+        void* task = reinterpret_cast<void**>(static_cast<unsigned char*>(intel) + 8)[2];
+        if (task) {
+            using TypeFn = int (*)(void*);
+            result.taskType = reinterpret_cast<TypeFn>((*reinterpret_cast<void***>(task))[0x28 / 8])(task);
+        }
+    }
+    return true;
+}
+
+static void PublishPedQueries() {
+    static PedQueries::Frame frame;
+    frame.clear();
+    auto sample = [&](uint32_t id, void* body, uint64_t generation) {
+        if (!body) return;
+        PedQueries::Snapshot state;
+        if (!PedQueries::Copy(id, state) || (generation && state.generation != generation)) return;
+        if (!ReadNativePedQuery(id, body, state)) state.streamed = false;
+        frame.emplace_back(id, state);
+    };
+    sample(ServerWorld::LocalPlayer(), g_findPlayer ? g_findPlayer(0) : nullptr, 0);
+    for (const auto& [id, remote] : g_remoteBodies) {
+        if (remote.queryGeneration) sample(id, remote.ped, remote.queryGeneration);
+    }
+    std::array<std::pair<uint32_t, void*>, kScriptPedSlots> scriptBodies{};
+    {
+        std::lock_guard lock(g_scriptMu);
+        unsigned count = 0;
+        for (const auto& ped : g_scriptPeds)
+            if (ped.used && !ped.drop && ped.body) scriptBodies[count++] = {ped.id, ped.body};
+    }
+    for (const auto& [id, body] : scriptBodies) sample(id, body, 0);
+    PedQueries::PublishFrame(frame);
+}
+
 bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out) {
     PedQueries::Snapshot result;
     bool copied = false;
-    if (!GameTasks::Run([&] {
+    if (!GameTasks::RunQuery([&] {
         if (!PedQueries::Copy(id, result)) return;
         void* body = nullptr;
         const bool local = id == ServerWorld::LocalPlayer();
@@ -4249,24 +5221,7 @@ bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out) {
             if (found != g_remoteBodies.end() && found->second.queryGeneration == result.generation)
                 body = found->second.ped;
         }
-        if (body) {
-            if (IsPlaceableVtable(body) || !ReadPedInventory(body, result)) return;
-            result.health = *reinterpret_cast<const float*>(static_cast<const unsigned char*>(body) + 0x6AC);
-            if (!std::isfinite(result.health)) return;
-            bool hl = false, al = false;
-            float health = 0, armor = 0;
-            CopyPedVitalsLock(id, hl, health, al, armor);
-            if (hl) result.health = health;
-            // CPedIntelligence +8 is CTaskManager, primary[2] is the
-            // event-response-nontemp root (SetTask 0x64e098/0x64e0c0).
-            if (void* intel = PedIntel(body)) {
-                void* task = reinterpret_cast<void**>(static_cast<unsigned char*>(intel) + 8)[2];
-                if (task) {
-                    using TypeFn = int (*)(void*);
-                    result.taskType = reinterpret_cast<TypeFn>((*reinterpret_cast<void***>(task))[0x28 / 8])(task);
-                }
-            }
-        }
+        if (body && !ReadNativePedQuery(id, body, result)) return;
         PedQueries::Snapshot latest;
         copied = PedQueries::Copy(id, latest) && latest.generation == result.generation;
     }) || !copied) return false;
@@ -4294,7 +5249,7 @@ void NoteLocalHealth(float health) {
     if (health < 0.f) health = 0.f;
     if (health > 200.f) health = 200.f;
     g_health = health;
-    g_healthOwned = true;
+    g_pendingLocalHealth = health;
     PedQueries::Health(ServerWorld::LocalPlayer(), health);
 }
 
@@ -4319,9 +5274,344 @@ static void* ResolveProjectileEntity(uint32_t id) {
     return nullptr;
 }
 
+bool HasNativeTrafficCapability(const char* name) {
+    bool available = false;
+    return GameTasks::Run([&] {
+        auto& api = Tasks();
+        const bool common = api.taskNew && api.addPrimary && api.findTaskByType && api.setPrimary;
+        if (std::strcmp(name, "ped-wander") == 0) available = common && api.wanderCtor && api.wanderVtable;
+        else if (std::strcmp(name, "drive-wander") == 0) available = common && api.driveWanderCtor && api.isVehicleDriver;
+    }) && available;
+}
+
+bool CopyTrafficVehicleState(uint32_t id, HostedCar& out) {
+    std::lock_guard lock(g_remoteMutex);
+    auto found = g_remoteCars.find(id);
+    if (found == g_remoteCars.end() || !found->second.lastBodyPose) return false;
+    out = *found->second.lastBodyPose;
+    return true;
+}
+
+bool SetTrafficVehicleVelocity(uint32_t id, float x, float y, float z, bool angular) {
+    bool changed = false;
+    return GameTasks::Run([&] {
+        if (!ServerWorld::ActorHosted(id)) return;
+        void* body = ResolveProjectileEntity(id);
+        if (!body) return;
+        auto* raw = static_cast<unsigned char*>(body);
+        if ((*reinterpret_cast<const uint32_t*>(raw + 0x64) & (1u << 13)) != 0) return;
+        const float speed[] = {x, y, z};
+        std::memcpy(raw + (angular ? 0x74 : 0x68), speed, sizeof speed);
+        changed = true;
+    }) && changed;
+}
+
+bool SetTrafficVehicleRotation(uint32_t id, float rx, float ry, float rz) {
+    bool changed = false;
+    return GameTasks::Run([&] {
+        if (!ServerWorld::ActorHosted(id)) return;
+        void* body = ResolveProjectileEntity(id);
+        changed = body && WriteBodyRotation(body, rx, ry, rz);
+    }) && changed;
+}
+
+bool IsTrafficVehicleOnGround(uint32_t id) {
+    bool onGround = false;
+    return GameTasks::Run([&] {
+        void* body = ResolveProjectileEntity(id);
+        if (!body) return;
+        using ModelIs = bool (*)(int);
+        using OffGround = bool (*)(const void*);
+        struct GroundFns {
+            ModelIs car = nullptr, bike = nullptr, bmx = nullptr, quad = nullptr;
+            OffGround carAirborne = nullptr, bikeAirborne = nullptr;
+        };
+        static const auto ground = [] {
+            GroundFns fns;
+            if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL)) {
+                fns.car = reinterpret_cast<ModelIs>(dlsym(handle, "_ZN10CModelInfo10IsCarModelEi"));
+                fns.bike = reinterpret_cast<ModelIs>(dlsym(handle, "_ZN10CModelInfo11IsBikeModelEi"));
+                fns.bmx = reinterpret_cast<ModelIs>(dlsym(handle, "_ZN10CModelInfo10IsBmxModelEi"));
+                fns.quad = reinterpret_cast<ModelIs>(dlsym(handle, "_ZN10CModelInfo15IsQuadBikeModelEi"));
+                fns.carAirborne = reinterpret_cast<OffGround>(dlsym(handle, "_ZNK11CAutomobile21GetAllWheelsOffGroundEv"));
+                fns.bikeAirborne = reinterpret_cast<OffGround>(dlsym(handle, "_ZN5CBike21GetAllWheelsOffGroundEv"));
+            }
+            return fns;
+        }();
+        const int model = ServerWorld::ModelOf(id);
+        if (model < 400 || model > 611) return;
+        if (ground.bikeAirborne && ((ground.bike && ground.bike(model)) || (ground.bmx && ground.bmx(model))))
+            onGround = !ground.bikeAirborne(body);
+        else if (ground.carAirborne && ((ground.car && ground.car(model)) || (ground.quad && ground.quad(model))))
+            onGround = !ground.carAirborne(body);
+    }) && onGround;
+}
+
+bool SetTrafficVehicleLoadCollision(uint32_t id, bool enabled) {
+    std::lock_guard lock(g_remoteMutex);
+    g_remoteCars[id].loadCollision = enabled;
+    return true;
+}
+
+bool SetTrafficVehicleEngine(uint32_t id, bool enabled) {
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.engineOn = enabled;
+    if (car.observedVehicle) car.observedVehicle->engineOn = enabled;
+    return true;
+}
+
+bool IsNativeActorStreamed(uint32_t id) {
+    if (!id || id == 0xFFFFFFFFu) return false;
+    if (id == ServerWorld::LocalPlayer()) return true;
+    if (id < kFirstScriptPed) {
+        const auto generation = ServerWorld::ElementGeneration(id);
+        if (!generation) return false;
+        std::lock_guard lock(g_remoteMutex);
+        const std::pair key{id, generation};
+        return std::find(g_streamedActors.begin(), g_streamedActors.end(), key) != g_streamedActors.end();
+    }
+    // Script peds have a separate four-slot pool and client-only IDs.
+    bool streamed = false;
+    return GameTasks::Run([&] { streamed = ResolveProjectileEntity(id) != nullptr; }) && streamed;
+}
+
+bool StartPedKillOnFoot(uint32_t id, uint32_t targetId) {
+    if (id == targetId) return false;
+    bool accepted = false;
+    return GameTasks::Run([&] {
+        if (!ServerWorld::ActorHosted(id) && id != ServerWorld::LocalPlayer()) return;
+        void* body = ResolveProjectileEntity(id);
+        void* target = ResolveProjectileEntity(targetId);
+        void* intel = PedIntel(body);
+        auto& api = Tasks();
+        static void* const lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        using Constructor = void (*)(void*, void*, int, unsigned, unsigned, unsigned, int);
+        static const auto construct = lib ? reinterpret_cast<Constructor>(
+            dlsym(lib, "_ZN25CTaskComplexKillPedOnFootC1EP4CPedijjji")) : nullptr;
+        if (!intel || !target || !construct || !api.taskNew || !api.addPrimary) return;
+        // ARM64 Clone at 0x5ee918 allocates 0x50. TaskAttackSA.cpp constructs
+        // the desktop script command with an indefinite timeout and task-owned target.
+        void* task = api.taskNew(0x50);
+        if (!task) return;
+        construct(task, target, -1, 0, 0, 0, 1);
+        api.addPrimary(intel, task, false);
+        if (auto it = g_remoteBodies.find(id); it != g_remoteBodies.end())
+            it->second.trafficTask = static_cast<int>(TrafficPedTask::KillOnFoot);
+        accepted = true;
+    }) && accepted;
+}
+
+// A shot already simulated by the authoritative ped. Only touch the model,
+// animation and sound here. Calling FireInstantHit would roll damage again.
+bool PresentPedWeaponShot(uint32_t id, unsigned weapon, float x, float y, float z) {
+    if (weapon < 22 || weapon > 34 || !PlausiblePosition(x, y, z)) return false;
+    bool shown = false;
+    return GameTasks::Run([&] {
+        if (ServerWorld::ActorHosted(id)) return;
+        auto it = g_remoteBodies.find(id);
+        if (it == g_remoteBodies.end() || it->second.networkPlayer) return;
+        void* body = it->second.ped;
+        const auto* info = WeaponInfoOf(weapon);
+        if (!body || !info) return;
+        auto* clump = *reinterpret_cast<void**>(static_cast<unsigned char*>(body) + 0x20);
+        if (!clump) return;
+        if (!PedWeaponOfType(body, weapon) || CurrentWeaponSlot(body) != WeaponInfoSlot(weapon)) {
+            const int model = WeaponInfoModel(weapon);
+            if (model <= 0) return;
+            if (StreamingLoadState(model) != 1) {
+                if (g_requestModel) g_requestModel(model, 0);
+                return;
+            }
+            if (!PedWeaponOfType(body, weapon)) PedGiveWeapon(body, weapon, 1, true, false, nullptr);
+            else PedSetCurrentWeaponSlotSA(body, WeaponInfoSlot(weapon), false);
+            if (CurrentWeaponSlot(body) != WeaponInfoSlot(weapon) || !PedWeaponOfType(body, weapon)) return;
+        }
+        static void* const lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        if (!lib) return;
+        using Blend = void* (*)(void*, int, int, float);
+        using Reset = void (*)(void*, float);
+        using Flash = void (*)(void*, int, bool);
+        using Audio = void (*)(void*, int, int, void*);
+        static const auto blend = reinterpret_cast<Blend>(dlsym(lib, "_ZN12CAnimManager14BlendAnimationEP7RpClump12AssocGroupId11AnimationIdf"));
+        static const auto reset = reinterpret_cast<Reset>(dlsym(lib, "_ZN21CAnimBlendAssociation14SetCurrentTimeEf"));
+        static const auto flash = reinterpret_cast<Flash>(dlsym(lib, "_ZN4CPed10DoGunFlashEib"));
+        static const auto audio = reinterpret_cast<Audio>(dlsym(lib, "_ZN12CAudioEngine17ReportWeaponEventEi11eWeaponTypeP9CPhysical"));
+        static void* const sound = dlsym(lib, "AudioEngine");
+        if (!blend || !reset || !flash || !audio || !sound) return;
+        float px, py, pz, heading;
+        if (!ReadBodyPos(body, px, py, pz, heading)) return;
+        if (std::hypot(x - px, y - py) > 0.1f)
+            SetRemotePedHeading(body, std::atan2(px - x, y - py));
+        // CTaskSimpleUseGun::StartAnim at 0x5decec / 0x5dedcc selects FIRE
+        // (224) from CWeaponInfo + 0x1c, then blends it at 8.0.
+        int group;
+        std::memcpy(&group, info + 0x1c, sizeof group);
+        static const auto groups = static_cast<const int*>(dlsym(lib, "_ZN12CAnimManager26ms_numAnimAssocDefinitionsE"));
+        using BlockName = const char* (*)(int);
+        static const auto blockName = reinterpret_cast<BlockName>(dlsym(lib, "_ZN12CAnimManager16GetAnimBlockNameE12AssocGroupId"));
+        auto& api = PedRpc();
+        if (!groups || group < 0 || group >= *groups || !blockName || !api.getAnimBlock || !api.getAnimBlockIndex) return;
+        const char* name = blockName(group);
+        const auto* block = name ? static_cast<const unsigned char*>(api.getAnimBlock(name)) : nullptr;
+        if (!block) return;
+        if (!block[0x10]) {
+            const int index = api.getAnimBlockIndex(name);
+            if (index >= 0 && g_requestModel) g_requestModel(kIfpStreamingBase + index, 0);
+            return;
+        }
+        void* association = blend(clump, group, 224, 8.f);
+        if (!association) return;
+        reset(association, 0.f);
+        flash(body, 250, false);
+        audio(sound, 145, weapon, body); // AE_WEAPON_FIRE
+        shown = true;
+    }) && shown;
+}
+
+bool StartPedWander(uint32_t id, int moveState, int direction, bool sensible) {
+    bool accepted = false;
+    return GameTasks::Run([&] {
+        const bool serverPed = std::strcmp(ServerWorld::ElementKindName(id), "ped") == 0;
+        if (serverPed && !ServerWorld::ActorHosted(id)) return;
+        accepted = StartWander(ResolveProjectileEntity(id), moveState, direction, sensible);
+        if (accepted && serverPed) {
+            auto stored = g_remoteBodies.find(id);
+            if (stored != g_remoteBodies.end()) stored->second.trafficTask = static_cast<int>(TrafficPedTask::Wander);
+        }
+    }) && accepted;
+}
+
+bool StartPedDriveWander(uint32_t pedId, uint32_t vehicleId, float speed, int drivingStyle) {
+    bool accepted = false;
+    return GameTasks::Run([&] {
+        if (!ServerWorld::ActorHosted(pedId) || !ServerWorld::ActorHosted(vehicleId)) return;
+        auto seated = g_seatedPeds.find(pedId);
+        if (seated == g_seatedPeds.end() || seated->second.vehicleId != vehicleId || seated->second.seat != 0) return;
+        void* ped = ResolveProjectileEntity(pedId);
+        void* car = ResolveProjectileEntity(vehicleId);
+        auto& api = Tasks();
+        void* intel = PedIntel(ped);
+        if (!intel || !car || !api.isVehicleDriver || !api.isVehicleDriver(car, ped)) return;
+        if (!api.taskNew || !api.driveWanderCtor || !api.addPrimary) {
+            static bool reported = false;
+            if (!reported) {
+                reported = true;
+                ENGINE_LOGI("DIAG setPedDriveWander: native driver task dispatch is unavailable");
+            }
+            return;
+        }
+        // libGTASA 2.10 C1 at 0x6070e8 initializes members through byte 0x30.
+        void* task = api.taskNew(0x38);
+        if (!task) return;
+        api.driveWanderCtor(task, car, drivingStyle, speed);
+        api.addPrimary(intel, task, false);
+        auto stored = g_remoteBodies.find(pedId);
+        if (stored != g_remoteBodies.end()) stored->second.trafficTask = static_cast<int>(TrafficPedTask::DriveWander);
+        accepted = true;
+    }) && accepted;
+}
+
+// Collision flag order follows CWorldSA.cpp:737-763. The queried ped is
+// excluded by the ped flag. GTA owns all collision and task objects on this thread.
+bool ScanTrafficObstacle(uint32_t id, bool resuming, float originalHeading, TrafficObstacleScan& out) {
+    bool sampled = false;
+    return GameTasks::RunQuery([&] {
+        using Sight = bool (*)(const Vec3&, const Vec3&, bool, bool, bool, bool, bool, bool, bool);
+        static const auto sight = [] {
+            void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+            return lib ? reinterpret_cast<Sight>(dlsym(lib, "_ZN6CWorld21GetIsLineOfSightClearERK7CVectorS2_bbbbbbb")) : nullptr;
+        }();
+        auto ground = Ground().findGround;
+        auto find = Tasks().findTaskByType;
+        if (!sight || !ground || !find) {
+            static bool reported = false;
+            if (!reported) ENGINE_LOGE("DIAG traffic obstacle scan unavailable: sight, ground or task query missing");
+            reported = true;
+            return;
+        }
+        if (!ServerWorld::ActorHosted(id)) return;
+        void* ped = ResolveProjectileEntity(id);
+        void* intel = PedIntel(ped);
+        float x, y, z, radians;
+        if (!intel || !ReadBodyPos(ped, x, y, z, radians) || !std::isfinite(radians)) return;
+        const auto has = [&](int type) { return find(intel, type) != nullptr; };
+        // Client/sdk/game/TaskTypes.h; GetTaskType in the ARM64 wander, flee and crossing classes.
+        enum { StandStill = 203, ObserveLights = 224, WaitAtLights = 225, CrossRoad = 227,
+               Cower = 412, HandsUp = 413, Duck = 415, FleePoint = 908, FleeEntity = 909,
+               SmartFleePoint = 910, SmartFleeEntity = 911, Wander = 912, FleeAnyMeans = 927, KillOnFoot = 1000 };
+        constexpr float degrees = 57.29577951f;
+        out.heading = radians * degrees;
+        sampled = true;
+        if (has(Cower) || has(HandsUp) || has(Duck) || has(KillOnFoot)) return;
+        const bool fleeing = has(FleePoint) || has(FleeEntity) || has(SmartFleePoint) || has(SmartFleeEntity) || has(FleeAnyMeans);
+        if (has(CrossRoad) || has(ObserveLights) || has(WaitAtLights)) {
+            out.mode = fleeing ? "flee-crossing" : "crossing";
+            return;
+        }
+        if (!fleeing && (!has(Wander) || has(StandStill))) return;
+        out.mode = fleeing ? "flee" : "walk";
+        if (resuming) radians = originalHeading / degrees;
+        bool found = false;
+        out.floor = ground(x, y, z + 0.25f, &found, nullptr);
+        if (!found || !std::isfinite(out.floor) || z - out.floor > 2.f || out.floor > z + 0.2f) {
+            sampled = false;
+            return;
+        }
+        auto clearAt = [&](float ex, float ey, float ez, float height) {
+            return sight({x, y, out.floor + height}, {ex, ey, ez + height},
+                         true, true, false, true, true, false, false);
+        };
+        for (float angle : {0.f, -20.f, 20.f, -35.f, 35.f}) {
+            float r = radians + angle / degrees;
+            float ex = x - std::sin(r) * 1.6f, ey = y + std::cos(r) * 1.6f;
+            if (!clearAt(ex, ey, out.floor, .25f) || !clearAt(ex, ey, out.floor, .60f) ||
+                !clearAt(ex, ey, out.floor, 1.f)) {
+                out.frontBlocked = true;
+                break;
+            }
+        }
+        if (resuming || !out.frontBlocked) return;
+        for (int dir = 0; dir < 8; ++dir) {
+            float r = dir * 45.f / degrees;
+            float ex = x - std::sin(r) * 2.8f, ey = y + std::cos(r) * 2.8f;
+            found = false;
+            float end = ground(ex, ey, z + .25f, &found, nullptr);
+            if (!found || !std::isfinite(end) || std::abs(end - out.floor) > 1.2f) continue;
+            out.clear[dir] = clearAt(ex, ey, end, .15f) && clearAt(ex, ey, end, .60f) && clearAt(ex, ey, end, 1.f);
+            out.ground[dir] = end;
+        }
+    }) && sampled;
+}
+
+bool IsTrafficPedTaskActive(uint32_t id, TrafficPedTask task) {
+    bool active = false;
+    return GameTasks::Run([&] {
+        void* intel = PedIntel(ResolveProjectileEntity(id));
+        auto& api = Tasks();
+        active = intel && api.findTaskByType && api.findTaskByType(intel, static_cast<int>(task));
+    }) && active;
+}
+
+bool KillNativePedTask(uint32_t id, bool primary, int slot, bool gracefully) {
+    bool stopped = false;
+    return GameTasks::Run([&] {
+        void* intel = PedIntel(ResolveProjectileEntity(id));
+        auto& api = Tasks();
+        if (!intel || gracefully) return;
+        auto* manager = static_cast<unsigned char*>(intel) + 8;
+        if (primary && api.setPrimary) {
+            api.setPrimary(manager, nullptr, slot, false);
+            stopped = true;
+        } else if (!primary && api.setSecondary) {
+            api.setSecondary(manager, nullptr, slot);
+            stopped = true;
+        }
+        if (stopped && primary && slot == 2) PedQueries::InvalidateNative(id);
+    }) && stopped;
+}
+
 extern "C" void WorldRPG_NoStoryScript(void*) {
-    t_onGameThread = true;
-    ServiceGroundQueries();
     ServiceScriptStage();
     static int depth = 0;
     static bool ready = false;
@@ -4336,6 +5626,8 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         SampleLocalPose();
         SampleLocalPadAndCamera();
         ApplyRemotePeds();
+        if (!WorldRPG::Debug::Flag("noremote")) ApplyRemoteBullets();
+        PublishPedQueries();
         ServerWorld::Tick(g_poseX.load(), g_poseY.load(), g_poseZ.load());
         --depth;
         return;
@@ -4636,6 +5928,7 @@ bool InstallServerSessionHook() {
         dlclose(handle);
         return false;
     }
+    VehiclePaint::Install(handle);
     g_originalDoGameState = reinterpret_cast<void (*)()>(fn);
     __atomic_store_n(slot, reinterpret_cast<void*>(&ServerSessionGameState), __ATOMIC_RELEASE);
     if (mprotect(page, pageSize, PROT_READ) != 0)
@@ -4678,11 +5971,13 @@ static bool BeginServerSessionOnGameThread() {
         constexpr uintptr_t kGotMobileMenu = 0x008519B0;
         auto* pending = reinterpret_cast<uint8_t*>(base + kPendingPause);
         uintptr_t menu = *reinterpret_cast<uintptr_t*>(base + kGotMobileMenu);
-        AllowWrite(pending, 1);
         const bool menuUp = menu && (*reinterpret_cast<int32_t*>(menu + 0x24) != 0 ||
             *reinterpret_cast<uintptr_t*>(menu + 0x30) != 0);
         if (*pending || menuUp) {
-            *pending = 0;
+            if (*pending) {
+                AllowWrite(pending, 1);
+                *pending = 0;
+            }
             if (menuUp && g_removeTop) {
                 g_mobileMenu = reinterpret_cast<void*>(menu);
                 CloseMobileMenuOnGameThread(g_mobileMenu);
@@ -4721,7 +6016,8 @@ static bool BeginServerSessionOnGameThread() {
             if (handle) InstallVehicleEntryGuard(handle);
             void* affects = handle ? dlsym(handle, "_ZNK12CEventDamage10AffectsPedEP4CPed") : nullptr;
             static Hook::MemoryPatcher damagePatcher;
-            const auto damage = affects
+            constexpr uint32_t affectsPrologue[] = {0xd10103ff, 0xf9000bf5, 0xa9024ff4, 0xa9037bfd};
+            const auto damage = affects && std::memcmp(affects, affectsPrologue, sizeof affectsPrologue) == 0
                 ? damagePatcher.installHook(reinterpret_cast<uintptr_t>(affects), reinterpret_cast<uintptr_t>(&HookAffectsPed))
                 : Hook::HookResult{};
             if (affects && damage.success) {
@@ -4733,6 +6029,7 @@ static bool BeginServerSessionOnGameThread() {
         }
         if (!InstallRenderGuard())
             ENGINE_LOGE("RenderGuard not installed; the sortLODs crash is unguarded");
+        InstallWeaponAimHooks();
         if (!InstallLocalBulletFireHook())
             ENGINE_LOGE("Local bullet sync (PLAYER_BULLETSYNC) disabled: CWeapon::Fire hook missing");
         ENGINE_LOGI("Ped symbols add=%p ctor=%p heading=%p density=%p manage=%p",
@@ -4795,11 +6092,19 @@ static bool BeginServerSessionOnGameThread() {
 }
 void ApplyServerSpawn(float x, float y, float z) {
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
-    QueueLocalPlacement(x, y, z);
+    QueueLocalPlacement(x, y, z, true);
+    {
+        std::lock_guard lock(g_remoteMutex);
+        g_localShots.clear();
+        g_localWeapon = {};
+        g_localDrivebyRequest = 0;
+        g_lastLocalShotAim = {};
+    }
     g_health = 100.f;
     g_armor = 0.f;
-    g_healthOwned = false;
-    g_damagePending = false;
+    g_pendingLocalHealth = 100.f;
+    g_pendingLocalArmor = 0.f;
+    g_pendingDamage.clear();
 }
 void CopySpawn(float& x, float& y, float& z) {
     std::lock_guard lock(g_localPlacementMutex);
@@ -4823,30 +6128,43 @@ void CopyBody(float& x, float& y, float& z, float& heading,
     health = g_health.load();
 }
 float CopyLocalArmor() { return g_armor.load(); }
-void NoteDamage(uint32_t attacker, float amount, uint8_t weapon) {
-    if (attacker == 0 || attacker == 0xFFFFFFFFu || amount <= 0.f) return;
-    const int64_t now = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-    std::atomic<int64_t>& stamp = weapon < 16 ? g_lastMeleeMs : g_lastDamageMs;
-    const int64_t gate = weapon < 16 ? 650 : 150;
-    int64_t previous = stamp.load();
-    if (now - previous < gate) return;
-    if (!stamp.compare_exchange_strong(previous, now)) return;
-    float health = g_health.load();
-    health = std::max(0.f, health - amount);
+// Apply the outstanding damage from a shot replayed during a local network interruption.
+void NoteDamage(uint32_t attacker, float amount, uint8_t weapon, uint8_t zone) {
+    auto* ped = g_findPlayer ? static_cast<unsigned char*>(g_findPlayer(0)) : nullptr;
+    if (!ped) return;
+    // Same native vitals as SampleLocalPose (2.10: 0x37d93c and 0x444044 for armor).
+    auto& health = *reinterpret_cast<float*>(ped + 0x6AC);
+    auto& armor = *reinterpret_cast<float*>(ped + 0x6B4);
+    if (!Combat::ApplyBackupDamage(amount, health, armor)) return;
     g_health = health;
-    g_healthOwned = true;
-    g_damager = attacker;
-    g_damageWeapon = weapon;
-    g_damagePending = true;
+    g_armor = armor;
+    g_pendingDamage.record(attacker, weapon, zone);
+    NoteLocalCombatDeath(ped, nullptr, attacker, weapon, zone);
 }
-bool ConsumeDamage(uint32_t& attacker, uint8_t& weapon) {
-    if (!g_damagePending.exchange(false)) return false;
-    attacker = g_damager.load();
-    weapon = g_damageWeapon.load();
-    return attacker != 0 && attacker != 0xFFFFFFFFu;
+Combat::DamageReport PeekDamage() { return g_pendingDamage.peek(); }
+void AcknowledgeDamage(uint64_t serial) { g_pendingDamage.acknowledge(serial); }
+// Commit the weapon and its input from the same packet before the game thread sees either.
+static void ApplyWeaponControls(RemotePed& ped, uint32_t id, uint8_t buttons,
+                                const PlayerWeaponSync::RemoteWeapon* weapon) {
+    if (ped.buttons != buttons) {
+        // What desktop sends for each move (e.g. a held key that kicks): 0x01 L1, 0x02 R1, 0x04 Square, 0x08 Cross,
+        // 0x10 Circle, 0x20 Triangle, 0x40 ShockL, 0x80 PedWalk.
+        static int changes = 0;
+        if (changes < 80) {
+            ++changes;
+            ENGINE_LOGI("DIAG remote buttons id=%u 0x%02x -> 0x%02x", id, static_cast<unsigned>(ped.buttons),
+                static_cast<unsigned>(buttons));
+        }
+    }
+    ped.buttons = buttons;
+    ped.fire = (buttons & PlayerWeaponSync::kFire) != 0;
+    if (weapon) {
+        ped.syncWeapon = *weapon;
+        ++ped.weaponRevision;
+        ++ped.aimRevision;
+    }
 }
-void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int stickY, bool fire, bool duck) {
+void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int stickY, uint8_t buttons, bool duck, const PlayerWeaponSync::RemoteWeapon* weapon) {
     if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
     const float pi = 3.14159265f;
     while (heading > pi) heading -= 2.f * pi;
@@ -4858,7 +6176,15 @@ void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int sti
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     auto& ped = g_remotePeds[id];
     ped.heading = heading;
-    ped.fire = fire;
+    // A seated keysync supplies the aim only. Vehicle puresync owns the
+    // selected weapon and its total ammo (CNetAPI::ReadKeysync 623-669).
+    if (weapon && weapon->aim.inVehicle) {
+        ped.syncWeapon.aim = weapon->aim;
+        ++ped.aimRevision;
+        ApplyWeaponControls(ped, id, buttons, nullptr);
+    } else {
+        ApplyWeaponControls(ped, id, buttons, weapon);
+    }
     ped.duck = duck;
     // CClientPed::SetControllerState replaces the whole controller (CClientPed.cpp 1460-1484).
     // A zero stick overwrites the previous one. ReadKeysync does not call SetMoveSpeed.
@@ -4884,10 +6210,48 @@ void NoteRemoteAim(uint32_t id, float heading, float camera, int stickX, int sti
     }
     ped.dirty = true;
 }
-void NoteRemoteWeapon(uint32_t id, int weapon) {
-    if (id == 0 || id == 0xFFFFFFFFu || weapon <= 0 || weapon > 46) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    g_remotePeds[id].weapon = weapon;
+PlayerWeaponSync::LocalWeapon CopyLocalWeapon() {
+    std::lock_guard lock(g_remoteMutex);
+    return g_localWeapon;
+}
+void NoteDriveby(uint32_t id, bool enabled) {
+    const bool local = id == ServerWorld::LocalPlayer();
+    std::lock_guard lock(g_remoteMutex);
+    if (local) g_localDrivebyRequest = enabled ? 1 : 0;
+    else g_remotePeds[id].gangDriveby = enabled;
+}
+bool IsDriveby(uint32_t id) {
+    const bool local = id == ServerWorld::LocalPlayer();
+    std::lock_guard lock(g_remoteMutex);
+    if (local) return g_localDrivebyRequest >= 0 ? g_localDrivebyRequest != 0 : g_localWeapon.gangDriveby;
+    auto it = g_remotePeds.find(id);
+    return it != g_remotePeds.end() && it->second.gangDriveby;
+}
+void NoteVehicleCombat(uint32_t id, const PlayerWeaponSync::RemoteWeapon& weapon, uint8_t buttons, bool driveby) {
+    if (!id || id == ServerWorld::LocalPlayer()) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& ped = g_remotePeds[id];
+    ped.gangDriveby = driveby;
+    ApplyWeaponControls(ped, id, driveby ? buttons : 0, &weapon);
+}
+void NoteRemotePlayerWeapon(uint32_t id, const PlayerWeaponSync::RemoteWeapon& weapon) {
+    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& ped = g_remotePeds[id];
+    ped.syncWeapon = weapon;
+    ++ped.weaponRevision;
+    ++ped.aimRevision;
+}
+void QueueRemoteBullet(const Combat::SBulletSync& shot) {
+    RemoteBullet bullet;
+    bullet.localLife = g_localLife.load();
+    bullet.shot = shot;
+    bullet.generation = PedQueries::Generation(shot.shooter);
+    if (!bullet.generation) return;
+    bullet.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(350);
+    std::lock_guard lock(g_remoteMutex);
+    if (g_remoteBullets.size() == kMaxRemoteBullets) g_remoteBullets.pop_front();
+    g_remoteBullets.push_back(std::move(bullet));
 }
 bool RemoteFacingLocal(uint32_t id, float facing, float reach) {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -4903,19 +6267,21 @@ bool RemoteFacingLocal(uint32_t id, float facing, float reach) {
     return (fx * dx + fy * dy) / len > 0.35f;
 }
 // The jump press is cleared only by a packet that carries it (CopyOnFoot reads it, the sender commits).
-void ConsumeLocalJump() {
-    g_localJumpLatch = false;
+void ConsumeLocalJump(uint64_t serial) {
+    if (serial) g_localJumpLatch.compare_exchange_strong(serial, 0);
 }
 
-void ConsumeLocalAttack() {
-    g_localAttackLatch = false;
+void ConsumeLocalAttack(uint64_t serial) {
+    if (serial) g_localAttackLatch.compare_exchange_strong(serial, 0);
 }
 
 void CopyOnFoot(float heading, float vx, float vy, OnFootKeys& keys) {
-    keys.fire = g_localAttackHeld.load() || g_localAttackLatch.load();
+    keys.attackPress = g_localAttackLatch.load();
+    keys.fire = g_localAttackHeld.load() || keys.attackPress;
     keys.duck = g_localDuck.load();
     keys.sprint = g_localSprint.load();
-    keys.jump = g_localJumpLatch.load();
+    keys.jumpPress = g_localJumpLatch.load();
+    keys.jump = keys.jumpPress != 0;
     keys.padStickZero = false;
     const float pi = 3.14159265f;
     // CNetAPI::WritePlayerPuresync / WriteKeysync: SCameraRotationSync is GetCameraRotation,
@@ -4958,7 +6324,7 @@ void CopyOnFoot(float heading, float vx, float vy, OnFootKeys& keys) {
 }
 void NoteRemotePlayerSync(uint32_t id, float x, float y, float z, float heading,
     float vx, float vy, float vz, bool hasVelocity,
-    int stickX, int stickY, float camera, bool fire, bool duck,
+    int stickX, int stickY, float camera, uint8_t buttons, bool duck, const PlayerWeaponSync::RemoteWeapon& weapon,
     bool hasHealth, float health, bool hasArmor, float armor) {
     if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -4975,7 +6341,7 @@ void NoteRemotePlayerSync(uint32_t id, float x, float y, float z, float heading,
     ped.stickX = stickX;
     ped.stickY = stickY;
     ped.cameraRotation = camera;
-    ped.fire = fire;
+    ApplyWeaponControls(ped, id, buttons, &weapon);
     ped.duck = duck;
     ped.keysync = true;
     ped.newTarget = true;
@@ -5003,14 +6369,75 @@ void NoteRemotePed(uint32_t id, float x, float y, float z, float heading, float 
         ped.vx = vx;
         ped.vy = vy;
         ped.vz = vz;
+        ped.syncMoveSpeed = true;
     }
     ped.dirty = true;
 }
+void NoteObservedPedSync(uint32_t id, const float* position, const float* heading,
+    const float* velocity, uint64_t intervalMs) {
+    if (id == 0 || id == 0xFFFFFFFFu || ServerWorld::ModelOf(id) < 0) return;
+    std::lock_guard lock(g_remoteMutex);
+    RemotePed& ped = g_remotePeds[id];
+    if (ped.hosted || (ped.hasAnimCache && !ped.animCache.updatePosition)) return;
+    const bool validPosition = position && PlausiblePosition(position[0], position[1], position[2]);
+    const bool validVelocity = velocity && std::isfinite(velocity[0]) && std::isfinite(velocity[1]) && std::isfinite(velocity[2]);
+    if (validPosition || validVelocity) {
+        const auto now = GameNowMs();
+        const int64_t observed = ped.lastObserverMotionMs ? now - ped.lastObserverMotionMs : 0;
+        const int64_t interval = std::clamp<int64_t>(std::max<int64_t>(intervalMs, observed), 400, 2000);
+        ped.lastObserverMotionMs = now;
+        ped.observerMotionUntilMs = now + 3 * interval;
+    }
+    if (validPosition) {
+        const auto now = GameNowMs();
+        const int64_t elapsed = now - ped.lastObserverPositionMs;
+        if (!velocity && ped.lastObserverPositionMs && elapsed >= 50 && elapsed <= 3000) {
+            // Desktop MTA velocity is displacement per 20 ms game step. Position-only
+            // deltas may present a gait but must never inject speed into the physics body.
+            float x = (position[0] - ped.x) * 20.f / elapsed;
+            float y = (position[1] - ped.y) * 20.f / elapsed;
+            const bool plausible = std::hypot(x, y) <= 0.5f;
+            ped.vx = plausible ? x : 0.f;
+            ped.vy = plausible ? y : 0.f;
+        }
+        ped.lastObserverPositionMs = now;
+        ped.x = position[0];
+        ped.y = position[1];
+        ped.z = position[2];
+        ped.observerHasPosition = true;
+        ped.observerPositionInterval = intervalMs;
+    }
+    if (heading && std::isfinite(*heading)) {
+        ped.heading = *heading;
+        ped.observerHasHeading = true;
+        ped.observerHeadingInterval = intervalMs;
+    }
+    if (validVelocity) {
+        static const bool trace = Debug::Flag("traceobservergait");
+        static int64_t nextSample = 0;
+        if (trace && ped.lastObserverMotionMs >= nextSample) {
+            nextSample = ped.lastObserverMotionMs + 2000;
+            ENGINE_LOGI("Observer packet id=%u velocity=%.4f,%.4f position=%.2f,%.2f", id,
+                velocity[0], velocity[1], ped.x, ped.y);
+        }
+        ped.vx = velocity[0];
+        ped.vy = velocity[1];
+        ped.vz = velocity[2];
+        ped.syncMoveSpeed = true;
+    }
+}
+
 void SetPedHost(uint32_t id, bool host) {
     if (id == 0 || id == 0xFFFFFFFFu) return;
     std::lock_guard<std::mutex> lock(g_remoteMutex);
-    g_remotePeds[id].hosted = host;
-    if (!host) g_remotePeds[id].wander = false;
+    RemotePed& ped = g_remotePeds[id];
+    ped.hosted = host;
+    if (!host) ped.ownedControls = 0;
+    ped.lastObserverPositionMs = 0;
+    ped.lastObserverMotionMs = 0;
+    ped.observerMotionUntilMs = 0;
+    ped.observerPositionInterval = 0;
+    ped.observerHeadingInterval = 0;
 }
 void ForgetRemote(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -5029,7 +6456,12 @@ void RpcSetPosition(uint32_t id, float x, float y, float z) {
     ped.x = x;
     ped.y = y;
     ped.z = z;
+    ped.teleportPosition = {x, y, z};
+    ped.lastObserverPositionMs = 0;
+    ped.observerMotionUntilMs = 0;
     ped.teleport = true;
+    ped.observerHasPosition = true;
+    ped.observerPositionInterval = 0;
 }
 
 void NoteRemoteWasted(uint32_t id, int weapon, int animGroup, int animId) {
@@ -5047,9 +6479,15 @@ void NoteRemoteSpawn(uint32_t id) {
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         RemotePed& ped = g_remotePeds[id];
-        if (ped.dead || ped.killPending) ped.respawn = true;
+        g_seatRequests.erase(id);
         ped.dead = false;
         ped.killPending = false;
+        ped.syncWeapon = {};
+        ped.gangDriveby = false;
+        ++ped.weaponRevision;
+        ++ped.aimRevision;
+        ped.buttons = 0;
+        ped.fire = false;
     }
     // CClientPlayer::Spawn: SetHealth(100), SetArmor(0) (remote players keep their locks at those values).
     LockPedHealth(id, 100.f);
@@ -5058,8 +6496,15 @@ void NoteRemoteSpawn(uint32_t id) {
 
 void RpcSetFrozen(uint32_t id, bool frozen) {
     if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
+    if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") == 0) {
+        std::lock_guard lock(g_remoteMutex);
+        g_remoteCars[id].frozen = frozen;
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
-    g_remotePeds[id].frozen = frozen;
+    auto& ped = g_remotePeds[id];
+    ped.frozen = frozen;
+    ped.frozenChanged = true;
 }
 
 void RpcSetRotation(uint32_t id, float radians) {
@@ -5067,7 +6512,10 @@ void RpcSetRotation(uint32_t id, float radians) {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     RemotePed& ped = g_remotePeds[id];
     ped.heading = radians;
+    ped.snapHeading = radians;
     ped.headingSnap = true;
+    ped.observerHasHeading = true;
+    ped.observerHeadingInterval = 0;
 }
 
 void RpcSetInterior(uint32_t id, uint8_t interior) {
@@ -5083,7 +6531,11 @@ void RpcSetInterior(uint32_t id, uint8_t interior) {
 // SET_ELEMENT_HEALTH / SET_PED_ARMOR: LockHealth when the ped's health is locked, otherwise SetHealth
 // (CElementRPCs.cpp 471-535, CPedRPCs.cpp 42-60).
 void RpcSetHealth(uint32_t id, float health) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer() || !std::isfinite(health)) return;
+    if (id == 0 || id == 0xFFFFFFFFu || !std::isfinite(health)) return;
+    if (id == ServerWorld::LocalPlayer()) {
+        NoteLocalHealth(health);
+        return;
+    }
     bool healthLocked = false, armorLocked = false;
     float h = 0.f, a = 0.f;
     CopyPedVitalsLock(id, healthLocked, h, armorLocked, a);
@@ -5098,7 +6550,11 @@ void RpcSetHealth(uint32_t id, float health) {
 }
 
 void RpcSetArmor(uint32_t id, float armor) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer() || !std::isfinite(armor)) return;
+    if (id == 0 || id == 0xFFFFFFFFu || !std::isfinite(armor)) return;
+    if (id == ServerWorld::LocalPlayer()) {
+        g_pendingLocalArmor = std::max(0.f, armor);
+        return;
+    }
     bool healthLocked = false, armorLocked = false;
     float h = 0.f, a = 0.f;
     CopyPedVitalsLock(id, healthLocked, h, armorLocked, a);
@@ -5146,8 +6602,15 @@ void RpcSetAlpha(uint32_t id, uint8_t alpha) {
         g_localAlpha = alpha;
         return;
     }
+    if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") == 0) {
+        std::lock_guard lock(g_remoteMutex);
+        g_remoteCars[id].alpha = alpha;
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
-    g_remotePeds[id].alpha = alpha;
+    auto& ped = g_remotePeds[id];
+    ped.alpha = alpha;
+    ped.alphaChanged = true;
 }
 
 void RpcSetCollisions(uint32_t id, bool enabled) {
@@ -5157,25 +6620,12 @@ void RpcSetCollisions(uint32_t id, bool enabled) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
-    g_remotePeds[id].collisions = enabled;
+    auto& ped = g_remotePeds[id];
+    ped.collisions = enabled;
+    ped.collisionsChanged = true;
 }
 
-void NoteRemoteButtons(uint32_t id, uint8_t buttons) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    RemotePed& ped = g_remotePeds[id];
-    if (ped.buttons != buttons) {
-        // What desktop sends for each move (e.g. a held key that kicks): 0x01 L1, 0x02 R1, 0x04 Square, 0x08 Cross,
-        // 0x10 Circle, 0x20 Triangle, 0x40 ShockL, 0x80 PedWalk.
-        static int changes = 0;
-        if (changes < 80) {
-            ++changes;
-            ENGINE_LOGI("DIAG remote buttons id=%u 0x%02x -> 0x%02x", id, static_cast<unsigned>(ped.buttons),
-                static_cast<unsigned>(buttons));
-        }
-    }
-    ped.buttons = buttons;
-}
+
 
 void NoteRemoteClothes(uint32_t id, const std::vector<WorldRPG::Entity::PedClothes>& clothes) {
     if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
@@ -5209,6 +6659,9 @@ void SetPedVitals(uint32_t id, float health, float armor) {
 // Reconnect (P3.1): the network thread clears the record set; the game thread
 // drops the bodies in ApplyRemotePeds on its next tick.
 void RequestRemoteReset() {
+    ++g_localLife;
+    g_pendingDamage.clear();
+    g_pendingLocalHealth = g_pendingLocalArmor = -1.f;
     {
         std::lock_guard lock(g_localPlacementMutex);
         g_appliedPlacement = g_requestedPlacement;
@@ -5218,9 +6671,24 @@ void RequestRemoteReset() {
         std::lock_guard<std::mutex> lock(g_remoteMutex);
         g_remotePeds.clear();
         g_forget.clear();
+        g_streamedActors.clear();
+        g_remoteResetPending = true;
     }
-    g_remoteResetPending = true;
 }
+bool SetOwnedPedControl(uint32_t id, const char* control, bool enabled) {
+    constexpr const char* names[] = {"forwards", "backwards", "left", "right", "walk", "sprint"};
+    unsigned index = 0;
+    while (index < std::size(names) && strcasecmp(control, names[index]) != 0) ++index;
+    if (index == std::size(names) || !ServerWorld::ActorHosted(id)) return false;
+    std::lock_guard lock(g_remoteMutex);
+    auto found = g_remotePeds.find(id);
+    if (found == g_remotePeds.end() || !found->second.hosted) return false;
+    const uint8_t flag = 1u << index;
+    if (enabled) found->second.ownedControls |= flag;
+    else found->second.ownedControls &= ~flag;
+    return true;
+}
+
 void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float heading) {
     if (id == 0 || id == 0xFFFFFFFFu || !PlausiblePosition(x, y, z)) return;
     std::lock_guard<std::mutex> lock(g_remoteMutex);
@@ -5231,7 +6699,100 @@ void NoteRemoteVehicle(uint32_t id, int model, float x, float y, float z, float 
     car.z = z;
     car.heading = heading;
     car.dirty = true;
+    car.useUnoccupiedSync = false;
+    car.observedVehicle.reset();
 }
+void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate& u) {
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[u.vehicleId];
+    if (car.hosted) return;
+    car.useUnoccupiedSync = true;
+    if (!car.observedVehicle || car.observedVehicle->timeContext != u.timeContext)
+        car.observedVehicle.emplace();
+    auto& pending = *car.observedVehicle;
+    pending.timeContext = u.timeContext;
+    if (u.syncPosition && PlausiblePosition(u.position.x, u.position.y, u.position.z)) {
+        pending.syncPosition = true;
+        pending.position = u.position;
+        car.x = u.position.x;
+        car.y = u.position.y;
+        car.z = u.position.z;
+        car.dirty = true;
+    }
+    if (u.syncRotation) {
+        pending.syncRotation = true;
+        pending.rotation = u.rotation;
+    }
+    if (u.syncVelocity) {
+        pending.syncVelocity = true;
+        pending.velocity = u.velocity;
+    }
+    if (u.syncTurnVelocity) {
+        pending.syncTurnVelocity = true;
+        pending.turnVelocity = u.turnVelocity;
+    }
+    if (u.syncHealth) {
+        pending.syncHealth = true;
+        pending.health = u.health;
+    }
+    pending.engineOn = u.engineOn;
+}
+
+void RpcSetVehiclePosition(uint32_t id, float x, float y, float z) {
+    if (!PlausiblePosition(x, y, z)) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.x = x;
+    car.y = y;
+    car.z = z;
+    car.dirty = true;
+    car.seed.pending = true;
+    car.seed.hasPose = true;
+    car.seed.x = x;
+    car.seed.y = y;
+    car.seed.z = z;
+    if (car.observedVehicle) car.observedVehicle->syncPosition = false;
+}
+
+void RpcSetVehicleHealth(uint32_t id, float health) {
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.seed.pending = true;
+    car.seed.hasHealth = true;
+    car.seed.health = health;
+    if (car.observedVehicle) car.observedVehicle->syncHealth = false;
+}
+
+void RpcSetVehicleRotation(uint32_t id, float x, float y, float z) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.seed.pending = true;
+    car.seed.hasRotation = true;
+    car.seed.rotX = x;
+    car.seed.rotY = y;
+    car.seed.rotZ = z;
+    if (car.observedVehicle) car.observedVehicle->syncRotation = false;
+}
+
+void RpcSetVehicleVelocity(uint32_t id, float x, float y, float z, bool angular) {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    float* speed = angular ? car.seed.turn : car.seed.move;
+    speed[0] = x;
+    speed[1] = y;
+    speed[2] = z;
+    car.seed.pending = true;
+    if (angular) {
+        car.seed.hasTurnSpeed = true;
+        if (car.observedVehicle) car.observedVehicle->syncTurnVelocity = false;
+    } else {
+        car.seed.hasMoveSpeed = true;
+        if (car.observedVehicle) car.observedVehicle->syncVelocity = false;
+    }
+}
+
 // Desktop CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleStartSync (CUnoccupiedVehicleSync.cpp 104-158): target
 // position, target rotation, move speed, turn speed and health are set on the vehicle before AddVehicle. The values are
 // applied to the body on the game thread (ApplyCarSeed). rot is in degrees.
@@ -5246,6 +6807,8 @@ void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], c
     car.z = pos[2];
     car.heading = rot[2] * 3.14159265f / 180.f;
     car.dirty = true;
+    car.useUnoccupiedSync = false;
+    car.observedVehicle.reset();
     CarSeed& seed = car.seed;
     seed.hasPose = true;
     seed.x = pos[0];
@@ -5255,7 +6818,8 @@ void NoteVehicleStartSync(uint32_t id, const float pos[3], const float rot[3], c
     seed.rotX = rot[0];
     seed.rotY = rot[1];
     seed.rotZ = rot[2];
-    seed.hasMotion = true;
+    seed.hasMoveSpeed = true;
+    seed.hasTurnSpeed = true;
     for (int i = 0; i < 3; ++i) {
         seed.move[i] = std::isfinite(move[i]) ? move[i] : 0.f;
         seed.turn[i] = std::isfinite(turn[i]) ? turn[i] : 0.f;
@@ -5273,17 +6837,23 @@ void NoteRemoteSeat(uint32_t pedId, uint32_t vehicleId, uint8_t seat) {
     req.seat = seat;
     req.seated = true;
     req.serial = ++g_seatSerial;
-    req.ticks = 0;
 }
 void NoteRemoteUnseat(uint32_t pedId) {
     if (pedId == 0 || pedId == 0xFFFFFFFFu) return;
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     RemoteSeatRequest& req = g_seatRequests[pedId];
+    if (auto it = g_remotePeds.find(pedId); it != g_remotePeds.end()) {
+        it->second.gangDriveby = false;
+        it->second.buttons = 0;
+        it->second.fire = false;
+        it->second.syncWeapon.aim = {};
+        ++it->second.weaponRevision;
+        ++it->second.aimRevision;
+    }
     req.vehicleId = kNoVehicle;
     req.seat = 0;
     req.seated = false;
     req.serial = ++g_seatSerial;
-    req.ticks = 0;
 }
 void NoteRemoteVehicleMotion(uint32_t id, float mx, float my, float mz, float tx, float ty, float tz) {
     if (id == 0 || id == 0xFFFFFFFFu) return;
@@ -5301,13 +6871,7 @@ void NoteRemoteVehicleMotion(uint32_t id, float mx, float my, float mz, float tx
     car.turnZ = tz;
     car.motionPending = true;
 }
-void RequestWander(uint32_t id, int direction) {
-    if (id == 0 || id == 0xFFFFFFFFu) return;
-    std::lock_guard<std::mutex> lock(g_remoteMutex);
-    auto& ped = g_remotePeds[id];
-    ped.wander = true;
-    ped.wanderDir = direction < 0 ? 0 : direction;
-}
+
 bool CopyRemotePose(uint32_t id, float& x, float& y, float& z) {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     auto found = g_remotePeds.find(id);
@@ -5322,6 +6886,17 @@ bool CopyRemotePose(uint32_t id, float& x, float& y, float& z) {
     x = car->second.shown ? car->second.shownX : car->second.x;
     y = car->second.shown ? car->second.shownY : car->second.y;
     z = car->second.shown ? car->second.shownZ : car->second.z;
+    return true;
+}
+bool CopyRemotePedMotion(uint32_t id, float& heading, float& vx, float& vy, float& vz) {
+    std::lock_guard lock(g_remoteMutex);
+    auto found = g_remotePeds.find(id);
+    if (found == g_remotePeds.end() || !found->second.shown || !found->second.serverPed) return false;
+    const auto& ped = found->second;
+    heading = ped.shownH;
+    vx = ped.vx;
+    vy = ped.vy;
+    vz = ped.vz;
     return true;
 }
 int CopyHostedPeds(HostedPed* out, int capacity) {
@@ -5357,15 +6932,22 @@ bool CopyLocalCar(LocalCarState& out) {
     return true;
 }
 
+void AcknowledgeVehicleFire(uint64_t serial) {
+    if (!serial) return;
+    std::lock_guard lock(g_remoteMutex);
+    if (g_localCar.firePress == serial) g_localCar.firePress = 0;
+}
+
 std::vector<VehicleTouchRect> CopyVehicleTouchControlBounds() {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     return g_vehicleTouchBounds;
 }
 // Desktop has no queue: CClientGame::PostWeaponFire sends at once. The queue only bridges the game thread
 // (CWeapon::Fire hook) and the network thread (SendBulletSync). At the cap the oldest shot is dropped.
-void NoteLocalShot(int weapon, const float* start, const float* end) {
+void NoteLocalShot(int weapon, const float* start, const float* end, const Combat::BulletHit& hit) {
     if (!end) return;
     LocalShot shot;
+    shot.hit = hit;
     shot.weapon = weapon;
     if (start) {
         shot.sx = start[0];
@@ -5378,8 +6960,23 @@ void NoteLocalShot(int weapon, const float* start, const float* end) {
     shot.ex = end[0];
     shot.ey = end[1];
     shot.ez = end[2];
+    PlayerWeaponSync::Aim ray;
+    if (!PlayerWeaponSync::SetAimLine(ray, {shot.sx, shot.sy, shot.sz}, {shot.ex, shot.ey, shot.ez})) return;
+    // CClientGame::BulletFire / multiplayer_shotsync.cpp:1585-1593, 1670-1684.
+    // FireInstantHit 0x7018b0 reads CWeaponInfo::m_fWeaponRange at +0x08.
+    const float range = NativeWeaponRange(weapon);
+    if (range > 0.f && std::hypot(shot.ex - shot.sx, shot.ey - shot.sy, shot.ez - shot.sz) > range) {
+        shot.ex = shot.sx + ray.direction.x * range;
+        shot.ey = shot.sy + ray.direction.y * range;
+        shot.ez = shot.sz + ray.direction.z * range;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
+    if (g_sampledLife != g_localLife.load()) return;
+    g_lastLocalShotAim = ray;
+    g_lastLocalShotWeapon = weapon;
+    g_lastLocalShotTime = std::chrono::steady_clock::now();
     if (g_localShots.size() >= kMaxLocalShots) g_localShots.erase(g_localShots.begin());
+    shot.serial = ++g_localShotSerial;
     g_localShots.push_back(shot);
 }
 bool ConsumeHostedWasted(HostedWasted& out) {
@@ -5390,12 +6987,16 @@ bool ConsumeHostedWasted(HostedWasted& out) {
     return true;
 }
 
-bool ConsumeLocalShot(LocalShot& out) {
+bool PeekLocalShot(LocalShot& out) {
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     if (g_localShots.empty()) return false;
     out = g_localShots.front();
-    g_localShots.erase(g_localShots.begin());
     return true;
+}
+void FinishLocalShot(uint64_t serial) {
+    std::lock_guard lock(g_remoteMutex);
+    if (!g_localShots.empty() && g_localShots.front().serial == serial)
+        g_localShots.erase(g_localShots.begin());
 }
 
 #else
@@ -5413,19 +7014,30 @@ void CopyBody(float& x, float& y, float& z, float& heading, float& vx, float& vy
 }
 float CopyLocalArmor() { return 0.f; }
 bool FindGroundZFor3DPosition(float, float, float, float&) { return false; }
-void NoteDamage(uint32_t, float, uint8_t) {}
-bool ConsumeDamage(uint32_t&, uint8_t&) { return false; }
-void NoteRemoteAim(uint32_t, float, float, int, int, bool, bool) {}
-void NoteRemoteWeapon(uint32_t, int) {}
+bool IsAmbientSphereVisible(float, float, float, float, bool&) { return false; }
+void NoteDamage(uint32_t, float, uint8_t, uint8_t) {}
+Combat::DamageReport PeekDamage() { return {}; }
+void AcknowledgeDamage(uint64_t) {}
+void NoteRemoteAim(uint32_t, float, float, int, int, uint8_t, bool, const PlayerWeaponSync::RemoteWeapon*) {}
+PlayerWeaponSync::LocalWeapon CopyLocalWeapon() { return {}; }
+void NoteDriveby(uint32_t, bool) {}
+bool IsDriveby(uint32_t) { return false; }
+void NoteVehicleCombat(uint32_t, const PlayerWeaponSync::RemoteWeapon&, uint8_t, bool) {}
+void NoteRemotePlayerWeapon(uint32_t, const PlayerWeaponSync::RemoteWeapon&) {}
+void QueueRemoteBullet(const Combat::SBulletSync&) {}
+bool IsRemoteNetworkPlayer(void*) { return false; }
+uint32_t EntityElementId(void*) { return 0xFFFFFFFFu; }
+float NativeWeaponRange(int) { return 0.f; }
 bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out) { return PedQueries::Copy(id, out); }
 bool CopySpatialScene(std::vector<Spatial::Element>&) { return false; }
 bool RemoteFacingLocal(uint32_t, float, float) { return false; }
 void CopyOnFoot(float, float, float, OnFootKeys& keys) { keys = {}; }
-void ConsumeLocalJump() {}
-void ConsumeLocalAttack() {}
-void NoteRemotePlayerSync(uint32_t, float, float, float, float, float, float, float, bool, int, int, float, bool, bool, bool, float, bool, float) {}
+void ConsumeLocalJump(uint64_t) {}
+void ConsumeLocalAttack(uint64_t) {}
+void NoteRemotePlayerSync(uint32_t, float, float, float, float, float, float, float, bool, int, int, float, uint8_t, bool, const PlayerWeaponSync::RemoteWeapon&, bool, float, bool, float) {}
 void NoteRemotePed(uint32_t, float, float, float, float, float, float, float, bool) {}
 void SetPedHost(uint32_t, bool) {}
+void NoteObservedPedSync(uint32_t, const float*, const float*, const float*, uint64_t) {}
 void ForgetRemote(uint32_t) {}
 void RequestRemoteReset() {}
 void NoteRemoteVehicle(uint32_t, int, float, float, float, float) {}
@@ -5433,18 +7045,41 @@ void NoteVehicleStartSync(uint32_t, const float*, const float*, const float*, co
 void NoteRemoteSeat(uint32_t, uint32_t, uint8_t) {}
 void NoteRemoteUnseat(uint32_t) {}
 void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}
-void RequestWander(uint32_t, int) {}
+void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate&) {}
+void RpcSetVehiclePosition(uint32_t, float, float, float) {}
+void RpcSetVehicleHealth(uint32_t, float) {}
+void RpcSetVehicleRotation(uint32_t, float, float, float) {}
+void RpcSetVehicleVelocity(uint32_t, float, float, float, bool) {}
+bool SetOwnedPedControl(uint32_t, const char*, bool) { return false; }
+bool StartPedKillOnFoot(uint32_t, uint32_t) { return false; }
+bool PresentPedWeaponShot(uint32_t, unsigned, float, float, float) { return false; }
+bool StartPedWander(uint32_t, int, int, bool) { return false; }
+bool StartPedDriveWander(uint32_t, uint32_t, float, int) { return false; }
+bool ScanTrafficObstacle(uint32_t, bool, float, TrafficObstacleScan&) { return false; }
+bool IsTrafficPedTaskActive(uint32_t, TrafficPedTask) { return false; }
+bool KillNativePedTask(uint32_t, bool, int, bool) { return false; }
+bool IsNativeActorStreamed(uint32_t) { return false; }
+bool HasNativeTrafficCapability(const char*) { return false; }
+bool SetTrafficVehicleVelocity(uint32_t, float, float, float, bool) { return false; }
+bool SetTrafficVehicleRotation(uint32_t, float, float, float) { return false; }
+bool IsTrafficVehicleOnGround(uint32_t) { return false; }
+bool SetTrafficVehicleLoadCollision(uint32_t, bool) { return false; }
+bool CopyTrafficVehicleState(uint32_t, HostedCar&) { return false; }
+bool SetTrafficVehicleEngine(uint32_t, bool) { return false; }
 bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
+bool CopyRemotePedMotion(uint32_t, float&, float&, float&, float&) { return false; }
 int CopyHostedPeds(HostedPed*, int) { return 0; }
 int CopyHostedCars(HostedCar*, int) { return 0; }
 bool ConsumeLocalVehicleEvent(LocalVehicleEvent&) { return false; }
 uint32_t LocalVehicleId() { return 0xFFFFFFFFu; }
+void AcknowledgeVehicleFire(uint64_t) {}
 bool CopyLocalCar(LocalCarState& out) {
     out = LocalCarState{};
     return false;
 }
-void NoteLocalShot(int, const float*, const float*) {}
-bool ConsumeLocalShot(LocalShot& out) {
+void NoteLocalShot(int, const float*, const float*, const Combat::BulletHit&) {}
+void FinishLocalShot(uint64_t) {}
+bool PeekLocalShot(LocalShot& out) {
     out = LocalShot{};
     return false;
 }
@@ -5465,10 +7100,10 @@ void UnlockPedVitals(uint32_t) {}
 void ForgetPedNativeTaskState(uint32_t) {}
 void SetPedVitals(uint32_t, float, float) {}
 void NoteRemoteClothes(uint32_t, const std::vector<WorldRPG::Entity::PedClothes>&) {}
-void NoteRemoteButtons(uint32_t, uint8_t) {}
 void RpcSetPosition(uint32_t, float, float, float) {}
 void RpcSetFrozen(uint32_t, bool) {}
 void NoteRemoteWasted(uint32_t, int, int, int) {}
+bool CopyLocalCombatDeath(uint64_t&, HostedWasted&) { return false; }
 bool ConsumeHostedWasted(HostedWasted&) { return false; }
 void NoteRemoteSpawn(uint32_t) {}
 void RpcSetRotation(uint32_t, float) {}

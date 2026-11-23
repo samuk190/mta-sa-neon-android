@@ -10,12 +10,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Game Sync
 
+- Android traffic owners can probe the task of a stalled pedestrian, ground and eight escape corridors in one game-thread query. Uses desktop CWorldSA.cpp:708–729,737–763 and the collision flags from Dryxio/san-andreas-online#133.
+
+- Wanted police can run the native on-foot attack task when Android owns the ped. Android observers replay the owner's shot animation, muzzle flash and audio without simulating another bullet (desktop TaskAttackSA.cpp and CClientGame.cpp, onClientPedWeaponFire). The Lua bridge preserves element-valued custom data and handle identity across events, including the police suspect and resource root.
+
+- Remote traffic peds on a 0x30 observer now feed the CPlayerPed virtual controller from fresh synchronized velocity, with the transform kept on the replica fence (desktop CClientPed.cpp:1646–1652, 2780–2845).
+- Vehicle creation and later color RPCs retain all four RGB slots for Lua and the renderer, including after stream-in (desktop CPacketHandler.cpp:3474–3489, CVehicleRPCs.cpp:140–158, CMultiplayerSA.cpp:8132–8188).
+
+- `isPedDead` and `getPedWeapon` read the latest completed game frame. Inventory changes and ID reuse invalidate a live sample. The task and weapon semantics follow desktop `CClientPed.cpp:3774-3804` and `CLuaPedDefs.cpp:685-710,2168-2198`.
+- Lua traffic queries for ped state, ground height and camera visibility can share a game-thread pulse. HUD color channels accept decimal values and clamp to 0–255 as in desktop `CLuaUtilDefs.cpp:714-745`.
+- Android applies the desktop capacities for objects (1200), buildings (32000), collision models (30000), tasks and events (5000 each), sector links, vehicle materials, RenderWare instances (30000) and matrix links (3600) before GTA initializes the world. The S25 reported those sizes in the running game. Follows `CGameSA.cpp:1165-1191` and `Client/sdk/game/Common.h:16-34`.
+- Lua checks remote player, ped and vehicle streaming against the last completed game tick, including the element generation. Touch and soft-keyboard commits reach DX forms in Android delivery order. Follows `CLuaElementDefs.cpp:1585-1611` and `CClientGame.cpp:2355-2381`.
+- Android initializes the GTA vehicle-structure pool with 255 slots, following the desktop patch in `CMultiplayerSA.cpp:1276-1282`. The S25 crash in `CVehicleModelInfo::SetClump` exhausted the original 50 slots during vehicle streaming.
+- The game thread reuses the loaded GTA library address. Repeated HUD visibility requests reuse the existing patches, and the pause flag changes page protection only on a write.
+- The MTA transport retains bursts of small ordered events through retransmission and dispatch. Acknowledgments keep running while Lua drains the events. The receive history tracks reliable messages independently of unreliable samples.
+
+- NPC ped sync preserves absent position and rotation fields, applies velocity-only stops, and interpolates once on the game thread. Follows desktop `CPedSync.cpp:289-477` and `CClientPed.cpp:5342-5364,8657-8822`. Device verification pending.
+- NPC vehicle sync applies packet 56 to the GTA body with time-context validation, time-based position and rotation, speed, health, and engine state. Follows `CUnoccupiedVehicleSync.cpp:178-208,269-416`, `CClientVehicle.cpp:3925-4157`, and `CElementRPCs.cpp:122-170,471-535`. Device verification pending.
+
+- Traffic visibility uses GTA's camera query on the game thread, following `CGameSA.cpp:2272-2279`. Device verification pending.
+- NPC vehicle occupants are tracked from ENTITY_ADD and ped RPCs and seated through GTA tasks with a scoped player context. Follows `CPacketHandler.cpp:4064-4065`, `CPedRPCs.cpp:190-236`, and `CClientPed.cpp:3319-3462,7441-7479`. Device verification pending.
+- Native ped wander and vehicle drive-wander dispatch run on the game thread and expose task readiness to the traffic resource. Follows `CLuaPedDefs.cpp:3157-3191,3534-3554` and `CTasksSA.cpp:46-65,200-205`. Traffic vehicles apply spawn alpha, freeze and engine state from `CPacketHandler.cpp:3615-3676`. Device verification pending.
+
 - Play opens the game-file setup flow when the installation is missing required assets or engine libraries. Crash reports from older APK installations no longer appear after an update.
 
 - The World RPG CDN supplies the GTA text table, fonts, shader caches, menu sounds and repaired menu texture files for startup without bundled game files. The launcher checks the text table before starting GTA.
 - World RPG's CDN now supplies the three ARM64 engine libraries under `game_files_android_mta/lib/`. The launcher directs CDN users to **Sync game assets** when the engine files are missing.
 
 ### Current Neon gameplay protocol
+
+- Passenger trigger taps survive between sync ticks, and releasing after a vehicle update sends the controller change. Rejected sends preserve the pending bullet, its sequence number and damage attribution. Follows `CNetAPI.cpp:385-397,729-828,1724-1753,2384-2417`.
+- Remote primary bullet traces run the vehicle occupant collision check before impact. Local damage attribution follows the actual hit even when the sender supplied no backup victim. Scoped weapons use the active camera to synchronize aim, and remote arm targets follow the transmitted point. Desktop references are `multiplayer_shotsync.cpp:734-800,1530-1558,1854-1864` and `CClientPed.cpp:8020-8054`.
+- Seat reassignment removes the previous occupant, a delayed exit only removes its matching seat, and a denied exit restores the confirmed passenger seat. Follows `CPacketHandler.cpp:2030-2084,2254-2275`. Two-client device verification is pending.
+
+- Android sends reliable weapon changes, the equipped slot, ammunition, aim and reload state. Driver sync keeps the equipped slot while braking. Follows `CClientGame.cpp:1900-1969` and `CNetAPI.cpp:729-828,1116-1304,1754-1815`.
+- On Android, remote players equip the relayed slot before applying aim and fire controls. Pure sync and key sync use the original button flags even when analog values follow. Vehicle aim uses the wire order X/Z/Y. Follows `CNetAPI.cpp:573-727,830-1021,1514-1572`, `SyncStructures.h:1569-1631` and `CClientPed.cpp:2864-2878,5605-5631,7995-8107`.
+- Remote shots replay the transmitted trajectory and fire sound on the game thread. Local shots include the observed victim, damage and body part when available. Scoped rifle shots use the native bullet direction. Follows `CClientPlayer.cpp:260-329`, `CWeaponSA.cpp:95-147`, `CNetAPI.cpp:2318-2359,2391-2414` and `multiplayer_shotsync.cpp:1557-1598,1660-1690,1747-1777`.
+- Android reports combat damage, armor and lethal hits to the server. A backup hit consumes armor first. Weapon settings and per-shooter duplicate records reset when reconnecting. Follows `CClientGame.cpp:4677-4803,6579-6634`, `CElementRPCs.cpp:471-535` and `CPedRPCs.cpp:42-60`.
+- Player and vehicle pure sync use the context from the spawn, player list or later RPC, and ignore stale updates. Remote spawns discard the old body and its queued inventory, including a spawn while still alive. Follows `CPacketHandler.cpp:934-1010,1196-1243`, `CClientEntity.cpp:180-185`, `CNetAPI.cpp:830-844,1116-1120,1306-1321,1615-1623` and `CClientPed.cpp:1261-1314`.
+- A remote shot compensates only outstanding damage to the local victim during a server-reported network interruption or its one-second recovery period. Expired shots and missing shooter bodies no longer apply backup damage. Follows `CPacketHandler.cpp:2841-2857` and `CClientPlayer.cpp:260-329,353-366`.
+- Mixed-client combat has headless packet coverage. A live Android/desktop session remains to be verified. Android now sends the passenger seat, aim, fire, ammo and drive-by direction in keysync and vehicle puresync. The remote passenger follows the driver, applies the matching window animation, and releases the controls on exit. Follows `CNetAPI.cpp:573-727,729-828,1306-1608,1615-1826`, `CPacketHandler.cpp:1896-1928,2034-2058`, and `CPedRPCs.cpp:190-256`.
+- On-foot weapon aim interpolates the remote arm angles, shot target and akimbo pose. Seated aim uses the transmitted horizontal arm angle immediately. Script weapon selection and drive-by toggles now reach native GTA tasks. Follows `CClientPed.cpp:4078-4130,4550-4610,5440-5479,7995-8107,9030-9090` and `multiplayer_shotsync.cpp:439-498,649-800`. The weapon camera state is saved and restored for each remote control pass, following the player context switch in `multiplayer_keysync.cpp:907-998,1102-1106`.
 
 - Vehicle streaming and network sync share a locked vehicle map. The game thread creates and moves GTA vehicle bodies after taking a snapshot of the network poses.
 - World RPG's current `ENTITY_ADD` header is decoded in desktop order, including call propagation and sync time context (`CPacketHandler.cpp:2999-3099`). The captured Android `/driftcar supra` packet retains baseline 24-bit X/Y and now creates the model 401 vehicle record. Standard joins also accept servers that send the baseline header.

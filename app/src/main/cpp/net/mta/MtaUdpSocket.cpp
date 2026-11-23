@@ -41,6 +41,10 @@ bool UdpSocket::Connect(const std::string& host, std::uint16_t port) {
     for (auto* address = addresses.get(); address; address = address->ai_next) {
         fd_ = ::socket(address->ai_family, address->ai_socktype | SOCK_CLOEXEC, address->ai_protocol);
         if (fd_ < 0) continue;
+        // Network dispatch shares the Lua tick. Buffer inbound datagrams while
+        // resource scripts are starting; the kernel may clamp this request.
+        constexpr int receiveBuffer = 4 * 1024 * 1024;
+        ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &receiveBuffer, sizeof(receiveBuffer));
         // connect() to 127.0.0.1 binds implicitly. On this WSL2 kernel that
         // socket never receives the peer's reply, so OPEN_REPLY is lost and
         // the handshake stays in Opening. Binding INADDR_ANY first keeps the
@@ -87,7 +91,7 @@ int UdpSocket::Receive(std::vector<std::uint8_t>& bytes, int timeoutMs) {
     do { result = ::poll(&descriptor, 1, timeoutMs); } while (result < 0 && errno == EINTR);
     if (result == 0) return 0;
     if (result < 0) { error_ = std::strerror(errno); return -1; }
-    std::array<std::uint8_t, 65536> buffer{};
+    std::array<std::uint8_t, 65536> buffer;
     ssize_t count;
     do { count = ::recv(fd_, buffer.data(), buffer.size(), MSG_DONTWAIT | MSG_TRUNC); }
     while (count < 0 && errno == EINTR);

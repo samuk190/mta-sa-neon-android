@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "entity/PedSpawn.h"
+#include "VehicleColors.h"
 #include "SpatialWorld.h"
 #include "entity/WeaponSpawn.h"
 
@@ -32,8 +33,9 @@ void NotePlayerSkin(uint32_t id, int model);
 int ModelOf(uint32_t id);
 
 // isBoolean (optional) is set when the server sent a Lua boolean; number is then 1 or 0.
+uint64_t LuaHandleGeneration(uint32_t id);
 bool GetData(uint32_t id, const char* key, double& number, std::string& text, bool& isNumber,
-             bool* isBoolean = nullptr);
+             bool* isBoolean = nullptr, bool* isElement = nullptr);
 
 // One custom-data value as GetData reports it (number, or text when number is false).
 struct ElementDataValue {
@@ -41,6 +43,7 @@ struct ElementDataValue {
     bool boolean = false;
     double value = 0;
     std::string text;
+    bool element = false;
 };
 
 // Own custom data for one element. Empty when the element has none.
@@ -77,8 +80,12 @@ struct ActorSpawn {
     // ENTITY_ADD interior (CPacketHandler common header). Outdoor traffic is 0.
     uint8_t interior = 0;
     int vehicleDoorLock = 1;
+    bool vehicleFrozen = false;
+    bool vehicleEngineOn = false;
+    uint8_t vehicleAlpha = 255;
     uint16_t nitroUpgrade = 0;
     uint64_t nitroRevision = 0;
+    std::optional<VehicleColors> vehicleColors;
 };
 // Copies peds (kind 14) and vehicles (kind 2).
 // Both limits negative: the two kinds share `capacity` (a run of vehicles can fill it).
@@ -124,6 +131,7 @@ void CopyTeams(std::vector<TeamFields>& out);
 bool CopyTeam(uint32_t id, TeamFields& out);
 // Sync time context from ENTITY_ADD (0 when this id has none). Desktop CClientEntity::GetSyncTimeContext.
 uint8_t SyncTimeContext(uint32_t id);
+bool CanUpdateSync(uint32_t id, uint8_t received);
 // The ENTITY_ADD ped body beyond pose and model (PedSpawn.h). False when the id is not a ped from ENTITY_ADD.
 bool CopyPedSpawn(uint32_t id, Entity::PedSpawn& out);
 // Last ENTITY_ADD weapon snapshot. False for removed elements and other types.
@@ -152,6 +160,7 @@ void NoteElementInterior(uint32_t id, uint8_t interior);
 void NoteElementModel(uint32_t id, int model);
 // A vehicle element for script state. Does not replace a player, ped, or other live kind.
 void NoteVehicle(uint32_t id, int model);
+bool SetVehicleColors(uint32_t id, const VehicleColors& colors);
 int VehicleDoorLockMode(uint32_t id);
 bool SetVehicleDoorLockMode(uint32_t id, int mode);
 uint16_t VehicleNitroUpgrade(uint32_t id);

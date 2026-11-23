@@ -1,3 +1,4 @@
+#include "stubs/test_ped_queries.h"
 #include "shared/SpatialWorld.h"
 #include "shared/LuaVMStub.h"
 #include "shared/LuaSpatialApi.h"
@@ -130,6 +131,25 @@ void DriftVehicleChecks() {
     ServerWorld::ActorSpawn vehicle;
     Check(ServerWorld::CopyVisual(534, vehicle) && vehicle.model == 401 && vehicle.health == 1000.f &&
           vehicle.x == 368.f && vehicle.y == -2036.5f, "current ENTITY_ADD stores the Supra");
+    Sync::PacketHandler packetHandler;
+    ServerWorld::SetSyncTimeContext(534, 17);
+    auto sendVehicleVelocity = [&](uint8_t context) {
+        VehicleSync::UnoccupiedUpdate update;
+        update.vehicleId = 534;
+        update.timeContext = context;
+        update.syncVelocity = true;
+        update.engineOn = true;
+        Net::BitStreamWriter w;
+        w.Write(uint8_t(56));
+        Check(VehicleSync::WriteUnoccupiedEntry(w, update), "encode packet 56 delta");
+        return packetHandler.handlePacket(99, w.GetData(), w.GetByteLength(), w.GetBitLength());
+    };
+    Check(sendVehicleVelocity(17), "read the NPC vehicle delta");
+    const auto observed = Headless::TakeUnoccupiedUpdate();
+    Check(observed && observed->vehicleId == 534 && !observed->syncPosition && !observed->syncRotation &&
+        observed->syncVelocity && observed->velocity.x == 0 && observed->engineOn, "vehicle stop and engine state reach game thread");
+    Check(sendVehicleVelocity(18) && !Headless::TakeUnoccupiedUpdate(), "stale vehicle context is parsed and discarded");
+
 
     ServerWorld::ResetSession();
     ServerWorld::ConfigureEntityAdd(true, true);

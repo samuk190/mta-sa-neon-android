@@ -878,7 +878,8 @@ int GetAllElementData(lua_State* L) {
     std::vector<std::pair<std::string, ServerWorld::ElementDataValue>> rows;
     ServerWorld::CopyElementData(id, rows);
     for (const auto& row : rows) {
-        if (row.second.boolean) lua_pushboolean(L, row.second.value != 0 ? 1 : 0);
+        if (row.second.element) PushElement(L, static_cast<uint32_t>(row.second.value));
+        else if (row.second.boolean) lua_pushboolean(L, row.second.value != 0 ? 1 : 0);
         else if (row.second.number) lua_pushnumber(L, row.second.value);
         else lua_pushlstring(L, row.second.text.data(), row.second.text.size());
         lua_setfield(L, table, row.first.c_str());

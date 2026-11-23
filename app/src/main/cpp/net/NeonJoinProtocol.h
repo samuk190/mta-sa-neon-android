@@ -63,6 +63,7 @@ static_assert(static_cast<uint8_t>(NeonPacketID::RPC) == 24, "ePacketID drift");
 enum class NeonServerRPC : uint8_t {
     PLAYER_INGAME_NOTICE = 0,
     INITIAL_DATA_STREAM = 1,
+    PLAYER_WEAPON = 3,
 };
 
 // version.h: MTA_DM_VERSION = (1 << 8) | (7 << 4) | 0
