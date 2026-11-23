@@ -254,6 +254,7 @@ public:
     // Processes this machine pretends exist (pid -> image path), and the pid
     // behind a process handle (pseudo handle included); 0 when not a process.
     static constexpr uint32_t kSelfPid = 0x1000, kExplorerPid = 0x0FA0;
+    uint32_t priorityClass = 0x20;  // NORMAL_PRIORITY_CLASS
     std::string ProcessImage(uint32_t pid) const;
     uint32_t OpenProcessHandle(uint32_t pid);
     uint32_t ProcessPid(uint32_t handle) const;

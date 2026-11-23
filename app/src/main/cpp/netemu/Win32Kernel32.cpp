@@ -785,11 +785,18 @@ void InstallKernel32(Win32State& s) {
         c.mem.Fill(c.Arg(0), 0, 172);
         c.Return(0);  // TIME_ZONE_ID_UNKNOWN: UTC
     });
-    R("GetThreadTimes", 5, [](ShimCall& c) {
-        for (int i = 1; i <= 4; ++i)
-            if (c.Arg(i)) c.mem.Write64(c.Arg(i), 0);
+    // (handle, *creation, *exit, *kernel, *user). Created when the machine
+    // started, still running; CPU time approximated by wall time since then.
+    auto processTimes = [st](ShimCall& c) {
+        const uint64_t up = st->machine.NowUs() * 10;  // 100 ns units
+        if (c.Arg(1)) c.mem.Write64(c.Arg(1), FileTimeNow() - up);
+        if (c.Arg(2)) c.mem.Write64(c.Arg(2), 0);
+        if (c.Arg(3)) c.mem.Write64(c.Arg(3), up / 8);
+        if (c.Arg(4)) c.mem.Write64(c.Arg(4), up / 4);
         c.Return(1);
-    });
+    };
+    R("GetThreadTimes", 5, processTimes);
+    R("GetProcessTimes", 5, processTimes);
     auto noFormat = [st](ShimCall& c) {
         st->NoteStub(c.def.name);
         c.SetLastError(Win32::kErrorNotSupported);

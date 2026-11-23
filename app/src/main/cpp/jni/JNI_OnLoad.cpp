@@ -613,6 +613,12 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
             auto client = WorldRPG::Net::QuicGameClient::Connect(env, thiz, g_serverHost, port);
             started = g_state->network->StartQuic(g_serverHost, port, std::move(client));
 #endif
+        } else if (!g_pcNetwork.netcPath.empty()) {
+            // InitNetRev product version of the core each netc build expects
+            // (SharedUtil::GetProductVersion): Neon 1.7.0 custom, stock 1.6 release.
+            const std::string productVersion = g_pcNetwork.build == "neon" ? "1.7.0-1.00000" : "1.6.0-9.23081";
+            started = g_state->network->StartPcNetwork(g_serverHost, static_cast<uint16_t>(port), g_pcNetwork.netcPath,
+                                                       g_pcNetwork.dataDir, productVersion);
         } else {
             started = g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
         }

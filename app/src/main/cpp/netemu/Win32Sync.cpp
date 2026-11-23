@@ -444,6 +444,102 @@ void InstallSync(Win32State& s) {
         return k ? st->machine.ThreadById(k->tid) : nullptr;
     };
     R("ExitThread", 1, [](ShimCall& c) { c.Exit(c.Arg(0)); });
+    // Priorities are recorded and read back; the cooperative scheduler is
+    // round-robin, as fair as Windows for threads that all sleep or wait.
+    auto withThread = [threadOf](ShimCall& c, uint32_t h, auto fn) {
+        GuestThread* t = threadOf(c, h);
+        if (!t) {
+            c.SetLastError(Win32::kErrorInvalidHandle);
+            return false;
+        }
+        fn(*t);
+        return true;
+    };
+    R("GetThreadPriority", 1, [withThread](ShimCall& c) {
+        int32_t p = 0x7FFFFFFF;  // THREAD_PRIORITY_ERROR_RETURN
+        withThread(c, c.Arg(0), [&](GuestThread& t) { p = t.priority; });
+        c.Return(static_cast<uint32_t>(p));
+    });
+    R("SetThreadPriority", 2, [withThread](ShimCall& c) {
+        const int32_t p = static_cast<int32_t>(c.Arg(1));
+        // -7..6 are valid in REALTIME class; the background-mode switches are
+        // accepted and change nothing here.
+        const bool background = p == 0x10000 || p == 0x20000;  // THREAD_MODE_BACKGROUND_BEGIN/END
+        if (background) {
+            c.Return(1);
+            return;
+        }
+        const bool valid = (p >= -7 && p <= 6) || p == -15 || p == 15;
+        if (!valid) {
+            c.SetLastError(Win32::kErrorInvalidParameter);
+            c.Return(0);
+            return;
+        }
+        c.Return(withThread(c, c.Arg(0), [&](GuestThread& t) { t.priority = p; }) ? 1 : 0);
+    });
+    R("GetThreadPriorityBoost", 2, [withThread](ShimCall& c) {
+        c.Return(withThread(c, c.Arg(0), [&](GuestThread& t) {
+            if (c.Arg(1)) c.mem.Write32(c.Arg(1), t.priorityBoostOff ? 1 : 0);
+        }) ? 1 : 0);
+    });
+    R("SetThreadPriorityBoost", 2, [withThread](ShimCall& c) {
+        c.Return(withThread(c, c.Arg(0), [&](GuestThread& t) { t.priorityBoostOff = c.Arg(1) != 0; }) ? 1 : 0);
+    });
+    R("GetThreadId", 1, [withThread](ShimCall& c) {
+        uint32_t id = 0;
+        withThread(c, c.Arg(0), [&](GuestThread& t) { id = t.id; });
+        c.Return(id);
+    });
+    R("GetProcessIdOfThread", 1, [withThread](ShimCall& c) {
+        c.Return(withThread(c, c.Arg(0), [](GuestThread&) {}) ? Win32State::kSelfPid : 0);
+    });
+    R("SetThreadIdealProcessor", 2, [withThread](ShimCall& c) {
+        c.Return(withThread(c, c.Arg(0), [](GuestThread&) {}) ? 0u : 0xFFFFFFFFu);  // previous ideal: CPU 0
+    });
+    R("GetThreadIOPendingFlag", 2, [withThread](ShimCall& c) {
+        c.Return(withThread(c, c.Arg(0), [&](GuestThread&) {
+            if (c.Arg(1)) c.mem.Write32(c.Arg(1), 0);
+        }) ? 1 : 0);
+    });
+    // Yields like Sleep(0), but reports that another thread got to run.
+    R("SwitchToThread", 0, [sleep](ShimCall& c) {
+        sleep(c, 0);
+        if (c.outcome == ShimCall::Outcome::Return) c.outEax = 1;
+    });
+    R("GetPriorityClass", 1, [st](ShimCall& c) {
+        if (st->ProcessPid(c.Arg(0)) != Win32State::kSelfPid) {
+            c.SetLastError(Win32::kErrorAccessDenied);
+            c.Return(0);
+            return;
+        }
+        c.Return(st->priorityClass);
+    });
+    R("SetPriorityClass", 2, [st](ShimCall& c) {
+        // The priority classes, plus PROCESS_MODE_BACKGROUND_BEGIN/END.
+        if (c.Arg(1) == 0x100000 || c.Arg(1) == 0x200000) {
+            c.Return(st->ProcessPid(c.Arg(0)) == Win32State::kSelfPid ? 1 : 0);
+            return;
+        }
+        static const uint32_t kClasses[] = {0x20, 0x40, 0x80, 0x100, 0x4000, 0x8000};
+        const bool valid = std::find(std::begin(kClasses), std::end(kClasses), c.Arg(1)) != std::end(kClasses);
+        if (st->ProcessPid(c.Arg(0)) != Win32State::kSelfPid || !valid) {
+            c.SetLastError(valid ? Win32::kErrorAccessDenied : Win32::kErrorInvalidParameter);
+            c.Return(0);
+            return;
+        }
+        st->priorityClass = c.Arg(1);
+        c.Return(1);
+    });
+    R("GetExitCodeThread", 2, [threadOf](ShimCall& c) {
+        GuestThread* t = threadOf(c, c.Arg(0));
+        if (!t || !c.Arg(1)) {
+            c.SetLastError(Win32::kErrorInvalidHandle);
+            c.Return(0);
+            return;
+        }
+        c.mem.Write32(c.Arg(1), t->state == GuestThread::State::Exited ? t->exitCode : 259u);  // STILL_ACTIVE
+        c.Return(1);
+    });
     R("ResumeThread", 1, [st, threadOf](ShimCall& c) {
         GuestThread* t = threadOf(c, c.Arg(0));
         if (!t) {

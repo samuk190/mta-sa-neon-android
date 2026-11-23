@@ -71,6 +71,7 @@ target_include_directories(saonlineneon PRIVATE
 target_link_libraries(saonlineneon
     android
     log
+    dl
     EGL
     GLESv2
     z

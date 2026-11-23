@@ -1,4 +1,5 @@
 #include "RakNetWrapper.h"
+#include "../PcNetworkTransport.h"
 
 #include <cstring>
 #include <algorithm>
@@ -600,6 +601,8 @@ enum class HandshakeState : uint8_t {
 
 struct RakNetWrapper::Impl {
     Mta::ClientTransport adapter;
+    std::unique_ptr<PcNetworkTransport> pc;  // PC netc.dll under emulation, when chosen
+    std::vector<uint8_t> pcPacket;
 #ifdef __ANDROID__
     std::unique_ptr<QuicGameClient> quic;
     std::vector<uint8_t> quicPacket;
@@ -688,7 +691,28 @@ bool RakNetWrapper::StartQuic(const std::string& host, uint16_t port, std::uniqu
 }
 #endif
 
+bool RakNetWrapper::StartPcNetwork(const std::string& host, uint16_t port, const std::string& netcPath,
+                                   const std::string& dataDir, const std::string& productVersion) {
+    if (netcPath.empty() || pImpl_->running.load()) return false;
+    std::string error;
+    pImpl_->pc = PcNetworkTransport::Start({netcPath, dataDir, productVersion}, host, port, &error);
+    if (!pImpl_->pc) {
+        LOGE("PC network: %s", error.c_str());
+        return false;
+    }
+    pImpl_->serverHost = host;
+    pImpl_->serverPort = port;
+    pImpl_->usageIn = {};
+    pImpl_->usageOut = {};
+    pImpl_->handshakeState.store(HandshakeState::IDLE);
+    pImpl_->ready.store(true);
+    pImpl_->running.store(true);
+    g_liveWrapper = this;
+    return true;
+}
+
 void RakNetWrapper::StopNetwork() {
+    pImpl_->pc.reset();
 #ifdef __ANDROID__
     pImpl_->quic.reset();
 #endif
@@ -698,11 +722,20 @@ void RakNetWrapper::StopNetwork() {
     pImpl_->adapter.shutdown();
 }
 
+bool RakNetWrapper::IsTransportStarting() const {
+    return pImpl_->pc && pImpl_->handshakeState.load() == HandshakeState::IDLE;
+}
+
+void RakNetWrapper::SetServerBitStreamVersion(uint16_t version) {
+    if (pImpl_->pc) pImpl_->pc->SetServerBitStreamVersion(version);
+}
+
 bool RakNetWrapper::IsReady() const {
     return pImpl_->ready.load();
 }
 
 bool RakNetWrapper::IsConnected() const {
+    if (pImpl_->pc) return IsRakNetConnected();
 #ifdef __ANDROID__
     if (pImpl_->quic) return IsRakNetConnected();
 #endif
@@ -711,6 +744,41 @@ bool RakNetWrapper::IsConnected() const {
 
 void RakNetWrapper::DoPulse() {
     if (!pImpl_->running.load()) return;
+
+    if (pImpl_->pc) {
+        std::string error;
+        const auto status = pImpl_->pc->Pulse(&error);
+        if (status == PcNetworkTransport::Status::Loading || status == PcNetworkTransport::Status::Connecting) return;
+        if (status == PcNetworkTransport::Status::Connected) {
+            if (pImpl_->handshakeState.load() == HandshakeState::IDLE) {
+                pImpl_->handshakeState.store(HandshakeState::TRANSPORT_CONNECTED);
+                if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(true, "PC network connected");
+                return;  // As for QUIC: let NeonJoinClient start before game packets flow.
+            }
+            // After the join a silent RakNet timeout queues no packet; netc then
+            // only reports it through IsConnected.
+            if (pImpl_->handshakeState.load() == HandshakeState::HANDSHAKE_COMPLETE && !pImpl_->pc->IsConnected()) {
+                LOGE("PC network: connection lost");
+                StopNetwork();
+                if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(false, "Connection lost");
+                return;
+            }
+            const auto user = static_cast<uint8_t>(PacketID::USER_PACKET_ENUM);
+            auto& packet = pImpl_->pcPacket;
+            size_t bits = 0;
+            for (int i = 0; i < 48 && pImpl_->pc && pImpl_->pc->Pop(packet, bits); ++i) {
+                if (packet[0] > UINT8_MAX - user) continue;
+                NoteUsage(true, packet[0] + user, packet.size());
+                if (pImpl_->packetHandler) pImpl_->packetHandler(user, packet.data(), packet.size(), bits);
+            }
+            return;
+        }
+        LOGE("PC network: %s", error.c_str());
+        if (const uint8_t code = pImpl_->pc->ConnectionError()) pImpl_->connectionError.store(code);
+        StopNetwork();
+        if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(false, error.c_str());
+        return;
+    }
 
 #ifdef __ANDROID__
     if (pImpl_->quic) {
@@ -889,6 +957,19 @@ void RakNetWrapper::SetPacketHandler(PacketHandlerCallback handler) {
 bool RakNetWrapper::SendPacket(uint8_t packetId, const BitStreamWriter& stream,
                                PacketPriority priority, PacketReliability reliability,
                                PacketOrdering ordering) {
+    if (pImpl_->pc) {
+        // CNet::SendPacket takes the game id and the payload; netc frames the
+        // packet and builds the join-data envelope (with its own serial) itself.
+        const auto bits = stream.GetBitLength();
+        if (packetId != static_cast<uint8_t>(PacketID::USER_PACKET_ENUM) || bits < 8) return false;
+        const uint8_t kind = stream.GetData()[0];
+        if (kind > UINT8_MAX - packetId) return false;
+        if (!pImpl_->pc->Send(kind, stream.GetData() + 1, bits - 8, static_cast<int>(priority), static_cast<int>(reliability),
+                              static_cast<int>(ordering)))
+            return false;
+        NoteUsage(false, packetId + kind, stream.GetByteLength());
+        return true;
+    }
 #ifdef __ANDROID__
     if (pImpl_->quic) {
         const auto bits = stream.GetBitLength();
@@ -943,6 +1024,7 @@ std::string RakNetWrapper::GetConnectedServer(bool includePort) const {
 }
 
 std::string RakNetWrapper::GetPeerEndpoint() const {
+    if (pImpl_->pc) return GetConnectedServer(true);
 #ifdef __ANDROID__
     if (pImpl_->quic) return GetConnectedServer(true);
 #endif
@@ -951,6 +1033,19 @@ std::string RakNetWrapper::GetPeerEndpoint() const {
 
 bool RakNetWrapper::GetNetworkStatistics(NetworkStatistics& stats) const {
     memset(&stats, 0, sizeof(stats));
+    // PC Network: netc keeps its own RakNet counters, which the C ABI does not
+    // expose yet; report the per-id byte counts this wrapper tracks.
+    if (pImpl_->pc) {
+        for (const auto& u : pImpl_->usageIn) {
+            stats.bytesReceived += u.totalBytes;
+            stats.packetsReceived += u.count;
+        }
+        for (const auto& u : pImpl_->usageOut) {
+            stats.bytesSent += u.totalBytes;
+            stats.packetsSent += u.count;
+        }
+        return true;
+    }
     const Mta::FrameCounters frames = pImpl_->adapter.frameCounters();
     stats.bytesReceived = frames.bytesReceived;
     stats.bytesSent = frames.bytesSent;
@@ -984,6 +1079,7 @@ void RakNetWrapper::NoteUsage(bool incoming, uint8_t id, size_t bytes) {
 }
 
 int RakNetWrapper::GetPing() const {
+    if (pImpl_->pc) return pImpl_->pc->Ping();
     return pImpl_->adapter.getPing();
 }
 
@@ -998,6 +1094,14 @@ std::string RakNetWrapper::GetLocalIP() const {
 }
 
 void RakNetWrapper::GetSerial(char* buffer, size_t maxLength) const {
+    // PC Network: the server sees netc's serial (in netc's join envelope).
+    if (pImpl_->pc && buffer && maxLength) {
+        const std::string serial = pImpl_->pc->Serial();
+        if (!serial.empty()) {
+            std::snprintf(buffer, maxLength, "%s", serial.c_str());
+            return;
+        }
+    }
     if (!buffer || maxLength == 0) return;
     size_t copyLen = std::min(maxLength - 1, strlen(pImpl_->serialBuffer));
     memcpy(buffer, pImpl_->serialBuffer, copyLen);
@@ -1028,6 +1132,7 @@ void RakNetWrapper::Reset() {
 
 void RakNetWrapper::SetTimeoutTime(uint32_t timeoutMs) {
     pImpl_->timeoutMs = timeoutMs;
+    if (pImpl_->pc) pImpl_->pc->SetTimeoutTime(timeoutMs);
 }
 
 bool RakNetWrapper::SendOpenPacket() {

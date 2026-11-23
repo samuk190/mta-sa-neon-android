@@ -212,7 +212,15 @@ public:
 #ifdef __ANDROID__
     bool StartQuic(const std::string& host, uint16_t port, std::unique_ptr<QuicGameClient> client);
 #endif
+    // "Use PC Network — Compatibility": connect through MTA's PC netc.dll under
+    // emulation (net/PcNetworkTransport). netcPath empty is an error.
+    bool StartPcNetwork(const std::string& host, uint16_t port, const std::string& netcPath, const std::string& dataDir,
+                        const std::string& productVersion);
     void StopNetwork();
+    // PC Network: netc is still loading or its RakNet has not connected yet.
+    bool IsTransportStarting() const;
+    // CNet::SetServerBitStreamVersion for netc; nothing to do on other transports.
+    void SetServerBitStreamVersion(uint16_t version);
 
     bool IsReady() const;
     bool IsConnected() const;

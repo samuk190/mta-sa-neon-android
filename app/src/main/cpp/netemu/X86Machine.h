@@ -88,6 +88,8 @@ struct GuestThread {
     bool cancelRequested = false;  // pthread_cancel, honoured at cancellation points
     uint32_t exitCode = 259;  // STILL_ACTIVE
     uint32_t suspendCount = 0;
+    int32_t priority = 0;          // THREAD_PRIORITY_NORMAL; bookkeeping (the scheduler is round-robin)
+    bool priorityBoostOff = false;
     // Hardware-exception loop guard. The dispatcher records where a handler
     // resumed the thread; any shim call clears it (progress). Faulting again
     // right there means the handler resumed without fixing the cause.

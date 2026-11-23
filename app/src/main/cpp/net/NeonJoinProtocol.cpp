@@ -1101,6 +1101,10 @@ struct NeonJoinClient::Impl {
             }
         }
 
+        // Desktop CConnectManager.cpp:628: the net module learns the server's
+        // bitstream version once MOD_NAME is validated (no-op off PC Network).
+        net->SetServerBitStreamVersion(bsVersion);
+
         if (modName != "deathmatch") {
             Fail("unsupported mod '" + modName + "'", DisconnectMessages::Plain("Error", "This server runs the mod '" + modName + "', which this client cannot join."));
             return;
@@ -1335,6 +1339,12 @@ void NeonJoinClient::Pulse() {
 
     switch (d.state) {
         case JoinState::WaitingRakNet:
+            // PC Network: the step clock starts once netc is loaded and its
+            // RakNet is up; the transport times out its own load and connect.
+            if (d.net->IsTransportStarting()) {
+                d.deadlineMs = NowMs() + JOIN_STEP_TIMEOUT_MS;
+                break;
+            }
             if (d.net->IsRakNetConnected()) {
                 // The server net module emits PLAYER_JOIN when NIC arrives.
                 // The desktop waits for MOD_NAME; it sends no application join.

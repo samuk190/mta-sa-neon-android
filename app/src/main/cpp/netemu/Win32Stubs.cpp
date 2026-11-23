@@ -598,6 +598,11 @@ void InstallStubs(Win32State& s) {
     V(kK2, "GetSystemFirmwareTable", 4, 0);  // 0 bytes: no SMBIOS table
     V(kK2, "EnumSystemFirmwareTables", 3, 0);
     V(kK2, "AddDllDirectory", 1, 0);
+    // A desktop process: AppPolicyThreadInitializationType_None, ERROR_SUCCESS.
+    R(kK2, "AppPolicyGetThreadInitializationType", 2, [](ShimCall& c) {
+        if (c.Arg(1)) c.mem.Write32(c.Arg(1), 0);
+        c.Return(0);
+    });
     V(kK2, "SetDefaultDllDirectories", 1, 1);
     R(kK2, "GetNativeSystemInfo", 1, [](ShimCall& c) {
         const uint32_t p = c.Arg(0);

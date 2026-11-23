@@ -810,6 +810,24 @@ void InstallNtdll(Win32State& s) {
             c.mem.Write8(buf, 0);
             if (ret) c.mem.Write32(ret, 1);
             c.Return(STATUS_SUCCESS);
+        } else if (cls == 1 && len >= 32) {  // ThreadTimes: creation, exit, kernel, user
+            const uint64_t up = st->machine.NowUs() * 10;
+            c.mem.Write64(buf, FileTimeNow() - up);
+            c.mem.Write64(buf + 8, 0);
+            c.mem.Write64(buf + 16, up / 8);
+            c.mem.Write64(buf + 24, up / 4);
+            if (ret) c.mem.Write32(ret, 32);
+            c.Return(STATUS_SUCCESS);
+        } else if ((cls == 16 || cls == 18 || cls == 20 || cls == 22 || cls == 24) && len >= 4) {
+            // IsIoPending 0, BreakOnTermination 0, IsTerminated, IoPriority
+            // normal (2), PagePriority normal (5).
+            uint32_t v = 0;
+            if (cls == 20) v = t->state == GuestThread::State::Exited ? 1 : 0;
+            if (cls == 22) v = 2;
+            if (cls == 24) v = 5;
+            c.mem.Write32(buf, v);
+            if (ret) c.mem.Write32(ret, 4);
+            c.Return(STATUS_SUCCESS);
         } else {
             st->NoteStub("NtQueryInformationThread class " + std::to_string(cls));
             c.Return(STATUS_INVALID_INFO_CLASS);
