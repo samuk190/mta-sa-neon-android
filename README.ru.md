@@ -1,5 +1,7 @@
 # MTA:SA Neon для Android
 
+[Официальный сайт](https://saonlinemobile.web.app/) · [Скачать APK](https://saonlinemobile.web.app/download)
+
 Нативный клиент **Multi Theft Auto: San Andreas** (MTA:SA) для Android на ARM64. В основе лежат архитектура MTA Neon и движок Grand Theft Auto: San Andreas Mobile.
 
 ## Языки README
@@ -18,7 +20,7 @@
 
 ## Установка и первый запуск
 
-1. Скачайте и установите `mta-sa-neon-android-<версия>.apk`. Откройте лаунчер один раз, чтобы Android создал папку приложения. [Выпуски](https://github.com/samuk190/mta-sa-neon-android/releases)
+1. Скачайте APK с [официальной страницы загрузки](https://saonlinemobile.web.app/download), установите его и один раз откройте лаунчер, чтобы создать папку приложения.
 2. Если в сборке задан `CDN_ROOT_URL`, откройте **Настройки → Синхронизировать файлы игры**. Лаунчер проверит загруженные файлы и установит данные и три библиотеки ARM64 в закрытое хранилище приложения. Для сборок без CDN выполните ручную установку по инструкции ниже.
 3. На вкладке **Серверы** выберите сервер, нажмите **Войти**, введите никнейм и нажмите **Играть**. Если сервер требует входа в SA:O, подключите аккаунт через **Настройки → Войти через Discord**.
 
@@ -39,18 +41,35 @@ APK и OBB оригинальной игры имеют формат ZIP. Изв
 /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ├── lib/
 │   ├── libGTASA.so
-│   ├── libSCAnd.so
-│   └── libOpenAL64.so
-├── anim/  audio/  models/  Text/  Textures/
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
+├── anim/
+├── audio/
+│   ├── android/
+│   ├── SFX/
+│   └── STREAMS/
+├── cgui/
 ├── data/
+│   ├── default.dat
 │   ├── gta.dat
-│   └── handling.cfg
+│   ├── handling.cfg
+│   └── script/
+├── fonts/
+├── models/
+├── MTA/cgui/
+├── Text/american.gxt
+├── Textures/fonts/
 ├── texdb/
 │   ├── gta3.img
+│   ├── gta_int.img
 │   └── menu/menu.pvr.dat
-├── assetfile.txt
-└── scache.txt  scache_small.txt  scache_small_low.txt
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
 ```
+
+[Полное дерево файлов (410 файлов)](docs/game-assets-tree.txt) содержит все пути из эталонного манифеста проекта, включая загрузочные экраны MTA. Для ручной установки скопируйте содержимое `assets/` из своего APK и содержимое архивов OBB непосредственно в `game_assets/`. Сохраните исходные имена и дополнительные файлы своей копии игры, включая `assetfile.txt`, если он есть. Три библиотеки ARM64 поместите непосредственно в `lib/`.
 
 Если файлы подготовлены в папке `gta_sa/` на компьютере, отправьте её содержимое через ADB.
 

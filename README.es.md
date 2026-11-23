@@ -1,5 +1,7 @@
 # MTA:SA Neon para Android
 
+[Sitio oficial](https://saonlinemobile.web.app/) · [Descargar APK](https://saonlinemobile.web.app/es/download)
+
 Cliente nativo ARM64 de **Multi Theft Auto: San Andreas** (MTA:SA) para Android, basado en MTA Neon y en el motor de Grand Theft Auto: San Andreas Mobile.
 
 ## Idiomas del README
@@ -18,7 +20,7 @@ El lanzador sigue las preferencias de idioma de Android de forma predeterminada 
 
 ## Instalación y primeros pasos
 
-1. Descarga e instala `mta-sa-neon-android-<versión>.apk`. Abre el lanzador una vez para que Android cree la carpeta de la aplicación. [Versiones publicadas](https://github.com/samuk190/mta-sa-neon-android/releases)
+1. Descarga el APK desde la [página oficial de descargas](https://saonlinemobile.web.app/es/download), instálalo y abre el launcher una vez para crear la carpeta de la aplicación.
 2. Si el APK se compiló con `CDN_ROOT_URL`, abre **Ajustes → Sincronizar archivos del juego**. El lanzador verifica las descargas e instala los datos y las tres bibliotecas ARM64 en el almacenamiento privado. Para las compilaciones sin CDN, sigue los pasos de instalación manual.
 3. En **Servidores**, elige un servidor, pulsa **Unirse**, introduce tu apodo y pulsa **Jugar**. Si el servidor requiere una cuenta de SA:O, vincula tu cuenta en **Ajustes → Iniciar sesión con Discord**.
 
@@ -39,18 +41,35 @@ Organiza los archivos así en la carpeta `game_assets` del dispositivo. Respeta 
 /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ├── lib/
 │   ├── libGTASA.so
-│   ├── libSCAnd.so
-│   └── libOpenAL64.so
-├── anim/  audio/  models/  Text/  Textures/
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
+├── anim/
+├── audio/
+│   ├── android/
+│   ├── SFX/
+│   └── STREAMS/
+├── cgui/
 ├── data/
+│   ├── default.dat
 │   ├── gta.dat
-│   └── handling.cfg
+│   ├── handling.cfg
+│   └── script/
+├── fonts/
+├── models/
+├── MTA/cgui/
+├── Text/american.gxt
+├── Textures/fonts/
 ├── texdb/
 │   ├── gta3.img
+│   ├── gta_int.img
 │   └── menu/menu.pvr.dat
-├── assetfile.txt
-└── scache.txt  scache_small.txt  scache_small_low.txt
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
 ```
+
+[Ver el árbol de referencia completo (410 archivos)](docs/game-assets-tree.txt). Incluye todas las rutas del manifiesto del proyecto y las pantallas de carga de MTA. Para la instalación manual, copia el contenido de `assets/` de tu APK y de los archivos OBB directamente a `game_assets/`. Conserva los nombres originales y los archivos adicionales de tu copia, incluido `assetfile.txt` si existe. Coloca las tres bibliotecas ARM64 directamente en `lib/`.
 
 Si preparaste los archivos en `gta_sa/` en tu ordenador, envía el contenido de esa carpeta mediante ADB.
 

@@ -1,0 +1,452 @@
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
+├── MTA/
+│   └── cgui/
+│       ├── images/
+│       │   └── loadscreens/
+│       │       ├── loadsc1.jpg
+│       │       ├── loadsc10.jpg
+│       │       ├── loadsc11.jpg
+│       │       ├── loadsc12.jpg
+│       │       ├── loadsc13.jpg
+│       │       ├── loadsc14.jpg
+│       │       ├── loadsc2.jpg
+│       │       ├── loadsc3.jpg
+│       │       ├── loadsc4.jpg
+│       │       ├── loadsc5.jpg
+│       │       ├── loadsc6.jpg
+│       │       ├── loadsc7.jpg
+│       │       ├── loadsc8.jpg
+│       │       └── loadsc9.jpg
+│       └── sabankgothic.ttf
+├── Text/
+│   └── american.gxt
+├── Textures/
+│   └── fonts/
+│       ├── JapaneseFont.met
+│       ├── JapaneseFont.png
+│       ├── RussianFont.met
+│       └── RussianFont.png
+├── anim/
+│   ├── anim.img
+│   ├── cuts.img
+│   └── ped.ifp
+├── audio/
+│   ├── CONFIG/
+│   │   ├── AudioEventHistory.txt
+│   │   ├── BankLkup.dat
+│   │   ├── BankSlot.dat
+│   │   ├── EventVol.dat
+│   │   ├── PakFiles.dat
+│   │   ├── SOUNDINF.DAT
+│   │   ├── StrmPaks.dat
+│   │   ├── TRKHEAD.DAT
+│   │   └── TrakLkup.dat
+│   ├── SFX/
+│   │   ├── FEET.osw
+│   │   ├── FEET.osw.idx
+│   │   ├── GENRL.osw
+│   │   ├── GENRL.osw.idx
+│   │   ├── PAIN_A.osw
+│   │   ├── PAIN_A.osw.idx
+│   │   ├── SCRIPT.osw
+│   │   └── SCRIPT.osw.idx
+│   ├── STREAMS/
+│   │   ├── AA.osw
+│   │   ├── AA.osw.idx
+│   │   ├── ADVERTS.osw
+│   │   ├── ADVERTS.osw.idx
+│   │   ├── AMBIENCE.osw
+│   │   ├── AMBIENCE.osw.idx
+│   │   ├── BEATS.osw
+│   │   ├── BEATS.osw.idx
+│   │   ├── CH.osw
+│   │   ├── CH.osw.idx
+│   │   ├── CO.osw
+│   │   ├── CO.osw.idx
+│   │   ├── CR.osw
+│   │   ├── CR.osw.idx
+│   │   ├── CUTSCENE.osw
+│   │   ├── CUTSCENE.osw.idx
+│   │   ├── DS.osw
+│   │   ├── DS.osw.idx
+│   │   ├── HC.osw
+│   │   ├── HC.osw.idx
+│   │   ├── MH.osw
+│   │   ├── MH.osw.idx
+│   │   ├── MR.osw
+│   │   ├── MR.osw.idx
+│   │   ├── NJ.osw
+│   │   ├── NJ.osw.idx
+│   │   ├── RE.osw
+│   │   ├── RE.osw.idx
+│   │   ├── RG.osw
+│   │   ├── RG.osw.idx
+│   │   ├── TK.osw
+│   │   └── TK.osw.idx
+│   └── android/
+│       ├── NAV_DOWN.ogg
+│       └── NAV_UP.ogg
+├── cgui/
+│   └── images/
+│       ├── radarset/
+│       │   ├── 01.png
+│       │   ├── 02.png
+│       │   ├── 03.png
+│       │   ├── 04.png
+│       │   ├── 05.png
+│       │   ├── 06.png
+│       │   ├── 07.png
+│       │   ├── 08.png
+│       │   ├── 09.png
+│       │   ├── 10.png
+│       │   ├── 11.png
+│       │   ├── 12.png
+│       │   ├── 13.png
+│       │   ├── 14.png
+│       │   ├── 15.png
+│       │   ├── 16.png
+│       │   ├── 17.png
+│       │   ├── 18.png
+│       │   ├── 19.png
+│       │   ├── 20.png
+│       │   ├── 21.png
+│       │   ├── 22.png
+│       │   ├── 23.png
+│       │   ├── 24.png
+│       │   ├── 25.png
+│       │   ├── 26.png
+│       │   ├── 27.png
+│       │   ├── 28.png
+│       │   ├── 29.png
+│       │   ├── 30.png
+│       │   ├── 31.png
+│       │   ├── 32.png
+│       │   ├── 33.png
+│       │   ├── 34.png
+│       │   ├── 35.png
+│       │   ├── 36.png
+│       │   ├── 37.png
+│       │   ├── 38.png
+│       │   ├── 39.png
+│       │   ├── 40.png
+│       │   ├── 41.png
+│       │   ├── 42.png
+│       │   ├── 43.png
+│       │   ├── 44.png
+│       │   ├── 45.png
+│       │   ├── 46.png
+│       │   ├── 47.png
+│       │   ├── 48.png
+│       │   ├── 49.png
+│       │   ├── 50.png
+│       │   ├── 51.png
+│       │   ├── 52.png
+│       │   ├── 53.png
+│       │   ├── 54.png
+│       │   ├── 55.png
+│       │   ├── 56.png
+│       │   ├── 57.png
+│       │   ├── 58.png
+│       │   ├── 59.png
+│       │   ├── 60.png
+│       │   ├── 61.png
+│       │   ├── 62.png
+│       │   ├── 63.png
+│       │   ├── down.png
+│       │   ├── square.png
+│       │   └── up.png
+│       ├── 16-message-warn.png
+│       ├── map_1024.png
+│       └── map_2048.png
+├── data/
+│   ├── Decision/
+│   │   ├── Allowed/
+│   │   │   ├── Cop.ped
+│   │   │   ├── Fireman.ped
+│   │   │   ├── GangMbr.ped
+│   │   │   ├── Indoors.ped
+│   │   │   ├── MISSION.grp
+│   │   │   ├── RANDOM.grp
+│   │   │   ├── RANDOM.ped
+│   │   │   ├── RANDOM2.grp
+│   │   │   ├── R_Norm.ped
+│   │   │   ├── R_Tough.ped
+│   │   │   ├── R_Weak.ped
+│   │   │   ├── m_empty.ped
+│   │   │   ├── m_norm.ped
+│   │   │   ├── m_plyr.ped
+│   │   │   ├── m_steal.ped
+│   │   │   ├── m_tough.ped
+│   │   │   └── m_weak.ped
+│   │   └── PedEvent.txt
+│   ├── maps/
+│   │   ├── LA/
+│   │   │   ├── LAe.ide
+│   │   │   ├── LAe.ipl
+│   │   │   ├── LAe2.ide
+│   │   │   ├── LAe2.ipl
+│   │   │   ├── LAhills.ide
+│   │   │   ├── LAhills.ipl
+│   │   │   ├── LAn.ide
+│   │   │   ├── LAn.ipl
+│   │   │   ├── LAn2.ide
+│   │   │   ├── LAn2.ipl
+│   │   │   ├── LAs.ide
+│   │   │   ├── LAs.ipl
+│   │   │   ├── LAs2.ide
+│   │   │   ├── LAs2.ipl
+│   │   │   ├── LAw.ide
+│   │   │   ├── LAw.ipl
+│   │   │   ├── LAw2.ide
+│   │   │   ├── LAw2.ipl
+│   │   │   ├── LAxref.ide
+│   │   │   ├── LaWn.ide
+│   │   │   └── LaWn.ipl
+│   │   ├── SF/
+│   │   │   ├── SFSe.ide
+│   │   │   ├── SFSe.ipl
+│   │   │   ├── SFe.ide
+│   │   │   ├── SFe.ipl
+│   │   │   ├── SFn.ide
+│   │   │   ├── SFn.ipl
+│   │   │   ├── SFs.ide
+│   │   │   ├── SFs.ipl
+│   │   │   ├── SFw.ide
+│   │   │   ├── SFw.ipl
+│   │   │   └── SFxref.ide
+│   │   ├── country/
+│   │   │   ├── countn2.ide
+│   │   │   ├── countn2.ipl
+│   │   │   ├── countryN.ide
+│   │   │   ├── countryN.ipl
+│   │   │   ├── countryS.ide
+│   │   │   ├── countryS.ipl
+│   │   │   ├── countryW.ide
+│   │   │   ├── countrye.ide
+│   │   │   ├── countrye.ipl
+│   │   │   ├── countryw.ipl
+│   │   │   └── counxref.ide
+│   │   ├── generic/
+│   │   │   ├── barriers.ide
+│   │   │   ├── dynamic.ide
+│   │   │   ├── dynamic2.ide
+│   │   │   ├── multiobj.ide
+│   │   │   ├── procobj.ide
+│   │   │   └── vegepart.ide
+│   │   ├── interior/
+│   │   │   ├── gen_int1.ide
+│   │   │   ├── gen_int1.ipl
+│   │   │   ├── gen_int2.ide
+│   │   │   ├── gen_int2.ipl
+│   │   │   ├── gen_int3.ide
+│   │   │   ├── gen_int3.ipl
+│   │   │   ├── gen_int4.ide
+│   │   │   ├── gen_int4.ipl
+│   │   │   ├── gen_int5.ide
+│   │   │   ├── gen_int5.ipl
+│   │   │   ├── gen_intb.ide
+│   │   │   ├── gen_intb.ipl
+│   │   │   ├── int_LA.ide
+│   │   │   ├── int_LA.ipl
+│   │   │   ├── int_SF.ide
+│   │   │   ├── int_SF.ipl
+│   │   │   ├── int_cont.ide
+│   │   │   ├── int_cont.ipl
+│   │   │   ├── int_veg.ide
+│   │   │   ├── int_veg.ipl
+│   │   │   ├── propext.ide
+│   │   │   ├── props.ide
+│   │   │   ├── props2.ide
+│   │   │   ├── savehous.ide
+│   │   │   ├── savehous.ipl
+│   │   │   ├── stadint.ide
+│   │   │   └── stadint.ipl
+│   │   ├── leveldes/
+│   │   │   ├── leveldes.ide
+│   │   │   ├── leveldes.ipl
+│   │   │   ├── levelmap.ide
+│   │   │   ├── levelmap.ipl
+│   │   │   ├── levelxre.ide
+│   │   │   ├── seabed.ide
+│   │   │   └── seabed.ipl
+│   │   ├── vegas/
+│   │   │   ├── VegasN.ide
+│   │   │   ├── VegasS.ide
+│   │   │   ├── VegasW.ide
+│   │   │   ├── vegasE.ide
+│   │   │   ├── vegasE.ipl
+│   │   │   ├── vegasN.ipl
+│   │   │   ├── vegasS.ipl
+│   │   │   ├── vegasW.ipl
+│   │   │   ├── vegaxref.ide
+│   │   │   └── vegaxref.ipl
+│   │   ├── veh_mods/
+│   │   │   └── veh_mods.ide
+│   │   ├── Audiozon.ipl
+│   │   ├── cull.ipl
+│   │   ├── occlu.ipl
+│   │   ├── occluLA.ipl
+│   │   ├── occluint.ipl
+│   │   ├── occlusf.ipl
+│   │   ├── occluveg.ipl
+│   │   ├── paths.ipl
+│   │   ├── paths2.ipl
+│   │   ├── paths3.ipl
+│   │   ├── paths4.ipl
+│   │   ├── paths5.ipl
+│   │   └── tunnels.ipl
+│   ├── paths/
+│   │   ├── ROADBLOX.DAT
+│   │   ├── carrec.img
+│   │   ├── tracks.dat
+│   │   ├── tracks2.dat
+│   │   ├── tracks3.dat
+│   │   └── tracks4.dat
+│   ├── script/
+│   │   ├── mainV1.scm
+│   │   └── scriptv1.img
+│   ├── 360Default1280x720.cfg
+│   ├── 360Default960x720.cfg
+│   ├── ShopUVs.dat
+│   ├── TouchDefaultPhone3x2.cfg
+│   ├── TouchDefaultPhoneWidescreen.cfg
+│   ├── TouchDefaultTablet4x3.cfg
+│   ├── TouchDefaultTabletWidescreen.cfg
+│   ├── animgrp.dat
+│   ├── ar_stats.dat
+│   ├── carcols.dat
+│   ├── cargrp.dat
+│   ├── carmods.dat
+│   ├── clothes.dat
+│   ├── colorcycle.dat
+│   ├── default.dat
+│   ├── default.ide
+│   ├── fonts.dat
+│   ├── furnitur.dat
+│   ├── gridref.dat
+│   ├── gta.dat
+│   ├── handling.cfg
+│   ├── info.zon
+│   ├── mainV1.scm
+│   ├── map.zon
+│   ├── melee.dat
+│   ├── object.dat
+│   ├── ped.dat
+│   ├── pedgrp.dat
+│   ├── peds.ide
+│   ├── pedstats.dat
+│   ├── plants.dat
+│   ├── popcycle.dat
+│   ├── procobj.dat
+│   ├── scriptv1.img
+│   ├── shopping.dat
+│   ├── statdisp.dat
+│   ├── surface.dat
+│   ├── surfaud.dat
+│   ├── surfinfo.dat
+│   ├── timecyc.dat
+│   ├── txdcut.ide
+│   ├── vehicles.ide
+│   ├── water.dat
+│   ├── water1.dat
+│   └── weapon.dat
+├── fonts/
+│   ├── arial.ttf
+│   ├── arial_bold.ttf
+│   ├── calibri.ttf
+│   ├── comicsansms.ttf
+│   ├── consolas.ttf
+│   ├── constantia.ttf
+│   ├── corbel.ttf
+│   ├── couriernew.ttf
+│   ├── georgia.ttf
+│   ├── gtaweap3.ttf
+│   ├── impact.ttf
+│   ├── lucidaconsole.ttf
+│   ├── marlett.ttf
+│   ├── palatinolinotype.ttf
+│   ├── sagothic.ttf
+│   ├── saheader.ttf
+│   ├── sans.ttf
+│   ├── symbol.ttf
+│   ├── tahoma.ttf
+│   ├── timesnewroman.ttf
+│   ├── trebuchetms.ttf
+│   ├── unifont.ttf
+│   ├── verdana.ttf
+│   ├── webdings.ttf
+│   ├── wingdings.ttf
+│   ├── wingdings2.ttf
+│   └── wingdings3.ttf
+├── lib/
+│   ├── libGTASA.so
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
+├── models/
+│   ├── coll/
+│   │   ├── peds.col
+│   │   ├── vehicles.col
+│   │   └── weapons.col
+│   └── effects.fxp
+├── texdb/
+│   ├── gta3/
+│   │   ├── gta3.dxt.dat
+│   │   ├── gta3.dxt.tmb
+│   │   ├── gta3.dxt.toc
+│   │   ├── gta3.etc.dat
+│   │   ├── gta3.etc.tmb
+│   │   ├── gta3.etc.toc
+│   │   ├── gta3.pvr.dat
+│   │   ├── gta3.pvr.tmb
+│   │   ├── gta3.pvr.toc
+│   │   └── gta3.txt
+│   ├── gta_int/
+│   │   ├── gta_int.dxt.dat
+│   │   ├── gta_int.dxt.tmb
+│   │   ├── gta_int.dxt.toc
+│   │   ├── gta_int.etc.dat
+│   │   ├── gta_int.etc.tmb
+│   │   ├── gta_int.etc.toc
+│   │   ├── gta_int.pvr.dat
+│   │   ├── gta_int.pvr.tmb
+│   │   ├── gta_int.pvr.toc
+│   │   └── gta_int.txt
+│   ├── menu/
+│   │   ├── menu.pvr.dat
+│   │   ├── menu.pvr.tmb
+│   │   ├── menu.pvr.toc
+│   │   └── menu.txt
+│   ├── mobile/
+│   │   ├── mobile.dxt.dat
+│   │   ├── mobile.dxt.tmb
+│   │   ├── mobile.dxt.toc
+│   │   ├── mobile.etc.dat
+│   │   ├── mobile.etc.tmb
+│   │   ├── mobile.etc.toc
+│   │   ├── mobile.pvr.dat
+│   │   ├── mobile.pvr.tmb
+│   │   ├── mobile.pvr.toc
+│   │   └── mobile.txt
+│   ├── player/
+│   │   ├── player.pvr.dat
+│   │   ├── player.pvr.tmb
+│   │   ├── player.pvr.toc
+│   │   └── player.txt
+│   ├── txd/
+│   │   ├── txd.dxt.dat
+│   │   ├── txd.dxt.tmb
+│   │   ├── txd.dxt.toc
+│   │   ├── txd.etc.dat
+│   │   ├── txd.etc.tmb
+│   │   ├── txd.etc.toc
+│   │   ├── txd.pvr.dat
+│   │   ├── txd.pvr.tmb
+│   │   ├── txd.pvr.toc
+│   │   └── txd.txt
+│   ├── gta3.img
+│   ├── gta_int.img
+│   └── player.img
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
