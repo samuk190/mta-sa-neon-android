@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - The Android launcher now ships and loads its native client as `libsaonlineneon.so`. The APK audit and runtime integrity checks use the same name.
 
+### PC Network compatibility (netc emulation)
+
+- New `app/src/main/cpp/netemu` subsystem runs the PC `netc.dll` (x86/32-bit) under emulation on arm64, so the transport and join handshake behave like a real PC client. This backs the planned "Use PC Network — Compatibility" server option for joining servers without the mobile transport. It reuses MobileSA's approach only; no code from that APK is used, and `netc.dll` (MTA's binary) is supplied at runtime, never committed. See `app/src/main/cpp/netemu/README.md`.
+  - `GuestMemory`: a 2 GiB guest address space (page allocator, size-class heap, string helpers) over one host reservation mapped with `uc_mem_map_ptr`.
+  - `PeImage`: PE32 mapping with sections, base relocations, import binding to shim thunks, exports and static TLS; `MapView` for `NtMapViewOfSection(SEC_IMAGE)`.
+  - `X86Machine`: Unicorn x86-32 CPU, cooperative guest threads with per-thread FS/TEB through the GDT, a slice scheduler with a watchdog, Win32 blocking emulated by re-entrant shims, and host↔guest calls with continuations.
+  - Win32 surface (`Win32Kernel32`, `Win32Sync`, `Win32Files`, `Win32Winsock`, `Win32Ntdll`, `Win32Stubs`): ~330 imports of both the Neon and stock netc builds, implemented on POSIX — process/module/memory/time/locale, synchronization and threads with SEH and pthreads-win32, files and a file-backed registry (A/W), `ws2_32` over POSIX sockets with async DNS, `ntdll`/`psapi`/toolhelp, and desktop-only stubs (COM, certificates, DPAPI, services).
+  - `NetcModule`: drives netc as `core.dll` does (DllMain, `SetMTADirectory`/`SetGTADirectory`, `InitNetRev`, `CheckCompatibility`, `InitNetInterface`, then the `CNet` methods) and exposes a small C++ API; packets cross the boundary by reading the `NetBitStreamInterface` through its own vtable via guest continuations.
+  - `tools/netemu/netemu_probe.cpp`: host-only tool to load a netc build, print its identity and dump the packets it returns, for debugging without a device.
+  - Verified on the host against both netc builds: 0 unresolved imports, CRT init and `DllMain` succeed, compatibility/version/install (registry) checks pass, and the hardware-fingerprint path runs (volume serial, adapter MAC, DPAPI round-trip, toolhelp/psapi enumeration). Not yet run on a device; a live join needs the remaining init path (network) and the server-select checkbox wiring, which follow in later lots.
+
 ### Game Sync
 
 - Android traffic owners can probe the task of a stalled pedestrian, ground and eight escape corridors in one game-thread query. Uses desktop CWorldSA.cpp:708–729,737–763 and the collision flags from Dryxio/san-andreas-online#133.

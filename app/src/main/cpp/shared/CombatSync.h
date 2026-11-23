@@ -15,6 +15,14 @@ class BitStreamWriter;
 
 namespace WorldRPG::Combat {
 
+// MTA SBodypartSync: a pie-piece body part is 3..9, written as (part - 3) in
+// 3 bits and read back with +3. Non-bullet damage (explosion, fire, drowning)
+// reports piece 0, which is not a valid pie piece; clamp it to 3 (torso) as the
+// desktop client does, so the unsigned subtraction never wraps on the wire.
+inline uint32_t EncodeBodypart(uint8_t part) {
+    return static_cast<uint32_t>((part >= 3 && part <= 9 ? part : 3) - 3);
+}
+
 struct DamageReport {
     uint64_t serial = 0;
     uint32_t attacker = 0;

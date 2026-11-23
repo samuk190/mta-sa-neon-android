@@ -352,7 +352,7 @@ struct NeonJoinClient::Impl {
         w.WriteCompressed(static_cast<uint32_t>(dead.animId), 4);
         WriteFieldLsb(w, dead.damager & 0x1FFFFu, 17);
         WriteFieldLsb(w, dead.weapon & 0x3Fu, 6);
-        WriteFieldLsb(w, (dead.bodyPart - 3) & 7, 3);
+        WriteFieldLsb(w, WorldRPG::Combat::EncodeBodypart(static_cast<uint8_t>(dead.bodyPart)), 3);
         WriteFieldLsb(w, fixed24(dead.x), 24);
         WriteFieldLsb(w, fixed24(dead.y), 24);
         w.Write(dead.z);
@@ -607,7 +607,7 @@ struct NeonJoinClient::Impl {
             std::memcpy(idBytes, &idBits, 4);
             w.WriteBits(idBytes, 17);
             low(w, damage.weapon & 0x3Fu, 6);
-            low(w, damage.zone - 3u, 3);                   // SBodypartSync
+            low(w, WorldRPG::Combat::EncodeBodypart(damage.zone), 3);  // SBodypartSync
         } else {
             low(w, 0, 1);                           // no damage info
         }

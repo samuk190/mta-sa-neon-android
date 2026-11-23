@@ -1,6 +1,8 @@
 #include <cmath>
 #include "VehicleSync.h"
 
+#include "CombatSync.h"
+
 #include "entity/EntitySyncReaders.h"
 #include "entity/EntityVehicleModels.h"
 
@@ -476,7 +478,7 @@ bool WriteDriverPuresync(Writer& w, const DriverPuresyncIn& in) {
     if (in.hasDamage) {
         WriteElementId(w, in.damagerId);
         WriteBitsValue(w, in.damageWeapon & 0x3Fu, 6);
-        WriteBitsValue(w, in.damageBodyPart - 3u, 3);
+        WriteBitsValue(w, WorldRPG::Combat::EncodeBodypart(in.damageBodyPart), 3);
     }
 
     // Player health and armor (CNetAPI 1754-1766; reader 405-456). Health 0-255, armor 0-127.5.
