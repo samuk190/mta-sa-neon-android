@@ -75,6 +75,9 @@ std::string ReadChatText(WorldRPG::Net::BitStreamReader& reader) {
     return text;
 }
 
+// The network the packet handlers were registered with (PacketHandler::registerAll).
+const WorldRPG::Net::RakNetWrapper* g_packetNetwork = nullptr;
+
 bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
     // The standard header has 50 bits. The shortened mobile header has 25.
     // When a caller has only whole bytes, retain its legacy layout fallback.
@@ -83,7 +86,10 @@ bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
     if (!mobile.Read(red) || !mobile.Read(green) || !mobile.Read(blue) || !mobile.ReadBits(&coded, 1))
         return false;
     std::string text = ReadChatText(mobile);
-    const bool standardHeader = (bits % 8 == 2);
+    // Through PC Network the server writes the desktop header (it sees a
+    // desktop bitstream version), and netc reports whole bytes, so the
+    // bit-length test below cannot tell.
+    const bool standardHeader = (bits % 8 == 2) || (g_packetNetwork && g_packetNetwork->IsPcNetwork());
     if (standardHeader || (bits % 8 == 0 && ReadableScore(text) < 2)) {
         WorldRPG::Net::BitStreamReader desktop(body, length, bits);
         uint8_t ignored = 0;
@@ -1529,6 +1535,7 @@ void PacketHandler::registerAll(Net::RakNetWrapper& network) {
         PKT_LOGE("PacketHandler::registerAll: not initialized");
         return;
     }
+    g_packetNetwork = &network;
 
     // Register built-in handlers
     registerHandler(MTAPacketID::ELEMENT_CREATE, [this](const uint8_t* data, size_t len) -> bool {

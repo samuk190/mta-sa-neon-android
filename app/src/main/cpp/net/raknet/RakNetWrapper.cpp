@@ -722,6 +722,8 @@ void RakNetWrapper::StopNetwork() {
     pImpl_->adapter.shutdown();
 }
 
+bool RakNetWrapper::IsPcNetwork() const { return pImpl_->pc != nullptr; }
+
 bool RakNetWrapper::IsTransportStarting() const {
     return pImpl_->pc && pImpl_->handshakeState.load() == HandshakeState::IDLE;
 }

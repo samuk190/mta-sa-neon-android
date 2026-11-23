@@ -219,6 +219,9 @@ public:
     void StopNetwork();
     // PC Network: netc is still loading or its RakNet has not connected yet.
     bool IsTransportStarting() const;
+    // True while the session runs through PC Network (emulated netc). The
+    // server then sees a desktop client and writes desktop packet layouts.
+    bool IsPcNetwork() const;
     // CNet::SetServerBitStreamVersion for netc; nothing to do on other transports.
     void SetServerBitStreamVersion(uint16_t version);
 
