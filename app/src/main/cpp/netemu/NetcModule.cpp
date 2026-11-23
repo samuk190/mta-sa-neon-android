@@ -166,18 +166,30 @@ void NetcModule::InstallHostThunks() {
                                    [sent](ShimCall& k4) { k4.Return(sent); });
                        });
                    };
-                   if (!bits) {
-                       send(k1);
+                   // NetBitStreamInterface::WriteBits is RakNet's WriteBits with
+                   // rightAlignedBits = true: a trailing partial byte is taken
+                   // from its low bits. Our buffers are MSB-first, so the whole
+                   // bytes go in one call and the tail is shifted down first.
+                   const uint32_t whole = bits & ~7u, rem = bits & 7u;
+                   auto tail = [writeBits, bs, data, whole, rem, send](ShimCall& k) {
+                       if (!rem) return send(k);
+                       const uint32_t at = data + whole / 8;
+                       k.mem.Write8(at, static_cast<uint8_t>(k.mem.Read8(at) >> (8 - rem)));
+                       k.Call(writeBits, {at, rem}, bs, send);
+                   };
+                   if (!whole) {
+                       tail(k1);
                        return;
                    }
-                   k1.Call(writeBits, {data, bits}, bs, send);
+                   k1.Call(writeBits, {data, whole}, bs, tail);
                });
     });
 }
 
 bool NetcModule::CalibrateBitStream(std::string* error) {
-    // Write 0xA5 0x5A 0xC3 through WriteBits and read it back. This checks
-    // the vtable slot numbers this build of netc uses.
+    // Write 20 bits (0xA5 0x5A and the low nibble of 0xC3) through WriteBits
+    // and read them back. This checks the vtable slot numbers this build of
+    // netc uses; WriteBits right-aligns a partial byte, so the tail is 0x3_.
     bool ok = false;
     const uint32_t bs = static_cast<uint32_t>(CallMethod(kAllocateNetBitStream, {}, &ok));
     if (!ok || !bs) {
@@ -200,7 +212,7 @@ bool NetcModule::CalibrateBitStream(std::string* error) {
     mem.ReadBytes(data, back, 3);
     machine_->CallSync(VCall(kDeallocateNetBitStream), cnet_, {bs}, &ok);
     FreeGuest(buf);
-    const bool match = bits == 20 && back[0] == 0xA5 && back[1] == 0x5A && (back[2] & 0xF0) == 0xC0 && readOffset == 0;
+    const bool match = bits == 20 && back[0] == 0xA5 && back[1] == 0x5A && (back[2] & 0xF0) == 0x30 && readOffset == 0;
     NETEMU_LOGI("bitstream calibration: bits=%u data=%02X %02X %02X readOffset=%u -> %s", bits, back[0], back[1], back[2], readOffset,
                 match ? "ok" : "MISMATCH");
     if (!match && error) *error = "NetBitStreamInterface vtable layout does not match";
@@ -284,6 +296,14 @@ bool NetcModule::Load(const NetcConfig& config, std::string* error) {
         const uint32_t c = GuestString(config.productVersion);
         machine_->CallSync(initRev, 0, {a, b, c}, &ok);
         if (!ok) return fail("InitNetRev faulted: " + machine_->LastFault());
+    }
+
+    // loader-proxy runs the anti-cheat service stage inside the game process
+    // before core.dll loads: CheckService(CHECK_SERVICE_POST_CREATE).
+    if (const uint32_t checkService = image_->Export("CheckService")) {
+        const uint64_t r = machine_->CallSync(checkService, 0, {7}, &ok, 60000);
+        if (!ok) return fail("CheckService faulted: " + machine_->LastFault());
+        NETEMU_LOGI("netc CheckService(POST_CREATE) -> %u", static_cast<unsigned>(r & 0xFF));
     }
 
     if (const uint32_t check = image_->Export("CheckCompatibility")) {

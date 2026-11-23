@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,14 @@ constexpr uint32_t kStaticBump = kStaticBegin + 0x10000u;
 constexpr uint32_t kThunkBegin = 0x7FF00000u;
 constexpr uint32_t kThunkEnd = 0x7FF40000u;
 constexpr uint32_t kThunkStride = 16;
+// Each thunk slot looks like a hot-patchable Win32 function so inline-hook
+// libraries (Detours, MinHook) can attach to it:
+//   +0 mov edi,edi / push ebp / mov ebp,esp   (5 bytes a hook may replace)
+//   +5 pop ebp                                 (a trampoline jumps back here)
+//   +6 dispatch point, then int3 padding (MinHook's hot-patch area)
+// The shim runs at +0 while the prologue is intact, or at +6 when a hook's
+// trampoline executed the copied prologue and came back.
+constexpr uint32_t kThunkDispatch = 6;
 constexpr uint32_t kSharedUserData = 0x7FFE0000u;
 constexpr uint32_t kArenaSize = 0x80000000u;
 constexpr uint32_t kPage = 0x1000u;
@@ -90,6 +99,16 @@ public:
     // next allocation or fixed region. 0 when va is allocated or reserved.
     uint32_t FreeSpan(uint32_t va) const;
 
+    // Win32 page protections as the guest sees them (VirtualQuery and the old
+    // value VirtualProtect hands back). Unicorn maps everything RWX; this is
+    // bookkeeping only. Pages never set report PAGE_EXECUTE_READWRITE.
+    static constexpr uint32_t kDefaultProtect = 0x40;
+    void SetProtect(uint32_t va, uint32_t len, uint32_t prot);
+    uint32_t Protect(uint32_t va) const;
+    // First page at or after va (page aligned, < limit) whose protection
+    // differs from va's; limit when the run reaches it.
+    uint32_t ProtectRunEnd(uint32_t va, uint32_t limit) const;
+
     // General heap used by HeapAlloc, malloc-style shims and the host side.
     // 16-byte aligned. Returns 0 when exhausted.
     uint32_t HeapAlloc(uint32_t size, bool zero);
@@ -124,6 +143,7 @@ private:
     std::map<uint32_t, uint32_t> freeLow_;   // start -> size
     std::map<uint32_t, uint32_t> freeHigh_;  // start -> size
     std::map<uint32_t, uint32_t> used_;      // start -> size
+    std::unordered_map<uint32_t, uint32_t> protect_;  // page number -> PAGE_* (only non-default)
     std::vector<uint32_t> freeLists_[kClassCount];
     uint32_t staticCur_ = Map::kStaticBump;
 };

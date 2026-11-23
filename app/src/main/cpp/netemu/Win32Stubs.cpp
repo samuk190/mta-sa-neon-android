@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <random>
 
 namespace NetEmu {
@@ -358,17 +361,7 @@ void InstallStubs(Win32State& s) {
     V(kS, "ShellExecuteA", 6, 2);
     V(kS, "ShellExecuteExW", 1, 0, Win32::kErrorAccessDenied);
 
-    // --- COM: no WMI in this process --------------------------------------------------
-    constexpr char kO[] = "ole32.dll";
-    V(kO, "CoInitializeEx", 2, 0);
-    V(kO, "CoInitializeSecurity", 9, 0);
-    R(kO, "CoCreateInstance", 5, [st](ShimCall& c) {
-        st->NoteStub("ole32!CoCreateInstance");
-        if (c.Arg(4)) c.mem.Write32(c.Arg(4), 0);
-        c.Return(0x80040154u);  // REGDB_E_CLASSNOTREG
-    });
-    V(kO, "CoSetProxyBlanket", 8, 0x80004001u);  // E_NOTIMPL
-
+    // --- COM: ole32 (CoCreateInstance and WMI) lives in Win32Wmi.cpp ------------------
     constexpr char kOa[] = "oleaut32.dll";
     m.RegisterOrdinal(kOa, 2, "SysAllocString");
     m.RegisterOrdinal(kOa, 6, "SysFreeString");
@@ -404,6 +397,7 @@ void InstallStubs(Win32State& s) {
     });
     R(kOa, "SysStringLen", 1, [](ShimCall& c) { c.Return(c.Arg(0) ? c.mem.Read32(c.Arg(0) - 4) / 2 : 0); });
     R(kOa, "VariantClear", 1, [](ShimCall& c) {
+        if (c.mem.Read16(c.Arg(0)) == 8 && c.mem.Read32(c.Arg(0) + 8)) c.mem.HeapFree(c.mem.Read32(c.Arg(0) + 8) - 4);  // VT_BSTR
         c.mem.Fill(c.Arg(0), 0, 16);
         c.Return(0);
     });
@@ -482,10 +476,124 @@ void InstallStubs(Win32State& s) {
     R("winmm.dll", "timeGetTime", 0, [st](ShimCall& c) { c.Return(static_cast<uint32_t>(st->machine.NowMs() + 3600000ull)); });
     // Optional fingerprint sources netc probes through GetProcAddress. Each
     // reports "nothing here" so netc falls back to the sources we do provide.
-    V(kA, "CredReadW", 5, 0, 1168);   // ERROR_NOT_FOUND
-    V(kA, "CredReadA", 5, 0, 1168);
-    V(kA, "CredFree", 1, 0);
-    V(kA, "CredWriteW", 2, 0, Win32::kErrorAccessDenied);
+    // Credential Manager: generic credentials persist with the registry file
+    // (under a private "credman" root no HKEY reaches), so what netc writes
+    // is there on the next run, as on a real profile.
+    auto credKey = [](uint32_t type, const std::string& target) {
+        std::string t = target;
+        for (char& ch : t) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return "credman\\" + std::to_string(type) + "\\" + t;
+    };
+    auto credRead = [st, credKey](ShimCall& c, bool wide) {
+        const std::string target = wide ? c.mem.ReadW(c.Arg(0), 512) : c.mem.ReadA(c.Arg(0), 512);
+        auto it = st->registry.find(credKey(c.Arg(1), target));
+        if (!c.Arg(3) || it == st->registry.end()) {
+            if (c.Arg(3)) c.mem.Write32(c.Arg(3), 0);
+            c.SetLastError(1168);  // ERROR_NOT_FOUND
+            c.Return(0);
+            return;
+        }
+        auto field = [&](const char* name) -> std::vector<uint8_t> {
+            auto f = it->second.find(name);
+            return f == it->second.end() ? std::vector<uint8_t>{} : f->second.second;
+        };
+        auto text = [&](const char* name) {
+            const std::vector<uint8_t> v = field(name);
+            return std::string(v.begin(), v.end());
+        };
+        auto u32 = [&](const char* name) {
+            const std::vector<uint8_t> v = field(name);
+            uint32_t x = 0;
+            if (v.size() >= 4) std::memcpy(&x, v.data(), 4);
+            return x;
+        };
+        const std::vector<uint8_t> blob = field("blob");
+        const std::string name = text("target"), user = text("user"), comment = text("comment");
+        const uint32_t unit = wide ? 2 : 1;
+        auto strBytes = [unit](const std::string& v) { return static_cast<uint32_t>((v.size() + 1) * unit); };
+        // One block, freed by CredFree: CREDENTIAL (52 bytes), then its strings and blob.
+        const uint32_t total = 52 + strBytes(name) + strBytes(user) + strBytes(comment) + static_cast<uint32_t>(blob.size());
+        const uint32_t p = c.mem.HeapAlloc(total, true);
+        if (!p) {
+            c.SetLastError(Win32::kErrorNotEnoughMemory);
+            c.Return(0);
+            return;
+        }
+        uint32_t cur = p + 52;
+        auto put = [&](const std::string& v) {
+            const uint32_t at = cur;
+            wide ? c.mem.WriteW(at, v, v.size() + 1) : c.mem.WriteA(at, v, v.size() + 1);
+            cur += strBytes(v);
+            return at;
+        };
+        c.mem.Write32(p + 0, u32("flags"));
+        c.mem.Write32(p + 4, c.Arg(1));
+        c.mem.Write32(p + 8, put(name));
+        c.mem.Write32(p + 12, comment.empty() ? 0 : put(comment));
+        c.mem.Write64(p + 16, static_cast<uint64_t>(u32("written_lo")) | (static_cast<uint64_t>(u32("written_hi")) << 32));
+        c.mem.Write32(p + 24, static_cast<uint32_t>(blob.size()));
+        if (!blob.empty()) {
+            c.mem.WriteBytes(cur, blob.data(), blob.size());
+            c.mem.Write32(p + 28, cur);
+            cur += static_cast<uint32_t>(blob.size());
+        }
+        c.mem.Write32(p + 32, u32("persist"));
+        c.mem.Write32(p + 48, user.empty() ? 0 : put(user));
+        c.mem.Write32(c.Arg(3), p);
+        c.Return(1);
+    };
+    auto credWrite = [st, credKey](ShimCall& c, bool wide) {
+        const uint32_t cred = c.Arg(0);
+        if (!cred) {
+            c.SetLastError(Win32::kErrorInvalidParameter);
+            c.Return(0);
+            return;
+        }
+        auto str = [&](uint32_t va) { return va ? (wide ? c.mem.ReadW(va, 32767) : c.mem.ReadA(va, 32767)) : std::string(); };
+        const uint32_t type = c.mem.Read32(cred + 4);
+        const std::string target = str(c.mem.Read32(cred + 8));
+        if (target.empty()) {
+            c.SetLastError(Win32::kErrorInvalidParameter);
+            c.Return(0);
+            return;
+        }
+        const uint32_t blobSize = std::min<uint32_t>(c.mem.Read32(cred + 24), 2560);  // CRED_MAX_CREDENTIAL_BLOB_SIZE
+        std::vector<uint8_t> blob(blobSize);
+        if (blobSize) c.mem.ReadBytes(c.mem.Read32(cred + 28), blob.data(), blobSize);
+        auto bytes = [](const std::string& v) { return std::vector<uint8_t>(v.begin(), v.end()); };
+        auto dword = [](uint32_t v) {
+            std::vector<uint8_t> b(4);
+            std::memcpy(b.data(), &v, 4);
+            return b;
+        };
+        const uint64_t now = FileTimeNow();
+        auto& values = st->registry[credKey(type, target)];
+        values.clear();
+        values["target"] = {3u, bytes(target)};
+        values["user"] = {3u, bytes(str(c.mem.Read32(cred + 48)))};
+        values["comment"] = {3u, bytes(str(c.mem.Read32(cred + 12)))};
+        values["blob"] = {3u, blob};
+        values["flags"] = {4u, dword(c.mem.Read32(cred))};
+        values["persist"] = {4u, dword(c.mem.Read32(cred + 32))};
+        values["written_lo"] = {4u, dword(static_cast<uint32_t>(now))};
+        values["written_hi"] = {4u, dword(static_cast<uint32_t>(now >> 32))};
+        st->SaveRegistry();
+        c.Return(1);
+    };
+    R(kA, "CredReadW", 4, [credRead](ShimCall& c) { credRead(c, true); });
+    R(kA, "CredReadA", 4, [credRead](ShimCall& c) { credRead(c, false); });
+    R(kA, "CredWriteW", 2, [credWrite](ShimCall& c) { credWrite(c, true); });
+    R(kA, "CredWriteA", 2, [credWrite](ShimCall& c) { credWrite(c, false); });
+    R(kA, "CredDeleteW", 3, [st, credKey](ShimCall& c) {
+        const bool found = st->registry.erase(credKey(c.Arg(1), c.mem.ReadW(c.Arg(0), 512))) > 0;
+        if (found) st->SaveRegistry();
+        else c.SetLastError(1168);
+        c.Return(found ? 1 : 0);
+    });
+    R(kA, "CredFree", 1, [](ShimCall& c) {
+        if (c.Arg(0)) c.mem.HeapFree(c.Arg(0));
+        c.Return(0);
+    });
     constexpr char kK2[] = "kernel32.dll";
     V(kK2, "GetSystemFirmwareTable", 4, 0);  // 0 bytes: no SMBIOS table
     V(kK2, "EnumSystemFirmwareTables", 3, 0);
@@ -555,7 +663,7 @@ void InstallStubs(Win32State& s) {
         c.mem.WriteBytes(a + 404, mac, 6);
         c.mem.Write32(a + 412, 1);   // Index
         c.mem.Write32(a + 416, 6);   // MIB_IF_TYPE_ETHERNET
-        c.mem.WriteA(a + 432, "192.168.1.100", 16);  // IpAddressList.IpAddress
+        c.mem.WriteA(a + 432, st->env.localIp, 16);  // IpAddressList.IpAddress
         c.mem.WriteA(a + 448, "255.255.255.0", 16);  // IpAddressList.IpMask
         c.Return(0);
     });
@@ -570,6 +678,17 @@ void InstallStubs(Win32State& s) {
             }
         }
         c.Return(232);  // ERROR_NO_DATA: no addresses of the requested family
+    });
+    // Every route goes out through the one adapter GetAdaptersInfo reports.
+    R("iphlpapi.dll", "GetBestInterface", 2, [](ShimCall& c) {
+        if (!c.Arg(1)) return c.Return(Win32::kErrorInvalidParameter);
+        c.mem.Write32(c.Arg(1), 1);
+        c.Return(0);
+    });
+    R("iphlpapi.dll", "GetBestInterfaceEx", 2, [](ShimCall& c) {
+        if (!c.Arg(1)) return c.Return(Win32::kErrorInvalidParameter);
+        c.mem.Write32(c.Arg(1), 1);
+        c.Return(0);
     });
     V("iphlpapi.dll", "GetIpNetTable2", 2, Win32::kErrorNotSupported);
     V("iphlpapi.dll", "FreeMibTable", 1, 0);

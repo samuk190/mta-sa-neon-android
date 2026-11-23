@@ -521,10 +521,75 @@ void InstallSync(Win32State& s) {
     });
 
     // --- structured exceptions -----------------------------------------------------
-    // RaiseException builds an EXCEPTION_RECORD and a CONTEXT below the caller's
-    // stack and walks the fs:[0] chain, calling each handler. MSVC's C++
-    // handler unwinds through RtlUnwind and jumps into the catch block itself.
-    R("RaiseException", 4, [](ShimCall& c) {
+    // Dispatch follows RtlDispatchException: vectored handlers first, then the
+    // fs:[0] frame chain. A handler that returns "continue execution" resumes
+    // the thread from the (possibly edited) CONTEXT; MSVC's C++ and __except
+    // handlers never return, they unwind through RtlUnwind into the catch
+    // block. The record is 0x50 bytes at rec, EXCEPTION_POINTERS {rec, ctx}
+    // sits at rec+0x50 and the CONTEXT at ctx.
+    auto dispatch = [st](ShimCall& c, uint32_t rec, uint32_t ctx, uint32_t reserve) {
+        const uint32_t code = c.mem.Read32(rec);
+        const uint32_t pointers = rec + 0x50;
+        c.mem.Write32(pointers, rec);
+        c.mem.Write32(pointers + 4, ctx);
+        auto resume = [ctx](ShimCall& r) {
+            ShimCall::Regs regs{};
+            regs.edi = r.mem.Read32(ctx + 0x9C);
+            regs.esi = r.mem.Read32(ctx + 0xA0);
+            regs.ebx = r.mem.Read32(ctx + 0xA4);
+            regs.edx = r.mem.Read32(ctx + 0xA8);
+            regs.ecx = r.mem.Read32(ctx + 0xAC);
+            regs.eax = r.mem.Read32(ctx + 0xB0);
+            regs.ebp = r.mem.Read32(ctx + 0xB4);
+            regs.eip = r.mem.Read32(ctx + 0xB8);
+            regs.eflags = r.mem.Read32(ctx + 0xC0);
+            regs.esp = r.mem.Read32(ctx + 0xC4);
+            r.thread.resumedEip = regs.eip;
+            r.thread.resumedEsp = regs.esp;
+            r.Resume(regs);
+        };
+        auto vehs = std::make_shared<std::vector<uint32_t>>(st->vectoredHandlers);
+        auto vehIndex = std::make_shared<size_t>(0);
+        auto frame = std::make_shared<uint32_t>(c.mem.Read32(c.thread.teb));
+        // The walker holds itself weakly; only a pending continuation keeps it
+        // alive, so it is freed once the exception is resumed or unwound.
+        auto next = std::make_shared<ShimFn>();
+        std::weak_ptr<ShimFn> weakNext = next;
+        *next = [weakNext, vehs, vehIndex, frame, rec, ctx, code, pointers, reserve, resume](ShimCall& k) {
+            auto next = weakNext.lock();
+            if (*vehIndex < vehs->size()) {
+                const uint32_t handler = (*vehs)[(*vehIndex)++];
+                k.Call(handler, {pointers}, 0,
+                       [next, resume](ShimCall& r) {
+                           if (r.result == 0xFFFFFFFFu) return resume(r);  // EXCEPTION_CONTINUE_EXECUTION
+                           (*next)(r);
+                       },
+                       reserve);
+                return;
+            }
+            if (*frame == 0xFFFFFFFFu || *frame == 0 || !k.mem.Valid(*frame, 8)) {
+                NETEMU_LOGE("unhandled guest exception 0x%08X at 0x%08X on thread %u", code, k.mem.Read32(rec + 12),
+                            k.thread.id);
+                k.Exit(code);
+                return;
+            }
+            const uint32_t handler = k.mem.Read32(*frame + 4);
+            const uint32_t current = *frame;
+            *frame = k.mem.Read32(current);
+            NETEMU_TRACE("SEH frame 0x%08X handler 0x%08X for 0x%08X", current, handler, code);
+            k.Call(handler, {rec, current, ctx, 0}, 0,
+                   [next, resume](ShimCall& r) {
+                       NETEMU_TRACE("SEH handler returned %u", r.result);
+                       if (r.result == 0) return resume(r);  // ExceptionContinueExecution
+                       (*next)(r);                           // continue search (nested/collided too)
+                   },
+                   reserve);
+        };
+        (*next)(c);
+    };
+
+    // RaiseException builds the record and CONTEXT below the caller's stack.
+    R("RaiseException", 4, [dispatch](ShimCall& c) {
         const uint32_t code = c.Arg(0);
         const uint32_t retAddr = c.ReturnAddress();
         const uint32_t rec = (c.esp - 0x400) & ~15u;
@@ -536,7 +601,7 @@ void InstallSync(Win32State& s) {
         c.mem.Write32(rec + 12, retAddr);
         c.mem.Write32(rec + 16, nparams);
         for (uint32_t i = 0; i < nparams; ++i) c.mem.Write32(rec + 20 + i * 4, c.mem.Read32(c.Arg(3) + i * 4));
-        c.mem.Fill(ctx, 0, 0x2CC);
+        c.mem.Fill(ctx, 0, Machine::kContextSize);
         c.mem.Write32(ctx + 0x00, 0x10007);
         c.mem.Write32(ctx + 0xB8, retAddr);
         c.mem.Write32(ctx + 0xC4, c.esp + 4 + 16);
@@ -547,41 +612,13 @@ void InstallSync(Win32State& s) {
             c.Return(0);
             return;
         }
-        auto next = std::make_shared<ShimFn>();
-        auto frame = std::make_shared<uint32_t>(c.mem.Read32(c.thread.teb));
-        *next = [next, frame, rec, ctx, code](ShimCall& k) {
-            // After a handler call: 0 = continue execution, 1 = continue search.
-            if (*frame == 0xFFFFFFFFu || *frame == 0 || !k.mem.Valid(*frame, 8)) {
-                NETEMU_LOGE("unhandled guest exception 0x%08X on thread %u", code, k.thread.id);
-                k.Exit(code);
-                return;
-            }
-            const uint32_t handler = k.mem.Read32(*frame + 4);
-            const uint32_t current = *frame;
-            *frame = k.mem.Read32(current);
-            k.Call(handler, {rec, current, ctx, 0}, 0,
-                   [next, rec, ctx](ShimCall& r) {
-                       if (r.result == 0) {
-                           ShimCall::Regs regs{};
-                           regs.edi = r.mem.Read32(ctx + 0x9C);
-                           regs.esi = r.mem.Read32(ctx + 0xA0);
-                           regs.ebx = r.mem.Read32(ctx + 0xA4);
-                           regs.edx = r.mem.Read32(ctx + 0xA8);
-                           regs.ecx = r.mem.Read32(ctx + 0xAC);
-                           regs.eax = r.mem.Read32(ctx + 0xB0);
-                           regs.ebp = r.mem.Read32(ctx + 0xB4);
-                           regs.eip = r.mem.Read32(ctx + 0xB8);
-                           regs.eflags = r.mem.Read32(ctx + 0xC0);
-                           regs.esp = r.mem.Read32(ctx + 0xC4);
-                           r.Resume(regs);
-                           return;
-                       }
-                       (*next)(r);
-                   },
-                   0x500);
-        };
-        (*next)(c);
+        dispatch(c, rec, ctx, 0x500);
     });
+    // Hardware faults (Machine::RaiseHardwareException) enter here with the
+    // record and CONTEXT already on the stack: [esp] 0, [esp+4] rec, [esp+8] ctx.
+    m.SetExceptionDispatcher(m.MakeThunk("<KiUserExceptionDispatcher>", 0, [dispatch](ShimCall& c) {
+        dispatch(c, c.Arg(0), c.Arg(1), 0);
+    }));
     R("RtlUnwind", 4, [](ShimCall& c) {
         const uint32_t target = c.Arg(0);
         uint32_t rec = c.Arg(2);
@@ -593,7 +630,9 @@ void InstallSync(Win32State& s) {
         c.mem.Write32(rec + 4, c.mem.Read32(rec + 4) | 2);  // EXCEPTION_UNWINDING
         if (!target) c.mem.Write32(rec + 4, c.mem.Read32(rec + 4) | 4);  // EXCEPTION_EXIT_UNWIND
         auto step = std::make_shared<ShimFn>();
-        *step = [step, target, rec](ShimCall& k) {
+        std::weak_ptr<ShimFn> weakStep = step;  // freed with the last continuation, as in dispatch
+        *step = [weakStep, target, rec](ShimCall& k) {
+            auto step = weakStep.lock();
             const uint32_t frame = k.mem.Read32(k.thread.teb);
             if (frame == target || frame == 0xFFFFFFFFu || frame == 0 || !k.mem.Valid(frame, 8)) {
                 k.Return(0);

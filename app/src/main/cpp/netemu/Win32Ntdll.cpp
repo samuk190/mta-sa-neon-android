@@ -135,6 +135,35 @@ void InstallNtdll(Win32State& s) {
             c.Return(1);
             return;
         }
+        if (f && f->disk && (code == 0x00070000u || code == 0x000700A0u)) {
+            // IOCTL_DISK_GET_DRIVE_GEOMETRY(_EX): a fixed 1 TB disk with the usual
+            // 255 heads x 63 sectors x 512 bytes translation. Disk-ID code (netc
+            // among it) only trusts a serial that comes from FixedMedia.
+            constexpr uint64_t kDiskBytes = 1000204886016ull;
+            constexpr uint32_t kHeads = 255, kSectors = 63, kBytesPerSector = 512;
+            const uint64_t cylinders = kDiskBytes / (uint64_t{kHeads} * kSectors * kBytesPerSector);
+            const bool ex = code == 0x000700A0u;
+            const uint32_t need = ex ? 32 : 24;  // DISK_GEOMETRY_EX without partition/detection info
+            if (!out || outSize < need) {
+                if (returned) c.mem.Write32(returned, 0);
+                c.SetLastError(Win32::kErrorInsufficientBuffer);
+                c.Return(0);
+                return;
+            }
+            c.mem.Write32(out, static_cast<uint32_t>(cylinders));
+            c.mem.Write32(out + 4, static_cast<uint32_t>(cylinders >> 32));
+            c.mem.Write32(out + 8, 12);  // FixedMedia
+            c.mem.Write32(out + 12, kHeads);
+            c.mem.Write32(out + 16, kSectors);
+            c.mem.Write32(out + 20, kBytesPerSector);
+            if (ex) {
+                c.mem.Write32(out + 24, static_cast<uint32_t>(kDiskBytes));
+                c.mem.Write32(out + 28, static_cast<uint32_t>(kDiskBytes >> 32));
+            }
+            if (returned) c.mem.Write32(returned, need);
+            c.Return(1);
+            return;
+        }
         char label[64];
         std::snprintf(label, sizeof(label), "DeviceIoControl 0x%08X", code);
         st->NoteStub(label);
@@ -407,7 +436,18 @@ void InstallNtdll(Win32State& s) {
         m.RegisterShim("kernel32.dll", std::string("K32") + name, args * 4, fn);
         m.RegisterShim("psapi.dll", name, args * 4, std::move(fn));
     };
-    auto enumModules = [moduleList](ShimCall& c) {
+    // This is a WOW64 process; the only other process it can open (explorer)
+    // is 64-bit, and psapi module queries across that boundary fail with
+    // ERROR_PARTIAL_COPY. True when hProcess (Arg 0) is this process.
+    auto ownProcess = [st](ShimCall& c) {
+        const uint32_t pid = st->ProcessPid(c.Arg(0));
+        if (pid == Win32State::kSelfPid) return true;
+        c.SetLastError(pid ? 299u : Win32::kErrorInvalidHandle);
+        c.Return(0);
+        return false;
+    };
+    auto enumModules = [moduleList, ownProcess](ShimCall& c) {
+        if (!ownProcess(c)) return;
         const auto mods = moduleList();
         const uint32_t arr = c.Arg(1), cb = c.Arg(2);
         for (uint32_t i = 0; i < mods.size() && (i + 1) * 4 <= cb; ++i) c.mem.Write32(arr + i * 4, mods[i].base);
@@ -416,7 +456,8 @@ void InstallNtdll(Win32State& s) {
     };
     P2("EnumProcessModules", 4, enumModules);
     P2("EnumProcessModulesEx", 5, enumModules);
-    P2("GetModuleInformation", 4, [findModule](ShimCall& c) {
+    P2("GetModuleInformation", 4, [findModule, ownProcess](ShimCall& c) {
+        if (!ownProcess(c)) return;
         auto mi = findModule(c.Arg(1));
         if (!mi || c.Arg(3) < 12) {
             c.SetLastError(Win32::kErrorInvalidHandle);
@@ -428,7 +469,8 @@ void InstallNtdll(Win32State& s) {
         c.mem.Write32(c.Arg(2) + 8, mi->entry);
         c.Return(1);
     });
-    auto moduleString = [findModule](ShimCall& c, bool path, bool wide) {
+    auto moduleString = [findModule, ownProcess](ShimCall& c, bool path, bool wide) {
+        if (!ownProcess(c)) return;
         auto mi = findModule(c.Arg(1));
         if (!mi) {
             c.SetLastError(Win32::kErrorInvalidHandle);
@@ -442,7 +484,8 @@ void InstallNtdll(Win32State& s) {
     P2("GetModuleFileNameExA", 4, [moduleString](ShimCall& c) { moduleString(c, true, false); });
     P2("GetModuleBaseNameW", 4, [moduleString](ShimCall& c) { moduleString(c, false, true); });
     P2("GetModuleBaseNameA", 4, [moduleString](ShimCall& c) { moduleString(c, false, false); });
-    P2("GetMappedFileNameW", 4, [moduleList](ShimCall& c) {
+    P2("GetMappedFileNameW", 4, [moduleList, ownProcess](ShimCall& c) {
+        if (!ownProcess(c)) return;
         for (const auto& mi : moduleList())
             if (c.Arg(1) >= mi.base && c.Arg(1) - mi.base < mi.size) {
                 const std::string dev = "\\Device\\HarddiskVolume1" + mi.path.substr(2);
@@ -452,6 +495,40 @@ void InstallNtdll(Win32State& s) {
         c.SetLastError(Win32::kErrorInvalidParameter);
         c.Return(0);
     });
+    // Loaded kernel drivers of a clean Windows 10 box (a WOW64 caller gets the
+    // image bases truncated to 32 bits). Anti-cheat code scans the names.
+    static const char* const kDrivers[] = {"ntoskrnl.exe", "hal.dll",     "kd.dll",      "mcupdate_GenuineIntel.dll",
+                                           "CLFS.SYS",     "tm.sys",      "PSHED.dll",   "BOOTVID.dll",
+                                           "FLTMGR.SYS",   "msrpc.sys",   "ksecdd.sys",  "clipsp.sys",
+                                           "cmimcext.sys", "ntosext.sys", "CI.dll",      "cng.sys",
+                                           "Wdf01000.sys", "acpiex.sys",  "ACPI.sys",    "WMILIB.SYS",
+                                           "pci.sys",      "volmgr.sys",  "volmgrx.sys", "storport.sys",
+                                           "stornvme.sys", "Ntfs.sys",    "tcpip.sys",   "NETIO.SYS",
+                                           "ndis.sys",     "afd.sys",     "dxgkrnl.sys", "win32k.sys"};
+    constexpr uint32_t kDriverCount = sizeof(kDrivers) / sizeof(kDrivers[0]);
+    auto driverBase = [](uint32_t i) { return 0x7A000000u + i * 0x00200000u; };  // low half of fffff806`7a...
+    P2("EnumDeviceDrivers", 3, [driverBase](ShimCall& c) {
+        const uint32_t arr = c.Arg(0), cb = c.Arg(1);
+        for (uint32_t i = 0; i < kDriverCount && (i + 1) * 4 <= cb; ++i) c.mem.Write32(arr + i * 4, driverBase(i));
+        if (c.Arg(2)) c.mem.Write32(c.Arg(2), kDriverCount * 4);
+        c.Return(1);
+    });
+    auto driverName = [driverBase](ShimCall& c, bool path, bool wide) {
+        for (uint32_t i = 0; i < kDriverCount; ++i) {
+            if (driverBase(i) != c.Arg(0)) continue;
+            const std::string name = kDrivers[i];
+            const bool kernel = i == 0 || name == "hal.dll" || name == "kd.dll";
+            const std::string v = !path ? name : (kernel ? "\\SystemRoot\\system32\\" : "\\SystemRoot\\System32\\drivers\\") + name;
+            c.Return(static_cast<uint32_t>(wide ? c.mem.WriteW(c.Arg(1), v, c.Arg(2)) : c.mem.WriteA(c.Arg(1), v, c.Arg(2))));
+            return;
+        }
+        c.SetLastError(Win32::kErrorInvalidParameter);
+        c.Return(0);
+    };
+    P2("GetDeviceDriverBaseNameA", 3, [driverName](ShimCall& c) { driverName(c, false, false); });
+    P2("GetDeviceDriverBaseNameW", 3, [driverName](ShimCall& c) { driverName(c, false, true); });
+    P2("GetDeviceDriverFileNameA", 3, [driverName](ShimCall& c) { driverName(c, true, false); });
+    P2("GetDeviceDriverFileNameW", 3, [driverName](ShimCall& c) { driverName(c, true, true); });
     P2("EnumProcesses", 3, [](ShimCall& c) {
         const uint32_t pids[] = {0, 4, 0x0FA0, 0x1000};
         uint32_t n = 0;
@@ -461,7 +538,13 @@ void InstallNtdll(Win32State& s) {
         c.Return(1);
     });
     P2("GetProcessImageFileNameW", 3, [st](ShimCall& c) {
-        const std::string dev = "\\Device\\HarddiskVolume1" + st->env.gtaDir.substr(2) + "\\gta_sa.exe";
+        const std::string image = st->ProcessImage(st->ProcessPid(c.Arg(0)));
+        if (image.empty()) {
+            c.SetLastError(Win32::kErrorInvalidHandle);
+            c.Return(0);
+            return;
+        }
+        const std::string dev = "\\Device\\HarddiskVolume1" + image.substr(2);
         c.Return(static_cast<uint32_t>(c.mem.WriteW(c.Arg(1), dev, c.Arg(2))));
     });
     P2("GetProcessMemoryInfo", 3, [](ShimCall& c) {
@@ -470,7 +553,12 @@ void InstallNtdll(Win32State& s) {
         c.Return(1);
     });
     K("QueryFullProcessImageNameW", 4, [st](ShimCall& c) {
-        const std::string exe = st->env.gtaDir + "\\gta_sa.exe";
+        const std::string exe = st->ProcessImage(st->ProcessPid(c.Arg(0)));
+        if (exe.empty()) {
+            c.SetLastError(Win32::kErrorInvalidHandle);
+            c.Return(0);
+            return;
+        }
         const uint32_t cap = c.mem.Read32(c.Arg(3));
         if (cap <= exe.size()) {
             c.SetLastError(Win32::kErrorInsufficientBuffer);
@@ -596,6 +684,38 @@ void InstallNtdll(Win32State& s) {
             if (ret) c.mem.Write32(ret, need);
             return len >= need;
         };
+        const uint32_t pid = st->ProcessPid(c.Arg(0));
+        if (!pid) {
+            c.Return(STATUS_INVALID_HANDLE);
+            return;
+        }
+        if (pid != Win32State::kSelfPid) {
+            // Another (64-bit) process: its identity and image name, nothing else.
+            if (cls == 0 && put(24)) {  // ProcessBasicInformation as WOW64 sees it
+                c.mem.Fill(buf, 0, 24);
+                c.mem.Write32(buf, 259);  // STILL_ACTIVE
+                c.mem.Write32(buf + 12, 8);
+                c.mem.Write32(buf + 16, pid);
+                c.mem.Write32(buf + 20, 0x0F00);  // userinit.exe, long exited
+                c.Return(STATUS_SUCCESS);
+            } else if (cls == 27 || cls == 43) {
+                const std::string image = st->ProcessImage(pid);
+                const std::string name = cls == 27 ? "\\Device\\HarddiskVolume1" + image.substr(2) : image;
+                const uint32_t need = 8 + static_cast<uint32_t>(name.size() + 1) * 2;
+                if (!put(need)) {
+                    c.Return(STATUS_INFO_LENGTH_MISMATCH);
+                    return;
+                }
+                c.mem.Write16(buf, static_cast<uint16_t>(name.size() * 2));
+                c.mem.Write16(buf + 2, static_cast<uint16_t>(name.size() * 2 + 2));
+                c.mem.Write32(buf + 4, buf + 8);
+                c.mem.WriteW(buf + 8, name, name.size() + 1);
+                c.Return(STATUS_SUCCESS);
+            } else {
+                c.Return(cls == 0 ? STATUS_INFO_LENGTH_MISMATCH : STATUS_ACCESS_DENIED);
+            }
+            return;
+        }
         switch (cls) {
         case 0:  // ProcessBasicInformation
             if (!put(24)) break;
@@ -649,7 +769,7 @@ void InstallNtdll(Win32State& s) {
     });
     // Low-level IOCTLs netc tries for SMART/disk identity: none are supported,
     // so it uses the volume serial and MAC it already collected.
-    R("NtDeviceIoControlFile", 10, [st](ShimCall& c) {
+    R("NtDeviceIoControlFile", 10, [](ShimCall& c) {
         if (c.Arg(4)) {
             c.mem.Write32(c.Arg(4), STATUS_NOT_IMPLEMENTED);
             c.mem.Write32(c.Arg(4) + 4, 0);
@@ -738,6 +858,7 @@ void InstallNtdll(Win32State& s) {
         }
         c.mem.Write32(pBase, want ? (want & ~(Map::kPage - 1)) : p);
         c.mem.Write32(pSize, (size + Map::kPage - 1) & ~(Map::kPage - 1));
+        c.mem.SetProtect(want ? (want & ~(Map::kPage - 1)) : p, size, c.Arg(5));
         c.Return(STATUS_SUCCESS);
     });
     R("NtFreeVirtualMemory", 4, [](ShimCall& c) {
@@ -745,9 +866,15 @@ void InstallNtdll(Win32State& s) {
         c.Return(STATUS_SUCCESS);
     });
     R("NtProtectVirtualMemory", 5, [st](ShimCall& c) {
-        if (c.Arg(4)) c.mem.Write32(c.Arg(4), 0x40);
-        const uint32_t base = c.mem.Read32(c.Arg(1));
-        st->machine.FlushCode(base, base + c.mem.Read32(c.Arg(2)));
+        const uint32_t base = c.mem.Read32(c.Arg(1)), size = c.mem.Read32(c.Arg(2));
+        if (c.Arg(4)) c.mem.Write32(c.Arg(4), c.mem.Protect(base));
+        // The kernel rounds the range out to whole pages and writes it back.
+        const uint32_t lo = base & ~(Map::kPage - 1);
+        const uint32_t hi = (base + size + Map::kPage - 1) & ~(Map::kPage - 1);
+        c.mem.SetProtect(lo, hi - lo, c.Arg(3));
+        c.mem.Write32(c.Arg(1), lo);
+        c.mem.Write32(c.Arg(2), hi - lo);
+        st->machine.FlushCode(base, base + size);
         c.Return(STATUS_SUCCESS);
     });
     R("NtQueryVirtualMemory", 6, [st](ShimCall& c) {
@@ -759,20 +886,9 @@ void InstallNtdll(Win32State& s) {
                 c.Return(STATUS_INFO_LENGTH_MISMATCH);
                 return;
             }
-            const uint32_t page = addr & ~(Map::kPage - 1);
-            c.mem.Fill(buf, 0, 28);
-            c.mem.Write32(buf, page);
-            if (used) {
-                c.mem.Write32(buf + 4, base);
-                c.mem.Write32(buf + 8, 0x40);
-                c.mem.Write32(buf + 12, base + size - page);
-                c.mem.Write32(buf + 16, 0x1000);
-                c.mem.Write32(buf + 20, 0x40);
-                c.mem.Write32(buf + 24, base == st->machine.MainModule() ? 0x1000000u : 0x20000u);
-            } else {
-                c.mem.Write32(buf + 12, Map::kPage);
-                c.mem.Write32(buf + 16, 0x10000);
-                c.mem.Write32(buf + 20, 1);
+            if (!WriteMemoryBasicInformation(*st, addr, buf)) {
+                c.Return(STATUS_INVALID_PARAMETER);
+                return;
             }
             if (ret) c.mem.Write32(ret, 28);
             c.Return(STATUS_SUCCESS);
@@ -846,6 +962,87 @@ void InstallNtdll(Win32State& s) {
             c.mem.Write32(iosb + 4, n > 0 ? static_cast<uint32_t>(n) : 0);
         }
         c.Return(n > 0 ? STATUS_SUCCESS : n == 0 ? STATUS_END_OF_FILE : STATUS_ACCESS_DENIED);
+    });
+    R("NtOpenProcess", 4, [st](ShimCall& c) {
+        // (*ProcessHandle, DesiredAccess, ObjectAttributes, ClientId {pid, tid})
+        const uint32_t out = c.Arg(0), cid = c.Arg(3);
+        if (!out || !cid) {
+            c.Return(STATUS_INVALID_PARAMETER);
+            return;
+        }
+        const uint32_t pid = c.mem.Read32(cid);
+        if (st->ProcessImage(pid).empty()) {
+            c.Return(pid == 4 ? STATUS_ACCESS_DENIED : 0xC000000Bu);  // STATUS_INVALID_CID
+            return;
+        }
+        c.mem.Write32(out, st->OpenProcessHandle(pid));
+        c.Return(STATUS_SUCCESS);
+    });
+    R("NtWriteFile", 9, [st](ShimCall& c) {
+        auto f = st->GetAs<KFile>(c.Arg(0), KObject::Kind::File);
+        if (!f) {
+            c.Return(STATUS_INVALID_HANDLE);
+            return;
+        }
+        const uint32_t iosb = c.Arg(4), buf = c.Arg(5), len = c.Arg(6), off = c.Arg(7);
+        const uint8_t* src = c.mem.Host(buf, len ? len : 1);
+        if (!src) {
+            c.Return(STATUS_ACCESS_DENIED);
+            return;
+        }
+        // ByteOffset absent or -1:-2 (FILE_USE_FILE_POINTER_POSITION): the
+        // current position; -1:-1 (FILE_WRITE_TO_END_OF_FILE): append.
+        constexpr uint64_t kUsePointer = 0xFFFFFFFFFFFFFFFEull, kToEnd = ~0ull;
+        const uint64_t pos = off ? c.mem.Read64(off) : kUsePointer;
+        if (pos == kToEnd) ::lseek(f->fd, 0, SEEK_END);
+        const bool positional = pos != kUsePointer && pos != kToEnd;
+        const ssize_t n = len == 0 ? 0 : positional ? ::pwrite(f->fd, src, len, static_cast<off_t>(pos)) : ::write(f->fd, src, len);
+        if (iosb) {
+            c.mem.Write32(iosb, n >= 0 ? 0 : STATUS_ACCESS_DENIED);
+            c.mem.Write32(iosb + 4, n > 0 ? static_cast<uint32_t>(n) : 0);
+        }
+        c.Return(n >= 0 ? STATUS_SUCCESS : STATUS_ACCESS_DENIED);
+    });
+    R("NtFlushBuffersFile", 2, [st](ShimCall& c) {
+        auto f = st->GetAs<KFile>(c.Arg(0), KObject::Kind::File);
+        if (!f) {
+            c.Return(STATUS_INVALID_HANDLE);
+            return;
+        }
+        if (!f->console) ::fsync(f->fd);
+        if (c.Arg(1)) c.mem.Fill(c.Arg(1), 0, 8);
+        c.Return(STATUS_SUCCESS);
+    });
+    R("NtSetInformationFile", 5, [st](ShimCall& c) {
+        auto f = st->GetAs<KFile>(c.Arg(0), KObject::Kind::File);
+        if (!f || f->console) {
+            c.Return(STATUS_INVALID_HANDLE);
+            return;
+        }
+        const uint32_t iosb = c.Arg(1), buf = c.Arg(2), len = c.Arg(3), cls = c.Arg(4);
+        uint32_t status = STATUS_SUCCESS;
+        switch (cls) {
+        case 4:   // FileBasicInformation: timestamps and attributes, accepted
+        case 19:  // FileAllocationInformation: no preallocation here
+            break;
+        case 13:  // FileDispositionInformation: delete on close
+            if (len >= 1 && c.mem.Read8(buf) && !f->hostPath.empty()) ::unlink(f->hostPath.c_str());
+            break;
+        case 14:  // FilePositionInformation
+            if (len < 8 || ::lseek(f->fd, static_cast<off_t>(c.mem.Read64(buf)), SEEK_SET) < 0) status = STATUS_INVALID_PARAMETER;
+            break;
+        case 20:  // FileEndOfFileInformation
+            if (len < 8 || ::ftruncate(f->fd, static_cast<off_t>(c.mem.Read64(buf))) != 0) status = STATUS_ACCESS_DENIED;
+            break;
+        default:
+            st->NoteStub("NtSetInformationFile class " + std::to_string(cls));
+            status = STATUS_INVALID_INFO_CLASS;
+        }
+        if (iosb) {
+            c.mem.Write32(iosb, status);
+            c.mem.Write32(iosb + 4, 0);
+        }
+        c.Return(status);
     });
     R("NtQueryInformationFile", 5, [st](ShimCall& c) {
         auto f = st->GetAs<KFile>(c.Arg(0), KObject::Kind::File);

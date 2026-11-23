@@ -33,7 +33,7 @@ constexpr char kWs[] = "ws2_32.dll";
 constexpr uint32_t kSocketError = 0xFFFFFFFFu;
 constexpr uint16_t kWinAfInet6 = 23;
 
-constexpr uint32_t WSAEINTR = 10004, WSAEFAULT = 10014, WSAEINVAL = 10022, WSAEWOULDBLOCK = 10035, WSAEINPROGRESS = 10036,
+constexpr uint32_t WSAEINTR = 10004, WSAEFAULT = 10014, WSAEINVAL = 10022, WSAEWOULDBLOCK = 10035,
                    WSAEALREADY = 10037, WSAENOTSOCK = 10038, WSAEMSGSIZE = 10040, WSAENOPROTOOPT = 10042,
                    WSAEOPNOTSUPP = 10045, WSAEAFNOSUPPORT = 10047, WSAEADDRINUSE = 10048, WSAEADDRNOTAVAIL = 10049,
                    WSAENETDOWN = 10050, WSAENETUNREACH = 10051, WSAECONNABORTED = 10053, WSAECONNRESET = 10054,
@@ -197,6 +197,18 @@ uint32_t GaiError(int rc) {
     }
 }
 
+// Names Windows answers without asking DNS: the computer's own name resolves
+// to its adapter address, "localhost" to loopback.
+std::string LocalName(const Win32State& st, const std::string& node) {
+    std::string n = node;
+    for (char& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    std::string host = st.env.computerName;
+    for (char& ch : host) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (n == host) return st.env.localIp;
+    if (n == "localhost") return "127.0.0.1";
+    return node;
+}
+
 // Run fn(lookup) once the lookup for this thread is done; block until then.
 template <class Fn>
 void WithLookup(ShimCall& c, const std::string& node, const std::string& service, const addrinfo& hints, Fn fn) {
@@ -345,7 +357,7 @@ void InstallWinsock(Win32State& s) {
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_DGRAM;
         const std::string name = c.mem.ReadA(c.Arg(0), 256);
-        WithLookup(c, name, "", hints, [&](addrinfo* res, int rc) {
+        WithLookup(c, LocalName(*st, name), "", hints, [&](addrinfo* res, int rc) {
             if (rc || !res) {
                 c.SetLastError(GaiError(rc ? rc : EAI_NONAME));
                 c.Return(0);
@@ -374,7 +386,7 @@ void InstallWinsock(Win32State& s) {
         c.SetLastError(WSANO_DATA);
         c.Return(0);
     });
-    R("getaddrinfo", 4, [](ShimCall& c) {
+    R("getaddrinfo", 4, [st](ShimCall& c) {
         const std::string node = c.Arg(0) ? c.mem.ReadA(c.Arg(0), 256) : "";
         const std::string service = c.Arg(1) ? c.mem.ReadA(c.Arg(1), 64) : "";
         addrinfo hints{};
@@ -385,7 +397,7 @@ void InstallWinsock(Win32State& s) {
             hints.ai_protocol = static_cast<int>(c.mem.Read32(h + 12));
         }
         const uint32_t resPtr = c.Arg(3);
-        WithLookup(c, node, service, hints, [&](addrinfo* res, int rc) {
+        WithLookup(c, node.empty() ? node : LocalName(*st, node), service, hints, [&](addrinfo* res, int rc) {
             if (rc) {
                 c.mem.Write32(resPtr, 0);
                 const uint32_t e = GaiError(rc);

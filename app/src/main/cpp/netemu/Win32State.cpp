@@ -2,6 +2,8 @@
 #include "Win32Shims.h"
 
 #include <sys/stat.h>
+
+#include <cstdlib>
 #include <unistd.h>
 
 #include <algorithm>
@@ -85,6 +87,15 @@ Win32State::Win32State(Machine& m, Win32Env e) : machine(m), env(std::move(e)) {
         stdHandles[i] = Add(f);
     }
     LoadRegistry();
+    // The folders every Windows profile and MTA install has; netc keeps data
+    // in alternate streams on some of them.
+    for (const std::string& dir : std::vector<std::string>{"C:\\Windows\\System32", "C:\\ProgramData\\MTA San Andreas All\\Common",
+          "C:\\Users\\" + env.userName + "\\AppData\\Roaming", "C:\\Users\\" + env.userName + "\\AppData\\Local\\Temp",
+          "C:\\Users\\" + env.userName + "\\Documents\\GTA San Andreas User Files", env.mtaDir + "\\MTA", env.gtaDir}) {
+        const std::string host = HostPath(dir);
+        for (size_t pos = 1; pos != std::string::npos; pos = host.find('/', pos + 1)) ::mkdir(host.substr(0, pos).c_str(), 0700);
+        ::mkdir(host.c_str(), 0700);
+    }
     // Stable per-install identity.
     const std::string idPath = env.dataDir + "/machine_id";
     if (FILE* f = std::fopen(idPath.c_str(), "rb")) {
@@ -102,6 +113,24 @@ Win32State::Win32State(Machine& m, Win32Env e) : machine(m), env(std::move(e)) {
             std::fclose(f);
         }
     }
+    // HARDWARE\DESCRIPTION, filled by Windows at every boot from SMBIOS/CPUID.
+    const std::string bios = "hklm\\hardware\\description\\system\\bios";
+    RegSetSz(bios, "BIOSVendor", Hw::kVendor);
+    RegSetSz(bios, "BIOSVersion", Hw::kBiosVersion);
+    RegSetSz(bios, "BIOSReleaseDate", Hw::kBiosDateRegistry);
+    RegSetSz(bios, "SystemManufacturer", Hw::kVendor);
+    RegSetSz(bios, "SystemProductName", Hw::kSystemProduct);
+    RegSetSz(bios, "SystemFamily", Hw::kSystemProduct);
+    RegSetSz(bios, "SystemVersion", "1.0");
+    RegSetSz(bios, "SystemSKU", "SAO-1");
+    RegSetSz(bios, "BaseBoardManufacturer", Hw::kVendor);
+    RegSetSz(bios, "BaseBoardProduct", Hw::kBoardProduct);
+    RegSetSz(bios, "BaseBoardVersion", "1.0");
+    const std::string cpu = "hklm\\hardware\\description\\system\\centralprocessor\\0";
+    RegSetSz(cpu, "ProcessorNameString", Hw::kCpuName);
+    RegSetSz(cpu, "Identifier", Hw::kCpuIdentifier);
+    RegSetSz(cpu, "VendorIdentifier", "GenuineIntel");
+    RegSetDword(cpu, "~MHz", Hw::kCpuMhz);
 }
 
 uint32_t Win32State::Add(std::shared_ptr<KObject> obj) {
@@ -227,6 +256,27 @@ std::string Win32State::HostPath(const std::string& guestPath) const {
     return out;
 }
 
+std::string Win32State::ProcessImage(uint32_t pid) const {
+    if (pid == kSelfPid) return env.gtaDir + "\\gta_sa.exe";
+    if (pid == kExplorerPid) return "C:\\Windows\\explorer.exe";
+    return {};
+}
+
+uint32_t Win32State::OpenProcessHandle(uint32_t pid) {
+    auto p = std::make_shared<KGeneric>();
+    p->kind = KObject::Kind::Process;
+    p->name = "process:" + std::to_string(pid);
+    return Add(p);
+}
+
+uint32_t Win32State::ProcessPid(uint32_t handle) const {
+    if (handle == Win32::kCurrentProcess) return kSelfPid;
+    auto k = Get(handle);
+    if (!k || k->kind != KObject::Kind::Process) return 0;
+    if (k->name.rfind("process:", 0) == 0) return static_cast<uint32_t>(std::strtoul(k->name.c_str() + 8, nullptr, 10));
+    return kSelfPid;
+}
+
 uint32_t Win32State::ModuleFor(const std::string& name) {
     std::string n = Lower(name);
     const size_t slash = n.find_last_of("\\/");
@@ -333,6 +383,7 @@ void InstallAll(Win32State& s) {
     InstallWinsock(s);
     InstallStubs(s);
     InstallNtdll(s);
+    InstallWmi(s);
 }
 
 }  // namespace NetEmu

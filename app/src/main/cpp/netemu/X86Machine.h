@@ -88,6 +88,10 @@ struct GuestThread {
     bool cancelRequested = false;  // pthread_cancel, honoured at cancellation points
     uint32_t exitCode = 259;  // STILL_ACTIVE
     uint32_t suspendCount = 0;
+    // Hardware-exception loop guard. The dispatcher records where a handler
+    // resumed the thread; any shim call clears it (progress). Faulting again
+    // right there means the handler resumed without fixing the cause.
+    uint32_t resumedEip = 0, resumedEsp = 0, exceptionRepeats = 0;
     std::vector<Continuation> conts;
     std::unordered_map<uint32_t, uint32_t> fls;
     std::string name;
@@ -208,6 +212,14 @@ public:
     void RunSync(const std::function<void()>& fn);
     bool OnEmuThread() const;
 
+    // Hardware exceptions (access violation, divide error, breakpoint) go to the
+    // guest the way KiUserExceptionDispatcher delivers them: an EXCEPTION_RECORD
+    // and a CONTEXT on the faulting thread's stack, then a call into this thunk
+    // with (record, context) as its two stack arguments. 0 = every fault is fatal.
+    void SetExceptionDispatcher(uint32_t thunk) { exceptionThunk_ = thunk; }
+    // CONTEXT (x86, CONTEXT_FULL) offsets used by the dispatcher and RaiseException.
+    static constexpr uint32_t kContextSize = 0x2CC;
+
     MachineStats Stats() const;
     // One line per guest thread: id, name, state, EIP of its saved context.
     std::string DescribeThreads();
@@ -218,6 +230,8 @@ public:
     void OnInterrupt(uint32_t intno);
     void OnInvalidMemory(int type, uint64_t addr, int size);
     void OnInvalidInsn();
+    void OnPrivilegedInsn();
+    void OnThunkWrite(uint32_t addr, int size, uint64_t value, uint32_t eip);
 
 private:
     struct Job {
@@ -242,6 +256,9 @@ private:
     GuestThread* Pick(uint64_t now);
     void RunSlice(GuestThread& t);
     void FaultCurrent(const char* why);
+    // Redirects the current thread into the exception dispatcher. false when
+    // none is installed or dispatch is already nested too deeply.
+    bool RaiseHardwareException(uint32_t code, uint32_t eip, uint32_t nparams, uint32_t p0, uint32_t p1);
     void ReleaseThread(GuestThread& t);
     void UpdateSharedUserData();
     void ThreadStartShim(ShimCall& call);
@@ -294,6 +311,11 @@ private:
     uint64_t startUs_ = 0;
     uint64_t lastSharedUpdateMs_ = 0;
     bool traceShims_ = false;  // NETEMU_TRACE_SHIMS=1 logs every shim call
+    uint32_t exceptionThunk_ = 0;
+    int lastMemType_ = 0;       // uc_mem_type of the last invalid access
+    uint32_t lastMemAddr_ = 0;
+    bool pendingRedirect_ = false;  // an instruction hook raised an exception mid-instruction
+    uint32_t redirectEsp_ = 0, redirectEip_ = 0;
 };
 
 }  // namespace NetEmu

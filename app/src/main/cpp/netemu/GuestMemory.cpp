@@ -270,10 +270,33 @@ bool GuestMemory::FreePages(uint32_t va) {
     if (it == used_.end()) return false;
     const uint32_t size = it->second;
     used_.erase(it);
+    SetProtect(va, size, kDefaultProtect);
     // Drop the physical pages; the reservation stays.
     madvise(arena_ + va, size, MADV_DONTNEED);
     GiveRange(va < Map::kImageEnd ? freeLow_ : freeHigh_, va, size);
     return true;
+}
+
+void GuestMemory::SetProtect(uint32_t va, uint32_t len, uint32_t prot) {
+    if (!len) return;
+    const uint32_t first = va / Map::kPage;
+    const uint32_t last = static_cast<uint32_t>((static_cast<uint64_t>(va) + len - 1) / Map::kPage);
+    for (uint32_t pg = first; pg <= last; ++pg) {
+        if (prot == kDefaultProtect) protect_.erase(pg);
+        else protect_[pg] = prot;
+    }
+}
+
+uint32_t GuestMemory::Protect(uint32_t va) const {
+    auto it = protect_.find(va / Map::kPage);
+    return it == protect_.end() ? kDefaultProtect : it->second;
+}
+
+uint32_t GuestMemory::ProtectRunEnd(uint32_t va, uint32_t limit) const {
+    const uint32_t prot = Protect(va);
+    uint32_t pg = (va & ~(Map::kPage - 1)) + Map::kPage;
+    while (pg < limit && pg != 0 && Protect(pg) == prot) pg += Map::kPage;
+    return pg < limit && pg != 0 ? pg : limit;
 }
 
 bool GuestMemory::QueryPages(uint32_t va, uint32_t* base, uint32_t* size) const {

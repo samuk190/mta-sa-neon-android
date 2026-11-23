@@ -29,7 +29,22 @@ struct Win32Env {
     std::string moduleHostPath;   // host file that guest path opens
     std::string computerName = "SAONLINE-PC";
     std::string userName = "player";
+    std::string localIp = "192.168.1.100";  // the one virtual adapter's address
 };
+
+// The virtual machine's hardware, shared by WMI, the registry's
+// HARDWARE\DESCRIPTION tree and the other identity shims so they agree.
+namespace Hw {
+constexpr const char* kVendor = "SAONLINE";
+constexpr const char* kSystemProduct = "SAONLINE Virtual PC";
+constexpr const char* kBoardProduct = "SAO-VIRTUAL-BOARD";
+constexpr const char* kBiosVersion = "1.0";
+constexpr const char* kBiosDateWmi = "20240101000000.000000+000";
+constexpr const char* kBiosDateRegistry = "01/01/2024";
+constexpr const char* kCpuName = "Intel(R) Core(TM) i5 CPU @ 3.00GHz";
+constexpr const char* kCpuIdentifier = "Intel64 Family 6 Model 158 Stepping 10";
+constexpr uint32_t kCpuMhz = 3000;
+}  // namespace Hw
 
 namespace Win32 {
 constexpr uint32_t kErrorSuccess = 0;
@@ -230,6 +245,16 @@ public:
     bool processExitRequested = false;
     uint32_t processExitCode = 0;
 
+    // Shim-owned helpers (e.g. the WMI provider) that registered thunks capture.
+    std::vector<std::shared_ptr<void>> keepAlive;
+
+    // Processes this machine pretends exist (pid -> image path), and the pid
+    // behind a process handle (pseudo handle included); 0 when not a process.
+    static constexpr uint32_t kSelfPid = 0x1000, kExplorerPid = 0x0FA0;
+    std::string ProcessImage(uint32_t pid) const;
+    uint32_t OpenProcessHandle(uint32_t pid);
+    uint32_t ProcessPid(uint32_t handle) const;
+
     // Diagnostics: unimplemented calls seen at least once.
     std::map<std::string, uint64_t> stubHits;
     void NoteStub(const std::string& name);
@@ -244,6 +269,9 @@ void InstallFiles(Win32State& s);
 void InstallWinsock(Win32State& s);
 void InstallStubs(Win32State& s);
 void InstallNtdll(Win32State& s);
+void InstallWmi(Win32State& s);
+// MEMORY_BASIC_INFORMATION (28 bytes) for addr; false above user space.
+bool WriteMemoryBasicInformation(Win32State& st, uint32_t addr, uint32_t out);
 void InstallAll(Win32State& s);
 
 // Socket readiness for an event bound with WSAEventSelect (Win32Winsock.cpp).

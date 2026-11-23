@@ -88,6 +88,7 @@ bool PeImage::Load(GuestMemory& mem, const std::vector<uint8_t>& f, const Import
         if (copy) mem.WriteBytes(base + va, f.data() + rawOff, copy);
         sections_.push_back({name, base + va, std::max(vsize, rawSize), ch});
     }
+    ApplySectionProtections(mem, base, headerSize);
 
     // Base relocations (only IMAGE_REL_BASED_HIGHLOW appears in i386 DLLs).
     const int64_t delta = static_cast<int64_t>(base) - imageBase;
@@ -203,10 +204,17 @@ uint32_t PeImage::MapView(GuestMemory& mem, const std::vector<uint8_t>& f, uint3
         ReadAt(f, sct + 12, &va);
         ReadAt(f, sct + 16, &rawSize);
         ReadAt(f, sct + 20, &rawOff);
+        uint32_t ch = 0;
+        ReadAt(f, sct + 36, &ch);
         const uint32_t copy = std::min(rawSize, vsize ? vsize : rawSize);
         if (copy && static_cast<uint64_t>(rawOff) + copy <= f.size() && static_cast<uint64_t>(va) + copy <= imageSize)
             mem.WriteBytes(base + va, f.data() + rawOff, copy);
+        const bool x = ch & 0x20000000u, r = ch & 0x40000000u, w = ch & 0x80000000u;
+        if (va < imageSize)
+            mem.SetProtect(base + va, std::max<uint32_t>(std::max(vsize, rawSize), 1),
+                           x ? (w ? 0x80u : r ? 0x20u : 0x10u) : (w ? 0x08u : r ? 0x02u : 0x01u));  // fresh view: WRITECOPY
     }
+    mem.SetProtect(base, std::max<uint32_t>(headerSize, 1), 0x02);
     const int64_t delta = static_cast<int64_t>(base) - imageBase;
     for (uint32_t off = 0; delta && relRva && off + 8 <= relSize;) {
         const uint32_t page = mem.Read32(base + relRva + off);
@@ -221,6 +229,19 @@ uint32_t PeImage::MapView(GuestMemory& mem, const std::vector<uint8_t>& f, uint3
     }
     if (sizeOut) *sizeOut = imageSize;
     return base;
+}
+
+// What VirtualQuery reports for a mapped image on Windows: headers read-only,
+// each section by its characteristics (writable data reads back as
+// PAGE_READWRITE once the loader and CRT have touched it).
+void PeImage::ApplySectionProtections(GuestMemory& mem, uint32_t base, uint32_t headerSize) const {
+    mem.SetProtect(base, std::max<uint32_t>(headerSize, 1), 0x02);  // PAGE_READONLY
+    for (const PeSection& s : sections_) {
+        const bool x = s.characteristics & 0x20000000u, r = s.characteristics & 0x40000000u, w = s.characteristics & 0x80000000u;
+        const uint32_t prot = x ? (w ? 0x80u : r ? 0x20u : 0x10u)  // EXECUTE_WRITECOPY / EXECUTE_READ / EXECUTE
+                                : (w ? 0x04u : r ? 0x02u : 0x01u);  // READWRITE / READONLY / NOACCESS
+        mem.SetProtect(s.va, std::max<uint32_t>(s.size, 1), prot);
+    }
 }
 
 uint32_t PeImage::Export(const std::string& name) const {

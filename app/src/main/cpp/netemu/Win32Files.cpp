@@ -22,7 +22,6 @@ constexpr char kK32[] = "kernel32.dll";
 constexpr char kAdv[] = "advapi32.dll";
 constexpr uint32_t kAttrDirectory = 0x10;
 constexpr uint32_t kAttrArchive = 0x20;
-constexpr uint32_t kAttrNormal = 0x80;
 constexpr uint32_t kInvalidAttributes = 0xFFFFFFFFu;
 
 uint32_t ErrnoToWin32(int e) {
@@ -706,7 +705,7 @@ void InstallFiles(Win32State& s) {
     R(kAdv, "RegDeleteKeyW", 2, [regDeleteKey](ShimCall& c) { regDeleteKey(c, true); });
     R(kAdv, "RegDeleteKeyA", 2, [regDeleteKey](ShimCall& c) { regDeleteKey(c, false); });
 
-    auto regEnumKey = [st, keyPath, subkeyList, writeStr](ShimCall& c, bool wide) {
+    auto regEnumKey = [keyPath, subkeyList, writeStr](ShimCall& c, bool wide) {
         const std::string path = keyPath(c.Arg(0), "");
         const auto kids = subkeyList(path);
         if (c.Arg(1) >= kids.size()) {

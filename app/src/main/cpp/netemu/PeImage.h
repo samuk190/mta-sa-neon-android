@@ -57,6 +57,7 @@ private:
     size_t unresolved_ = 0;
     PeTls tls_;
     std::vector<PeSection> sections_;
+    void ApplySectionProtections(GuestMemory& mem, uint32_t base, uint32_t headerSize) const;
     std::unordered_map<std::string, uint32_t> exports_;
     std::unordered_map<uint16_t, uint32_t> ordinals_;
 };

@@ -51,6 +51,26 @@ bool MemHook(uc_engine*, uc_mem_type type, uint64_t addr, int size, int64_t, voi
     static_cast<Machine*>(user)->OnInvalidMemory(static_cast<int>(type), addr, size);
     return false;
 }
+void WatchHook(uc_engine* uc, uc_mem_type, uint64_t addr, int size, int64_t value, void*) {
+    NETEMU_LOGI("watch: write%d 0x%08" PRIX64 " = 0x%08" PRIX64 " at EIP 0x%08X", size * 8, addr,
+                static_cast<uint64_t>(value), Reg(uc, UC_X86_REG_EIP));
+}
+void ThunkWriteHook(uc_engine* uc, uc_mem_type, uint64_t addr, int size, int64_t value, void* user) {
+    static_cast<Machine*>(user)->OnThunkWrite(static_cast<uint32_t>(addr), size, static_cast<uint64_t>(value), Reg(uc, UC_X86_REG_EIP));
+}
+void TraceCallHook(uc_engine* uc, uint64_t addr, uint32_t, void* user) {
+    GuestMemory& mem = static_cast<Machine*>(user)->Mem();
+    const uint32_t esp = Reg(uc, UC_X86_REG_ESP);
+    const uint32_t arg = mem.Read32(esp + 4);
+    const std::string str = mem.Valid(arg, 1) ? mem.ReadA(arg, 64) : std::string();
+    NETEMU_LOGI("call 0x%08" PRIX64 " from 0x%08X arg0=0x%08X \"%s\" ecx=0x%08X", addr, mem.Read32(esp), arg, str.c_str(),
+                Reg(uc, UC_X86_REG_ECX));
+}
+uint32_t PortInHook(uc_engine* uc, uint32_t, int, void* user) {
+    static_cast<Machine*>(user)->OnPrivilegedInsn();
+    return Reg(uc, UC_X86_REG_EAX);  // the instruction is discarded; keep EAX as it was
+}
+void PortOutHook(uc_engine*, uint32_t, int, uint32_t, void* user) { static_cast<Machine*>(user)->OnPrivilegedInsn(); }
 bool InsnHook(uc_engine*, void* user) {
     static_cast<Machine*>(user)->OnInvalidInsn();
     return false;
@@ -145,8 +165,10 @@ bool Machine::Init(std::string* error) {
         if (error) *error = std::string("uc_mem_map_ptr: ") + uc_strerror(mapErr);
         return false;
     }
-    // Thunk bytes are `ret`; the code hook always runs before them.
-    mem_.Fill(Map::kThunkBegin, 0xC3, Map::kThunkEnd - Map::kThunkBegin);
+    // Thunk bodies (see Map::kThunkDispatch); the code hook runs the shim.
+    static constexpr uint8_t kThunkBody[Map::kThunkStride] = {0x8B, 0xFF, 0x55, 0x8B, 0xEC, 0x5D, 0xC3, 0xCC,
+                                                              0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC};
+    for (uint32_t va = Map::kThunkBegin; va < Map::kThunkEnd; va += Map::kThunkStride) mem_.WriteBytes(va, kThunkBody, sizeof(kThunkBody));
     if (!SetupCpu(error)) return false;
 
     uc_hook h;
@@ -154,6 +176,25 @@ bool Machine::Init(std::string* error) {
     uc_hook_add(uc_, &h, UC_HOOK_INTR, reinterpret_cast<void*>(IntrHook), this, 1, 0);
     uc_hook_add(uc_, &h, UC_HOOK_MEM_INVALID, reinterpret_cast<void*>(MemHook), this, 1, 0);
     uc_hook_add(uc_, &h, UC_HOOK_INSN_INVALID, reinterpret_cast<void*>(InsnHook), this, 1, 0);
+    // User-mode port I/O is privileged on Windows (IOPL 0): it raises #GP.
+    // VM probes (VMware's backdoor port) rely on exactly that.
+    uc_hook_add(uc_, &h, UC_HOOK_INSN, reinterpret_cast<void*>(PortInHook), this, 1, 0, UC_X86_INS_IN);
+    uc_hook_add(uc_, &h, UC_HOOK_INSN, reinterpret_cast<void*>(PortOutHook), this, 1, 0, UC_X86_INS_OUT);
+    // Debug aid: NETEMU_WATCH_THUNKS=1 logs guest writes into the thunk area
+    // (inline hooks). Off by default: a write hook can slow every guest store.
+    if (const char* w = std::getenv("NETEMU_WATCH_THUNKS"); w && w[0] == '1')
+        uc_hook_add(uc_, &h, UC_HOOK_MEM_WRITE, reinterpret_cast<void*>(ThunkWriteHook), this, Map::kThunkBegin, Map::kThunkEnd - 1);
+    // Debug aid: NETEMU_TRACE_CALL=0xADDR logs each entry with its first stack
+    // argument (and that argument as a string when it points at one).
+    if (const char* at = std::getenv("NETEMU_TRACE_CALL")) {
+        const uint32_t va = static_cast<uint32_t>(std::strtoul(at, nullptr, 0));
+        if (va) uc_hook_add(uc_, &h, UC_HOOK_CODE, reinterpret_cast<void*>(TraceCallHook), this, va, va);
+    }
+    // Debug aid: NETEMU_WATCH=0xADDR logs every guest write to that dword.
+    if (const char* watch = std::getenv("NETEMU_WATCH")) {
+        const uint32_t va = static_cast<uint32_t>(std::strtoul(watch, nullptr, 0));
+        if (va) uc_hook_add(uc_, &h, UC_HOOK_MEM_WRITE, reinterpret_cast<void*>(WatchHook), this, va, va + 3);
+    }
 
     retHostThunk_ = MakeThunk("<return-to-host>", 0, nullptr);
     contThunk_ = MakeThunk("<continuation>", 0, nullptr);
@@ -590,6 +631,25 @@ void Machine::Apply(ShimCall& call, uint32_t thunkAddr) {
 void Machine::OnThunk(uint32_t addr) {
     GuestThread* t = current_;
     if (!t) return;
+    // Only two places in a slot run the shim: the entry while the prologue is
+    // intact, and the dispatch point a hook trampoline returns to. A patched
+    // entry (inline hook) and the rest of the slot execute as guest code.
+    // Where the shim was entered: a Block retry must re-enter there, not at a
+    // hooked +0 that would run the guest's detour again.
+    const uint32_t entry = addr;
+    t->resumedEip = 0;  // the thread made progress since any exception resume
+    const uint32_t off = (addr - Map::kThunkBegin) % Map::kThunkStride;
+    addr -= off;
+    if (off == 0) {
+        if (mem_.Read16(addr) != 0xFF8B) return;  // `mov edi,edi` replaced by a hook jump
+    } else if (off == 2 || off == 3 || off == 5 || off >= 11) {
+        // Prologue tail run by a trampoline, or MinHook's hot-patch jump in
+        // the padding before the next slot: guest code.
+        return;
+    } else if (off != Map::kThunkDispatch) {
+        FaultCurrent("jump into the thunk area outside a thunk");
+        return;
+    }
     {
         std::lock_guard lk(statsMutex_);
         ++stats_.shimCalls;
@@ -638,7 +698,7 @@ void Machine::OnThunk(uint32_t addr) {
         return;
     }
     const size_t slot = (addr - Map::kThunkBegin) / Map::kThunkStride;
-    if (slot >= defs_.size() || !defs_[slot] || ((addr - Map::kThunkBegin) % Map::kThunkStride)) {
+    if (slot >= defs_.size() || !defs_[slot]) {
         FaultCurrent("jump into the thunk area outside a thunk");
         return;
     }
@@ -656,16 +716,31 @@ void Machine::OnThunk(uint32_t addr) {
         return;
     }
     def.fn(call);
-    Apply(call, addr);
+    Apply(call, entry);
+}
+
+void Machine::OnThunkWrite(uint32_t addr, int size, uint64_t value, uint32_t eip) {
+    const size_t slot = (addr - Map::kThunkBegin) / Map::kThunkStride;
+    const ShimDef* d = slot < defs_.size() ? defs_[slot].get() : nullptr;
+    NETEMU_LOGW("guest patches thunk %s!%s (+%u, %d bytes = 0x%llX) from EIP 0x%08X", d ? d->dll.c_str() : "?",
+                d ? d->name.c_str() : "?", (addr - Map::kThunkBegin) % Map::kThunkStride, size,
+                static_cast<unsigned long long>(value), eip);
 }
 
 void Machine::OnInterrupt(uint32_t intno) {
+    const uint32_t eip = Reg(uc_, UC_X86_REG_EIP);
+    // #DE leaves EIP on the faulting instruction; int3 has already stepped past
+    // it, and Windows reports the breakpoint at the int3 itself.
+    if (intno == 0 && RaiseHardwareException(0xC0000094u, eip, 0, 0, 0)) return;  // STATUS_INTEGER_DIVIDE_BY_ZERO
+    if (intno == 3 && RaiseHardwareException(0x80000003u, eip - 1, 1, 0, 0)) return;  // STATUS_BREAKPOINT
     char why[96];
     std::snprintf(why, sizeof(why), "interrupt 0x%X at EIP 0x%08X", intno, Reg(uc_, UC_X86_REG_EIP));
     FaultCurrent(why);
 }
 
 void Machine::OnInvalidMemory(int type, uint64_t addr, int size) {
+    lastMemType_ = type;
+    lastMemAddr_ = static_cast<uint32_t>(addr);
     char why[128];
     std::snprintf(why, sizeof(why), "invalid memory access type %d at 0x%08" PRIX64 " size %d, EIP 0x%08X", type, addr, size,
                   Reg(uc_, UC_X86_REG_EIP));
@@ -673,11 +748,77 @@ void Machine::OnInvalidMemory(int type, uint64_t addr, int size) {
     lastFault_ = why;
 }
 
+void Machine::OnPrivilegedInsn() {
+    const uint32_t eip = Reg(uc_, UC_X86_REG_EIP);
+    // Unicorn finishes the instruction after the hook returns, so the redirect
+    // into the dispatcher is re-applied once the slice stops. Limitation:
+    // uc_emu_stop takes effect at the end of the translation block, so the
+    // instructions after IN/OUT in the same block still run (on Windows the
+    // #GP comes first). The CONTEXT is captured here, before them, so a handler
+    // that resumes or unwinds sees the right registers; only memory stores in
+    // that tail would leak through. The VM probes seen so far store nothing
+    // before their next branch.
+    if (RaiseHardwareException(0xC0000096u, eip, 0, 0, 0)) {  // STATUS_PRIVILEGED_INSTRUCTION
+        pendingRedirect_ = true;
+        redirectEsp_ = Reg(uc_, UC_X86_REG_ESP);
+        redirectEip_ = Reg(uc_, UC_X86_REG_EIP);
+        stopRequested_ = true;
+        uc_emu_stop(uc_);
+        return;
+    }
+    char why[96];
+    std::snprintf(why, sizeof(why), "privileged instruction at EIP 0x%08X", eip);
+    FaultCurrent(why);
+}
+
 void Machine::OnInvalidInsn() {
     char why[96];
     std::snprintf(why, sizeof(why), "invalid instruction at EIP 0x%08X", Reg(uc_, UC_X86_REG_EIP));
     std::lock_guard lk(statsMutex_);
     lastFault_ = why;
+}
+
+bool Machine::RaiseHardwareException(uint32_t code, uint32_t eip, uint32_t nparams, uint32_t p0, uint32_t p1) {
+    GuestThread* t = current_;
+    if (!exceptionThunk_ || !t) return false;
+    const uint32_t esp = Reg(uc_, UC_X86_REG_ESP);
+    if (eip == t->resumedEip && esp == t->resumedEsp) {
+        if (++t->exceptionRepeats > 16) return false;
+    } else {
+        t->exceptionRepeats = 0;
+    }
+    t->resumedEip = t->resumedEsp = 0;
+    // CONTEXT, then EXCEPTION_RECORD, then the dispatcher's call frame, all
+    // below the faulting ESP (as the kernel lays them out for user mode).
+    const uint32_t ctx = (esp - kContextSize - 0x40) & ~15u;
+    const uint32_t rec = ctx - 0x60;
+    const uint32_t frame = rec - 12;
+    if (!mem_.Valid(frame, esp - frame)) return false;
+    mem_.Fill(rec, 0, 0x50);
+    mem_.Write32(rec + 0, code);
+    mem_.Write32(rec + 12, eip);  // ExceptionAddress
+    mem_.Write32(rec + 16, nparams);
+    mem_.Write32(rec + 20, p0);
+    mem_.Write32(rec + 24, p1);
+    mem_.Fill(ctx, 0, kContextSize);
+    mem_.Write32(ctx + 0x00, 0x10007);  // CONTEXT_FULL (i386)
+    const std::pair<uint32_t, int> regs[] = {
+        {0x8C, UC_X86_REG_GS},  {0x90, UC_X86_REG_FS},  {0x94, UC_X86_REG_ES},  {0x98, UC_X86_REG_DS},
+        {0x9C, UC_X86_REG_EDI}, {0xA0, UC_X86_REG_ESI}, {0xA4, UC_X86_REG_EBX}, {0xA8, UC_X86_REG_EDX},
+        {0xAC, UC_X86_REG_ECX}, {0xB0, UC_X86_REG_EAX}, {0xB4, UC_X86_REG_EBP}, {0xBC, UC_X86_REG_CS},
+        {0xC0, UC_X86_REG_EFLAGS}, {0xC8, UC_X86_REG_SS},
+    };
+    for (const auto& [off, reg] : regs) mem_.Write32(ctx + off, Reg(uc_, reg));
+    mem_.Write32(ctx + 0xB8, eip);
+    mem_.Write32(ctx + 0xC4, esp);
+    mem_.Write32(frame + 0, 0);  // no return address: the dispatcher never returns
+    mem_.Write32(frame + 4, rec);
+    mem_.Write32(frame + 8, ctx);
+    NETEMU_LOGW("guest exception 0x%08X at EIP 0x%08X (info %u, 0x%08X) on thread %u -> SEH dispatch", code, eip, p0, p1,
+                t->id);
+    SetReg(uc_, UC_X86_REG_ESP, frame);
+    SetReg(uc_, UC_X86_REG_EIP, exceptionThunk_);
+    return true;
 }
 
 void Machine::FaultCurrent(const char* why) {
@@ -693,6 +834,20 @@ void Machine::FaultCurrent(const char* why) {
                 t ? t->id : 0, t ? t->name.c_str() : "?", why, Reg(uc_, UC_X86_REG_EAX), Reg(uc_, UC_X86_REG_EBX),
                 Reg(uc_, UC_X86_REG_ECX), Reg(uc_, UC_X86_REG_EDX), Reg(uc_, UC_X86_REG_ESI), Reg(uc_, UC_X86_REG_EDI),
                 Reg(uc_, UC_X86_REG_EBP), esp, mem_.Read32(esp), mem_.Read32(esp + 4));
+    // EBP frame chain: enough to find the caller of a crashing routine in a disassembly.
+    {
+        char chain[512];
+        size_t n = 0;
+        uint32_t ebp = Reg(uc_, UC_X86_REG_EBP);
+        for (int depth = 0; depth < 32 && mem_.Valid(ebp, 8) && n < sizeof(chain) - 12; ++depth) {
+            n += std::snprintf(chain + n, sizeof(chain) - n, " %08X", mem_.Read32(ebp + 4));
+            const uint32_t next = mem_.Read32(ebp);
+            if (next <= ebp) break;
+            ebp = next;
+        }
+        chain[n] = 0;
+        NETEMU_LOGE("  return chain:%s", n ? chain : " (none)");
+    }
     if (t == main_) {
         SetReg(uc_, UC_X86_REG_ESP, main_->jobEsp);
         main_->state = GuestThread::State::Idle;
@@ -807,7 +962,30 @@ void Machine::RunSlice(GuestThread& t) {
         std::lock_guard lk(statsMutex_);
         ++stats_.slices;
     }
+    if (pendingRedirect_) {
+        pendingRedirect_ = false;
+        SetReg(uc_, UC_X86_REG_ESP, redirectEsp_);
+        SetReg(uc_, UC_X86_REG_EIP, redirectEip_);
+    }
+    if (err == UC_ERR_INSN_INVALID && t.state != GuestThread::State::Exited &&
+        RaiseHardwareException(0xC000001Du, Reg(uc_, UC_X86_REG_EIP), 0, 0, 0)) {  // STATUS_ILLEGAL_INSTRUCTION
+        current_ = nullptr;
+        uc_context_save(uc_, t.ctx);
+        return;
+    }
     if (err != UC_ERR_OK && t.state != GuestThread::State::Exited) {
+        const bool memFault = err == UC_ERR_READ_UNMAPPED || err == UC_ERR_WRITE_UNMAPPED || err == UC_ERR_FETCH_UNMAPPED ||
+                              err == UC_ERR_READ_PROT || err == UC_ERR_WRITE_PROT || err == UC_ERR_FETCH_PROT;
+        if (memFault) {
+            // ExceptionInformation[0]: 0 read, 1 write, 8 execute (DEP).
+            const bool write = lastMemType_ == UC_MEM_WRITE_UNMAPPED || lastMemType_ == UC_MEM_WRITE_PROT;
+            const bool fetch = lastMemType_ == UC_MEM_FETCH_UNMAPPED || lastMemType_ == UC_MEM_FETCH_PROT;
+            if (RaiseHardwareException(0xC0000005u, Reg(uc_, UC_X86_REG_EIP), 2, fetch ? 8u : write ? 1u : 0u, lastMemAddr_)) {
+                current_ = nullptr;
+                uc_context_save(uc_, t.ctx);
+                return;
+            }
+        }
         std::string why;
         {
             std::lock_guard lk(statsMutex_);

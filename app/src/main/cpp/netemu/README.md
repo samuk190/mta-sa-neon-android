@@ -24,7 +24,8 @@ committed here — it is supplied at runtime (see "Where netc comes from").
 | `Win32Files.cpp` | Files and directories on a private host dir, plus the registry (A/W). |
 | `Win32Winsock.cpp` | `ws2_32` over POSIX sockets; blocking modes and async DNS without stalling the CPU thread. |
 | `Win32Ntdll.cpp` | `ntdll`/`psapi`/toolhelp: process & thread queries, virtual memory, native files, sections, the object manager, volume enumeration. |
-| `Win32Stubs.cpp` | Desktop-only surface (windows, clipboard, COM, certificates, DPAPI, services) answered the way a clean headless Windows process would. |
+| `Win32Stubs.cpp` | Desktop-only surface (windows, clipboard, certificates, DPAPI, services, Credential Manager) answered the way a clean headless Windows process would. |
+| `Win32Wmi.cpp` | An in-process WMI: `CoCreateInstance(CLSID_WbemLocator)` and the COM tree behind it (locator, services, enumerator, class objects) answering the hardware classes netc fingerprints. |
 | `NetcModule.*` | Drives `netc.dll` exactly as `core.dll` does: DllMain, `SetMTADirectory`/`SetGTADirectory`, `InitNetRev`, `CheckCompatibility`, `InitNetInterface`, then the `CNet` methods. Exposes a small C++ API (StartNetwork, DoPulse, SendPacket, PopPacket, …). |
 | `../../../../tools/netemu/netemu_probe.cpp` | Host-only tool: loads a netc build, prints its identity, and (with a server) dumps the packets it hands back. Build it against the host Unicorn to debug without a device. |
 
@@ -60,22 +61,49 @@ these shims build into a **separate** shared library (`libsaonline_netemu.so`)
 that is loaded only when the compatibility option is on; the main
 `libsaonlineneon.so` does not link Unicorn.
 
+## Fidelity notes
+
+netc's anti-tamper code checks that it runs on a real Windows box, so the
+emulator reproduces behaviour a shortcut would get wrong:
+
+- **Exceptions.** Access violations, illegal and privileged instructions,
+  divide errors and `int3` are delivered like `KiUserExceptionDispatcher`
+  does: a `CONTEXT` and `EXCEPTION_RECORD` on the faulting stack, vectored
+  handlers first, then the `fs:[0]` chain. netc probes for VMs with
+  VirtualPC's illegal opcode and VMware's backdoor port and expects the fault.
+- **Hookable API thunks.** Each thunk starts with the hot-patchable
+  `mov edi,edi; push ebp; mov ebp,esp` prologue, so Detours (which netc uses
+  on `AddVectoredExceptionHandler`) can attach; a patched entry runs the
+  guest's detour, and the trampoline's jump back lands on the shim.
+- **Page protections.** `VirtualQuery` reports per-section protections of the
+  image (headers read-only, `.text` execute-read, data read-write) and what
+  `VirtualProtect`/`VirtualAlloc` set. netc verifies its `.cpivg` section is
+  not executable.
+- **Identity.** Disk serial (storage IOCTLs, fixed-media geometry), adapter
+  MAC, volume serial, WMI and `HARDWARE\DESCRIPTION` all derive from one
+  per-install seed and agree with each other. The computer's own host name
+  resolves locally (no DNS round trip).
+
+Debug aids (host or device, via environment): `NETEMU_TRACE_SHIMS=1` logs
+every shim call; `NETEMU_TRACE_CALL=0xADDR` logs entries to a guest function
+with its first argument; `NETEMU_WATCH=0xADDR` logs writes to a dword;
+`NETEMU_WATCH_THUNKS=1` logs guest writes into the thunk area (inline hooks).
+
+Known limitation: a privileged `in`/`out` raises its exception at the end of
+the Unicorn translation block, so later instructions in the same block run
+first. The `CONTEXT` is taken at the instruction, so registers are right; only
+memory stores in that tail would differ from Windows.
+
 ## Status (device-unverified)
 
-Built and driven on the host with `netemu_probe` against both the Neon and the
-stock PC `netc.dll`:
+Driven on the host with `netemu_probe` against both the Neon and the stock PC
+`netc.dll`: each loads end to end. `DllMain`, `InitNetRev`,
+`CheckService(POST_CREATE)`, `CheckCompatibility` and `InitNetInterface` run,
+a live `CNet` comes back, the `NetBitStreamInterface` slots calibrate, and
+`GetSerial` returns a stable 32-digit MTA serial. A cold load takes about
+0.5 s (Neon) and 1.9 s (stock) on a desktop host, warm about 0.3 s and 0.5 s.
+Init does no network I/O.
 
-- both images map, relocate and bind imports with **0 unresolved**;
-- the MSVC CRT initializes and `DllMain(DLL_PROCESS_ATTACH)` returns TRUE;
-- `CheckCompatibility`, `InitNetRev` and the module-version check pass;
-- netc's install validation passes (registry seeded; stock no longer shows
-  "Error [U01]");
-- the hardware-fingerprint path runs: volume serial, adapter MAC, DPAPI
-  protect/unprotect round-trip, toolhelp/psapi module and process enumeration,
-  service and debugger checks.
-
-Remaining before a live join (next lots): stock `netc` reaches live DNS during
-`InitNetInterface` (it contacts MTA's servers and needs real network); the Neon
-build faults slightly earlier in a different fingerprint routine. After init
-returns a `CNet`, the handshake is driven through `NetcModule` and wired to the
-existing `RakNetWrapper` path behind the checkbox.
+Not yet done (next lots): the separate `.so` build and asset/import wiring,
+the server-select checkbox, and routing `NetcModule` into the transport path
+for a live join against a server.
