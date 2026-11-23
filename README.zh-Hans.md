@@ -122,5 +122,5 @@ cp .env.example .env
 - [同步移植路线图与项目状态](README.md#project-roadmap-mta-sync-porting-plan-pc-to-android)
 - [客户端 Lua 函数目录](docs/lua-functions/README.md)和[兼容性矩阵](docs/PARITY_MATRIX.md)
 - [协议参考](docs/PROTOCOL_REFERENCE.md)和[同步规范](docs/MTA_SYNC_ANDROID_PORT.md)
-- [许可证和致谢](README.md#license--attribution)
+- 本项目采用 [GNU Affero 通用公共许可证第 3 版（AGPL-3.0-only）](LICENSE)。[致谢及第三方组件许可证](README.md#license--attribution)。
 - [Discord 社区](https://discord.gg/DKrpU3e4pF) · [在 Ko-fi 上支持项目](https://ko-fi.com/samuk190)
