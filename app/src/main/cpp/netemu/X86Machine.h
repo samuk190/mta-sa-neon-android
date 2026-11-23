@@ -308,6 +308,15 @@ private:
     std::condition_variable jobDoneCv_;  // wakes CallSync waiters
     std::deque<std::shared_ptr<Job>> jobs_;
     std::shared_ptr<Job> activeJob_;
+    // Where the time of the active guest call goes (emulator thread only).
+    // A call slower than kSlowCallMs logs the split (see ReportJobProfile).
+    struct JobProfile {
+        uint64_t startUs = 0, idleUs = 0, shimUs = 0, slices = 0;
+        std::unordered_map<uint32_t, uint64_t> threadUs;  // guest thread id -> slice time
+        std::unordered_map<const ShimDef*, std::pair<uint64_t, uint64_t>> shims;  // calls, us
+    } profile_;
+    void ProfileShim(const ShimDef* def, uint64_t us);
+    void ReportJobProfile(uint32_t fn);
 
     std::mutex sliceMutex_;
     std::condition_variable sliceCv_;

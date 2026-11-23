@@ -18,6 +18,12 @@ set(UNICORN_LEGACY_STATIC_ARCHIVE OFF CACHE BOOL "" FORCE)
 set(UNICORN_FUZZ OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF)
 
+# A debug APK builds at -O0, where the emulator is too slow to finish netc's
+# join step before the server times out. Unicorn and netemu are built
+# optimised in every variant (these flags only reach this directory).
+string(APPEND CMAKE_C_FLAGS_DEBUG " -O2")
+string(APPEND CMAKE_CXX_FLAGS_DEBUG " -O2")
+
 FetchContent_Declare(unicorn
     URL https://github.com/unicorn-engine/unicorn/archive/refs/tags/2.1.4.tar.gz
     URL_HASH SHA256=ea8863f095a0136388694e5a6063afd9bb7650e30243dd6251af59c5ce5601f4)

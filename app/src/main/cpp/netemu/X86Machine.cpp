@@ -697,7 +697,9 @@ void Machine::OnThunk(uint32_t addr) {
         ShimCall call(*this, *t, *c.origin, c.originEsp);
         call.result = eax;
         call.resultEdx = edx;
+        const uint64_t contStartUs = NowUs();
         c.fn(call);
+        if (activeJob_) ProfileShim(c.origin, NowUs() - contStartUs);
         Apply(call, addr);
         return;
     }
@@ -719,7 +721,9 @@ void Machine::OnThunk(uint32_t addr) {
         FaultCurrent("missing shim");
         return;
     }
+    const uint64_t shimStartUs = NowUs();
     def.fn(call);
+    if (activeJob_) ProfileShim(&def, NowUs() - shimStartUs);
     Apply(call, entry);
 }
 
@@ -957,7 +961,12 @@ void Machine::RunSlice(GuestThread& t) {
         sliceCv_.notify_all();
     }
     const uint32_t eip = Reg(uc_, UC_X86_REG_EIP);
+    const uint64_t sliceStartUs = NowUs();
     const uc_err err = uc_emu_start(uc_, eip, kNeverAddr, 0, 0);
+    if (activeJob_) {
+        profile_.threadUs[t.id] += NowUs() - sliceStartUs;
+        ++profile_.slices;
+    }
     {
         std::lock_guard lk(sliceMutex_);
         sliceActive_ = false;
@@ -1035,6 +1044,8 @@ void Machine::EmuLoop() {
                 uc_context_save(uc_, main_->ctx);
                 main_->state = GuestThread::State::Runnable;
                 main_->conts.clear();
+                profile_ = JobProfile{};
+                profile_.startUs = NowUs();
             }
         }
         const uint64_t now = NowMs();
@@ -1043,16 +1054,58 @@ void Machine::EmuLoop() {
             uint64_t wake = now + 10;
             for (auto& th : threads_)
                 if (th->state == GuestThread::State::Blocked && !th->suspendCount) wake = std::min(wake, th->wakeAtMs);
-            std::unique_lock lk(jobMutex_);
-            if (jobs_.empty() || (activeJob_ && !jobs_.front()->task))
-                jobCv_.wait_for(lk, std::chrono::milliseconds(wake > now ? wake - now : 0));
+            const uint64_t idleStartUs = NowUs();
+            {
+                std::unique_lock lk(jobMutex_);
+                if (jobs_.empty() || (activeJob_ && !jobs_.front()->task))
+                    jobCv_.wait_for(lk, std::chrono::milliseconds(wake > now ? wake - now : 0));
+            }
+            if (activeJob_) profile_.idleUs += NowUs() - idleStartUs;
             continue;
         }
         RunSlice(*t);
     }
 }
 
+void Machine::ProfileShim(const ShimDef* def, uint64_t us) {
+    profile_.shimUs += us;
+    auto& e = profile_.shims[def];
+    ++e.first;
+    e.second += us;
+}
+
+// One line per slow guest call: wall time, then guest code per thread (shim
+// time included in the slices is taken out), Win32 shims by time, and time
+// with no runnable thread (Sleep, waits, sockets).
+void Machine::ReportJobProfile(uint32_t fn) {
+    constexpr uint64_t kSlowCallMs = 250;
+    const uint64_t wallUs = NowUs() - profile_.startUs;
+    if (!profile_.startUs || wallUs < kSlowCallMs * 1000) return;
+    uint64_t sliceUs = 0;
+    for (auto& [id, us] : profile_.threadUs) sliceUs += us;
+    std::string threads;
+    std::vector<std::pair<uint32_t, uint64_t>> byThread(profile_.threadUs.begin(), profile_.threadUs.end());
+    std::sort(byThread.begin(), byThread.end(), [](auto& a, auto& b) { return a.second > b.second; });
+    for (size_t i = 0; i < byThread.size() && i < 4; ++i)
+        threads += " t" + std::to_string(byThread[i].first) + "=" + std::to_string(byThread[i].second / 1000) + "ms";
+    std::vector<std::pair<const ShimDef*, std::pair<uint64_t, uint64_t>>> byShim(profile_.shims.begin(), profile_.shims.end());
+    std::sort(byShim.begin(), byShim.end(), [](auto& a, auto& b) { return a.second.second > b.second.second; });
+    std::string shims;
+    for (size_t i = 0; i < byShim.size() && i < 6; ++i) {
+        const ShimDef* d = byShim[i].first;
+        shims += " " + (d ? d->name : std::string("?")) + "x" + std::to_string(byShim[i].second.first) + "=" +
+                 std::to_string(byShim[i].second.second / 1000) + "ms";
+    }
+    NETEMU_LOGW("slow guest call 0x%08X: %llu ms total; guest code %llu ms in %llu slices (%s ); shims %llu ms (%s ); idle %llu ms",
+                fn, (unsigned long long)(wallUs / 1000),
+                (unsigned long long)((sliceUs > profile_.shimUs ? sliceUs - profile_.shimUs : 0) / 1000),
+                (unsigned long long)profile_.slices, threads.c_str(), (unsigned long long)(profile_.shimUs / 1000), shims.c_str(),
+                (unsigned long long)(profile_.idleUs / 1000));
+}
+
 void Machine::FinishJob(bool ok, uint64_t result) {
+    if (activeJob_) ReportJobProfile(activeJob_->fn);
+    profile_.startUs = 0;
     std::lock_guard lk(jobMutex_);
     if (!activeJob_) return;
     activeJob_->ok = ok;
