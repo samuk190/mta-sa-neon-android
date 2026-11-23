@@ -364,7 +364,9 @@ int main(int argc, char** argv) {
             : net.StartPcNetwork(opt.host, opt.port, opt.netcPath, opt.netcDataDir, opt.netcProductVersion);
     };
     const bool started = startTransport();
-    if (!started || !join.Begin(net, opt.nickname, "", opt.profile, opt.release)) {
+    // As JNI: --release only applies with --netc (PC Network).
+    const auto release = opt.netcPath.empty() ? WorldRPG::Net::NetcodeRelease::Current : opt.release;
+    if (!started || !join.Begin(net, opt.nickname, "", opt.profile, release)) {
         std::printf("neon_headless: could not start the join attempt\n");
         net.StopNetwork();
         return 1;

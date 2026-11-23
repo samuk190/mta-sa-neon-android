@@ -651,8 +651,12 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
     g_lastConnect.profile = joinProfile == static_cast<jint>(WorldRPG::Net::JoinProfile::LegacyMobile)
         ? WorldRPG::Net::JoinProfile::LegacyMobile
         : WorldRPG::Net::JoinProfile::Standard;
+    // The Server version choice belongs to PC Network. Off it, the join is
+    // the stock one: current netcode, no release fallback.
+    const bool pcNetwork = !g_pcNetwork.netcPath.empty();
+    const auto release = pcNetwork ? g_requestedRelease : WorldRPG::Net::NetcodeRelease::Current;
     if (g_serverHost.empty() || normalizedNick.empty() || !StartTransport(env, thiz) ||
-        !g_state->join->Begin(*g_state->network, normalizedNick, "", g_lastConnect.profile, g_requestedRelease, g_releaseHint)) {
+        !g_state->join->Begin(*g_state->network, normalizedNick, "", g_lastConnect.profile, release, g_releaseHint)) {
         g_state->network->StopNetwork();
         return JNI_FALSE;
     }

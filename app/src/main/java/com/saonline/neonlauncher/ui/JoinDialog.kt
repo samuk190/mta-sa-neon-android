@@ -58,7 +58,11 @@ object JoinDialog {
         // player is asked for netc.dll (NetcSourceDialog), and only if needed.
         val netcBuild = PcNetworkSettings.buildFor(server)
         fun updatePcNetworkHint() {
-            b.pcNetworkHint.visibility = if (b.pcNetwork.isChecked) View.VISIBLE else View.GONE
+            // Server version only matters through PC Network; off it the
+            // join is the stock one.
+            val shown = if (b.pcNetwork.isChecked) View.VISIBLE else View.GONE
+            b.pcNetworkHint.visibility = shown
+            b.serverReleaseLayout.visibility = shown
         }
         fun askForModule() {
             b.pcNetwork.isEnabled = false  // until the module question is settled

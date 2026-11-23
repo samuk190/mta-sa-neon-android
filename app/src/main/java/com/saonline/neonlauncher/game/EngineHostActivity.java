@@ -961,7 +961,9 @@ public final class EngineHostActivity extends GTASA {
             if (connected) {
                 joinedOnce = true;
                 // Remember the release this server accepted, so Automatic starts there next time.
-                ServerReleaseSettings.rememberDetected(this, connectIp, connectPort,
+                // Only PC Network joins pick a release.
+                String pcNetc = getIntent().getStringExtra(PcNetworkSettings.EXTRA_NETC_PATH);
+                if (pcNetc != null && !pcNetc.isEmpty()) ServerReleaseSettings.rememberDetected(this, connectIp, connectPort,
                         getIntent().getIntExtra(ServerReleaseSettings.EXTRA_RELEASE, ServerReleaseSettings.AUTOMATIC),
                         nativeGetNetcodeRelease());
                 // The "Connecting to server" panel ends with the join, as the desktop connect dialog does.
