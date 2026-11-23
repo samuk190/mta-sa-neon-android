@@ -523,12 +523,27 @@ Outcome ProcessRequest(ResourceConnection& pool, const Request& req) {
     }
     const std::string requestPath = target.pathPrefix + "/" + EncodePath(req.resource) + "/" + EncodePath(req.file);
 
+    // A server that closes the connection mid-file (seen as "short body" on
+    // large resources) fails one file and with it the whole resource. Such
+    // transport failures are retried on a fresh connection; an HTTP error
+    // status is not.
+    constexpr int kAttempts = 3;
     FileHasher hasher;
     int status = 0;
-    if (!FetchToFile(pool, target, requestPath, partPath, hasher, status, error)) {
+    for (int attempt = 1;; ++attempt) {
+        if (FetchToFile(pool, target, requestPath, partPath, hasher, status, error)) break;
         std::remove(partPath.c_str());
-        out.note = label + ": " + error;
-        return out;  // Kind::Failed (default)
+        const bool transport = status == 0 || status == 200;
+        if (!transport || attempt == kAttempts) {
+            out.note = label + ": " + error;
+            return out;  // Kind::Failed (default)
+        }
+        HTTP_LOGI("HTTP: retrying %s/%s (%s)", req.resource.c_str(), req.file.c_str(), error.c_str());
+        TransferSubtract(g_transferDone, t_transferReceived);  // the partial body does not count
+        t_transferReceived = 0;
+        pool.idle.reset();
+        hasher = FileHasher{};
+        error.clear();
     }
 
     uint8_t digest[16];
