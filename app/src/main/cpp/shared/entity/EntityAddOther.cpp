@@ -24,6 +24,8 @@ constexpr uint8_t kColshapeSphere = 2;
 constexpr uint8_t kColshapeRectangle = 3;
 constexpr uint8_t kColshapePolygon = 4;
 constexpr uint8_t kColshapeTube = 5;
+static_assert(static_cast<unsigned>(Spatial::ShapeType::Polygon)==kColshapePolygon);
+static_assert(static_cast<unsigned>(Spatial::ShapeType::Tube)==kColshapeTube);
 
 // Blip: SPositionSync, ReadCompressed short ordering, SIntegerSync<ushort,14> visible distance,
 // SIntegerSync<uchar,6> icon, SIntegerSync<uchar,5> size, SColorSync (32 bits).
@@ -116,6 +118,7 @@ bool ReadRadarArea(Net::BitStreamReader& reader, const EntityCommon& common, Vis
     visual.a = color[3];
     bool flashing = false;
     if (!ReadFlag(reader, flashing)) ENTITY_BODY_FAIL();
+    visual.radarFlashing = flashing;
     (void)common;
     return true;
 }
@@ -147,13 +150,19 @@ bool ReadTeam(Net::BitStreamReader& reader, const EntityCommon& common, Visual& 
     if (!ReadFlag(reader, friendlyFire)) ENTITY_BODY_FAIL();
     uint32_t playerCount = 0;
     if (!reader.Read(playerCount)) ENTITY_BODY_FAIL();
+    auto team = std::make_shared<TeamSpawn>();
+    team->name = std::move(teamName);
+    team->friendlyFire = friendlyFire;
+    team->players.reserve(playerCount);
     for (uint32_t i = 0; i < playerCount; ++i) {
         uint32_t playerId = 0;
         if (!ReadElementId(reader, playerId)) ENTITY_BODY_FAIL();
+        team->players.push_back(playerId);
     }
     visual.r = red;
     visual.g = green;
     visual.b = blue;
+    visual.team = std::move(team);
     (void)common;
     return true;
 }
@@ -172,43 +181,56 @@ bool ReadColshape(Net::BitStreamReader& reader, const EntityCommon& common, Visu
     bool enabled = false, autoCall = false;
     if (!ReadFlag(reader, enabled) || !ReadFlag(reader, autoCall)) ENTITY_BODY_FAIL();
 
+    auto geometry = std::make_shared<Spatial::Geometry>();
+    geometry->type = static_cast<Spatial::ShapeType>(shape);
+    geometry->enabled = enabled;
+    geometry->autoEvents = autoCall;
     switch (shape) {
         case kColshapeCircle:
         case kColshapeSphere: {
             float radius = 0;
             if (!reader.Read(radius)) ENTITY_BODY_FAIL();
+            geometry->radius = radius;
             break;
         }
         case kColshapeCuboid: {
             float sx = 0, sy = 0, sz = 0;
             if (!ReadPosition(reader, sx, sy, sz)) ENTITY_BODY_FAIL();  // SPositionSync(false) size
+            geometry->size = {sx, sy, sz};
             break;
         }
         case kColshapeRectangle: {
             float sx = 0, sy = 0;
             if (!ReadPosition2(reader, sx, sy)) ENTITY_BODY_FAIL();  // SPosition2DSync(false) size
+            geometry->size = {sx, sy, 0};
             break;
         }
         case kColshapeTube: {
             float radius = 0, height = 0;
             if (!reader.Read(radius) || !reader.Read(height)) ENTITY_BODY_FAIL();
+            geometry->radius = radius; geometry->height = height;
             break;
         }
         case kColshapePolygon: {
             uint32_t points = 0;
             if (!ReadCompressed(reader, 4, points)) ENTITY_BODY_FAIL();
+            if (reader.GetRemainingBits() < 64 || points > (reader.GetRemainingBits() - 64) / 48) ENTITY_BODY_FAIL();
             for (uint32_t i = 0; i < points; ++i) {
                 float vx = 0, vy = 0;
                 if (!ReadPosition2(reader, vx, vy)) ENTITY_BODY_FAIL();
+                geometry->points.push_back({vx, vy, 0});
             }
             float floorHeight = 0, ceilHeight = 0;
             if (!reader.Read(floorHeight) || !reader.Read(ceilHeight)) ENTITY_BODY_FAIL();
+            geometry->floor = floorHeight; geometry->ceiling = ceilHeight;
             break;
         }
         default:
             DIAG("ENTITY_ADD colshape unknown shape=%u id=%u bit=%zu", static_cast<unsigned>(shape), common.id, reader.GetReadOffsetBits());
             ENTITY_BODY_FAIL();
     }
+    if (shape == kColshapeCircle || shape == kColshapeRectangle || shape == kColshapePolygon) visual.z = 0.f;
+    visual.colshape = std::move(geometry);
     return true;
 }
 

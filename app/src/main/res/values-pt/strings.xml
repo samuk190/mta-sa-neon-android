@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher and navigation -->
+    <string name="connecting">Conectando ao servidor…</string>
+    <string name="server_browser">Servidores</string>
+    <string name="favorites">Favoritos</string>
+    <string name="settings">Configurações</string>
+    <string name="language">Idioma</string>
+    <string name="language_system">Idioma do aparelho</string>
+    <string name="language_selected">Idioma · %1$s</string>
+    <string name="cancel">Cancelar</string>
+    <string name="play">Jogar</string>
+    <string name="disconnect">Desconectar</string>
+    <string name="disconnect_close">Fechar</string>
+    <string name="disconnect_retry">Reconectar</string>
+    <string name="refresh">Atualizar</string>
+    <string name="no_servers">Nenhum servidor encontrado</string>
+    <string name="no_servers_hint">Verifique sua conexão e tente novamente.</string>
+    <string name="connection_failed">Falha na conexão</string>
+    <string name="server_browser_summary">%1$s, %2$s</string>
+    <string name="players_count">%1$d / %2$d</string>
+    <string name="ping_ms">%1$d ms</string>
+    <string name="nickname">Apelido</string>
+    <string name="nickname_helper">Visível para outros jogadores</string>
+    <string name="nickname_empty">Digite um apelido</string>
+    <string name="nickname_invalid">Use de 1 a 22 caracteres ASCII visíveis, sem espaços</string>
+    <string name="nickname_reserved">Este apelido é reservado</string>
+    <string name="toggle_favorite">Adicionar ou remover dos favoritos</string>
+    <string name="server_logo">Logo do servidor</string>
+    <string name="join">Entrar</string>
+    <string name="offline">Offline</string>
+    <string name="querying">Verificando…</string>
+    <string name="passworded">Protegido por senha</string>
+    <string name="no_favorites">Nenhum servidor favorito</string>
+    <string name="no_favorites_hint">Toque em + para adicionar um endereço ou na estrela de um servidor.</string>
+    <string name="add_favorite">Adicionar servidor favorito</string>
+    <string name="add_server">Adicionar</string>
+    <string name="server_host">Endereço IP ou nome do host</string>
+    <string name="server_port">Porta</string>
+    <string name="server_host_invalid">Digite um endereço IPv4 ou nome de host válido.</string>
+    <string name="server_port_invalid">Digite uma porta de 1 a 65535.</string>
+    <string name="server_already_favorite">Este servidor já está nos favoritos.</string>
+    <string name="neon_registry_unavailable">Não foi possível atualizar a lista do Neon. Mostrando os servidores disponíveis.</string>
+
+    <!-- Launcher settings and game files -->
+    <string name="section_graphics">Gráficos</string>
+    <string name="section_audio">Áudio</string>
+    <string name="section_controls">Controles</string>
+    <string name="section_assets">Arquivos do jogo</string>
+    <string name="section_interface">Interface</string>
+    <string name="interface_scale">Escala da interface (DPI)</string>
+    <string name="interface_scale_description" formatted="false">Tamanho dos textos, janelas e botões do servidor. 100% é o padrão no celular.</string>
+    <string name="interface_scale_default">Padrão</string>
+    <string name="interface_scale_save_failed">Não foi possível salvar a escala da interface.</string>
+    <string name="graphics_low">Baixa</string>
+    <string name="graphics_medium">Média</string>
+    <string name="graphics_high">Alta</string>
+    <string name="graphics_very_high">Muito alta</string>
+    <string name="audio_volume">Volume</string>
+    <string name="touch_sensitivity">Sensibilidade ao toque</string>
+    <string name="percentage">%1$d%%</string>
+    <string name="save_settings">Salvar configurações</string>
+    <string name="settings_saved">Configurações salvas</string>
+    <string name="assets_description">Verifica os arquivos locais do jogo e baixa os que estão faltando ou foram alterados.</string>
+    <string name="sync_assets">Sincronizar arquivos do jogo</string>
+    <string name="downloading_assets">Baixando arquivos do jogo…</string>
+    <string name="game_setup_title">Prepare os arquivos do jogo</string>
+    <string name="game_setup_message">Sincronize os arquivos do jogo antes de entrar em um servidor.</string>
+    <string name="assets_fetching_manifest">Buscando a lista de arquivos do jogo…</string>
+    <string name="assets_verifying">Verificando arquivos do jogo %1$d/%2$d</string>
+    <string name="assets_syncing">Sincronizando arquivos do jogo %1$d/%2$d</string>
+    <string name="assets_already_syncing">A sincronização dos arquivos do jogo já está em andamento.</string>
+    <string name="assets_local_missing">Arquivos do jogo não encontrados. Copie os arquivos originais do GTA Mobile 2.10 para %1$s ou defina GAME_ASSETS_DIR no .env antes de transferi-los por ADB.</string>
+    <string name="assets_insufficient_space">Não há espaço livre suficiente para os arquivos do jogo.</string>
+    <string name="assets_storage_unavailable">Não foi possível acessar o armazenamento dos arquivos do jogo.</string>
+    <string name="assets_invalid_manifest">A lista de arquivos do jogo é inválida.</string>
+    <string name="assets_file_invalid">Não foi possível verificar o arquivo %1$s.</string>
+    <string name="assets_http_error">O servidor de arquivos do jogo retornou HTTP %1$s.</string>
+    <string name="assets_sync_failed">Não foi possível sincronizar os arquivos do jogo. Tente novamente.</string>
+    <string name="test_gta">Testar GTA (depuração)</string>
+    <string name="engine_debug">Depuração do motor</string>
+    <string name="engine_debug_description">Registra os logs do jogo e os exibe em uma janela após uma falha do motor. Vale a partir da próxima sessão.</string>
+    <string name="engine_debug_save_failed">Não foi possível salvar a opção de depuração do motor.</string>
+
+    <!-- SA:O account and server connection mode -->
+    <string name="neon_account_title">Conta SA:O</string>
+    <string name="neon_account_connected">Conta SA:O conectada</string>
+    <string name="neon_account_disconnected">Conecte sua conta do Discord para entrar nos servidores que exigem login no SA:O.</string>
+    <string name="neon_account_sign_in">Entrar com Discord</string>
+    <string name="neon_account_sign_out">Sair da conta</string>
+    <string name="neon_account_sign_out_confirm">Sair da sua conta SA:O neste aparelho?</string>
+    <string name="neon_account_sign_out_failed">Não foi possível sair da conta SA:O. Tente novamente.</string>
+    <string name="neon_account_waiting_for_browser">Abrindo o Discord. Conclua o login no navegador e volte ao launcher.</string>
+    <string name="neon_account_sign_in_canceled">Login no SA:O cancelado.</string>
+    <string name="neon_account_sign_in_failed">Não foi possível entrar no SA:O. Tente novamente.</string>
+    <string name="neon_account_server_requires_sign_in">Este servidor exige login no SA:O. Conecte sua conta do Discord para continuar.</string>
+    <string name="neon_account_sign_in_required">Entre na sua conta SA:O antes de se conectar a este servidor.</string>
+    <string name="neon_account_session_expired">Sua sessão SA:O expirou. Entre novamente.</string>
+    <string name="neon_account_authorization_failed">Não foi possível autorizar este servidor com a sua conta SA:O. Tente novamente.</string>
+    <string name="connection_mode">Modo de conexão</string>
+    <string name="connection_mode_save_failed">Não foi possível salvar o modo de conexão.</string>
+
+    <plurals name="servers_count">
+        <item quantity="one">%d servidor</item>
+        <item quantity="many">%d servidores</item>
+        <item quantity="other">%d servidores</item>
+    </plurals>
+    <plurals name="players_online">
+        <item quantity="one">%d jogador on-line</item>
+        <item quantity="many">%d jogadores on-line</item>
+        <item quantity="other">%d jogadores on-line</item>
+    </plurals>
+    <plurals name="assets_verified">
+        <item quantity="one">%d arquivo do jogo verificado</item>
+        <item quantity="many">%d arquivos do jogo verificados</item>
+        <item quantity="other">%d arquivos do jogo verificados</item>
+    </plurals>
+
+    <string-array name="connection_modes">
+        <item>Automático</item>
+        <item>Padrão</item>
+        <item>Modo móvel legado</item>
+    </string-array>
+</resources>

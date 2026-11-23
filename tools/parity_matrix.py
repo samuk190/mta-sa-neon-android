@@ -305,54 +305,167 @@ def port_stub_helpers(shared_dir):
     return helpers, fn_bodies
 
 
+# Install functions walked from installDxBindings, in the order that function calls them.
+# A later call replaces an earlier binding of the same name. defaults[] fill only gaps.
+FOLLOW_INSTALLS = {
+    "installDxBindings",
+    "InstallExtraBindings",
+    "InstallJsonBindings",
+    "InstallGuiBindings",
+    "InstallGuiLua",
+    "RegisterGuiExtensions",
+    "InstallDestroyElement",
+    "installWardrobeBindings",
+    "InstallCategoryLua",
+    "InstallCameraLua",
+    "InstallFieldLua",
+    "InstallSpatialLua",
+    "InstallMarkerLua",
+    "InstallBlipLua",
+    "InstallRadarLua",
+    "InstallPickupLua",
+    "InstallLightLua",
+    "InstallBirdLua",
+    "InstallTeamLua",
+    "InstallRopeLua",
+    "InstallNativeUiLua",
+    "InstallWorldObjectLua",
+    "InstallWaterLua",
+    "InstallFireLua",
+    "InstallFxLua",
+    "InstallWorldQueryLua",
+    "InstallSightLua",
+    "InstallAmbientLua",
+    "InstallUtilLua",
+    "InstallCryptLua",
+    "InstallFileLua",
+    "InstallXmlLua",
+    "InstallStoredElementLua",
+    "InstallClothesLua",
+    "InstallAudioLua",
+    "InstallWeaponLua",
+    "InstallProjectileLua",
+    "InstallResourceLua",
+    "InstallMtaWindowLua",
+    "InstallKeyBindLua",
+    "InstallDxLua",
+    "InstallDx3DLua",
+    "InstallModelEffectsLua",
+    "InstallShaderLua",
+    "InstallSvgLua",
+    "InstallBrowserLua",
+    "InstallDiscordLua",
+    "InstallElementLua",
+    "InstallElementBindings",
+    "InstallElementTreeLua",
+    "InstallPedLua",
+    "BindPedLua",
+    "InstallVehicleLua",
+    "BindVehicleLua",
+    "InstallEngineLua",
+    "BindObjectGroupLua",
+    "BindSurfaceLua",
+    "BindStreamingLua",
+    "BindEngineWorldLua",
+    "BindEngineRendererLua",
+    "BindCullZoneLua",
+    "BindVehicleAudioLua",
+    "BindBreakEffectLua",
+    "BindEngineAssetLua",
+    "Register",
+}
+
+
 def port_lua_bindings(shared_dir, helpers, fn_bodies):
     """Effective global bindings in the order the VM installs them.
 
-    Order (LuaVMStub.cpp installDxBindings -> InstallExtraBindings):
-      1. binds[] table                    (installDxBindings)
-      2. InstallJsonBindings              (LuaJsonApi.cpp, called first in InstallExtraBindings)
-      3. SetGlobal(L, name, fn) calls     (LuaApiExtra.cpp, in source order)
-      4. defaults[] table via SetDefault  (only when the name is still undefined)
-    Returns {name: {"kind": ..., "fn": ..., "where": "file:line"}}.
+    installDxBindings sets its binds[] table, then InstallExtraBindings (JSON,
+    SetGlobal, GUI, then defaults for names still missing), then
+    installWardrobeBindings, then InstallCategoryLua (element, ped, vehicle, GUI).
+    A later step replaces the same name. Returns
+    {name: {"kind": ..., "fn": ..., "where": "file:line"}}.
     """
-    eff = OrderedDict()
-    binds_srcs = []
-    defaults_src = None
+    del helpers, fn_bodies  # classification uses the returned fn name
     files = {}
     for path in walk(shared_dir, {".cpp"}):
         files[path] = Src(path)
 
+    funcs = {}
+    sig = re.compile(r"\b(?:void|int)\s+(\w+)\s*\([^;{]*\)\s*\{")
     for path, src in files.items():
-        # Several files may own a binds[] table (LuaVMStub.cpp, LuaGuiApi.cpp).
+        for m in sig.finditer(src.masked):
+            open_idx = m.end() - 1
+            funcs.setdefault(m.group(1), []).append((path, src, open_idx, src.block_end(open_idx)))
+
+    eff = OrderedDict()
+
+    def record(name, fn, path, src, pos, kind):
+        eff[name] = {"kind": kind, "fn": fn.split("::")[-1],
+                     "where": "%s:%d" % (rel(path, PORT_CPP), src.line(pos))}
+
+    def pick(name, caller_path):
+        cands = funcs.get(name, [])
+        same = [c for c in cands if c[0] == caller_path]
+        if len(same) == 1:
+            return same[0]
+        if len(cands) == 1:
+            return cands[0]
+        return None
+
+    def apply_range(path, src, open_idx, close, depth):
+        if depth > 12:
+            return
+        events = []
         for m in re.finditer(r"\bbinds\[\]\s*=\s*\{", src.masked):
-            binds_srcs.append((path, src, src.masked.find("{", m.start())))
-        m = re.search(r"\bdefaults\[\]\s*=\s*\{", src.masked)
-        if m:
-            defaults_src = (path, src, src.masked.find("{", m.start()))
+            if open_idx <= m.start() < close:
+                events.append((m.start(), "binds", m.start()))
+        for m in re.finditer(r"\bdefaults\[\]\s*=\s*\{", src.masked):
+            if open_idx <= m.start() < close:
+                events.append((m.start(), "defaults", m.start()))
+        for m in re.finditer(r'SetGlobal\(\s*L\s*,\s*"(\w+)"\s*,\s*([A-Za-z_][\w:]*)\s*\)', src.clean):
+            if open_idx <= m.start() < close:
+                events.append((m.start(), "setglobal", m))
+        for m in re.finditer(r'Bind\(\s*L\s*,\s*"(\w+)"\s*,\s*(\w+)\s*\)', src.clean):
+            if open_idx <= m.start() < close:
+                events.append((m.start(), "bind", m))
+        for m in re.finditer(
+                r'lua_pushc(?:function|closure)\(\s*L\s*,\s*(\w+)\s*(?:,\s*\d+\s*)?\)\s*;\s*lua_setglobal\(\s*L\s*,\s*"(\w+)"\s*\)',
+                src.clean):
+            if open_idx <= m.start() < close:
+                events.append((m.start(), "push", m))
+        for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(\s*L\s*\)", src.clean):
+            if open_idx <= m.start() < close and m.group(1) in FOLLOW_INSTALLS:
+                events.append((m.start(), "call", m.group(1)))
+        events.sort(key=lambda item: item[0])
 
-    for path, src, open_idx in binds_srcs:
-        for e in re.finditer(r'\{\s*"(\w+)"\s*,\s*(\w+)\s*\}', src.clean, re.S):
-            if open_idx < e.start() < src.block_end(open_idx):
-                eff[e.group(1)] = {"kind": "bind", "fn": e.group(2),
-                                   "where": "%s:%d" % (rel(path, PORT_CPP), src.line(e.start()))}
+        for _pos, kind, payload in events:
+            if kind == "binds":
+                brace = src.masked.find("{", payload)
+                end = src.block_end(brace)
+                for e in re.finditer(r'\{\s*"(\w+)"\s*,\s*(\w+)\s*\}', src.clean):
+                    if brace < e.start() < end:
+                        record(e.group(1), e.group(2), path, src, e.start(), "bind")
+            elif kind == "defaults":
+                brace = src.masked.find("{", payload)
+                end = src.block_end(brace)
+                for e in re.finditer(r'\{\s*"(\w+)"\s*,\s*(k\w+)\s*\}', src.clean):
+                    if brace < e.start() < end and e.group(1) not in eff:
+                        record(e.group(1), e.group(2), path, src, e.start(), "default")
+            elif kind == "setglobal":
+                record(payload.group(1), payload.group(2), path, src, payload.start(), "setglobal")
+            elif kind == "bind":
+                record(payload.group(1), payload.group(2), path, src, payload.start(), "setglobal")
+            elif kind == "push":
+                record(payload.group(2), payload.group(1), path, src, payload.start(), "json")
+            elif kind == "call":
+                target = pick(payload, path)
+                if target:
+                    apply_range(target[0], target[1], target[2], target[3], depth + 1)
 
-    for path, src in files.items():
-        for m in re.finditer(r"lua_pushcfunction\(\s*L\s*,\s*(\w+)\s*\)\s*;\s*lua_setglobal\(\s*L\s*,\s*\"(\w+)\"\s*\)",
-                             src.clean):
-            eff[m.group(2)] = {"kind": "json", "fn": m.group(1),
-                               "where": "%s:%d" % (rel(path, PORT_CPP), src.line(m.start()))}
-
-    for path, src in files.items():
-        for m in re.finditer(r'SetGlobal\(\s*L\s*,\s*"(\w+)"\s*,\s*(\w+)\s*\)', src.clean):
-            eff[m.group(1)] = {"kind": "setglobal", "fn": m.group(2),
-                               "where": "%s:%d" % (rel(path, PORT_CPP), src.line(m.start()))}
-
-    if defaults_src:
-        path, src, open_idx = defaults_src
-        for e in re.finditer(r'\{\s*"(\w+)"\s*,\s*(k\w+)\s*\}', src.clean):
-            if open_idx < e.start() < src.block_end(open_idx) and e.group(1) not in eff:
-                eff[e.group(1)] = {"kind": "default", "fn": e.group(2),
-                                   "where": "%s:%d" % (rel(path, PORT_CPP), src.line(e.start()))}
+    root = pick("installDxBindings", None)
+    if root is None:
+        raise SystemExit("installDxBindings not found")
+    apply_range(root[0], root[1], root[2], root[3], 0)
     return eff
 
 
@@ -386,7 +499,7 @@ def desktop_events(client_root):
 
 def port_fired_events():
     fired = OrderedDict()
-    pattern = re.compile(r'(?:\bfireHandlers\(\s*|handlers\.find\(\s*|handlers\[\s*)"(on\w+)"')
+    pattern = re.compile(r'(?:\b(?:fireHandlers|ActiveVmFireSpatialEvent)\(\s*|handlers\.find\(\s*|handlers\[\s*)"(on\w+)"')
     for path in walk(PORT_CPP, {".cpp", ".h"}, skip=("lua53", "opus")):
         src = Src(path)
         for m in pattern.finditer(src.clean):
@@ -868,7 +981,7 @@ def main():
     out.append("## Method and blind spots\n")
     out.append("""- **Implemented** means the Lua name is bound to a C function whose body is not a constant return. It does not mean the behaviour matches desktop. Argument handling and return values are not compared.
 - **Stub** means the binding is a constant helper (table in A1, detected from the C body), or a `defaults[]` entry in `LuaApiExtra.cpp`. A `defaults[]` entry only applies when no core binding already defines the name, which the script follows.
-- **Port binding order** follows `installDxBindings` (binds, then `InstallJsonBindings`, then `SetGlobal` calls, then defaults). This order is hard-coded in the script. If `InstallExtraBindings` changes order, update `port_lua_bindings`.
+- **Port binding order** follows `installDxBindings`: its `binds[]`, then `InstallExtraBindings` (JSON, `SetGlobal`, GUI, then `defaults[]` for names still missing), then `installWardrobeBindings`, then `InstallCategoryLua` (element, ped, vehicle, GUI, engine model names). A later step replaces the same name. `Bind(L, name, fn)` and qualified `SetGlobal` targets count. If that call order changes, update `port_lua_bindings`.
 - **Lua name overlap** in other ports (Lua resource code that defines a function with the same name) is not counted. Only C-side bindings are.
 - **Desktop luadefs** are read from `LoadFunctions` tables (entries of the form `{"name", Handler}`) and `lua_register` calls. Functions registered through other mechanisms are missed. Duplicates across groups are counted once.
 - **Client events** are literal names only. `AddEvent` calls that pass a variable name are not counted.

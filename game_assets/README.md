@@ -2,30 +2,41 @@
 
 Place your original **GTA San Andreas Mobile v2.10** extracted files in this directory (or point `GAME_ASSETS_DIR` in `.env` to another local folder on your computer).
 
-### Required Structure:
+### Installed game folder
+
 ```text
-game_assets/
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
+├── lib/
+│   ├── libGTASA.so
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
 ├── anim/
-│   └── anim.img, etc.
 ├── audio/
-│   └── streams, sfx, etc.
+│   ├── android/
+│   ├── SFX/
+│   └── STREAMS/
+├── cgui/
 ├── data/
+│   ├── default.dat
 │   ├── gta.dat
 │   ├── handling.cfg
-│   ├── surface.dat
-│   └── ...
+│   └── script/
+├── fonts/
 ├── models/
-│   └── coll, generic, etc.
+├── MTA/cgui/
+├── Text/american.gxt
+├── Textures/fonts/
 ├── texdb/
 │   ├── gta3.img
-│   ├── gta3.txt
 │   ├── gta_int.img
-│   └── menu/
-│       ├── menu.pvr.dat
-│       └── menu.pvr.toc
-└── Text/
-    └── american.gxt
+│   └── menu/menu.pvr.dat
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
 ```
+
+[Complete reference tree with all 410 file paths](../docs/game-assets-tree.txt). The tree matches the [reference manifest](https://huggingface.co/datasets/WorldRPG/worldrpg-game-files/blob/f4839e688328d11836d43a4583d2de22c96bd82b/manifest_android_mta.json). For a manual installation, keep all files from your own game archives, including additional files such as `assetfile.txt` when present. Merge the contents of the APK’s `assets/` and the OBB archives into this folder. Copy the three engine libraries from the APK’s `lib/arm64-v8a/` into `lib/`.
 
 ### Where to get these files:
 These files come from the legally owned original **GTA San Andreas Mobile v2.10** for Android:

@@ -4,90 +4,109 @@
     android:id="@+id/cardServer"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="12dp"
-    android:layout_marginVertical="4dp"
-    app:cardCornerRadius="8dp"
-    app:cardElevation="2dp"
-    app:strokeWidth="0dp">
-
+    android:layout_marginBottom="5dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardBackgroundColor="@color/browser_card"
+    app:cardCornerRadius="5dp"
+    app:cardElevation="0dp"
+    app:strokeWidth="1dp"
+    app:strokeColor="@color/browser_line">
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="12dp"
-        android:gravity="center_vertical">
+        android:minHeight="53dp"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="2dp">
+        <com.google.android.material.imageview.ShapeableImageView
+            android:id="@+id/ivLogo"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:importantForAccessibility="no"
+            android:scaleType="centerCrop"
+            app:shapeAppearanceOverlay="@style/ShapeAppearance.WorldRPGNeon.Logo" />
 
-        <!-- Favorite Star -->
-        <ImageButton
-            android:id="@+id/btnFavorite"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/star_off"
-            android:contentDescription="Toggle favorite"
-            android:scaleType="centerInside" />
-
-        <!-- Server Info -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:orientation="vertical"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:orientation="vertical">
+            android:layout_marginStart="8dp">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:id="@+id/tvServerName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    style="@style/BrowserText"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:textStyle="bold"
+                        android:textAllCaps="true" />
+
+                <ImageView
+                    android:id="@+id/ivLock"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:importantForAccessibility="yes"
+                    android:src="@drawable/ic_lock"
+                    app:tint="@color/browser_muted"
+                    android:contentDescription="@string/passworded" />
+            </LinearLayout>
 
             <TextView
-                android:id="@+id/tvServerName"
-                android:layout_width="wrap_content"
+                android:id="@+id/tvGameMode"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceTitleSmall"
-                android:textColor="?attr/colorOnSurface"
+                style="@style/BrowserText.Small"
                 android:maxLines="1"
                 android:ellipsize="end" />
-
-            <TextView
-                android:id="@+id/tvServerAddress"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:textAppearance="?attr/textAppearanceBodySmall"
-                android:textColor="?attr/colorOnSurface" />
-
         </LinearLayout>
 
-        <!-- Player Count and Ping -->
+        <TextView
+            android:id="@+id/countries"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="@style/BrowserText.Small"
+            android:maxLines="1"
+            android:visibility="gone" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnFavorite"
+            style="@style/BrowserIcon"
+            android:contentDescription="@string/toggle_favorite"
+            app:icon="@drawable/ic_star_outline" />
+
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:gravity="end">
-
+            android:gravity="end"
+            android:layout_marginEnd="8dp">
             <TextView
                 android:id="@+id/tvPlayerCount"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceLabelMedium"
-                android:textColor="?attr/colorPrimary" />
+                style="@style/BrowserText.Small" />
 
             <TextView
                 android:id="@+id/tvPing"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceLabelSmall"
-                android:textColor="?attr/colorOnSurface" />
-
+                style="@style/BrowserText.Small" />
         </LinearLayout>
 
-        <!-- Connect Button -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnConnect"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:layout_marginStart="8dp"
-            android:text="@string/connect"
-            android:textSize="12sp"
-            app:backgroundTint="?attr/colorSecondary" />
-
+            android:layout_height="wrap_content"
+            style="@style/BrowserButton"
+            android:text="@string/browser_connect"
+            app:icon="@drawable/ic_play" />
     </LinearLayout>
-
 </com.google.android.material.card.MaterialCardView>

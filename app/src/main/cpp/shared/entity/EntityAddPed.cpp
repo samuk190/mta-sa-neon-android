@@ -5,11 +5,26 @@
 // move anim, clothes, weapons, current weapon slot, animation.
 // Widths are for the 0x0030 peer bitstream (NeonJoinProtocol pins it).
 // The model id is stored raw; ResolveModelID / IsValidModel need the game and are not run here.
+// Every field is kept in Visual::ped (PedSpawn.h, ROADMAP_PEDS_SYNC phase 1) for _CreateModel on the game thread.
 
 #include "EntityAddTypes.h"
 #include "PedWire.h"
 
+#include <chrono>
+
 namespace WorldRPG::Entity {
+
+namespace {
+// bitStream.Read(char*, length) for the clothes strings (CPacketHandler.cpp 4092, 4098).
+bool ReadChars(Net::BitStreamReader& reader, uint8_t length, std::string& out) {
+    out.clear();
+    if (length == 0) return true;
+    std::vector<uint8_t> bytes(length);
+    if (!reader.ReadBits(bytes.data(), static_cast<size_t>(length) * 8)) return false;
+    out.assign(bytes.begin(), bytes.end());
+    return true;
+}
+}  // namespace
 
 bool ReadEntityBodyPed(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual) {
     // Position: SPositionSync(false). Two fixed24 components (SPositionComponentSync at 0x0030), then a float Z.
@@ -57,12 +72,15 @@ bool ReadEntityBodyPed(Net::BitStreamReader& reader, const EntityCommon& common,
 
     // Clothes: raw uchar count. Per item: raw uchar texture length, texture bytes,
     // raw uchar model length, model bytes, raw uchar clothes type.
+    auto spawn = std::make_shared<PedSpawn>();
     uint8_t clothesCount = 0;
     if (!reader.Read(clothesCount)) ENTITY_BODY_FAIL();
     for (uint8_t i = 0; i < clothesCount; ++i) {
-        uint8_t textureLength = 0, modelLength = 0, clothesType = 0;
-        if (!reader.Read(textureLength) || !SkipBytes(reader, textureLength)) ENTITY_BODY_FAIL();
-        if (!reader.Read(modelLength) || !SkipBytes(reader, modelLength) || !reader.Read(clothesType)) ENTITY_BODY_FAIL();
+        uint8_t textureLength = 0, modelLength = 0;
+        PedClothes item;
+        if (!reader.Read(textureLength) || !ReadChars(reader, textureLength, item.texture)) ENTITY_BODY_FAIL();
+        if (!reader.Read(modelLength) || !ReadChars(reader, modelLength, item.model) || !reader.Read(item.type)) ENTITY_BODY_FAIL();
+        spawn->clothes.push_back(std::move(item));
     }
 
     // Weapons: raw uchar slot. Until slot 0xFF: raw uchar weapon type, raw ushort total ammo, next raw uchar slot.
@@ -72,7 +90,10 @@ bool ReadEntityBodyPed(Net::BitStreamReader& reader, const EntityCommon& common,
     while (slot != 0xFF) {
         uint8_t weaponType = 0;
         uint16_t totalAmmo = 0;
+        const uint8_t weaponSlot = slot;
         if (!reader.Read(weaponType) || !reader.Read(totalAmmo) || !reader.Read(slot)) ENTITY_BODY_FAIL();
+        // Packet_EntityAdd indexes m_usWeaponAmmo[slot] with the wire slot (4131). Slots past 12 are kept out.
+        if (weaponSlot < 13) spawn->weapons.push_back(PedWeapon{weaponSlot, weaponType, totalAmmo});
         ++weaponCount;
     }
 
@@ -100,6 +121,38 @@ bool ReadEntityBodyPed(Net::BitStreamReader& reader, const EntityCommon& common,
     visual.z = z;
     visual.heading = heading;
     visual.model = static_cast<int>(model);
+
+    spawn->health = health;
+    spawn->armor = armor;
+    spawn->synced = synced;
+    spawn->vehicleId = inVehicle ? vehicleId : 0xFFFFFFFFu;
+    spawn->seat = seat;
+    spawn->hasJetpack = hasJetpack;
+    spawn->headless = headless;
+    spawn->frozen = frozen;
+    spawn->alpha = alpha;
+    spawn->moveAnim = moveAnim;
+    spawn->currentSlot = currentSlot;
+    spawn->collisions = common.collisions;
+    spawn->dimension = common.dimension;
+    if (hasAnim) {
+        PedAnimation& anim = spawn->animation;
+        anim.present = true;
+        anim.block = blockName;
+        anim.name = animName;
+        anim.time = animTime;
+        anim.blendTime = blendTime;
+        anim.looped = looped;
+        anim.updatePosition = updatePosition;
+        anim.interruptable = interruptable;
+        anim.freezeLastFrame = freezeLastFrame;
+        anim.taskRestore = taskRestore;
+        anim.elapsedTime = elapsedTime;
+        anim.speed = speed;
+        anim.receivedAtMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+    visual.ped = std::move(spawn);
 
     DIAG("ped stored id=%u model=%u pos=%.2f %.2f %.2f heading=%.3f", common.id, model, x, y, z, heading);
     DIAG("ped detail id=%u health=%.1f armor=%.1f vehicle=%u seat=%u jetpack=%d synced=%d headless=%d frozen=%d alpha=%u move=%u clothes=%u weapons=%u slot=%u anim=%d bit=%zu",

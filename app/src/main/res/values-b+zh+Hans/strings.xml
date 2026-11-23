@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher and navigation -->
+    <string name="connecting">正在连接服务器…</string>
+    <string name="server_browser">服务器</string>
+    <string name="favorites">收藏</string>
+    <string name="settings">设置</string>
+    <string name="language">语言</string>
+    <string name="language_system">跟随系统</string>
+    <string name="language_selected">语言 · %1$s</string>
+    <string name="cancel">取消</string>
+    <string name="play">开始游戏</string>
+    <string name="disconnect">断开连接</string>
+    <string name="disconnect_close">关闭</string>
+    <string name="disconnect_retry">重新连接</string>
+    <string name="refresh">刷新</string>
+    <string name="no_servers">未找到服务器</string>
+    <string name="no_servers_hint">请检查网络连接后重试。</string>
+    <string name="connection_failed">连接失败</string>
+    <string name="server_browser_summary">%1$s，%2$s</string>
+    <string name="players_count">%1$d / %2$d</string>
+    <string name="ping_ms">%1$d 毫秒</string>
+    <string name="nickname">昵称</string>
+    <string name="nickname_helper">其他玩家可以看到此昵称</string>
+    <string name="nickname_empty">请输入昵称</string>
+    <string name="nickname_invalid">请使用 1–22 个可见 ASCII 字符，不含空格</string>
+    <string name="nickname_reserved">此昵称已被保留</string>
+    <string name="toggle_favorite">收藏或取消收藏</string>
+    <string name="server_logo">服务器图标</string>
+    <string name="join">加入</string>
+    <string name="offline">离线</string>
+    <string name="querying">正在查询…</string>
+    <string name="passworded">需要密码</string>
+    <string name="no_favorites">尚未收藏服务器</string>
+    <string name="no_favorites_hint">点按「+」添加地址，或点按服务器旁的星标。</string>
+    <string name="add_favorite">添加收藏服务器</string>
+    <string name="add_server">添加</string>
+    <string name="server_host">IP 地址或主机名</string>
+    <string name="server_port">端口</string>
+    <string name="server_host_invalid">请输入有效的 IPv4 地址或主机名。</string>
+    <string name="server_port_invalid">请输入 1 到 65535 之间的端口号。</string>
+    <string name="server_already_favorite">已收藏此服务器。</string>
+    <string name="neon_registry_unavailable">无法刷新 Neon 服务器列表，现显示可用服务器。</string>
+
+    <!-- Launcher settings and game files -->
+    <string name="section_graphics">画面</string>
+    <string name="section_audio">音频</string>
+    <string name="section_controls">操作</string>
+    <string name="section_assets">游戏文件</string>
+    <string name="section_interface">界面</string>
+    <string name="interface_scale">界面缩放（DPI）</string>
+    <string name="interface_scale_description" formatted="false">调整服务器界面中的文字、窗口和按钮大小。移动端默认值为 100%。</string>
+    <string name="interface_scale_default">默认</string>
+    <string name="interface_scale_save_failed">无法保存界面缩放设置。</string>
+    <string name="graphics_low">低</string>
+    <string name="graphics_medium">中</string>
+    <string name="graphics_high">高</string>
+    <string name="graphics_very_high">极高</string>
+    <string name="audio_volume">音量</string>
+    <string name="touch_sensitivity">触控灵敏度</string>
+    <string name="percentage">%1$d%%</string>
+    <string name="save_settings">保存设置</string>
+    <string name="settings_saved">设置已保存</string>
+    <string name="assets_description">检查本地游戏文件，并下载缺失或已变更的文件。</string>
+    <string name="sync_assets">同步游戏文件</string>
+    <string name="downloading_assets">正在下载游戏文件…</string>
+    <string name="game_setup_title">需要准备游戏文件</string>
+    <string name="game_setup_message">加入服务器前，请先同步游戏文件。</string>
+    <string name="assets_fetching_manifest">正在获取游戏文件列表…</string>
+    <string name="assets_verifying">正在校验游戏文件 %1$d/%2$d</string>
+    <string name="assets_syncing">正在同步游戏文件 %1$d/%2$d</string>
+    <string name="assets_already_syncing">游戏文件已在同步中。</string>
+    <string name="assets_local_missing">未找到游戏文件。请将 GTA Mobile 2.10 的原始文件复制到 %1$s，或先在 .env 中设置 GAME_ASSETS_DIR，再通过 ADB 传输。</string>
+    <string name="assets_insufficient_space">存储空间不足，无法安装游戏文件。</string>
+    <string name="assets_storage_unavailable">无法访问游戏文件的存储空间。</string>
+    <string name="assets_invalid_manifest">游戏文件列表无效。</string>
+    <string name="assets_file_invalid">无法校验文件 %1$s。</string>
+    <string name="assets_http_error">游戏文件服务器返回 HTTP %1$s。</string>
+    <string name="assets_sync_failed">无法同步游戏文件，请重试。</string>
+    <string name="test_gta">测试 GTA（调试）</string>
+    <string name="engine_debug">引擎调试</string>
+    <string name="engine_debug_description">记录游戏日志，并在引擎出错后显示日志窗口。下次启动游戏时生效。</string>
+    <string name="engine_debug_save_failed">无法保存引擎调试设置。</string>
+
+    <!-- SA:O account and server connection mode -->
+    <string name="neon_account_title">SA:O 账号</string>
+    <string name="neon_account_connected">已连接 SA:O 账号</string>
+    <string name="neon_account_disconnected">请绑定 Discord 账号，以加入要求登录 SA:O 的服务器。</string>
+    <string name="neon_account_sign_in">使用 Discord 登录</string>
+    <string name="neon_account_sign_out">退出登录</string>
+    <string name="neon_account_sign_out_confirm">要在此设备上退出 SA:O 账号吗？</string>
+    <string name="neon_account_sign_out_failed">无法退出 SA:O，请重试。</string>
+    <string name="neon_account_waiting_for_browser">正在打开 Discord。请在浏览器中完成登录，然后返回启动器。</string>
+    <string name="neon_account_sign_in_canceled">已取消 SA:O 登录。</string>
+    <string name="neon_account_sign_in_failed">无法登录 SA:O，请重试。</string>
+    <string name="neon_account_server_requires_sign_in">此服务器要求登录 SA:O。请绑定 Discord 账号后继续。</string>
+    <string name="neon_account_sign_in_required">连接此服务器前，请先登录 SA:O 账号。</string>
+    <string name="neon_account_session_expired">SA:O 会话已过期，请重新登录。</string>
+    <string name="neon_account_authorization_failed">无法使用 SA:O 账号授权此服务器，请重试。</string>
+    <string name="connection_mode">连接模式</string>
+    <string name="connection_mode_save_failed">无法保存连接模式。</string>
+
+    <plurals name="servers_count">
+        <item quantity="other">%d 台服务器</item>
+    </plurals>
+    <plurals name="players_online">
+        <item quantity="other">%d 名玩家在线</item>
+    </plurals>
+    <plurals name="assets_verified">
+        <item quantity="other">已校验 %d 个游戏文件</item>
+    </plurals>
+
+    <string-array name="connection_modes">
+        <item>自动</item>
+        <item>标准</item>
+        <item>旧版移动模式</item>
+    </string-array>
+</resources>

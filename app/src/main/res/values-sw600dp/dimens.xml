@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tablets: more room around the content, larger touch targets. -->
+    <dimen name="screen_padding">32dp</dimen>
+    <dimen name="pane_gap">32dp</dimen>
+    <dimen name="card_corner">28dp</dimen>
+    <dimen name="card_padding">24dp</dimen>
+    <dimen name="rail_logo_size">48dp</dimen>
+    <dimen name="row_logo_size">56dp</dimen>
+    <dimen name="row_logo_corner">16dp</dimen>
+    <dimen name="play_button_height">64dp</dimen>
+    <dimen name="join_logo_size">120dp</dimen>
+</resources>

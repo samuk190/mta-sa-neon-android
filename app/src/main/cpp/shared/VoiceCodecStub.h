@@ -18,7 +18,9 @@
 
 namespace WorldRPG::Audio {
 
-/// Voice codec configuration matching MTA's Opus-based voice chat parameters
+enum class VoiceCodec { Opus, Speex };
+
+/// Codec is explicit: packets carry no reliable codec tag; never auto-detect.
 struct VoiceConfig {
     uint32_t sampleRate = 48000;   ///< Audio sample rate in Hz
     uint32_t frameSizeMs = 20;     ///< Frame duration in milliseconds
@@ -26,7 +28,12 @@ struct VoiceConfig {
     uint8_t channels = 1;          ///< Mono for voice
     float captureGain = 1.0f;      ///< Microphone input gain multiplier
     float playbackGain = 1.0f;     ///< Speaker output gain multiplier
+    VoiceCodec codec = VoiceCodec::Opus; // Preserve existing Opus callers.
+    uint8_t quality = 8; // Speex quality, 0..10; bitrate 0 uses quality alone.
 };
+
+// CVoiceRecorder.cpp:55-124,165-191: stock MTA handshake always selects Speex.
+VoiceConfig DesktopVoiceConfig(uint8_t rateCode, uint8_t quality, uint32_t bitrate);
 
 /// Callback for encoded voice packet ready to send over network
 using VoicePacketCallback = std::function<void(const uint8_t* data, size_t length, uint32_t timestamp)>;
@@ -34,9 +41,8 @@ using VoicePacketCallback = std::function<void(const uint8_t* data, size_t lengt
 /// Callback for decoded audio samples ready for playback
 using AudioOutputCallback = std::function<void(const int16_t* samples, size_t sampleCount, uint32_t sampleRate)>;
 
-/// Stub voice codec interface for MTA-compatible voice chat.
-/// Provides the API surface that will be backed by libopus in a future phase.
-/// Currently logs all encode/decode calls for protocol validation without processing audio.
+/// Speex/Opus encoder and decoder. Codec selection is connection configuration,
+/// not packet sniffing. Capture, playback and transport are separate consumers.
 class VoiceCodecStub {
 public:
     VoiceCodecStub();
@@ -53,14 +59,14 @@ public:
 
     /// Encode raw PCM audio samples into compressed voice packet
     /// @param pcmSamples Interleaved 16-bit PCM samples
-    /// @param sampleCount Number of samples (not bytes)
-    /// @return Encoded packet data (empty if stub/not ready)
+    /// @param sampleCount Number of interleaved samples (not bytes); exactly one configured frame
+    /// @return Encoded packet data (empty if not ready)
     std::vector<uint8_t> encode(const int16_t* pcmSamples, size_t sampleCount);
 
     /// Decode compressed voice packet back to PCM samples
     /// @param data Compressed packet data
     /// @param length Packet length in bytes
-    /// @return Decoded PCM samples (empty if stub/not ready)
+    /// @return Decoded PCM samples (empty if not ready)
     std::vector<int16_t> decode(const uint8_t* data, size_t length);
 
     /// Set callback for when encoded packets are ready (push mode)

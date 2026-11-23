@@ -1,10 +1,25 @@
 # MTA SA ANDROID ( for San Andreas Online/MTA NEON )
 
+[Official website](https://saonlinemobile.web.app/) · [Download the APK](https://saonlinemobile.web.app/en/download)
+
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
 A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft Auto: San Andreas** (MTA:SA) powered by the MTA Neon architecture and Grand Theft Auto: San Andreas Mobile engine.
 
+## README languages
+
+**English** · [Português (Brasil)](README.pt-BR.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [简体中文](README.zh-Hans.md) · [Русский](README.ru.md)
+
+## Launcher language
+
+The launcher follows your Android language preferences by default and falls back to English. Open **Settings → Language** to choose a language for the launcher. Your choice is applied immediately and saved. Select **Device language** to follow Android again.
+
 ---
+
+## Neon server compatibility
+
+The standard connection uses Neon gameplay protocol `0x41E7` and the mobile bitstream layout `0x0030`. Use the server’s default gameplay protocol. For verified Android admission, the launcher must trust the server operator’s HTTPS issuer, and the issuer must authorize the APK’s package ID and signing certificate.
 
 ## Important Notice & Prerequisites
 
@@ -17,12 +32,106 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 
 ---
 
+## Install the Release APK (players)
+
+When the build has `CDN_ROOT_URL` configured, use **Settings → Sync game assets** before playing or using **Test GTA**. The World RPG CDN manifest includes the game data and the three ARM64 engine libraries in `lib/`. The app verifies the downloads and installs them in private storage. The manual instructions below apply to builds without a configured CDN.
+
+The APK on the Releases page includes the launcher and the MTA loading images. For manual installation, copy the GTA San Andreas files from your own copy of the game into the game folder. [Releases](https://github.com/samuk190/mta-sa-neon-android/releases)
+
+### What you need
+
+- An ARM64 (aarch64) Android phone, Android 8.0 or newer.
+- Your own, legally purchased **GTA San Andreas for Android, version 2.10** (Google Play), installed on the phone or on a PC.
+- A PC with [adb](https://developer.android.com/tools/releases/platform-tools) (recommended), or a file manager that can write to `Android/data`.
+
+### 1. Install the APK
+
+Download the current APK from the [official download page](https://saonlinemobile.web.app/en/download) and install it. Open the launcher once to create its game folder.
+
+The launcher uses the Android application ID `com.saonline.neonlauncher`. Android installs it alongside older World RPG packages and gives it a new game-data directory and install key.
+
+For servers using Neon Identity transport credentials, the official launcher obtains its publisher's public Play Integrity project number from Neon Identity. Players and server hosts do not configure Google projects. Independently signed builds can use their own publisher and issuer. Access to a publisher's servers depends on which releases that issuer recognizes.
+
+### 2. Get the files from your copy of the game
+
+GTA San Andreas for Android keeps its files in two places. Both are ZIP archives that any unzip tool opens:
+
+| Source | Where it is | What to take |
+|---|---|---|
+| Game APK | `adb shell pm path com.rockstargames.gtasa`, then `adb pull` that `base.apk` | `lib/arm64-v8a/libGTASA.so`, `libSCAnd.so`, `libOpenAL64.so`, and everything inside `assets/` |
+| OBB data | `Android/obb/com.rockstargames.gtasa/*.obb` | everything inside (`anim/`, `audio/`, `data/`, `models/`, `texdb/`, ...) |
+
+### 3. Put them in the game folder
+
+The default game folder is:
+
+```text
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
+```
+
+Arrange the files like this (the three libraries go in `lib/`, everything else at the top):
+
+```text
+/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
+├── lib/
+│   ├── libGTASA.so
+│   ├── libOpenAL64.so
+│   └── libSCAnd.so
+├── anim/
+├── audio/
+│   ├── android/
+│   ├── SFX/
+│   └── STREAMS/
+├── cgui/
+├── data/
+│   ├── default.dat
+│   ├── gta.dat
+│   ├── handling.cfg
+│   └── script/
+├── fonts/
+├── models/
+├── MTA/cgui/
+├── Text/american.gxt
+├── Textures/fonts/
+├── texdb/
+│   ├── gta3.img
+│   ├── gta_int.img
+│   └── menu/menu.pvr.dat
+├── scache.txt
+├── scache_small.txt
+├── scache_small_low.txt
+└── stream.ini
+```
+
+[Show the complete reference tree (410 files)](docs/game-assets-tree.txt). It lists every path in the project’s reference manifest, including the MTA loading screens. For a manual install, merge the contents of your own APK’s `assets/` and the OBB archives directly into `game_assets/`. Preserve the original names and any extra files from your copy, including `assetfile.txt` when present. The three ARM64 libraries belong directly in `lib/`.
+
+With adb, after extracting both archives into one folder `gta_sa/` on your PC (with the libraries in `gta_sa/lib/`):
+
+```bash
+adb push gta_sa/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
+```
+
+### 4. Play
+
+Open the app, pick a server, tap **Join**, enter your nickname and tap **Play**. If the three libraries are missing, the app names them and the folder it expects them in. If a required data file is missing (`data/default.dat`, `data/gta.dat`, `data/handling.cfg`, `texdb/gta3.img`, `texdb/menu/menu.pvr.dat`), the game does not start: check the layout above.
+
+The fourteen MTA desktop loading images (`MTA/cgui/images/loadscreens/loadsc1.jpg` ... `loadsc14.jpg`) are bundled in the APK. An image in the installed game folder takes precedence; if it is missing or cannot be decoded, the bundled image is used. The optional desktop font, `MTA/cgui/sabankgothic.ttf`, is read from that folder, with a bold system font as fallback.
+
+For CDN builds, publish image overrides and the font under `game_files_android_mta/MTA/cgui/` and list their sizes and SHA-256 hashes in `manifest_android_mta.json`, then sync again. Copying them into an external backup folder does not update the installed CDN generation. The bundled loading images work before that sync.
+
+> [!NOTE]
+> Uninstalling the app deletes `Android/data/com.saonline.neonlauncher/`, including the game folder. Keep your extracted copy on the PC.
+
+---
+
 ## Architecture Highlights
 
 - **Platform:** Android 8.0+ (API level 26 minimum, Target API 34).
 - **ABI:** `arm64-v8a` (aarch64) exclusively.
 - **Native Engine:** C++20 standard, ARM NEON acceleration, custom Lua 5.3 runtime, Opus audio codec, and RenderWare graphics pipeline.
 - **Networking:** MTA Neon transport protocol with native handshake, cipher, and bitstream serialization.
+
+The `fetchRemote` HTTP queue behavior and the network-stats shape were ported onto the Neon RakNet transport, using [mta-network](https://github.com/vaxeus/mta-network) by vaxeus as the reference. The phone still uses Neon RakNet; it did not vendor that project's ENet `net.dll` / `netc.dll` and did not switch to ENet.
 
 ---
 
@@ -31,33 +140,13 @@ A high-performance, native ARM64 (aarch64) Android client port of **Multi Theft 
 - [x] **Game Log-in** — Working (handshake, OPEN51 datagram, cipher negotiation, and session init)
 - [x] **Character Sync** — Working *(with bugs)* (remote `CPlayerPed` creation, pure sync, keysync, health updates)
 - [x] **Peds** — Working *(with bugs)* (`ENTITY_ADD`, `PED_SYNC`, wander tasks; pathfinding and collision tuning in progress)
-- [x] **Sound / Chat** — Working (Opus voice stream, text chat send/receive, and on-screen overlay)
+- [x] **Sound / Chat** — MediaPlayer playback, text chat, and on-screen overlay. Voice codecs are available. In-game voice capture and playback still need integration.
 
 ---
 
-## Client Lua API Parity & Conversion Catalog
+## Client Lua API Conversion Catalog
 
-A complete line-by-line conversion catalog comparing all 1,581 desktop MTA client Lua functions (`mta_neon_source`) against the Android client is maintained in [`docs/lua-functions/`](docs/lua-functions/README.md).
-
-### Parity Breakdown by Category
-
-| Category | Documentation File | Total | Implemented | Stub | Missing | Parity % |
-|---|---|---|---|---|---|---|
-| **Vehicles (CLuaVehicleDefs)** | [VEHICLES.md](docs/lua-functions/VEHICLES.md) | 165 | 0 | 23 | 142 | 0.0% |
-| **Peds & Players (CLuaPedDefs, CLuaPlayerDefs)** | [PEDS_AND_PLAYERS.md](docs/lua-functions/PEDS_AND_PLAYERS.md) | 206 | 8 | 82 | 116 | 3.9% |
-| **World, Objects & Environment** | [WORLD_AND_OBJECTS.md](docs/lua-functions/WORLD_AND_OBJECTS.md) | 227 | 2 | 15 | 210 | 0.9% |
-| **Element Tree & Data (CLuaElementDefs)** | [ELEMENTS.md](docs/lua-functions/ELEMENTS.md) | 81 | 10 | 24 | 47 | 12.3% |
-| **GUI & 2D/3D Drawing (DX & CEGUI)** | [GUI_AND_DX.md](docs/lua-functions/GUI_AND_DX.md) | 199 | 22 | 6 | 171 | 11.1% |
-| **Engine & Model Replacement (DFF, TXD, COL)** | [ENGINE_AND_MODELS.md](docs/lua-functions/ENGINE_AND_MODELS.md) | 125 | 1 | 15 | 109 | 0.8% |
-| **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](docs/lua-functions/AUDIO_AND_VOICE.md) | 57 | 0 | 8 | 49 | 0.0% |
-| **Camera & Viewport (CLuaCameraDefs)** | [CAMERA.md](docs/lua-functions/CAMERA.md) | 47 | 1 | 5 | 41 | 2.1% |
-| **Weapons & Projectiles (CLuaWeaponDefs, CLuaProjectileDefs)** | [WEAPONS_AND_COMBAT.md](docs/lua-functions/WEAPONS_AND_COMBAT.md) | 31 | 0 | 0 | 31 | 0.0% |
-| **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](docs/lua-functions/CORE_AND_UTILITY.md) | 195 | 16 | 15 | 164 | 8.2% |
-| **Markers, Blips, ColShapes & Spatial** | [MARKERS_AND_SPATIAL.md](docs/lua-functions/MARKERS_AND_SPATIAL.md) | 145 | 0 | 3 | 142 | 0.0% |
-| **Web Browser & Compatibility (CEF / Discord)** | [BROWSER_AND_COMPATIBILITY.md](docs/lua-functions/BROWSER_AND_COMPATIBILITY.md) | 103 | 0 | 0 | 103 | 0.0% |
-| **TOTAL** | **All Categories** | **1581** | **60** | **196** | **1325** | **3.8%** |
-
-*Full machine-generated parity matrix: [`docs/PARITY_MATRIX.md`](docs/PARITY_MATRIX.md)*
+The catalog covers 1,581 desktop MTA client Lua functions. It records Android binding coverage, desktop references, and known engine limitations. See the [category breakdown](docs/lua-functions/README.md) and [generated compatibility matrix](docs/PARITY_MATRIX.md).
 
 ---
 
@@ -69,12 +158,7 @@ This mobile client is designed to connect to servers running the **MTA Neon** / 
 
 To set up and host your own compatible game server, clone and build the San Andreas Online server repository following its instructions.
 
-> [!WARNING]
-> **MTA Anti-Cheat Compatibility Notice**
->
-> Standard Multi Theft Auto proprietary Anti-Cheat (`net.dll` / MTA AC server checks) **does NOT work** with this mobile client.
->
-> Because this client uses a custom packet architecture, mobile-tailored bitstreams, and an ARM64-optimized native cipher for network transport, traditional desktop MTA anti-cheat modules will reject the connection. The server must be run using [San Andreas Online (MTA Neon)](https://github.com/Dryxio/san-andreas-online) or have standard anti-cheat verification modules disabled.
+Classic game connections use the server's stock network module and anticheat. Keep the default settings for mixed PC and Android play. The stock module may reject a mobile connection with AC #4 before the game records a join. Play Integrity enrollment supplies a client credential for servers that implement QUIC gameplay.
 
 ---
 
@@ -85,6 +169,8 @@ To set up and host your own compatible game server, clone and build the San Andr
 > Peer bitstream: the phone is pinned to `0x0030`. Items that only exist from `0x0031` or `0x003D` are marked. Verified on device means logged on a real phone against the live server.
 
 **Legend:** `[x]` verified on device. `[~]` implemented in code, not verified on device. `[ ]` not started or log-only.
+
+- [ ] Non-traffic peds (remote players and script/synced peds, not native-ped-traffic) are still bugged: they do not move correctly; work already in the tree is recorded in [`docs/PEDS_SYNC_STATUS.md`](docs/PEDS_SYNC_STATUS.md).
 
 ### 0. Session, join and world state (prerequisite)
 - [x] **Join handshake** (`NeonJoinProtocol`): RakNet connect, `MOD_NAME`, `PLAYER_JOINDATA`, `PLAYER_INGAME_NOTICE`, `SERVER_JOINEDGAME` (reference `CNetAPI`, join path).
@@ -160,10 +246,11 @@ To set up and host your own compatible game server, clone and build the San Andr
 ### 5. Step E — Scripting engine, touch UI and optimization
 - [~] **Lua 5.3 client VM**: `addEventHandler`, `triggerServerEvent`, timers and about 60 ped natives defined; `getAmbientPedPopulationProfile` shim relies on them.
 - [ ] **DirectX / RenderWare 2D GUI**: DX primitives, radar blips and HUD overlays for remote entities.
+- [ ] **Registration wardrobe preview** ([docs/ROADMAP_WARDROBE_PREVIEW.md](docs/ROADMAP_WARDROBE_PREVIEW.md)): `createPed` (model 0 stays CJ), `setTime`, `setWeather`, `setCameraMatrix`, `setCameraTarget`, `addPedClothes`, `removePedClothes`, `setElementRotation`, in that order. The DX menu already draws.
 - [ ] **Touch control customization**: virtual joystick sensitivity and touch button mapping.
 - [ ] **Custom asset streaming**: server-side DFF/TXD download and RenderWare memory streaming.
 - [ ] **Engine optimization**: frame pacing, memory compaction and ARM64 anti-crash guardrails.
-- [ ] **16 KB ELF alignment** for `libc++_shared.so` (Samsung compatibility warning on install; repo audit fails).
+- [~] **16 KB ELF alignment**: the static STL (`ANDROID_STL=c++_static`) means no `libc++_shared.so` is packaged, and `tools/audit_android_apk.py` passes on a current `-PnoGameFiles` build (`libsaonlineneon.so` and `libneon_gameplay.so` have 16 KB-aligned LOAD segments and are compressed for extraction at install). Installing on a 16 KB-page device is still unverified.
 
 - [ ] **Object sync** (`OBJECT_SYNC`, `OBJECT_STARTSYNC`, `OBJECT_STOPSYNC`): world objects owned by a syncer, with their start and stop packets.
 - [ ] **Light sync** (`LIGHTSYNC`) and **camera sync** (`CAMERA_SYNC`): world lights and remote camera state.
@@ -181,7 +268,7 @@ To set up and host your own compatible game server, clone and build the San Andr
 
 ## Game Assets & Folder Location
 
-All game assets are configured locally via environment variables (`.env`) rather than downloading from external cloud repositories.
+Configure the local game files and optional CDN in `.env`.
 
 ### 1. Configure `.env`
 
@@ -196,7 +283,8 @@ Edit `.env` to define your asset locations:
 ```env
 # Launcher UI Customization
 LAUNCHER_TITLE=MTA:SA Neon Android
-LAUNCHER_PLAY_BUTTON_TEXT=Play
+# Leave empty to use the translated Play label.
+LAUNCHER_PLAY_BUTTON_TEXT=
 
 # Default Server Connection Settings
 DEFAULT_SERVER_NAME=MTA Neon Server
@@ -209,7 +297,7 @@ DEFAULT_PLAYER_NICK=Player
 GAME_ASSETS_DIR=./game_assets
 
 # Storage path on your Android device (where assets will be loaded from):
-DEVICE_ASSETS_PATH=/sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets
+DEVICE_ASSETS_PATH=/sdcard/Android/data/com.saonline.neonlauncher/files/game_assets
 
 # Optional: Custom CDN or Local HTTP Server URL if serving assets over network
 CDN_ROOT_URL=
@@ -255,10 +343,9 @@ mta-sa-neon-android/
 
 1. Open your GTA SA Mobile 2.10 APK as a ZIP archive.
 2. Navigate to `lib/arm64-v8a/`.
-3. Copy `libGTASA.so` (and optional companion libraries `libSCAnd.so`, `libOpenAL64.so`) into:
-   ```text
-   app/src/main/jniLibs/arm64-v8a/libGTASA.so
-   ```
+3. Copy `libGTASA.so`, `libSCAnd.so` and `libOpenAL64.so` into the game folder on the device, under `lib/` (`game_assets/lib/`), as in [Install the Release APK](#install-the-release-apk-players). The app copies them into its private storage and loads them from there (`GameLibraries.java`).
+
+A debug build also packages them when they are in `app/src/main/jniLibs/arm64-v8a/` (git-ignored); that copy is used first. The release build never packages them, nor the game files in `app/src/main/assets/` (`american.gxt`, fonts, `mainV1.scm`, `menu.pvr`, `scache*.txt`); the engine reads those from the game folder first. To test a debug build exactly as the release behaves, build with `./gradlew assembleDebug -PnoGameFiles`.
 
 ### 4. Transferring Assets to Device
 
@@ -274,7 +361,7 @@ bash tools/sync_local_assets.sh
 
 Alternatively, copy the contents of `game_assets/` to your device storage manually:
 ```bash
-adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game_assets/
+adb push game_assets/. /sdcard/Android/data/com.saonline.neonlauncher/files/game_assets/
 ```
 
 ---
@@ -294,6 +381,13 @@ adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game
 # Debug build (generates APK in app/build/outputs/apk/debug/)
 ./gradlew assembleDebug
 
+# Release build (app/build/outputs/apk/release/), signed with keystore.properties when present:
+#   storeFile=/path/to/release.jks
+#   storePassword=...
+#   keyAlias=...
+#   keyPassword=...
+./gradlew assembleRelease
+
 # Install directly to connected device
 ./gradlew installDebug
 ```
@@ -304,6 +398,7 @@ adb push game_assets/. /sdcard/Android/data/com.worldrpg.neonlauncher/files/game
 
 Detailed architectural and protocol references are preserved in the `docs/` directory:
 
+- [Wardrobe preview port](docs/ROADMAP_WARDROBE_PREVIEW.md)
 - [Lua Functions Conversion Catalog](docs/lua-functions/README.md)
 - [Client Parity Matrix](docs/PARITY_MATRIX.md)
 - [Protocol Reference](docs/PROTOCOL_REFERENCE.md)
@@ -319,8 +414,10 @@ Detailed architectural and protocol references are preserved in the `docs/` dire
 Join our community to discuss development, report findings, test builds, and collaborate:
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/DKrpU3e4pF)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20My%20Work-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/samuk190)
 
-👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)
+👉 **Discord Server:** [https://discord.gg/DKrpU3e4pF](https://discord.gg/DKrpU3e4pF)  
+☕ **Support on Ko-fi:** [https://ko-fi.com/samuk190](https://ko-fi.com/samuk190)
 
 ---
 
@@ -343,3 +440,9 @@ This project is built upon decades of collective community research, open-source
 - **Opus Codec**: Copyright © 2001–2011 Xiph.Org Foundation, Skype Limited. Licensed under the [BSD-3-Clause License](https://opus-codec.org/license/).
 - **Rockstar Games**: Grand Theft Auto and Grand Theft Auto: San Andreas are registered trademarks of Rockstar Games / Take-Two Interactive.
 - This open-source research and educational project is not affiliated with, endorsed by, or sponsored by Rockstar Games or Take-Two Interactive.
+
+## Connect to a QUIC gameplay server
+
+In **Favorites → Add**, enter the server's certificate hostname prefixed with `quic://` and its separate QUIC UDP port. The launcher uses the installation key in Android Keystore and its Neon Identity client certificate. The server owner can require Google Play device integrity for this endpoint. Use a plain hostname and the classic port to connect to classic servers.
+
+To build the launcher with the native adapter, check out the server branch from [PR #135](https://github.com/Dryxio/san-andreas-online/pull/135) in a sibling directory named `san-andreas-online`. Install the Go version from `Shared/transport/go.mod` on your PATH. The Android CMake build compiles and packages the arm64 QUIC library using the NDK. A checkout in another location can be selected with the CMake variable `NEON_TRANSPORT_DIR`.

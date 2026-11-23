@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="neon_account_title">SA:O account</string>
+    <string name="neon_account_connected">SA:O account connected</string>
+    <string name="neon_account_disconnected">Connect your Discord account for servers that require SA:O sign-in.</string>
+    <string name="neon_account_sign_in">Sign in with Discord</string>
+    <string name="neon_account_sign_out">Sign out</string>
+    <string name="neon_account_sign_out_confirm">Sign out of your SA:O account on this device?</string>
+    <string name="neon_account_sign_out_failed">Could not sign out of SA:O. Try again.</string>
+    <string name="neon_account_waiting_for_browser">Opening Discord. Complete sign-in in your browser, then return to the launcher.</string>
+    <string name="neon_account_sign_in_canceled">SA:O sign-in canceled.</string>
+    <string name="neon_account_sign_in_failed">Could not sign in to SA:O. Try again.</string>
+    <string name="neon_account_server_requires_sign_in">This server requires SA:O sign-in. Connect your Discord account to continue.</string>
+    <string name="neon_account_sign_in_required">Sign in to your SA:O account before connecting to this server.</string>
+    <string name="neon_account_session_expired">Your SA:O session expired. Sign in again.</string>
+    <string name="neon_account_authorization_failed">Could not authorize this server with your SA:O account. Try again.</string>
+    <string name="connection_mode">Connection mode</string>
+    <string name="connection_mode_save_failed">Could not save the connection mode.</string>
+
+    <string-array name="connection_modes">
+        <item>Automatic</item>
+        <item>Standard</item>
+        <item>Legacy mobile</item>
+    </string-array>
+</resources>

@@ -6,12 +6,12 @@
 }
 
 # Keep native library loading
--keep class com.worldrpg.neonlauncher.game.** { *; }
--keep class com.worldrpg.neonlauncher.network.** { *; }
+-keep class com.saonline.neonlauncher.game.** { *; }
+-keep class com.saonline.neonlauncher.network.** { *; }
 
 # Keep data classes used for serialization
--keep class com.worldrpg.neonlauncher.network.packets.** { *; }
--keep class com.worldrpg.neonlauncher.game.entity.** { *; }
+-keep class com.saonline.neonlauncher.network.packets.** { *; }
+-keep class com.saonline.neonlauncher.game.entity.** { *; }
 
 # AndroidX
 -keep class androidx.** { *; }

@@ -17,7 +17,7 @@ public class WarMedia extends com.wardrumstudios.utils.WarGamepad {
 
     public boolean DeleteFile(java.lang.String str) {
         try {
-            return com.worldrpg.engine.EngineAssetLoader.resolveFile(GetGameBaseDirectory(), str).delete();
+            return com.saonline.engine.EngineAssetLoader.resolveFile(GetGameBaseDirectory(), str).delete();
         } catch (java.io.IOException error) {
             android.util.Log.e("WorldRPG.engine", "Could not delete game file", error);
             return false;
@@ -40,8 +40,8 @@ public class WarMedia extends com.wardrumstudios.utils.WarGamepad {
 
     public boolean FileRename(java.lang.String str, java.lang.String str2, int i) {
         try {
-            java.io.File source = com.worldrpg.engine.EngineAssetLoader.resolveFile(GetGameBaseDirectory(), str);
-            java.io.File destination = com.worldrpg.engine.EngineAssetLoader.resolveFile(GetGameBaseDirectory(), str2);
+            java.io.File source = com.saonline.engine.EngineAssetLoader.resolveFile(GetGameBaseDirectory(), str);
+            java.io.File destination = com.saonline.engine.EngineAssetLoader.resolveFile(GetGameBaseDirectory(), str2);
             return source.renameTo(destination);
         } catch (java.io.IOException error) {
             android.util.Log.e("WorldRPG.engine", "Could not rename game file", error);

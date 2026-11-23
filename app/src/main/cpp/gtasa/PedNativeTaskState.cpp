@@ -32,6 +32,10 @@ struct PedNativeTaskState {
     float health = 0.f;
     bool armorLocked = false;
     float armor = 0.f;
+    // CPedSync::Packet_PedStopSync locks to the body's current value: LockHealth(GetHealth()) (CPedSync.cpp 280-281).
+    // The packet runs on the network thread, so the value is taken on the game thread (ResolvePedVitalsLockCurrent).
+    bool healthLockCurrentPending = false;
+    bool armorLockCurrentPending = false;
 };
 
 std::mutex gPedNativeTaskMutex;
@@ -113,14 +117,61 @@ void LockPedArmor(uint32_t id, float armor) {
     state.armor = armor;
 }
 
+// Used to set healthLocked with whatever value the record held (0 for a ped that was never locked), so the next
+// tick wrote that stale value into CPed+0x6AC. The lock now waits for the body's value.
 void LockPedHealthCurrent(uint32_t id) {
     std::lock_guard<std::mutex> lock(gPedNativeTaskMutex);
-    StateFor(id).healthLocked = true;
+    StateFor(id).healthLockCurrentPending = true;
 }
 
 void LockPedArmorCurrent(uint32_t id) {
     std::lock_guard<std::mutex> lock(gPedNativeTaskMutex);
-    StateFor(id).armorLocked = true;
+    StateFor(id).armorLockCurrentPending = true;
+}
+
+void ResolvePedVitalsLockCurrent(uint32_t id, float bodyHealth, float bodyArmor) {
+    std::lock_guard<std::mutex> lock(gPedNativeTaskMutex);
+    auto found = gPedNativeTaskStates.find(id);
+    if (found == gPedNativeTaskStates.end()) return;
+    PedNativeTaskState& state = found->second;
+    if (state.healthLockCurrentPending) {
+        state.healthLockCurrentPending = false;
+        state.healthLocked = true;
+        state.health = bodyHealth;
+    }
+    if (state.armorLockCurrentPending) {
+        state.armorLockCurrentPending = false;
+        state.armorLocked = true;
+        state.armor = bodyArmor;
+    }
+}
+
+// CClientPed::UnlockHealth / UnlockArmor (Packet_PedStartSync, CPedSync.cpp 256-257).
+void UnlockPedVitals(uint32_t id) {
+    std::lock_guard<std::mutex> lock(gPedNativeTaskMutex);
+    auto found = gPedNativeTaskStates.find(id);
+    if (found == gPedNativeTaskStates.end()) return;
+    found->second.healthLocked = false;
+    found->second.armorLocked = false;
+    found->second.healthLockCurrentPending = false;
+    found->second.armorLockCurrentPending = false;
+}
+
+// The element is gone (ENTITY_REMOVE, reconnect). A reused ElementID starts with no locks or presentation.
+void ForgetPedNativeTaskState(uint32_t id) {
+    std::lock_guard<std::mutex> lock(gPedNativeTaskMutex);
+    gPedNativeTaskStates.erase(id);
+}
+
+bool CopyPedVitalsLock(uint32_t id, bool& healthLocked, float& health, bool& armorLocked, float& armor) {
+    std::lock_guard<std::mutex> lock(gPedNativeTaskMutex);
+    auto found = gPedNativeTaskStates.find(id);
+    if (found == gPedNativeTaskStates.end()) return false;
+    healthLocked = found->second.healthLocked;
+    health = found->second.health;
+    armorLocked = found->second.armorLocked;
+    armor = found->second.armor;
+    return healthLocked || armorLocked;
 }
 
 } // namespace WorldRPG::Game

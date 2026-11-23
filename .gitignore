@@ -78,3 +78,14 @@ game_assets/*
 !game_assets/README.md
 !game_assets/.gitkeep
 *.img
+
+# Local Ghidra bridge (machine paths, project database, exported decompiler output)
+ghidra-bridge.yaml
+ghidra-bridge.yml
+ghidra-local/
+.ghidra-exports/
+
+# Release signing (kept outside version control)
+keystore.properties
+*.jks
+*.keystore

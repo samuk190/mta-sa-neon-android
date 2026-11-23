@@ -14,8 +14,11 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <memory>
+#include <charconv>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <netdb.h>
@@ -50,10 +53,11 @@ struct HttpTarget {
 };
 
 struct Request {
-    std::string cacheRoot;
+    std::string cachePath;
     std::string serverBase;
     std::string resource;
     std::string file;
+    uint32_t generation = 0;
     uint64_t size = 0;
     uint32_t crc = 0;
     bool hasMd5 = false;
@@ -85,7 +89,8 @@ struct State {
     std::condition_variable idle;  // queue drained and no transfer running
     std::deque<Request> queue;
     std::vector<Completion> completions;
-    std::unordered_set<std::string> inFlight;
+    std::unordered_map<std::string, uint32_t> latestQueued;
+    std::unordered_set<std::string> activePaths;
     std::vector<std::thread> workers;
     size_t active = 0;
     bool stopping = false;
@@ -103,7 +108,7 @@ struct State {
             stopping = true;
             stats.dropped += queue.size();
             for (const Request& req : queue) {
-                completions.push_back({req.resource, req.file, false, "dropped at shutdown"});
+                completions.push_back({req.resource, req.file, req.generation, false, "dropped at shutdown"});
             }
             queue.clear();
         }
@@ -208,6 +213,8 @@ public:
     }
     HttpConnection(const HttpConnection&) = delete;
     HttpConnection& operator=(const HttpConnection&) = delete;
+
+    bool FullyConsumed() const { return pos_ == buffer_.size(); }
 
     bool Send(const std::string& data, std::string& error) {
         size_t offset = 0;
@@ -314,25 +321,33 @@ bool ConnectTo(const HttpTarget& target, int& fd, std::string& error) {
     return fd >= 0;
 }
 
-// HTTP/1.0 GET. Streams the body into `path` (".part") and hashes it.
-// Returns false with `error` set; `status` is the HTTP status when headers arrived.
-bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const std::string& path, FileHasher& hasher, int& status,
-                 std::string& error) {
+// A worker owns at most one idle connection to a resource origin.
+struct ResourceConnection {
+    std::string host, port;
+    std::unique_ptr<HttpConnection> idle;
+};
+
+bool FetchToFile(ResourceConnection& pool, const HttpTarget& target, const std::string& requestPath,
+                 const std::string& path, FileHasher& hasher, int& status, std::string& error) {
     status = 0;
-    int fd = -1;
-    if (!ConnectTo(target, fd, error)) return false;
-    HttpConnection conn(fd);
-
-    const std::string request = "GET " + requestPath + " HTTP/1.0\r\nHost: " + target.host + ":" + target.port +
-                                "\r\nUser-Agent: WorldRPG-Neon/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
-    if (!conn.Send(request, error)) return false;
-
+    const std::string request = "GET " + requestPath + " HTTP/1.1\r\nHost: " + target.host + ":" + target.port +
+                                "\r\nUser-Agent: MTAMobile/1.0\r\nAccept: */*\r\n\r\n";
+    std::unique_ptr<HttpConnection> socket = std::move(pool.idle);
     std::string line;
-    if (!conn.ReadLine(line, error)) return false;
-    if (line.rfind("HTTP/", 0) != 0) {
-        error = "bad status line";
-        return false;
+    // An idle connection may have expired. Retry this GET once on a fresh socket
+    // only if no response line was available. No file data has been accepted yet.
+    if (!socket || pool.host != target.host || pool.port != target.port ||
+        !socket->Send(request, error) || !socket->ReadLine(line, error)) {
+        socket.reset();
+        error.clear();
+        int fd = -1;
+        if (!ConnectTo(target, fd, error)) return false;
+        socket = std::make_unique<HttpConnection>(fd);
+        if (!socket->Send(request, error) || !socket->ReadLine(line, error)) return false;
     }
+    HttpConnection& conn = *socket;
+    bool reusable = line.rfind("HTTP/1.1 ", 0) == 0;
+    if (line.rfind("HTTP/", 0) != 0) { error = "bad status line"; return false; }
     const size_t space = line.find(' ');
     if (space == std::string::npos) {
         error = "bad status line";
@@ -357,8 +372,20 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
         const size_t first = value.find_first_not_of(" \t");
         value = first == std::string::npos ? std::string() : value.substr(first);
         if (name == "content-length") {
-            contentLength = std::atoll(value.c_str());
+            long long parsedLength = -1;
+            const auto end = value.data() + value.size();
+            const auto parsed = std::from_chars(value.data(), end, parsedLength);
+            if (parsed.ec != std::errc{} || parsed.ptr != end || parsedLength < 0 ||
+                (contentLength >= 0 && parsedLength != contentLength)) {
+                error = "invalid Content-Length";
+                return false;
+            }
+            contentLength = parsedLength;
+        } else if (name == "connection") {
+            for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (value.find("close") != std::string::npos) reusable = false;
         } else if (name == "transfer-encoding") {
+            reusable = false;
             std::string lower = value;
             for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             chunked = lower.find("chunked") != std::string::npos;
@@ -367,7 +394,7 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
         }
     }
     if (status != 200) {
-        error = "HTTP status" + (location.empty() ? std::string() : " (Location: " + location + ")");
+        error = "HTTP " + std::to_string(status) + (location.empty() ? std::string() : " (Location: " + location + ")");
         return false;
     }
 
@@ -455,13 +482,18 @@ bool FetchToFile(const HttpTarget& target, const std::string& requestPath, const
         error = "close failed";
         ok = false;
     }
+    if (ok && reusable && contentLength >= 0 && conn.FullyConsumed()) {
+        pool.host = target.host;
+        pool.port = target.port;
+        pool.idle = std::move(socket);
+    }
     return ok;
 }
 
-Outcome ProcessRequest(const Request& req) {
+Outcome ProcessRequest(ResourceConnection& pool, const Request& req) {
     Outcome out;
     const std::string label = req.resource + "/" + req.file;
-    const std::string finalPath = req.cacheRoot + "/" + req.resource + "/" + req.file;
+    const std::string& finalPath = req.cachePath;
     const std::string partPath = finalPath + ".part";
 
     // Cache: reuse the local copy when size, CRC-32 and (if sent) MD5 all match.
@@ -493,7 +525,7 @@ Outcome ProcessRequest(const Request& req) {
 
     FileHasher hasher;
     int status = 0;
-    if (!FetchToFile(target, requestPath, partPath, hasher, status, error)) {
+    if (!FetchToFile(pool, target, requestPath, partPath, hasher, status, error)) {
         std::remove(partPath.c_str());
         out.note = label + ": " + error;
         return out;  // Kind::Failed (default)
@@ -569,26 +601,41 @@ void ApplyOutcome(Stats& stats, Outcome& outcome, const Request& req) {
 }
 
 void WorkerLoop() {
+    ResourceConnection pool;
     State& state = GetState();
     while (true) {
         Request req;
         {
             std::unique_lock<std::mutex> lock(state.mutex);
-            state.wake.wait(lock, [&] { return state.stopping || !state.queue.empty(); });
+            auto next = state.queue.end();
+            state.wake.wait(lock, [&] {
+                if (state.stopping) return true;
+                next = std::find_if(state.queue.begin(), state.queue.end(), [&](const Request& item) {
+                    return !state.activePaths.contains(item.cachePath);
+                });
+                return next != state.queue.end();
+            });
             if (state.stopping) return;
-            req = std::move(state.queue.front());
-            state.queue.pop_front();
+            req = std::move(*next);
+            state.queue.erase(next);
+            // The checked file and its .part path belong to one request at a
+            // time. A later generation for the same path runs after this one.
+            state.activePaths.insert(req.cachePath);
             ++state.active;
         }
 
-        Outcome outcome = ProcessRequest(req);
+        Outcome outcome = ProcessRequest(pool, req);
 
         std::lock_guard<std::mutex> lock(state.mutex);
         ApplyOutcome(state.stats, outcome, req);
         const bool ok = outcome.kind == Outcome::Kind::Cached || outcome.kind == Outcome::Kind::Downloaded;
-        state.completions.push_back({req.resource, req.file, ok, ok ? std::string() : outcome.note});
-        state.inFlight.erase(req.resource + "/" + req.file);
+        state.completions.push_back({req.resource, req.file, req.generation, ok, ok ? std::string() : outcome.note});
+        state.activePaths.erase(req.cachePath);
+        if (auto latest = state.latestQueued.find(req.cachePath);
+            latest != state.latestQueued.end() && latest->second == req.generation)
+            state.latestQueued.erase(latest);
         --state.active;
+        state.wake.notify_all();
         if (state.queue.empty() && state.active == 0) state.idle.notify_all();
     }
 }
@@ -600,6 +647,12 @@ void SetResourceCacheRoot(const std::string& root) {
     std::lock_guard<std::mutex> lock(state.mutex);
     state.cacheRoot = TrimTrailingSlashes(root);
     state.rootWarned = false;
+}
+
+std::string GetResourceCacheRoot() {
+    State& state = GetState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.cacheRoot;
 }
 
 void SetServerBase(const std::string& baseUrl) {
@@ -617,7 +670,7 @@ std::string BuildServerBase(const NeonJoinInfo& info, const std::string& host) {
     return std::string();
 }
 
-EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file) {
+EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file, uint32_t generation) {
     State& state = GetState();
     std::lock_guard<std::mutex> lock(state.mutex);
     if (state.stopping) return EnqueueResult::Stopped;
@@ -635,17 +688,20 @@ EnqueueResult Enqueue(const std::string& resourceName, const ResourceFile& file)
         }
         return EnqueueResult::Disabled;
     }
-    const std::string key = resourceName + "/" + file.name;
-    if (!state.inFlight.insert(key).second) {
+    const std::string cachePath = state.cacheRoot + "/" + resourceName + "/" + file.name;
+    auto [latest, inserted] = state.latestQueued.try_emplace(cachePath, generation);
+    if (!inserted && latest->second == generation) {
         ++state.stats.skippedDuplicate;
         return EnqueueResult::Duplicate;
     }
+    latest->second = generation;
 
     Request req;
-    req.cacheRoot = state.cacheRoot;
+    req.cachePath = cachePath;
     req.serverBase = state.serverBase;
     req.resource = resourceName;
     req.file = file.name;
+    req.generation = generation;
     req.size = file.size;
     req.crc = file.crc;
     req.hasMd5 = file.hasMd5;

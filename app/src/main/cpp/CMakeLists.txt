@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(WorldRPGNeon LANGUAGES CXX C)
+project(saonlineneon LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,10 +48,15 @@ add_subdirectory(lua53)
 # Phase 6: Replaces VoiceCodecStub with real Opus encoder/decoder.
 # ---------------------------------------------------------------------------
 add_subdirectory(opus)
+add_subdirectory(speex)
+add_subdirectory(third_party/hlslparser)
+# Crypto++ 8.9.0 and crypt_blowfish, the libraries desktop MTA vendors for CLuaCryptDefs.
+add_subdirectory(third_party/cryptopp)
+add_subdirectory(third_party/bcrypt)
 
-add_library(WorldRPGNeon SHARED ${NATIVE_SOURCES})
+add_library(saonlineneon SHARED ${NATIVE_SOURCES})
 
-target_include_directories(WorldRPGNeon PRIVATE
+target_include_directories(saonlineneon PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/net
     ${CMAKE_CURRENT_SOURCE_DIR}/net/raknet
@@ -60,7 +65,7 @@ target_include_directories(WorldRPGNeon PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/shared
 )
 
-target_link_libraries(WorldRPGNeon
+target_link_libraries(saonlineneon
     android
     log
     EGL
@@ -68,15 +73,50 @@ target_link_libraries(WorldRPGNeon
     z
     lua53
     opus
+    neon_speex
+    neon_hlsl
+    neon_cryptopp
+    neon_bcrypt
 )
 
 # Resolve every native dependency during the Android link
 if(ANDROID)
-    target_link_options(WorldRPGNeon PRIVATE "-Wl,--no-undefined")
+    target_link_options(saonlineneon PRIVATE "-Wl,--no-undefined")
 endif()
 
 # Align LOAD segments to 16KB pages for modern Android compatibility
-target_link_options(WorldRPGNeon PRIVATE
+target_link_options(saonlineneon PRIVATE
     "-Wl,-z,max-page-size=16384"
     "-Wl,-z,common-page-size=16384"
 )
+
+if(ANDROID)
+    set(NEON_TRANSPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../san-andreas-online/Shared/transport"
+        CACHE PATH "PR #135 Shared/transport checkout")
+    if(NOT EXISTS "${NEON_TRANSPORT_DIR}/native/main.go")
+        message(FATAL_ERROR "Place the PR #135 san-andreas-online checkout beside the launcher or set NEON_TRANSPORT_DIR")
+    endif()
+    find_program(NEON_GO go REQUIRED)
+    get_filename_component(ndk_bin "${CMAKE_C_COMPILER}" DIRECTORY)
+    set(quic_cc "${ndk_bin}/aarch64-linux-android${ANDROID_PLATFORM_LEVEL}-clang")
+    if(CMAKE_HOST_WIN32)
+        string(APPEND quic_cc ".cmd")
+    endif()
+    set(quic_out "${CMAKE_CURRENT_BINARY_DIR}/quic")
+    file(GLOB_RECURSE quic_sources CONFIGURE_DEPENDS "${NEON_TRANSPORT_DIR}/*.go")
+    add_custom_command(
+        OUTPUT "${quic_out}/libneon_gameplay.so" "${quic_out}/libneon_gameplay.h"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${quic_out}"
+        COMMAND "${CMAKE_COMMAND}" -E env "CGO_ENABLED=1" "GOOS=android" "GOARCH=arm64" "CC=${quic_cc}"
+                "${NEON_GO}" build -trimpath -buildmode=c-shared
+                "-ldflags=-extldflags=-Wl,-soname,libneon_gameplay.so,-z,max-page-size=16384"
+                -o "${quic_out}/libneon_gameplay.so" ./native
+        DEPENDS ${quic_sources} "${NEON_TRANSPORT_DIR}/go.mod" "${NEON_TRANSPORT_DIR}/go.sum"
+        WORKING_DIRECTORY "${NEON_TRANSPORT_DIR}" VERBATIM)
+    add_custom_target(build_neon_gameplay DEPENDS "${quic_out}/libneon_gameplay.so" "${quic_out}/libneon_gameplay.h")
+    add_library(neon_gameplay SHARED IMPORTED)
+    set_target_properties(neon_gameplay PROPERTIES IMPORTED_LOCATION "${quic_out}/libneon_gameplay.so")
+    add_dependencies(saonlineneon build_neon_gameplay)
+    target_link_libraries(saonlineneon neon_gameplay)
+    target_include_directories(saonlineneon PRIVATE "${quic_out}")
+endif()

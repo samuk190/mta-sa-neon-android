@@ -101,6 +101,7 @@ bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out) {
         bool value = false;
         if (!ReadFlag(reader, value)) LUA_FAIL();
         out.number = true;
+        out.boolean = true;
         out.value = value ? 1 : 0;
         return true;
     }
@@ -152,7 +153,7 @@ bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out) {
     return SkipLuaBody(reader, kind, 0);
 }
 
-bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
+bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out, bool extendedHeader) {
     // Reference order: ElementID, type (1 byte), parent ElementID, interior (1 byte),
     // dimension (ReadCompressed ushort), attached flag.
     uint32_t id = 0, parent = 0, dimension = 0;
@@ -192,9 +193,11 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
         DIAG("ENTITY_ADD fail line=%d stage=collisions id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
         return false;
     }
-    // Call-propagation bit exists only for peers at 0x31+ (reference: Can(ExtendedWorldPositions)).
+    // The current World RPG server sends both desktop header fields for a
+    // standard mobile join at 0x0030. Verified with /driftcar supra on
+    // 2026-11-20: count/name are zero and vehicle 401 starts at body bit 87.
     out.callProp = true;
-    if (kServerEntityBitStream >= 0x0031 && !ReadFlag(reader, out.callProp)) {
+    if (extendedHeader && !ReadFlag(reader, out.callProp)) {
         DIAG("ENTITY_ADD fail line=%d stage=callprop id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
         return false;
     }
@@ -209,23 +212,41 @@ bool ReadEntityCommon(Net::BitStreamReader& reader, EntityCommon& out) {
         return false;
     }
 
-    // Sync time context: one byte after the name. Read unconditionally. Device evidence (2026-11-12):
-    // the server writes it at the 0x0030 peer version too. Without it the DUMMY type name starts
-    // 8 bits early and the MARKER fields misalign. The reference gates it on ExtendedWorldPositions,
-    // so this is a deliberate deviation based on the bytes on the wire.
-    {
-        uint8_t syncTimeContext = 0;
-        if (!reader.Read(syncTimeContext)) {
-            DIAG("ENTITY_ADD fail line=%d stage=synctime id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
-            return false;
-        }
+    // CPacketHandler::Packet_EntityAdd (3097-3099): sync context follows the name.
+    out.syncTimeContext = 0;
+    if (extendedHeader && !reader.Read(out.syncTimeContext)) {
+        DIAG("ENTITY_ADD fail line=%d stage=synctime id=%u type=%u bit=%zu", __LINE__, id, static_cast<unsigned>(type), reader.GetReadOffsetBits());
+        return false;
     }
     DIAG("ENTITY_ADD common ok id=%u type=%u name=%s custom=%zu bit=%zu", id, static_cast<unsigned>(type), out.name.c_str(), out.customData.size(), reader.GetReadOffsetBits());
     return true;
 }
 
-bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual) {
+bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Visual& visual,
+                    const ElementKindResolver& resolveKind, bool currentWaterFlags) {
     switch (common.type) {
+        case kTypeWater: {
+            uint8_t count = 0;
+            if (!reader.Read(count) || (count != 3 && count != 4)) ENTITY_BODY_FAIL();
+            auto water = std::make_shared<WaterPolygon>();
+            water->vertices.resize(count);
+            for (auto& vertex : water->vertices) {
+                uint16_t x = 0, y = 0;
+                if (!reader.Read(x) || !reader.Read(y) || !reader.Read(vertex.z)) ENTITY_BODY_FAIL();
+                vertex.x = static_cast<int16_t>(x);
+                vertex.y = static_cast<int16_t>(y);
+            }
+            bool first = false;
+            if (!ReadFlag(reader, first)) ENTITY_BODY_FAIL();
+            if (currentWaterFlags) {
+                water->shallow = first;
+                if (!ReadFlag(reader, water->visible)) ENTITY_BODY_FAIL();
+            } else {
+                water->visible = !first;
+            }
+            visual.water = std::move(water);
+            return true;
+        }
         case kTypeDummy:
             return ReadEntityBodyDummy(reader, common, visual);
         case kTypePlayer:
@@ -237,7 +258,7 @@ bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Vi
             return ReadEntityBodyVehicle(reader, common, visual);
         case kTypeObject:
         case 18:  // WEAPON: the reference routes it through the object case
-            return ReadEntityBodyObject(reader, common, visual);
+            return ReadEntityBodyObject(reader, common, visual, resolveKind);
         case kTypeMarker:
             return ReadEntityBodyMarker(reader, common, visual);
         case kTypeBlip:
@@ -251,7 +272,6 @@ bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Vi
         case kTypePed:
             return ReadEntityBodyPed(reader, common, visual);
         default:
-            // Types 16+ (SCRIPTFILE, WATER, WEAPON, BUILDING, ...) are not sent for this layout.
             DIAG("ENTITY_ADD unhandled type id=%u type=%u bit=%zu", common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
             ENTITY_BODY_FAIL();
     }

@@ -30,7 +30,7 @@ bool IsHosted(uint32_t id);
 
 // PED_SYNC position for an observed ped: start a time-based interpolation to the
 // target over delayMs (reference SetTargetPosition). Snaps when no pose is known yet.
-void SetObserverPosition(uint32_t id, const Vec3& target, const Vec3& velocity, uint64_t delayMs);
+void SetObserverPosition(uint32_t id, const Vec3& target, const Vec3& velocity, uint64_t delayMs, bool applyVelocity = true);
 
 // PED_SYNC heading: start a rotation interpolation over delayMs (reference SetTargetRotation).
 void SetObserverRotation(uint32_t id, float heading, uint64_t delayMs);
@@ -45,6 +45,10 @@ bool SamplePose(uint32_t id);
 
 // Drop all state for a ped that left the world (ForgetRemote / ENTITY_REMOVE).
 void Forget(uint32_t id);
+
+// CClientPed::SetPosition with bResetInterpolation (SET_ELEMENT_POSITION): the pose is the target and any running
+// interpolation stops, so SamplePose does not push the previous target back.
+void Teleport(uint32_t id, const Vec3& pos);
 
 // Monotonic milliseconds (reference CClientTime::GetTime).
 uint64_t NowMs();

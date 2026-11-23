@@ -1,13 +1,98 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Note: app_name and connect are generated dynamically from .env via build.gradle.kts resValue -->
-    <string name="connecting">Connecting to server...</string>
-    <string name="server_browser">Server Browser</string>
+    <!-- Launcher and navigation -->
+    <string name="connecting">Connecting to server…</string>
+    <string name="server_browser">Servers</string>
     <string name="favorites">Favorites</string>
     <string name="settings">Settings</string>
+    <string name="language">Language</string>
+    <string name="language_system">Device language</string>
+    <string name="language_selected">Language · %1$s</string>
+    <string name="cancel">Cancel</string>
+    <string name="play">Play</string>
     <string name="disconnect">Disconnect</string>
+    <string name="disconnect_close">Close</string>
+    <string name="disconnect_retry">Reconnect</string>
     <string name="refresh">Refresh</string>
     <string name="no_servers">No servers found</string>
+    <string name="no_servers_hint">Check your connection and try again.</string>
     <string name="connection_failed">Connection failed</string>
-    <string name="downloading_assets">Downloading game assets...</string>
+    <string name="server_browser_summary">%1$s, %2$s</string>
+    <string name="players_count">%1$d / %2$d</string>
+    <string name="ping_ms">%1$d ms</string>
+    <string name="mta_version" translatable="false">MTA %1$s</string>
+    <string name="nickname">Nickname</string>
+    <string name="nickname_helper">Shown to other players</string>
+    <string name="nickname_empty">Enter a nickname</string>
+    <string name="nickname_invalid">Use 1–22 visible ASCII characters without spaces</string>
+    <string name="nickname_reserved">This nickname is reserved</string>
+    <string name="toggle_favorite">Toggle favorite</string>
+    <string name="server_logo">Server logo</string>
+    <string name="join">Join</string>
+    <string name="offline">Offline</string>
+    <string name="querying">Checking…</string>
+    <string name="passworded">Password protected</string>
+    <string name="no_favorites">No favorite servers yet</string>
+    <string name="no_favorites_hint">Tap + to add an address, or the star on a server.</string>
+    <string name="add_favorite">Add favorite server</string>
+    <string name="add_server">Add</string>
+    <string name="server_host">IP address or hostname</string>
+    <string name="server_port">Port</string>
+    <string name="server_host_invalid">Enter a valid IPv4 address or hostname.</string>
+    <string name="server_port_invalid">Enter a port from 1 to 65535.</string>
+    <string name="server_already_favorite">This server is already a favorite.</string>
+    <string name="neon_registry_unavailable">Could not refresh the Neon server list. Showing available servers.</string>
+
+    <!-- Launcher settings and game files -->
+    <string name="section_graphics">Graphics</string>
+    <string name="section_audio">Audio</string>
+    <string name="section_controls">Controls</string>
+    <string name="section_assets">Game assets</string>
+    <string name="section_interface">Interface</string>
+    <string name="interface_scale">Interface scale (DPI)</string>
+    <string name="interface_scale_description" formatted="false">Size of server text, windows and buttons. 100% is the mobile default.</string>
+    <string name="interface_scale_default">Default</string>
+    <string name="interface_scale_save_failed">Could not save the interface scale.</string>
+    <string name="graphics_low">Low</string>
+    <string name="graphics_medium">Medium</string>
+    <string name="graphics_high">High</string>
+    <string name="graphics_very_high">Very high</string>
+    <string name="audio_volume">Volume</string>
+    <string name="touch_sensitivity">Touch sensitivity</string>
+    <string name="percentage">%1$d%%</string>
+    <string name="save_settings">Save settings</string>
+    <string name="settings_saved">Settings saved</string>
+    <string name="assets_description">Checks your local game files and downloads anything missing or changed.</string>
+    <string name="sync_assets">Sync game assets</string>
+    <string name="downloading_assets">Downloading game assets…</string>
+    <string name="game_setup_title">Game setup required</string>
+    <string name="game_setup_message">Sync the game files before joining a server.</string>
+    <string name="assets_fetching_manifest">Fetching the game file list…</string>
+    <string name="assets_verifying">Verifying game assets %1$d/%2$d</string>
+    <string name="assets_syncing">Syncing game assets %1$d/%2$d</string>
+    <string name="assets_already_syncing">Game assets are already syncing.</string>
+    <string name="assets_local_missing">Game files not found. Copy the original GTA Mobile 2.10 files to %1$s or set GAME_ASSETS_DIR in .env before transferring them with ADB.</string>
+    <string name="assets_insufficient_space">Not enough free space for game assets.</string>
+    <string name="assets_storage_unavailable">Could not access storage for game assets.</string>
+    <string name="assets_invalid_manifest">The game file list is invalid.</string>
+    <string name="assets_file_invalid">Could not verify the file %1$s.</string>
+    <string name="assets_http_error">The game file server returned HTTP %1$s.</string>
+    <string name="assets_sync_failed">Could not sync game assets. Try again.</string>
+    <string name="test_gta">Test GTA (debug)</string>
+    <string name="engine_debug">Engine debug</string>
+    <string name="engine_debug_description">Capture game logs and show a log window after an engine failure. Applies to the next game session.</string>
+    <string name="engine_debug_save_failed">Could not save the engine debug setting.</string>
+
+    <plurals name="servers_count">
+        <item quantity="one">%d server</item>
+        <item quantity="other">%d servers</item>
+    </plurals>
+    <plurals name="players_online">
+        <item quantity="one">%d player online</item>
+        <item quantity="other">%d players online</item>
+    </plurals>
+    <plurals name="assets_verified">
+        <item quantity="one">%d game file verified</item>
+        <item quantity="other">%d game files verified</item>
+    </plurals>
 </resources>

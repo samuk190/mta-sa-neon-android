@@ -4,7 +4,7 @@
 #include <cstring>
 
 // Runtime switches for on-device bisection, read once from the app's private files dir:
-//   adb shell run-as com.worldrpg.neonlauncher sh -c 'echo noremote > files/neon_debug_flags'
+//   adb shell run-as com.saonline.neonlauncher sh -c 'echo noremote > files/neon_debug_flags'
 // One word per line. Missing file = all features on.
 namespace WorldRPG::Debug {
 
@@ -14,7 +14,7 @@ inline bool Flag(const char* name) {
     if (!loaded) {
         loaded = true;
 #ifdef __ANDROID__
-        if (FILE* f = std::fopen("/data/data/com.worldrpg.neonlauncher/files/neon_debug_flags", "r")) {
+        if (FILE* f = std::fopen("/data/data/com.saonline.neonlauncher/files/neon_debug_flags", "r")) {
             const size_t n = std::fread(flags, 1, sizeof(flags) - 1, f);
             flags[n] = '\0';
             std::fclose(f);

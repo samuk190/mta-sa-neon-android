@@ -2,12 +2,12 @@
 
 Checkpoints, radar map blips, collision shapes (spheres, cubes, polygons), radar areas, pickups, and 3D searchlights.
 
-## Parity Status
+## Binding Coverage
 
 - **Total Functions:** 145
-- **Implemented:** 0 (0.0%)
-- **Stubs:** 3
-- **Missing:** 142
+- **Nonconstant handlers:** 145 (100.0%)
+- **Stubs:** 0
+- **Missing:** 0
 
 > **Technical Requirement:** Requires spatial overlap checks (AABB / SAT collision algorithms) and radar texture rendering hooks.
 
@@ -15,148 +15,148 @@ Checkpoints, radar map blips, collision shapes (spheres, cubes, polygons), radar
 
 | Lua Function | Status | Desktop Source Ref | Desktop Handler | Conversion Requirement / Implementation Notes |
 |---|---|---|---|---|
-| `addColPolygonPoint` | Missing | `CLuaColShapeDefs.cpp:31` | `AddColPolygonPoint` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `attachElementToRope` | Missing | `CLuaRopeDefs.cpp:230` | `AttachElementToRope` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `clearNativeText` | Missing | `CLuaNativeUIDefs.cpp:261` | `ClearNativeText` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `countPlayersInTeam` | Missing | `CLuaTeamDefs.cpp:18` | `ArgumentParserWarn<false, CountPlayersInTeam>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createBird` | Missing | `CLuaBirdDefs.cpp:149` | `CreateBird` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createBlip` | *Stub* | `CLuaBlipDefs.cpp:141` | `ArgumentParserWarn<false, CreateBlip>` | Currently stubbed: `FalseResult: lua_pushboolean(L, 0)`. Needs native engine wiring. |
-| `createBlipAttachedTo` | Missing | `CLuaBlipDefs.cpp:142` | `ArgumentParserWarn<false, CreateBlipAttachedTo>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createColCircle` | Missing | `CLuaColShapeDefs.cpp:17` | `CreateColCircle` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createColCuboid` | Missing | `CLuaColShapeDefs.cpp:18` | `CreateColCuboid` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createColPolygon` | Missing | `CLuaColShapeDefs.cpp:21` | `CreateColPolygon` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createColRectangle` | Missing | `CLuaColShapeDefs.cpp:20` | `CreateColRectangle` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createColSphere` | *Stub* | `CLuaColShapeDefs.cpp:19` | `CreateColSphere` | Currently stubbed: `FalseResult: lua_pushboolean(L, 0)`. Needs native engine wiring. |
-| `createColTube` | Missing | `CLuaColShapeDefs.cpp:22` | `CreateColTube` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createLight` | Missing | `CLuaPointLightDefs.cpp:19` | `CreateLight` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createMarker` | *Stub* | `CLuaMarkerDefs.cpp:20` | `CreateMarker` | Currently stubbed: `FalseResult: lua_pushboolean(L, 0)`. Needs native engine wiring. |
-| `createNativeUI` | Missing | `CLuaNativeUIDefs.cpp:260` | `CreateNativeUI` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createPickup` | Missing | `CLuaPickupDefs.cpp:17` | `CreatePickup` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createRadarArea` | Missing | `CLuaRadarAreaDefs.cpp:18` | `CreateRadarArea` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createRope` | Missing | `CLuaRopeDefs.cpp:218` | `CreateRope` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `createSearchLight` | Missing | `CLuaSearchLightDefs.cpp:17` | `CreateSearchLight` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `destroyNativeUI` | Missing | `CLuaNativeUIDefs.cpp:260` | `DestroyNativeUI` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `detachElementFromRope` | Missing | `CLuaRopeDefs.cpp:230` | `DetachElementFromRope` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBirdColors` | Missing | `CLuaBirdDefs.cpp:151` | `GetBirdColors` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBirdRenderDistance` | Missing | `CLuaBirdDefs.cpp:153` | `GetBirdRenderDistance` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBirdSize` | Missing | `CLuaBirdDefs.cpp:151` | `GetBirdSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBirdTargetVelocity` | Missing | `CLuaBirdDefs.cpp:150` | `GetBirdTargetVelocity` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBirdVelocity` | Missing | `CLuaBirdDefs.cpp:149` | `GetBirdVelocity` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBirdWingBeatTime` | Missing | `CLuaBirdDefs.cpp:152` | `GetBirdWingBeatTime` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBlipColor` | Missing | `CLuaBlipDefs.cpp:147` | `ArgumentParserWarn<false, GetBlipColor>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBlipIcon` | Missing | `CLuaBlipDefs.cpp:145` | `ArgumentParserWarn<false, GetBlipIcon>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBlipOrdering` | Missing | `CLuaBlipDefs.cpp:148` | `ArgumentParserWarn<false, GetBlipOrdering>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBlipSize` | Missing | `CLuaBlipDefs.cpp:146` | `ArgumentParserWarn<false, GetBlipSize>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getBlipVisibleDistance` | Missing | `CLuaBlipDefs.cpp:149` | `ArgumentParserWarn<false, GetBlipVisibleDistance>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getColPolygonHeight` | Missing | `CLuaColShapeDefs.cpp:37` | `ArgumentParser<GetColPolygonHeight>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getColPolygonPointPosition` | Missing | `CLuaColShapeDefs.cpp:29` | `GetColPolygonPointPosition` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getColPolygonPoints` | Missing | `CLuaColShapeDefs.cpp:28` | `GetColPolygonPoints` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getColShapeRadius` | Missing | `CLuaColShapeDefs.cpp:24` | `GetColShapeRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getColShapeSize` | Missing | `CLuaColShapeDefs.cpp:26` | `GetColShapeSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getColShapeType` | Missing | `CLuaColShapeDefs.cpp:35` | `GetColShapeType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getLightColor` | Missing | `CLuaPointLightDefs.cpp:20` | `GetLightColor` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getLightDirection` | Missing | `CLuaPointLightDefs.cpp:20` | `GetLightDirection` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getLightRadius` | Missing | `CLuaPointLightDefs.cpp:19` | `GetLightRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getLightType` | Missing | `CLuaPointLightDefs.cpp:19` | `GetLightType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerColor` | Missing | `CLuaMarkerDefs.cpp:27` | `GetMarkerColor` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerCount` | Missing | `CLuaMarkerDefs.cpp:23` | `GetMarkerCount` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerIcon` | Missing | `CLuaMarkerDefs.cpp:29` | `GetMarkerIcon` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerLimitStats` | Missing | `CLuaMarkerDefs.cpp:24` | `GetMarkerLimitStats` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerSize` | Missing | `CLuaMarkerDefs.cpp:26` | `GetMarkerSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerTarget` | Missing | `CLuaMarkerDefs.cpp:28` | `GetMarkerTarget` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerTargetArrowProperties` | Missing | `CLuaMarkerDefs.cpp:30` | `ArgumentParser<GetMarkerTargetArrowProperties>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getMarkerType` | Missing | `CLuaMarkerDefs.cpp:25` | `GetMarkerType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getNativeUIState` | Missing | `CLuaNativeUIDefs.cpp:260` | `GetNativeUIState` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getPickupAmmo` | Missing | `CLuaPickupDefs.cpp:19` | `GetPickupAmmo` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getPickupAmount` | Missing | `CLuaPickupDefs.cpp:19` | `GetPickupAmount` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getPickupType` | Missing | `CLuaPickupDefs.cpp:19` | `GetPickupType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getPickupWeapon` | Missing | `CLuaPickupDefs.cpp:19` | `GetPickupWeapon` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getPlayersInTeam` | Missing | `CLuaTeamDefs.cpp:18` | `ArgumentParserWarn<false, GetPlayersInTeam>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRadarAreaColor` | Missing | `CLuaRadarAreaDefs.cpp:18` | `GetRadarAreaColor` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRadarAreaSize` | Missing | `CLuaRadarAreaDefs.cpp:18` | `GetRadarAreaSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeCarriedElement` | Missing | `CLuaRopeDefs.cpp:230` | `GetRopeCarriedElement` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeDuration` | Missing | `CLuaRopeDefs.cpp:220` | `GetRopeDuration` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeFixedNode` | Missing | `CLuaRopeDefs.cpp:227` | `GetRopeFixedNode` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeHolder` | Missing | `CLuaRopeDefs.cpp:222` | `GetRopeHolder` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeHolderOffset` | Missing | `CLuaRopeDefs.cpp:223` | `GetRopeHolderOffset` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeLength` | Missing | `CLuaRopeDefs.cpp:226` | `GetRopeLength` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopePositionAt` | Missing | `CLuaRopeDefs.cpp:231` | `GetRopePositionAt` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeRemainingTime` | Missing | `CLuaRopeDefs.cpp:221` | `GetRopeRemainingTime` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeTopVelocity` | Missing | `CLuaRopeDefs.cpp:224` | `GetRopeTopVelocity` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeType` | Missing | `CLuaRopeDefs.cpp:219` | `GetRopeType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getRopeWinchHeight` | Missing | `CLuaRopeDefs.cpp:225` | `GetRopeWinchHeight` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getSearchLightColor` | Missing | `CLuaSearchLightDefs.cpp:23` | `ArgumentParser<GetSearchLightColor>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getSearchLightEndPosition` | Missing | `CLuaSearchLightDefs.cpp:20` | `GetSearchLightEndPosition` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getSearchLightEndRadius` | Missing | `CLuaSearchLightDefs.cpp:22` | `GetSearchLightEndRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getSearchLightStartPosition` | Missing | `CLuaSearchLightDefs.cpp:19` | `GetSearchLightStartPosition` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getSearchLightStartRadius` | Missing | `CLuaSearchLightDefs.cpp:21` | `GetSearchLightStartRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getTeamColor` | Missing | `CLuaTeamDefs.cpp:17` | `ArgumentParserWarn<false, GetTeamColor>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getTeamFriendlyFire` | Missing | `CLuaTeamDefs.cpp:17` | `ArgumentParserWarn<false, GetTeamFriendlyFire>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getTeamFromName` | Missing | `CLuaTeamDefs.cpp:16` | `ArgumentParserWarn<false, GetTeamFromName>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `getTeamName` | Missing | `CLuaTeamDefs.cpp:16` | `ArgumentParserWarn<false, GetTeamName>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isBirdCurvedFlightEnabled` | Missing | `CLuaBirdDefs.cpp:154` | `IsBirdCurvedFlightEnabled` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isBirdMovementEnabled` | Missing | `CLuaBirdDefs.cpp:156` | `IsBirdMovementEnabled` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isBirdShootable` | Missing | `CLuaBirdDefs.cpp:155` | `IsBirdShootable` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isCoronaReflectionEnabled` | Missing | `CLuaMarkerDefs.cpp:40` | `ArgumentParser<IsCoronaReflectionEnabled>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isInsideColShape` | Missing | `CLuaColShapeDefs.cpp:34` | `IsInsideColShape` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isInsideRadarArea` | Missing | `CLuaRadarAreaDefs.cpp:20` | `IsInsideRadarArea` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isRadarAreaFlashing` | Missing | `CLuaRadarAreaDefs.cpp:19` | `IsRadarAreaFlashing` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isRopeActive` | Missing | `CLuaRopeDefs.cpp:231` | `IsRopeActive` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isRopeOnGround` | Missing | `CLuaRopeDefs.cpp:228` | `IsRopeOnGround` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isRopePhysicsEnabled` | Missing | `CLuaRopeDefs.cpp:229` | `IsRopePhysicsEnabled` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `isShowCollisionsEnabled` | Missing | `CLuaColShapeDefs.cpp:40` | `ArgumentParser<IsShowCollisionsEnabled>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `processBirdGunShot` | Missing | `CLuaBirdDefs.cpp:157` | `ProcessBirdGunShot` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `releaseNativeUI` | Missing | `CLuaNativeUIDefs.cpp:261` | `ReleaseNativeUI` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `removeColPolygonPoint` | Missing | `CLuaColShapeDefs.cpp:32` | `RemoveColPolygonPoint` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `renderScriptImportantArea` | Missing | `CLuaMarkerDefs.cpp:21` | `ArgumentParser<RenderScriptImportantArea>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdColors` | Missing | `CLuaBirdDefs.cpp:151` | `SetBirdColors` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdCurvedFlightEnabled` | Missing | `CLuaBirdDefs.cpp:154` | `SetBirdCurvedFlightEnabled` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdMovementEnabled` | Missing | `CLuaBirdDefs.cpp:156` | `SetBirdMovementEnabled` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdRenderDistance` | Missing | `CLuaBirdDefs.cpp:153` | `SetBirdRenderDistance` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdShootable` | Missing | `CLuaBirdDefs.cpp:155` | `SetBirdShootable` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdSize` | Missing | `CLuaBirdDefs.cpp:151` | `SetBirdSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdTargetVelocity` | Missing | `CLuaBirdDefs.cpp:150` | `SetBirdTargetVelocity` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdVelocity` | Missing | `CLuaBirdDefs.cpp:149` | `SetBirdVelocity` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBirdWingBeatTime` | Missing | `CLuaBirdDefs.cpp:152` | `SetBirdWingBeatTime` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBlipColor` | Missing | `CLuaBlipDefs.cpp:154` | `ArgumentParserWarn<false, SetBlipColor>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBlipIcon` | Missing | `CLuaBlipDefs.cpp:152` | `ArgumentParserWarn<false, SetBlipIcon>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBlipOrdering` | Missing | `CLuaBlipDefs.cpp:155` | `ArgumentParserWarn<false, SetBlipOrdering>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBlipSize` | Missing | `CLuaBlipDefs.cpp:153` | `ArgumentParserWarn<false, SetBlipSize>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setBlipVisibleDistance` | Missing | `CLuaBlipDefs.cpp:156` | `ArgumentParserWarn<false, SetBlipVisibleDistance>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setColPolygonHeight` | Missing | `CLuaColShapeDefs.cpp:36` | `ArgumentParser<SetColPolygonHeight>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setColPolygonPointPosition` | Missing | `CLuaColShapeDefs.cpp:30` | `SetColPolygonPointPosition` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setColShapeRadius` | Missing | `CLuaColShapeDefs.cpp:25` | `SetColShapeRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setColShapeSize` | Missing | `CLuaColShapeDefs.cpp:27` | `SetColShapeSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setCoronaReflectionEnabled` | Missing | `CLuaMarkerDefs.cpp:39` | `ArgumentParser<SetCoronaReflectionEnabled>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setLightColor` | Missing | `CLuaPointLightDefs.cpp:20` | `SetLightColor` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setLightDirection` | Missing | `CLuaPointLightDefs.cpp:20` | `SetLightDirection` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setLightRadius` | Missing | `CLuaPointLightDefs.cpp:19` | `SetLightRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setMarkerColor` | Missing | `CLuaMarkerDefs.cpp:34` | `SetMarkerColor` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setMarkerIcon` | Missing | `CLuaMarkerDefs.cpp:36` | `SetMarkerIcon` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setMarkerSize` | Missing | `CLuaMarkerDefs.cpp:33` | `SetMarkerSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setMarkerTarget` | Missing | `CLuaMarkerDefs.cpp:35` | `SetMarkerTarget` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setMarkerTargetArrowProperties` | Missing | `CLuaMarkerDefs.cpp:37` | `ArgumentParser<SetMarkerTargetArrowProperties>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setMarkerType` | Missing | `CLuaMarkerDefs.cpp:32` | `SetMarkerType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setPickupType` | Missing | `CLuaPickupDefs.cpp:21` | `SetPickupType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRadarAreaColor` | Missing | `CLuaRadarAreaDefs.cpp:19` | `SetRadarAreaColor` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRadarAreaFlashing` | Missing | `CLuaRadarAreaDefs.cpp:19` | `SetRadarAreaFlashing` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRadarAreaSize` | Missing | `CLuaRadarAreaDefs.cpp:20` | `SetRadarAreaSize` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeDuration` | Missing | `CLuaRopeDefs.cpp:220` | `SetRopeDuration` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeFixedNode` | Missing | `CLuaRopeDefs.cpp:227` | `SetRopeFixedNode` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeHolder` | Missing | `CLuaRopeDefs.cpp:222` | `SetRopeHolder` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeHolderOffset` | Missing | `CLuaRopeDefs.cpp:223` | `SetRopeHolderOffset` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeLength` | Missing | `CLuaRopeDefs.cpp:226` | `SetRopeLength` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeOnGround` | Missing | `CLuaRopeDefs.cpp:228` | `SetRopeOnGround` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopePhysicsEnabled` | Missing | `CLuaRopeDefs.cpp:229` | `SetRopePhysicsEnabled` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeRemainingTime` | Missing | `CLuaRopeDefs.cpp:221` | `SetRopeRemainingTime` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeTopVelocity` | Missing | `CLuaRopeDefs.cpp:224` | `SetRopeTopVelocity` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeType` | Missing | `CLuaRopeDefs.cpp:219` | `SetRopeType` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setRopeWinchHeight` | Missing | `CLuaRopeDefs.cpp:225` | `SetRopeWinchHeight` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setSearchLightColor` | Missing | `CLuaSearchLightDefs.cpp:29` | `ArgumentParser<SetSearchLightColor>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setSearchLightEndPosition` | Missing | `CLuaSearchLightDefs.cpp:26` | `SetSearchLightEndPosition` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setSearchLightEndRadius` | Missing | `CLuaSearchLightDefs.cpp:28` | `SetSearchLightEndRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setSearchLightStartPosition` | Missing | `CLuaSearchLightDefs.cpp:25` | `SetSearchLightStartPosition` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `setSearchLightStartRadius` | Missing | `CLuaSearchLightDefs.cpp:27` | `SetSearchLightStartRadius` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `showCol` | Missing | `CLuaColShapeDefs.cpp:39` | `ArgumentParser<SetShowCollision>` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `showNativeText` | Missing | `CLuaNativeUIDefs.cpp:261` | `ShowNativeText` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
-| `updateNativeUI` | Missing | `CLuaNativeUIDefs.cpp:260` | `UpdateNativeUI` | Needs desktop C++ logic ported to app/src/main/cpp/shared. |
+| `addColPolygonPoint` | **Implemented** | `CLuaColShapeDefs.cpp:31` | `AddColPolygonPoint` | Operational on Android. (AddColPolygonPoint) |
+| `attachElementToRope` | **Implemented** | `CLuaRopeDefs.cpp:230` | `AttachElementToRope` | Operational on Android. (AttachElementToRope) |
+| `clearNativeText` | **Implemented** | `CLuaNativeUIDefs.cpp:261` | `ClearNativeText` | Operational on Android. (ClearNativeText) |
+| `countPlayersInTeam` | **Implemented** | `CLuaTeamDefs.cpp:18` | `ArgumentParserWarn<false, CountPlayersInTeam>` | Operational on Android. (CountPlayersInTeam) |
+| `createBird` | **Implemented** | `CLuaBirdDefs.cpp:149` | `CreateBird` | Operational on Android. (CreateBird) |
+| `createBlip` | **Implemented** | `CLuaBlipDefs.cpp:141` | `ArgumentParserWarn<false, CreateBlip>` | Operational on Android. (CreateBlip) |
+| `createBlipAttachedTo` | **Implemented** | `CLuaBlipDefs.cpp:142` | `ArgumentParserWarn<false, CreateBlipAttachedTo>` | Operational on Android. (CreateBlipAttachedTo) |
+| `createColCircle` | **Implemented** | `CLuaColShapeDefs.cpp:17` | `CreateColCircle` | Operational on Android. (CreateColCircle) |
+| `createColCuboid` | **Implemented** | `CLuaColShapeDefs.cpp:18` | `CreateColCuboid` | Operational on Android. (CreateColCuboid) |
+| `createColPolygon` | **Implemented** | `CLuaColShapeDefs.cpp:21` | `CreateColPolygon` | Operational on Android. (CreateColPolygon) |
+| `createColRectangle` | **Implemented** | `CLuaColShapeDefs.cpp:20` | `CreateColRectangle` | Operational on Android. (CreateColRectangle) |
+| `createColSphere` | **Implemented** | `CLuaColShapeDefs.cpp:19` | `CreateColSphere` | Operational on Android. (CreateColSphere) |
+| `createColTube` | **Implemented** | `CLuaColShapeDefs.cpp:22` | `CreateColTube` | Operational on Android. (CreateColTube) |
+| `createLight` | **Implemented** | `CLuaPointLightDefs.cpp:19` | `CreateLight` | Operational on Android. (CreateLight) |
+| `createMarker` | **Implemented** | `CLuaMarkerDefs.cpp:20` | `CreateMarker` | Operational on Android. (CreateMarker) |
+| `createNativeUI` | **Implemented** | `CLuaNativeUIDefs.cpp:260` | `CreateNativeUI` | Operational on Android. (CreateNativeUI) |
+| `createPickup` | **Implemented** | `CLuaPickupDefs.cpp:17` | `CreatePickup` | Operational on Android. (CreatePickup) |
+| `createRadarArea` | **Implemented** | `CLuaRadarAreaDefs.cpp:18` | `CreateRadarArea` | Operational on Android. (CreateRadarArea) |
+| `createRope` | **Implemented** | `CLuaRopeDefs.cpp:218` | `CreateRope` | Operational on Android. (CreateRope) |
+| `createSearchLight` | **Implemented** | `CLuaSearchLightDefs.cpp:17` | `CreateSearchLight` | Operational on Android. (CreateSearchLight) |
+| `destroyNativeUI` | **Implemented** | `CLuaNativeUIDefs.cpp:260` | `DestroyNativeUI` | Operational on Android. (DestroyNativeUI) |
+| `detachElementFromRope` | **Implemented** | `CLuaRopeDefs.cpp:230` | `DetachElementFromRope` | Operational on Android. (DetachElementFromRope) |
+| `getBirdColors` | **Implemented** | `CLuaBirdDefs.cpp:151` | `GetBirdColors` | Operational on Android. (GetBirdColors) |
+| `getBirdRenderDistance` | **Implemented** | `CLuaBirdDefs.cpp:153` | `GetBirdRenderDistance` | Operational on Android. (GetBirdRenderDistance) |
+| `getBirdSize` | **Implemented** | `CLuaBirdDefs.cpp:151` | `GetBirdSize` | Operational on Android. (GetBirdSize) |
+| `getBirdTargetVelocity` | **Implemented** | `CLuaBirdDefs.cpp:150` | `GetBirdTargetVelocity` | Operational on Android. (GetBirdTargetVelocity) |
+| `getBirdVelocity` | **Implemented** | `CLuaBirdDefs.cpp:149` | `GetBirdVelocity` | Operational on Android. (GetBirdVelocity) |
+| `getBirdWingBeatTime` | **Implemented** | `CLuaBirdDefs.cpp:152` | `GetBirdWingBeatTime` | Operational on Android. (GetBirdWingBeatTime) |
+| `getBlipColor` | **Implemented** | `CLuaBlipDefs.cpp:147` | `ArgumentParserWarn<false, GetBlipColor>` | Operational on Android. (GetBlipColor) |
+| `getBlipIcon` | **Implemented** | `CLuaBlipDefs.cpp:145` | `ArgumentParserWarn<false, GetBlipIcon>` | Operational on Android. (GetBlipIcon) |
+| `getBlipOrdering` | **Implemented** | `CLuaBlipDefs.cpp:148` | `ArgumentParserWarn<false, GetBlipOrdering>` | Operational on Android. (GetBlipOrdering) |
+| `getBlipSize` | **Implemented** | `CLuaBlipDefs.cpp:146` | `ArgumentParserWarn<false, GetBlipSize>` | Operational on Android. (GetBlipSize) |
+| `getBlipVisibleDistance` | **Implemented** | `CLuaBlipDefs.cpp:149` | `ArgumentParserWarn<false, GetBlipVisibleDistance>` | Operational on Android. (GetBlipVisibleDistance) |
+| `getColPolygonHeight` | **Implemented** | `CLuaColShapeDefs.cpp:37` | `ArgumentParser<GetColPolygonHeight>` | Operational on Android. (GetColPolygonHeight) |
+| `getColPolygonPointPosition` | **Implemented** | `CLuaColShapeDefs.cpp:29` | `GetColPolygonPointPosition` | Operational on Android. (GetColPolygonPointPosition) |
+| `getColPolygonPoints` | **Implemented** | `CLuaColShapeDefs.cpp:28` | `GetColPolygonPoints` | Operational on Android. (GetColPolygonPoints) |
+| `getColShapeRadius` | **Implemented** | `CLuaColShapeDefs.cpp:24` | `GetColShapeRadius` | Operational on Android. (GetColShapeRadius) |
+| `getColShapeSize` | **Implemented** | `CLuaColShapeDefs.cpp:26` | `GetColShapeSize` | Operational on Android. (GetColShapeSize) |
+| `getColShapeType` | **Implemented** | `CLuaColShapeDefs.cpp:35` | `GetColShapeType` | Operational on Android. (GetColShapeType) |
+| `getLightColor` | **Implemented** | `CLuaPointLightDefs.cpp:20` | `GetLightColor` | Operational on Android. (GetLightColor) |
+| `getLightDirection` | **Implemented** | `CLuaPointLightDefs.cpp:20` | `GetLightDirection` | Operational on Android. (GetLightDirection) |
+| `getLightRadius` | **Implemented** | `CLuaPointLightDefs.cpp:19` | `GetLightRadius` | Operational on Android. (GetLightRadius) |
+| `getLightType` | **Implemented** | `CLuaPointLightDefs.cpp:19` | `GetLightType` | Operational on Android. (GetLightType) |
+| `getMarkerColor` | **Implemented** | `CLuaMarkerDefs.cpp:27` | `GetMarkerColor` | Operational on Android. (GetMarkerColor) |
+| `getMarkerCount` | **Implemented** | `CLuaMarkerDefs.cpp:23` | `GetMarkerCount` | Operational on Android. (GetMarkerCount) |
+| `getMarkerIcon` | **Implemented** | `CLuaMarkerDefs.cpp:29` | `GetMarkerIcon` | Operational on Android. (GetMarkerIcon) |
+| `getMarkerLimitStats` | **Implemented** | `CLuaMarkerDefs.cpp:24` | `GetMarkerLimitStats` | Operational on Android. (GetMarkerLimitStats) |
+| `getMarkerSize` | **Implemented** | `CLuaMarkerDefs.cpp:26` | `GetMarkerSize` | Operational on Android. (GetMarkerSize) |
+| `getMarkerTarget` | **Implemented** | `CLuaMarkerDefs.cpp:28` | `GetMarkerTarget` | Operational on Android. (GetMarkerTarget) |
+| `getMarkerTargetArrowProperties` | **Implemented** | `CLuaMarkerDefs.cpp:30` | `ArgumentParser<GetMarkerTargetArrowProperties>` | Operational on Android. (GetMarkerTargetArrowProperties) |
+| `getMarkerType` | **Implemented** | `CLuaMarkerDefs.cpp:25` | `GetMarkerType` | Operational on Android. (GetMarkerType) |
+| `getNativeUIState` | **Implemented** | `CLuaNativeUIDefs.cpp:260` | `GetNativeUIState` | Operational on Android. (GetNativeUIState) |
+| `getPickupAmmo` | **Implemented** | `CLuaPickupDefs.cpp:19` | `GetPickupAmmo` | Operational on Android. (GetPickupAmmo) |
+| `getPickupAmount` | **Implemented** | `CLuaPickupDefs.cpp:19` | `GetPickupAmount` | Operational on Android. (GetPickupAmount) |
+| `getPickupType` | **Implemented** | `CLuaPickupDefs.cpp:19` | `GetPickupType` | Operational on Android. (GetPickupType) |
+| `getPickupWeapon` | **Implemented** | `CLuaPickupDefs.cpp:19` | `GetPickupWeapon` | Operational on Android. (GetPickupWeapon) |
+| `getPlayersInTeam` | **Implemented** | `CLuaTeamDefs.cpp:18` | `ArgumentParserWarn<false, GetPlayersInTeam>` | Operational on Android. (GetPlayersInTeam) |
+| `getRadarAreaColor` | **Implemented** | `CLuaRadarAreaDefs.cpp:18` | `GetRadarAreaColor` | Operational on Android. (GetRadarAreaColor) |
+| `getRadarAreaSize` | **Implemented** | `CLuaRadarAreaDefs.cpp:18` | `GetRadarAreaSize` | Operational on Android. (GetRadarAreaSize) |
+| `getRopeCarriedElement` | **Implemented** | `CLuaRopeDefs.cpp:230` | `GetRopeCarriedElement` | Operational on Android. (GetRopeCarriedElement) |
+| `getRopeDuration` | **Implemented** | `CLuaRopeDefs.cpp:220` | `GetRopeDuration` | Operational on Android. (GetRopeDuration) |
+| `getRopeFixedNode` | **Implemented** | `CLuaRopeDefs.cpp:227` | `GetRopeFixedNode` | Operational on Android. (GetRopeFixedNode) |
+| `getRopeHolder` | **Implemented** | `CLuaRopeDefs.cpp:222` | `GetRopeHolder` | Operational on Android. (GetRopeHolder) |
+| `getRopeHolderOffset` | **Implemented** | `CLuaRopeDefs.cpp:223` | `GetRopeHolderOffset` | Operational on Android. (GetRopeHolderOffset) |
+| `getRopeLength` | **Implemented** | `CLuaRopeDefs.cpp:226` | `GetRopeLength` | Operational on Android. (GetRopeLength) |
+| `getRopePositionAt` | **Implemented** | `CLuaRopeDefs.cpp:231` | `GetRopePositionAt` | Operational on Android. (GetRopePositionAt) |
+| `getRopeRemainingTime` | **Implemented** | `CLuaRopeDefs.cpp:221` | `GetRopeRemainingTime` | Operational on Android. (GetRopeRemainingTime) |
+| `getRopeTopVelocity` | **Implemented** | `CLuaRopeDefs.cpp:224` | `GetRopeTopVelocity` | Operational on Android. (GetRopeTopVelocity) |
+| `getRopeType` | **Implemented** | `CLuaRopeDefs.cpp:219` | `GetRopeType` | Operational on Android. (GetRopeType) |
+| `getRopeWinchHeight` | **Implemented** | `CLuaRopeDefs.cpp:225` | `GetRopeWinchHeight` | Operational on Android. (GetRopeWinchHeight) |
+| `getSearchLightColor` | **Implemented** | `CLuaSearchLightDefs.cpp:23` | `ArgumentParser<GetSearchLightColor>` | Operational on Android. (GetSearchLightColor) |
+| `getSearchLightEndPosition` | **Implemented** | `CLuaSearchLightDefs.cpp:20` | `GetSearchLightEndPosition` | Operational on Android. (GetSearchLightEndPosition) |
+| `getSearchLightEndRadius` | **Implemented** | `CLuaSearchLightDefs.cpp:22` | `GetSearchLightEndRadius` | Operational on Android. (GetSearchLightEndRadius) |
+| `getSearchLightStartPosition` | **Implemented** | `CLuaSearchLightDefs.cpp:19` | `GetSearchLightStartPosition` | Operational on Android. (GetSearchLightStartPosition) |
+| `getSearchLightStartRadius` | **Implemented** | `CLuaSearchLightDefs.cpp:21` | `GetSearchLightStartRadius` | Operational on Android. (GetSearchLightStartRadius) |
+| `getTeamColor` | **Implemented** | `CLuaTeamDefs.cpp:17` | `ArgumentParserWarn<false, GetTeamColor>` | Operational on Android. (GetTeamColor) |
+| `getTeamFriendlyFire` | **Implemented** | `CLuaTeamDefs.cpp:17` | `ArgumentParserWarn<false, GetTeamFriendlyFire>` | Operational on Android. (GetTeamFriendlyFire) |
+| `getTeamFromName` | **Implemented** | `CLuaTeamDefs.cpp:16` | `ArgumentParserWarn<false, GetTeamFromName>` | Operational on Android. (GetTeamFromName) |
+| `getTeamName` | **Implemented** | `CLuaTeamDefs.cpp:16` | `ArgumentParserWarn<false, GetTeamName>` | Operational on Android. (GetTeamName) |
+| `isBirdCurvedFlightEnabled` | **Implemented** | `CLuaBirdDefs.cpp:154` | `IsBirdCurvedFlightEnabled` | Operational on Android. (IsBirdCurvedFlightEnabled) |
+| `isBirdMovementEnabled` | **Implemented** | `CLuaBirdDefs.cpp:156` | `IsBirdMovementEnabled` | Operational on Android. (IsBirdMovementEnabled) |
+| `isBirdShootable` | **Implemented** | `CLuaBirdDefs.cpp:155` | `IsBirdShootable` | Operational on Android. (IsBirdShootable) |
+| `isCoronaReflectionEnabled` | **Implemented** | `CLuaMarkerDefs.cpp:40` | `ArgumentParser<IsCoronaReflectionEnabled>` | Operational on Android. (IsCoronaReflectionEnabled) |
+| `isInsideColShape` | **Implemented** | `CLuaColShapeDefs.cpp:34` | `IsInsideColShape` | Operational on Android. (IsInsideColShape) |
+| `isInsideRadarArea` | **Implemented** | `CLuaRadarAreaDefs.cpp:20` | `IsInsideRadarArea` | Operational on Android. (IsInsideRadarArea) |
+| `isRadarAreaFlashing` | **Implemented** | `CLuaRadarAreaDefs.cpp:19` | `IsRadarAreaFlashing` | Operational on Android. (IsRadarAreaFlashing) |
+| `isRopeActive` | **Implemented** | `CLuaRopeDefs.cpp:231` | `IsRopeActive` | Operational on Android. (IsRopeActive) |
+| `isRopeOnGround` | **Implemented** | `CLuaRopeDefs.cpp:228` | `IsRopeOnGround` | Operational on Android. (IsRopeOnGround) |
+| `isRopePhysicsEnabled` | **Implemented** | `CLuaRopeDefs.cpp:229` | `IsRopePhysicsEnabled` | Operational on Android. (IsRopePhysicsEnabled) |
+| `isShowCollisionsEnabled` | **Implemented** | `CLuaColShapeDefs.cpp:40` | `ArgumentParser<IsShowCollisionsEnabled>` | Operational on Android. (IsShowCollisionsEnabled) |
+| `processBirdGunShot` | **Implemented** | `CLuaBirdDefs.cpp:157` | `ProcessBirdGunShot` | Operational on Android. (ProcessBirdGunShot) |
+| `releaseNativeUI` | **Implemented** | `CLuaNativeUIDefs.cpp:261` | `ReleaseNativeUI` | Operational on Android. (ReleaseNativeUI) |
+| `removeColPolygonPoint` | **Implemented** | `CLuaColShapeDefs.cpp:32` | `RemoveColPolygonPoint` | Operational on Android. (RemoveColPolygonPoint) |
+| `renderScriptImportantArea` | **Implemented** | `CLuaMarkerDefs.cpp:21` | `ArgumentParser<RenderScriptImportantArea>` | Operational on Android. (RenderScriptImportantArea) |
+| `setBirdColors` | **Implemented** | `CLuaBirdDefs.cpp:151` | `SetBirdColors` | Operational on Android. (SetBirdColors) |
+| `setBirdCurvedFlightEnabled` | **Implemented** | `CLuaBirdDefs.cpp:154` | `SetBirdCurvedFlightEnabled` | Operational on Android. (SetBirdCurvedFlightEnabled) |
+| `setBirdMovementEnabled` | **Implemented** | `CLuaBirdDefs.cpp:156` | `SetBirdMovementEnabled` | Operational on Android. (SetBirdMovementEnabled) |
+| `setBirdRenderDistance` | **Implemented** | `CLuaBirdDefs.cpp:153` | `SetBirdRenderDistance` | Operational on Android. (SetBirdRenderDistance) |
+| `setBirdShootable` | **Implemented** | `CLuaBirdDefs.cpp:155` | `SetBirdShootable` | Operational on Android. (SetBirdShootable) |
+| `setBirdSize` | **Implemented** | `CLuaBirdDefs.cpp:151` | `SetBirdSize` | Operational on Android. (SetBirdSize) |
+| `setBirdTargetVelocity` | **Implemented** | `CLuaBirdDefs.cpp:150` | `SetBirdTargetVelocity` | Operational on Android. (SetBirdTargetVelocity) |
+| `setBirdVelocity` | **Implemented** | `CLuaBirdDefs.cpp:149` | `SetBirdVelocity` | Operational on Android. (SetBirdVelocity) |
+| `setBirdWingBeatTime` | **Implemented** | `CLuaBirdDefs.cpp:152` | `SetBirdWingBeatTime` | Operational on Android. (SetBirdWingBeatTime) |
+| `setBlipColor` | **Implemented** | `CLuaBlipDefs.cpp:154` | `ArgumentParserWarn<false, SetBlipColor>` | Operational on Android. (SetBlipColor) |
+| `setBlipIcon` | **Implemented** | `CLuaBlipDefs.cpp:152` | `ArgumentParserWarn<false, SetBlipIcon>` | Operational on Android. (SetBlipIcon) |
+| `setBlipOrdering` | **Implemented** | `CLuaBlipDefs.cpp:155` | `ArgumentParserWarn<false, SetBlipOrdering>` | Operational on Android. (SetBlipOrdering) |
+| `setBlipSize` | **Implemented** | `CLuaBlipDefs.cpp:153` | `ArgumentParserWarn<false, SetBlipSize>` | Operational on Android. (SetBlipSize) |
+| `setBlipVisibleDistance` | **Implemented** | `CLuaBlipDefs.cpp:156` | `ArgumentParserWarn<false, SetBlipVisibleDistance>` | Operational on Android. (SetBlipVisibleDistance) |
+| `setColPolygonHeight` | **Implemented** | `CLuaColShapeDefs.cpp:36` | `ArgumentParser<SetColPolygonHeight>` | Operational on Android. (SetColPolygonHeight) |
+| `setColPolygonPointPosition` | **Implemented** | `CLuaColShapeDefs.cpp:30` | `SetColPolygonPointPosition` | Operational on Android. (SetColPolygonPointPosition) |
+| `setColShapeRadius` | **Implemented** | `CLuaColShapeDefs.cpp:25` | `SetColShapeRadius` | Operational on Android. (SetColShapeRadius) |
+| `setColShapeSize` | **Implemented** | `CLuaColShapeDefs.cpp:27` | `SetColShapeSize` | Operational on Android. (SetColShapeSize) |
+| `setCoronaReflectionEnabled` | **Implemented** | `CLuaMarkerDefs.cpp:39` | `ArgumentParser<SetCoronaReflectionEnabled>` | Operational on Android. (SetCoronaReflectionEnabled) |
+| `setLightColor` | **Implemented** | `CLuaPointLightDefs.cpp:20` | `SetLightColor` | Operational on Android. (SetLightColor) |
+| `setLightDirection` | **Implemented** | `CLuaPointLightDefs.cpp:20` | `SetLightDirection` | Operational on Android. (SetLightDirection) |
+| `setLightRadius` | **Implemented** | `CLuaPointLightDefs.cpp:19` | `SetLightRadius` | Operational on Android. (SetLightRadius) |
+| `setMarkerColor` | **Implemented** | `CLuaMarkerDefs.cpp:34` | `SetMarkerColor` | Operational on Android. (SetMarkerColor) |
+| `setMarkerIcon` | **Implemented** | `CLuaMarkerDefs.cpp:36` | `SetMarkerIcon` | Operational on Android. (SetMarkerIcon) |
+| `setMarkerSize` | **Implemented** | `CLuaMarkerDefs.cpp:33` | `SetMarkerSize` | Operational on Android. (SetMarkerSize) |
+| `setMarkerTarget` | **Implemented** | `CLuaMarkerDefs.cpp:35` | `SetMarkerTarget` | Operational on Android. (SetMarkerTarget) |
+| `setMarkerTargetArrowProperties` | **Implemented** | `CLuaMarkerDefs.cpp:37` | `ArgumentParser<SetMarkerTargetArrowProperties>` | Operational on Android. (SetMarkerTargetArrowProperties) |
+| `setMarkerType` | **Implemented** | `CLuaMarkerDefs.cpp:32` | `SetMarkerType` | Operational on Android. (SetMarkerType) |
+| `setPickupType` | **Implemented** | `CLuaPickupDefs.cpp:21` | `SetPickupType` | Operational on Android. (SetPickupType) |
+| `setRadarAreaColor` | **Implemented** | `CLuaRadarAreaDefs.cpp:19` | `SetRadarAreaColor` | Operational on Android. (SetRadarAreaColor) |
+| `setRadarAreaFlashing` | **Implemented** | `CLuaRadarAreaDefs.cpp:19` | `SetRadarAreaFlashing` | Operational on Android. (SetRadarAreaFlashing) |
+| `setRadarAreaSize` | **Implemented** | `CLuaRadarAreaDefs.cpp:20` | `SetRadarAreaSize` | Operational on Android. (SetRadarAreaSize) |
+| `setRopeDuration` | **Implemented** | `CLuaRopeDefs.cpp:220` | `SetRopeDuration` | Operational on Android. (SetRopeDuration) |
+| `setRopeFixedNode` | **Implemented** | `CLuaRopeDefs.cpp:227` | `SetRopeFixedNode` | Operational on Android. (SetRopeFixedNode) |
+| `setRopeHolder` | **Implemented** | `CLuaRopeDefs.cpp:222` | `SetRopeHolder` | Operational on Android. (SetRopeHolder) |
+| `setRopeHolderOffset` | **Implemented** | `CLuaRopeDefs.cpp:223` | `SetRopeHolderOffset` | Operational on Android. (SetRopeHolderOffset) |
+| `setRopeLength` | **Implemented** | `CLuaRopeDefs.cpp:226` | `SetRopeLength` | Operational on Android. (SetRopeLength) |
+| `setRopeOnGround` | **Implemented** | `CLuaRopeDefs.cpp:228` | `SetRopeOnGround` | Operational on Android. (SetRopeOnGround) |
+| `setRopePhysicsEnabled` | **Implemented** | `CLuaRopeDefs.cpp:229` | `SetRopePhysicsEnabled` | Operational on Android. (SetRopePhysicsEnabled) |
+| `setRopeRemainingTime` | **Implemented** | `CLuaRopeDefs.cpp:221` | `SetRopeRemainingTime` | Operational on Android. (SetRopeRemainingTime) |
+| `setRopeTopVelocity` | **Implemented** | `CLuaRopeDefs.cpp:224` | `SetRopeTopVelocity` | Operational on Android. (SetRopeTopVelocity) |
+| `setRopeType` | **Implemented** | `CLuaRopeDefs.cpp:219` | `SetRopeType` | Operational on Android. (SetRopeType) |
+| `setRopeWinchHeight` | **Implemented** | `CLuaRopeDefs.cpp:225` | `SetRopeWinchHeight` | Operational on Android. (SetRopeWinchHeight) |
+| `setSearchLightColor` | **Implemented** | `CLuaSearchLightDefs.cpp:29` | `ArgumentParser<SetSearchLightColor>` | Operational on Android. (SetSearchLightColor) |
+| `setSearchLightEndPosition` | **Implemented** | `CLuaSearchLightDefs.cpp:26` | `SetSearchLightEndPosition` | Operational on Android. (SetSearchLightEndPosition) |
+| `setSearchLightEndRadius` | **Implemented** | `CLuaSearchLightDefs.cpp:28` | `SetSearchLightEndRadius` | Operational on Android. (SetSearchLightEndRadius) |
+| `setSearchLightStartPosition` | **Implemented** | `CLuaSearchLightDefs.cpp:25` | `SetSearchLightStartPosition` | Operational on Android. (SetSearchLightStartPosition) |
+| `setSearchLightStartRadius` | **Implemented** | `CLuaSearchLightDefs.cpp:27` | `SetSearchLightStartRadius` | Operational on Android. (SetSearchLightStartRadius) |
+| `showCol` | **Implemented** | `CLuaColShapeDefs.cpp:39` | `ArgumentParser<SetShowCollision>` | Operational on Android. (ShowCol) |
+| `showNativeText` | **Implemented** | `CLuaNativeUIDefs.cpp:261` | `ShowNativeText` | Operational on Android. (ShowNativeText) |
+| `updateNativeUI` | **Implemented** | `CLuaNativeUIDefs.cpp:260` | `UpdateNativeUI` | Operational on Android. (UpdateNativeUI) |

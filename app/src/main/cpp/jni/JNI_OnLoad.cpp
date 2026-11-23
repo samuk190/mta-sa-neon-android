@@ -1,6 +1,8 @@
+#include "../shared/ConnectionLoading.h"
 #include <jni.h>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <memory>
 #include <mutex>
 #include <atomic>
@@ -9,17 +11,24 @@
 #include "../net/raknet/RakNetWrapper.h"
 #include "../net/NeonJoinProtocol.h"
 #include "../net/HttpDownloader.h"
+#include "../net/RemoteCalls.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
 #include "../gtasa/RemoteVehicle.h"
+#include "../gtasa/RenderGuard.h"
 #include "../gtasa/RenderWareHooks.h"
 #include "../gtasa/InputHooks.h"
 #include "../gtasa/HUDRenderer.h"
+#include "../gtasa/MobileSettings.h"
 #include "../shared/ElementManager.h"
 #include "../shared/SyncManager.h"
 #include "../shared/PacketHandler.h"
 #include "../shared/LuaVMStub.h"
+#include "../shared/Utf8.h"
+#include "../shared/LuaMtaWindowApi.h"
+#include "../shared/LuaKeyBindApi.h"
+#include "../shared/LuaWeaponApi.h"
 #include "../shared/ServerWorld.h"
 #include "../shared/AssetManager.h"
 
@@ -43,6 +52,14 @@ static jobject g_gameActivityRef = nullptr;
 static jmethodID g_onConnectionStateChangeMethod = nullptr;
 static jmethodID g_onGameLineMethod = nullptr;
 static jmethodID g_onDxFrameMethod = nullptr;
+static jmethodID g_measureTextMethod = nullptr;
+static jmethodID g_fontHeightMethod = nullptr;
+static jmethodID g_loadPixelsMethod = nullptr;
+static jmethodID g_decodePixelsMethod = nullptr;
+static jmethodID g_encodePixelsMethod = nullptr;
+static jmethodID g_storePixelsMethod = nullptr;
+static jmethodID g_renderSvgMethod = nullptr;
+static jmethodID g_copyScreenMethod = nullptr;
 
 namespace WorldRPG::JniBridge {
 void PostGameLine(int kind, const char* text) {
@@ -65,13 +82,242 @@ void PostGameLine(int kind, const char* text) {
     } else if (result != JNI_OK) {
         return;
     }
-    jstring jtext = env->NewStringUTF(text);
+    const auto wide = Utf8::ToUtf16(text);
+    jstring jtext = env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
     if (jtext) {
         env->CallVoidMethod(g_gameActivityRef, g_onGameLineMethod, kind, jtext);
         if (env->ExceptionCheck()) env->ExceptionClear();
         env->DeleteLocalRef(jtext);
     }
     if (attached) g_jvm->DetachCurrentThread();
+}
+// Width of one line of text in the DX overlay font, or in a TTF file (EngineHostActivity.onNativeMeasureText).
+// The text goes over as UTF-16, because NewStringUTF aborts on bytes that are not modified UTF-8.
+float MeasureText(const std::string& utf8, float pixelSize, const std::string& fontFile, bool bold) {
+    if (!g_jvm || !g_gameActivityRef || !g_measureTextMethod) return -1.f;
+    const auto wide = WorldRPG::Utf8::ToUtf16(utf8);
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    const jint result = g_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (result == JNI_EDETACHED) {
+        if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return -1.f;
+        attached = true;
+    } else if (result != JNI_OK) {
+        return -1.f;
+    }
+    float width = -1.f;
+    jstring jtext = env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
+    if (jtext) {
+        // The versioned font source and cache path are printable ASCII; the overlay resolves them.
+        jstring jfont = fontFile.empty() ? nullptr : env->NewStringUTF(fontFile.c_str());
+        width = env->CallFloatMethod(g_gameActivityRef, g_measureTextMethod, jtext, static_cast<jfloat>(pixelSize), jfont,
+                                     static_cast<jboolean>(bold ? JNI_TRUE : JNI_FALSE));
+        if (jfont) env->DeleteLocalRef(jfont);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            width = -1.f;
+        }
+        env->DeleteLocalRef(jtext);
+    } else if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    if (attached) g_jvm->DetachCurrentThread();
+    return width;
+}
+namespace {
+// A JNIEnv for the calling thread, attached for the scope when it was not.
+struct EnvScope {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    EnvScope() {
+        if (!g_jvm) return;
+        const jint result = g_jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+        if (result == JNI_EDETACHED) {
+            if (g_jvm->AttachCurrentThread(&env, nullptr) == JNI_OK) attached = true;
+            else env = nullptr;
+        } else if (result != JNI_OK) {
+            env = nullptr;
+        }
+    }
+    ~EnvScope() {
+        if (attached) g_jvm->DetachCurrentThread();
+    }
+    EnvScope(const EnvScope&) = delete;
+    EnvScope& operator=(const EnvScope&) = delete;
+};
+
+// The Activity returns {width, height, pixels...}. Null or a short array is a failure.
+bool TakePixels(JNIEnv* env, jintArray result, std::vector<uint32_t>& argb, unsigned& width, unsigned& height) {
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return false;
+    }
+    if (!result) return false;
+    const jsize count = env->GetArrayLength(result);
+    jint head[2] = {0, 0};
+    bool ok = false;
+    if (count >= 2) {
+        env->GetIntArrayRegion(result, 0, 2, head);
+        const jlong pixels = static_cast<jlong>(head[0]) * static_cast<jlong>(head[1]);
+        if (head[0] > 0 && head[1] > 0 && pixels == static_cast<jlong>(count) - 2) {
+            argb.resize(static_cast<size_t>(pixels));
+            env->GetIntArrayRegion(result, 2, static_cast<jsize>(pixels), reinterpret_cast<jint*>(argb.data()));
+            width = static_cast<unsigned>(head[0]);
+            height = static_cast<unsigned>(head[1]);
+            ok = !env->ExceptionCheck();
+            if (!ok) env->ExceptionClear();
+        }
+    }
+    env->DeleteLocalRef(result);
+    return ok;
+}
+
+jintArray ToIntArray(JNIEnv* env, const std::vector<uint32_t>& argb) {
+    jintArray array = env->NewIntArray(static_cast<jsize>(argb.size()));
+    if (!array) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return nullptr;
+    }
+    env->SetIntArrayRegion(array, 0, static_cast<jsize>(argb.size()), reinterpret_cast<const jint*>(argb.data()));
+    return array;
+}
+}  // namespace
+
+float FontHeight(const std::string& source, float pixelSize, bool bold) {
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env || !g_gameActivityRef || !g_fontHeightMethod) return -1.f;
+    const auto wide = WorldRPG::Utf8::ToUtf16(source);
+    jstring jsource = env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
+    if (!jsource) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return 0.f;
+    }
+    float height = env->CallFloatMethod(g_gameActivityRef, g_fontHeightMethod, jsource,
+                                       static_cast<jfloat>(pixelSize), static_cast<jboolean>(bold));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); height = 0.f; }
+    env->DeleteLocalRef(jsource);
+    return height;
+}
+
+// Pixels of an image file or of an overlay bitmap ("tx:<id>", "rt:<id>"). The name is a cache
+// path or a bitmap name, both printable ASCII.
+bool LoadPixels(const std::string& source, std::vector<uint32_t>& argb, unsigned& width, unsigned& height) {
+    if (!g_gameActivityRef || !g_loadPixelsMethod) return false;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return false;
+    jstring jsource = env->NewStringUTF(source.c_str());
+    if (!jsource) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return false;
+    }
+    auto result = static_cast<jintArray>(env->CallObjectMethod(g_gameActivityRef, g_loadPixelsMethod, jsource));
+    env->DeleteLocalRef(jsource);
+    return TakePixels(env, result, argb, width, height);
+}
+
+bool DecodePixels(const char* data, size_t size, std::vector<uint32_t>& argb, unsigned& width, unsigned& height) {
+    if (!g_gameActivityRef || !g_decodePixelsMethod || !data || size == 0 || size > 0x7FFFFFFFu) return false;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return false;
+    jbyteArray bytes = env->NewByteArray(static_cast<jsize>(size));
+    if (!bytes) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return false;
+    }
+    env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(size), reinterpret_cast<const jbyte*>(data));
+    auto result = static_cast<jintArray>(env->CallObjectMethod(g_gameActivityRef, g_decodePixelsMethod, bytes));
+    env->DeleteLocalRef(bytes);
+    return TakePixels(env, result, argb, width, height);
+}
+
+bool EncodePixels(const std::vector<uint32_t>& argb, unsigned width, unsigned height, bool jpeg, int quality,
+                  std::string& out) {
+    if (!g_gameActivityRef || !g_encodePixelsMethod || argb.empty() || argb.size() > 0x7FFFFFFFu) return false;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return false;
+    jintArray pixels = ToIntArray(env, argb);
+    if (!pixels) return false;
+    auto result = static_cast<jbyteArray>(
+        env->CallObjectMethod(g_gameActivityRef, g_encodePixelsMethod, pixels, static_cast<jint>(width),
+                              static_cast<jint>(height), static_cast<jboolean>(jpeg ? JNI_TRUE : JNI_FALSE),
+                              static_cast<jint>(quality)));
+    env->DeleteLocalRef(pixels);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return false;
+    }
+    if (!result) return false;
+    const jsize length = env->GetArrayLength(result);
+    out.resize(static_cast<size_t>(length));
+    if (length > 0) env->GetByteArrayRegion(result, 0, length, reinterpret_cast<jbyte*>(&out[0]));
+    env->DeleteLocalRef(result);
+    return length > 0;
+}
+
+bool StorePixels(const std::string& name, const std::vector<uint32_t>& argb, unsigned width, unsigned height) {
+    if (!g_gameActivityRef || !g_storePixelsMethod || argb.empty() || argb.size() > 0x7FFFFFFFu) return false;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return false;
+    jstring jname = env->NewStringUTF(name.c_str());
+    jintArray pixels = jname ? ToIntArray(env, argb) : nullptr;
+    bool stored = false;
+    if (jname && pixels) {
+        stored = env->CallBooleanMethod(g_gameActivityRef, g_storePixelsMethod, jname, pixels, static_cast<jint>(width),
+                                        static_cast<jint>(height)) == JNI_TRUE;
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            stored = false;
+        }
+    } else if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    if (pixels) env->DeleteLocalRef(pixels);
+    if (jname) env->DeleteLocalRef(jname);
+    return stored;
+}
+// dxUpdateScreenSource: the Activity copies the game surface into the bitmap of this name.
+void CopyScreen(const std::string& name, unsigned width, unsigned height) {
+    if (!g_gameActivityRef || !g_copyScreenMethod) return;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return;
+    jstring jname = env->NewStringUTF(name.c_str());
+    if (jname) {
+        env->CallVoidMethod(g_gameActivityRef, g_copyScreenMethod, jname, static_cast<jint>(width), static_cast<jint>(height));
+        env->DeleteLocalRef(jname);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+// The overlay draws the SVG document into the bitmap of this name. The document goes over as
+// bytes because it may hold any UTF-8. 1 drawn, 0 not readable as SVG, -1 no Activity.
+int RenderSvg(const std::string& name, const std::string& xml, unsigned width, unsigned height) {
+    if (!g_gameActivityRef || !g_renderSvgMethod || xml.empty() || xml.size() > 0x7FFFFFFFu) return -1;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return -1;
+    jstring jname = env->NewStringUTF(name.c_str());
+    jbyteArray bytes = jname ? env->NewByteArray(static_cast<jsize>(xml.size())) : nullptr;
+    int result = -1;
+    if (jname && bytes) {
+        env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(xml.size()), reinterpret_cast<const jbyte*>(xml.data()));
+        result = env->CallIntMethod(g_gameActivityRef, g_renderSvgMethod, jname, bytes, static_cast<jint>(width),
+                                    static_cast<jint>(height));
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            result = -1;
+        }
+    } else if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    if (bytes) env->DeleteLocalRef(bytes);
+    if (jname) env->DeleteLocalRef(jname);
+    return result;
 }
 } // namespace WorldRPG::JniBridge
 
@@ -150,14 +396,16 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
         return JNI_ERR;
     }
     g_jvm = vm;
-    JNI_LOGI("JNI_OnLoad: WorldRPGNeon native library loaded");
+    JNI_LOGI("JNI_OnLoad: libsaonlineneon.so loaded");
     // Engine process only: libGTASA is already loaded and its engine thread has not started yet.
     WorldRPG::Game::InstallGameHeap();
+    WorldRPG::Game::InstallRenderQueueCapacity();
+    WorldRPG::Game::InstallServerSessionHook();
     return JNI_VERSION_1_6;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject thiz) {
+Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject thiz) {
     const std::lock_guard lock(g_stateMutex);
     if (g_state) return isOwner(env, thiz) ? JNI_TRUE : JNI_FALSE;
 
@@ -190,12 +438,44 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
     if (!g_onGameLineMethod && env->ExceptionCheck()) env->ExceptionClear();
     g_onDxFrameMethod = env->GetMethodID(activityClass, "onNativeDxFrame", "(Ljava/lang/String;)V");
     if (!g_onDxFrameMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_measureTextMethod = env->GetMethodID(activityClass, "onNativeMeasureText", "(Ljava/lang/String;FLjava/lang/String;Z)F");
+    if (!g_measureTextMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_fontHeightMethod = env->GetMethodID(activityClass, "onNativeFontHeight", "(Ljava/lang/String;FZ)F");
+    if (!g_fontHeightMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_loadPixelsMethod = env->GetMethodID(activityClass, "onNativeLoadPixels", "(Ljava/lang/String;)[I");
+    if (!g_loadPixelsMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_decodePixelsMethod = env->GetMethodID(activityClass, "onNativeDecodePixels", "([B)[I");
+    if (!g_decodePixelsMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_encodePixelsMethod = env->GetMethodID(activityClass, "onNativeEncodePixels", "([IIIZI)[B");
+    if (!g_encodePixelsMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_storePixelsMethod = env->GetMethodID(activityClass, "onNativeStorePixels", "(Ljava/lang/String;[III)Z");
+    if (!g_storePixelsMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_renderSvgMethod = env->GetMethodID(activityClass, "onNativeRenderSvg", "(Ljava/lang/String;[BII)I");
+    if (!g_renderSvgMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_copyScreenMethod = env->GetMethodID(activityClass, "onNativeCopyScreen", "(Ljava/lang/String;II)V");
+    if (!g_copyScreenMethod && env->ExceptionCheck()) env->ExceptionClear();
     env->DeleteLocalRef(activityClass);
     if (!callback) {
         if (env->ExceptionCheck()) env->ExceptionClear();
         JNI_LOGE("nativeInit: connection callback signature not found");
         return JNI_FALSE;
     }
+
+    activityClass = env->GetObjectClass(thiz);
+    jmethodID identityCallback = env->GetMethodID(activityClass, "onNativeIdentityRequest", "(JLjava/lang/String;Ljava/lang/String;I)V");
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(activityClass);
+    if (identityCallback) state->join->SetIdentityCallback([identityCallback](uint64_t requestId, const std::string& serverId,
+            const std::string& endpoint, WorldRPG::Net::NeonAuthMode mode) {
+        WorldRPG::JniBridge::EnvScope scope;
+        if (!scope.env || !g_gameActivityRef) return;
+        jstring id = scope.env->NewStringUTF(serverId.c_str());
+        jstring address = scope.env->NewStringUTF(endpoint.c_str());
+        if (id && address) scope.env->CallVoidMethod(g_gameActivityRef, identityCallback, static_cast<jlong>(requestId), id, address, static_cast<jint>(mode));
+        if (id) scope.env->DeleteLocalRef(id);
+        if (address) scope.env->DeleteLocalRef(address);
+        if (scope.env->ExceptionCheck()) scope.env->ExceptionClear();
+    });
 
     jobject activityRef = env->NewGlobalRef(thiz);
     if (!activityRef) return JNI_FALSE;
@@ -226,6 +506,9 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
                     WorldRPG::Net::HttpDownloader::BuildServerBase(g_state->join->Info(), g_serverHost));
             }
         } else if (state == JoinState::Failed) {
+            // Desktop ~CClientGame / CCore::RemoveMessageBox path: never leave the screen over an error.
+            WorldRPG::ConnectionLoading::End();
+            WorldRPG::ConnectionLoading::Flush();
             PostConnectionState(false, detail);
         }
     });
@@ -257,7 +540,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
 /// resident and the hook surface is ready; it does NOT mean the game world is
 /// running (full boot is P1A.4).
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeBootEngine(JNIEnv* env, jobject thiz) {
+Java_com_saonline_neonlauncher_game_GameActivity_nativeBootEngine(JNIEnv* env, jobject thiz) {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state->assetsReady) return JNI_FALSE;
     if (g_state->gameEngine->isReady()) return JNI_TRUE;
@@ -272,20 +555,20 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeBootEngine(JNIEnv* env, j
 }
 
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativePause(JNIEnv* env, jobject thiz) {
+Java_com_saonline_neonlauncher_game_GameActivity_nativePause(JNIEnv* env, jobject thiz) {
     const std::lock_guard lock(g_stateMutex);
     if (isOwner(env, thiz) && g_state->gameEngine) g_state->gameEngine->pause();
 }
 
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeResume(JNIEnv* env, jobject thiz) {
+Java_com_saonline_neonlauncher_game_GameActivity_nativeResume(JNIEnv* env, jobject thiz) {
     const std::lock_guard lock(g_stateMutex);
     if (isOwner(env, thiz) && g_state->gameEngine) g_state->gameEngine->resume();
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
-    JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname)
+Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
+    JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname, jint joinProfile)
 {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state->assetsReady || !ip || !nickname ||
@@ -296,6 +579,8 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
     const char* ipStr = env->GetStringUTFChars(ip, nullptr);
     if (!ipStr) return JNI_FALSE;
     g_serverHost = ipStr;
+    const bool useQuic = g_serverHost.compare(0, 7, "quic://") == 0;
+    if (useQuic) g_serverHost.erase(0, 7);
     const char* nickStr = env->GetStringUTFChars(nickname, nullptr);
     if (!nickStr) {
         env->ReleaseStringUTFChars(ip, ipStr);
@@ -314,24 +599,44 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(
         WorldRPG::Game::RequestRemoteReset();
         WorldRPG::Script::ActiveVmResetSession();
     }
-    const bool started = ipStr[0] != '\0' && !normalizedNick.empty() &&
-        g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
+    bool started = false;
+    if (!g_serverHost.empty() && !normalizedNick.empty()) {
+        if (useQuic) {
+#ifdef __ANDROID__
+            auto client = WorldRPG::Net::QuicGameClient::Connect(env, thiz, g_serverHost, port);
+            started = g_state->network->StartQuic(g_serverHost, port, std::move(client));
+#endif
+        } else {
+            started = g_state->network->StartNetwork(ipStr, static_cast<uint16_t>(port));
+        }
+    }
     env->ReleaseStringUTFChars(ip, ipStr);
     // Scheduling a join only starts an attempt. It does not verify a session.
     // The Neon join handshake (PLAYER_JOIN -> MOD_NAME -> PLAYER_JOINDATA ->
     // SERVER_JOIN_COMPLETE -> RPCs -> SERVER_JOINEDGAME) is driven by
     // NeonJoinClient from nativePulse once the transport is up.
-    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "")) {
+    const auto profile = joinProfile == static_cast<jint>(WorldRPG::Net::JoinProfile::LegacyMobile)
+        ? WorldRPG::Net::JoinProfile::LegacyMobile
+        : WorldRPG::Net::JoinProfile::Standard;
+    if (!started || !g_state->join->Begin(*g_state->network, normalizedNick, "", profile)) {
         g_state->network->StopNetwork();
         return JNI_FALSE;
     }
     g_enterServer = true;
     g_sessionOpened = true;
+    {
+        // The phone opens the loading screen at connect: GTA is still loading underneath, and its
+        // counter is the first part of the bar. Desktop shows CConnectManager's box here instead.
+        char status[160];
+        std::snprintf(status, sizeof(status), "Connecting to %s:%d", g_serverHost.c_str(), static_cast<int>(port));
+        WorldRPG::ConnectionLoading::End();
+        WorldRPG::ConnectionLoading::Begin(status);
+    }
     return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSurfaceChanged(
+Java_com_saonline_neonlauncher_game_GameActivity_nativeSurfaceChanged(
     JNIEnv* env, jobject thiz, jint width, jint height)
 {
     const std::lock_guard lock(g_stateMutex);
@@ -344,8 +649,44 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSurfaceChanged(
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeCancelIdentityRequest(JNIEnv* env, jobject thiz, jlong requestId) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !g_state->join->CancelIdentityRequest(static_cast<uint64_t>(requestId))) return JNI_FALSE;
+    g_state->network->StopNetwork();
+    WorldRPG::ConnectionLoading::End();
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetNetworkSerial(JNIEnv* env, jobject thiz, jstring serial) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !serial || env->GetStringUTFLength(serial) != 32) return JNI_FALSE;
+    const char* value = env->GetStringUTFChars(serial, nullptr);
+    if (!value) return JNI_FALSE;
+    const bool ok = g_state->network->SetSerial(value);
+    env->ReleaseStringUTFChars(serial, value);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeOnTouch(
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeProvideIdentityTicket(JNIEnv* env, jobject thiz, jlong requestId,
+        jstring ticket, jstring error) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || !ticket || !error) return;
+    if (env->GetStringUTFLength(ticket) > 4096 || env->GetStringUTFLength(error) > 512) return;
+    const char* ticketText = env->GetStringUTFChars(ticket, nullptr);
+    if (!ticketText) return;
+    const char* errorText = env->GetStringUTFChars(error, nullptr);
+    if (errorText) {
+        g_state->join->ProvideIdentityTicket(static_cast<uint64_t>(requestId), ticketText, errorText);
+        env->ReleaseStringUTFChars(error, errorText);
+    }
+    env->ReleaseStringUTFChars(ticket, ticketText);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_GameActivity_nativeOnTouch(
     JNIEnv* env, jobject thiz, jfloat x, jfloat y, jint action, jint pointerId)
 {
     const std::lock_guard lock(g_stateMutex);
@@ -362,23 +703,40 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeOnTouch(
     g_state->input->onTouchEvent(event);
 }
 
-/// Process incoming network packets on the view's GL thread.
-/// Suppressed while the Activity is paused (no frames are drawn then, but a
-/// queued event could still arrive; the transport must not advance).
+/// Activity window focus. Desktop CCore::IsFocused, sampled by CClientGame::OnWindowFocusChange.
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobject thiz) {
+Java_com_saonline_neonlauncher_game_GameActivity_nativeWindowFocus(
+    JNIEnv*, jobject, jboolean focused) {
+    WorldRPG::Script::MtaWindowSetFocused(focused == JNI_TRUE);
+}
+
+// The engine host keeps RakNet and Lua timers running while backgrounded. Only
+// the foreground host marshals draw commands and starts game-thread resources.
+static void PulseClient(JNIEnv* env, jobject thiz, bool renderFrame) {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state->network) return;
     if (g_enterServer.load()) WorldRPG::Game::BeginServerSession();
     g_state->network->DoPulse();
     g_state->join->Pulse();
+    bool transferring = false;
     {
         // Transfer box (desktop CTransferBox): "downloaded|total" while files are in flight, then one
         // empty line. Sent only when the numbers change.
         static uint64_t lastDone = ~0ull, lastTotal = ~0ull;
         static bool shown = false;
         const auto transfer = WorldRPG::Net::HttpDownloader::GetTransfer();
-        if (transfer.active && transfer.total > 0) {
+        transferring = transfer.active && transfer.total > 0;
+        if (transferring) {
+            // Desktop CResourceFileDownloadManager::AddDownloadSize (245-269) on the first queued file,
+            // then DoPulse (198-210) every pulse: loading status with bytes done / total, and the Lua event.
+            if (!shown) {
+                WorldRPG::ConnectionLoading::Update(WorldRPG::ConnectionLoading::Phase::Download, "Downloading resources", 0.0f);
+                WorldRPG::Script::ActiveVmFireTransferVisibility(true);
+            }
+            WorldRPG::ConnectionLoading::Update(WorldRPG::ConnectionLoading::Phase::Download, "Downloading resources",
+                static_cast<float>(static_cast<double>(transfer.done) / static_cast<double>(transfer.total)));
+            WorldRPG::Script::ActiveVmFireTransferProgress(static_cast<double>(transfer.done),
+                                                           static_cast<double>(transfer.total));
             if (transfer.done != lastDone || transfer.total != lastTotal) {
                 lastDone = transfer.done;
                 lastTotal = transfer.total;
@@ -392,45 +750,101 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobjec
             shown = false;
             lastDone = lastTotal = ~0ull;
             WorldRPG::JniBridge::PostGameLine(3, "0|0");
+            // Desktop DoPulse when the last group finished (214-232): hide, event, then "Processing resources".
+            WorldRPG::Script::ActiveVmFireTransferVisibility(false);
+            WorldRPG::ConnectionLoading::Update(WorldRPG::ConnectionLoading::Phase::Process, "Processing resources");
         }
     }
-    // Client scripts of resources that became ready run here, on the VM thread.
-    WorldRPG::Script::ActiveVmPulseResources();
+    // GTA's own load counter feeds the engine part of the bar until the session leaves the frontend.
+    const bool gameReady = WorldRPG::Game::ServerSessionLive();
+    WorldRPG::ConnectionLoading::SetEngine(gameReady ? 1.0f : WorldRPG::ConnectionLoading::ReadEngineLoad());
+    // Desktop CClientGame::PulseConnectionLoading (CClientGame.cpp:3657-3672). GTA is loaded once the
+    // session left the frontend (desktop m_bGameLoaded).
+    WorldRPG::ConnectionLoading::Pulse(g_state->join->State() == WorldRPG::Net::JoinState::Complete, gameReady, transferring);
+    WorldRPG::ConnectionLoading::Flush();
+    // Initial resource scripts may load models synchronously through the
+    // game's task queue. Run them once the game can service that queue.
+    if (gameReady && renderFrame) WorldRPG::Script::ActiveVmPulseResources();
+    // CClientWeaponManager::DoPulse for createWeapon and touched server weapons.
+    WorldRPG::Script::WeaponsPulse();
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
-    const std::string frame = WorldRPG::Script::ActiveVmPump();
+    const std::string frame = WorldRPG::Script::ActiveVmPump(renderFrame);
+    // Commands that a key bind ran go to the server as a typed command does (COMMAND_Executed).
+    for (const std::string& line : WorldRPG::Script::ActiveVmTakeServerCommands()) {
+        if (g_state->join) g_state->join->SendChat(line);
+    }
+    if (!renderFrame) return;
     // An empty frame is sent once, so the overlay clears what the scripts stopped drawing.
     static bool lastFrameEmpty = true;
     if (frame.empty() && lastFrameEmpty) return;
     lastFrameEmpty = frame.empty();
-    jstring jtext = env->NewStringUTF(frame.c_str());
+    const auto wide = WorldRPG::Utf8::ToUtf16(frame);
+    jstring jtext = env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
     if (!jtext) return;
     env->CallVoidMethod(g_gameActivityRef, g_onDxFrameMethod, jtext);
     if (env->ExceptionCheck()) env->ExceptionClear();
     env->DeleteLocalRef(jtext);
 }
 
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_GameActivity_nativePulse(JNIEnv* env, jobject thiz) {
+    PulseClient(env, thiz, true);
+}
+
 JNIEXPORT jstring JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeMapSnapshot(JNIEnv* env, jobject) {
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeMapSnapshot(JNIEnv* env, jobject) {
     float x = 0, y = 0, z = 0, heading = 0;
     WorldRPG::Game::CopyPose(x, y, z, heading);
+    heading = WorldRPG::Game::CopyRadarHeading();
     const std::string text = WorldRPG::ServerWorld::MapSnapshot(x, y, heading);
     return env->NewStringUTF(text.c_str());
 }
 
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeCursorEvent(
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeCursorEvent(
     JNIEnv*, jobject, jint action, jfloat x, jfloat y) {
     WorldRPG::Script::ActiveVmQueueCursor(action, x, y);
 }
 
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSetScreenSize(
-    JNIEnv*, jobject, jint width, jint height) {
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSoundEnded(
+    JNIEnv*, jobject, jint id) {
+    WorldRPG::Script::ActiveVmNoteSoundEnded(static_cast<uint32_t>(id));
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSoundLength(
+    JNIEnv*, jobject, jint id, jdouble seconds) {
+    WorldRPG::Script::ActiveVmNoteSoundLength(static_cast<uint32_t>(id), seconds);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeScriptInput(
+    JNIEnv* env, jobject, jstring text, jint backspaces, jstring key) {
+    std::string utf8;
+    if (text) {
+        const jchar* chars = env->GetStringChars(text, nullptr);
+        if (!chars) return;
+        const std::u16string wide(chars, chars + env->GetStringLength(text));
+        utf8 = WorldRPG::Utf8::FromUtf16(wide);
+        env->ReleaseStringChars(text, chars);
+    }
+    const char* name = key ? env->GetStringUTFChars(key, nullptr) : nullptr;
+    if (key && !name) return;
+    WorldRPG::Script::ActiveVmQueueScriptInput(utf8.c_str(), backspaces, name ? name : "");
+    if (name) env->ReleaseStringUTFChars(key, name);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetScreenSize(
+    JNIEnv* env, jobject thiz, jint width, jint height) {
+    const std::lock_guard lock(g_stateMutex);
+    if (!isOwner(env, thiz) || width <= 0 || height <= 0) return;
     WorldRPG::Script::ActiveVmSetScreen(width, height);
 }
 
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobject thiz) {
+Java_com_saonline_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobject thiz) {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz)) return;
 
@@ -442,6 +856,10 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobj
     g_state->network->Shutdown();
     g_hudRenderer = nullptr;
     g_enterServer = false;
+    WorldRPG::ConnectionLoading::End();
+    // The Activity and its chat input bar are gone. The window is no longer foreground.
+    WorldRPG::Script::MtaWindowSetChatInputActive(false);
+    WorldRPG::Script::MtaWindowSetFocused(false);
     g_state.reset();
     env->DeleteGlobalRef(g_gameActivityRef);
     g_gameActivityRef = nullptr;
@@ -452,7 +870,7 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobj
 
 /// Set the private storage path published by the Android asset installer.
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetAssetPath(
+Java_com_saonline_neonlauncher_game_GameActivity_nativeSetAssetPath(
     JNIEnv* env, jobject thiz, jstring assetPath)
 {
     const std::lock_guard lock(g_stateMutex);
@@ -482,39 +900,82 @@ Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetAssetPath(
 // The game screen is EngineHostActivity. These entry points share the
 // GameActivity client so the join, download bar and chat run there.
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeInit(JNIEnv* env, jobject thiz) {
-    return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeInit(env, thiz);
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeInit(JNIEnv* env, jobject thiz) {
+    return Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(env, thiz);
 }
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSetAssetPath(JNIEnv* env, jobject thiz, jstring assetPath) {
-    return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeSetAssetPath(env, thiz, assetPath);
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetAssetPath(JNIEnv* env, jobject thiz, jstring assetPath) {
+    return Java_com_saonline_neonlauncher_game_GameActivity_nativeSetAssetPath(env, thiz, assetPath);
 }
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeConnect(JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname) {
-    return Java_com_worldrpg_neonlauncher_game_GameActivity_nativeConnect(env, thiz, ip, port, nickname);
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeConnect(
+    JNIEnv* env, jobject thiz, jstring ip, jint port, jstring nickname, jint joinProfile) {
+    return Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(env, thiz, ip, port, nickname, joinProfile);
 }
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz) {
-    Java_com_worldrpg_neonlauncher_game_GameActivity_nativePulse(env, thiz);
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativePulse(JNIEnv* env, jobject thiz, jboolean renderFrame) {
+    PulseClient(env, thiz, renderFrame == JNI_TRUE);
 }
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeDestroy(JNIEnv* env, jobject thiz) {
-    Java_com_worldrpg_neonlauncher_game_GameActivity_nativeDestroy(env, thiz);
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeDestroy(JNIEnv* env, jobject thiz) {
+    Java_com_saonline_neonlauncher_game_GameActivity_nativeDestroy(env, thiz);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeSendChat(JNIEnv* env, jobject thiz, jstring text) {
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSendChat(JNIEnv* env, jobject thiz, jstring text) {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state || !g_state->join || !text) return JNI_FALSE;
     const char* raw = env->GetStringUTFChars(text, nullptr);
     if (!raw) return JNI_FALSE;
     const bool sent = g_state->join->SendChat(raw);
+    // The client command handlers and onClientConsole see the same line (COMMAND_Executed).
+    if (sent) WorldRPG::Script::ActiveVmQueueCommand(raw);
     env->ReleaseStringUTFChars(text, raw);
     return sent ? JNI_TRUE : JNI_FALSE;
 }
 
+// A hardware keyboard key in desktop key-bind spelling ("e", "F1", "space"). Unknown names are ignored.
 JNIEXPORT void JNICALL
-Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIEnv* env, jobject thiz)
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeKeyEvent(JNIEnv* env, jobject, jstring key, jboolean down) {
+    const char* name = key ? env->GetStringUTFChars(key, nullptr) : nullptr;
+    if (!name) return;
+    WorldRPG::Script::KeyBindsQueueKey(name, down == JNI_TRUE);
+    env->ReleaseStringUTFChars(key, name);
+}
+
+// GTA mobile options (gtasa/MobileSettings.h) for the in-game settings screen.
+JNIEXPORT jboolean JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSetGameSetting(JNIEnv*, jobject, jint index, jint value) {
+    return WorldRPG::Game::SetMobileSetting(index, value) ? JNI_TRUE : JNI_FALSE;
+}
+
+// {value, min, max}, or null when the table is not available.
+JNIEXPORT jintArray JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeGetGameSetting(JNIEnv* env, jobject, jint index) {
+    int value = 0, min = 0, max = 0;
+    if (!WorldRPG::Game::GetMobileSetting(index, value, min, max)) return nullptr;
+    jintArray out = env->NewIntArray(3);
+    if (!out) return nullptr;
+    const jint data[3] = {value, min, max};
+    env->SetIntArrayRegion(out, 0, 3, data);
+    return out;
+}
+
+// The keys scripts have bound ("e|F1|p"), for the on-screen key list.
+JNIEXPORT jstring JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBoundKeys(JNIEnv* env, jobject) {
+    return env->NewStringUTF(WorldRPG::Script::KeyBindsBoundKeys().c_str());
+}
+
+// The chat input bar opened or closed (desktop CLocalGUI::IsChatBoxInputEnabled, read by
+// isChatBoxInputActive and isMTAWindowActive).
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeChatInputActive(JNIEnv*, jobject, jboolean active) {
+    WorldRPG::Script::MtaWindowSetChatInputActive(active == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIEnv* env, jobject thiz)
 {
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz) || !g_state || !g_state->network) return;
@@ -526,3 +987,13 @@ Java_com_worldrpg_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIE
 }
 
 } // extern "C"
+
+namespace WorldRPG::Net {
+// Lua runs inside nativePulse, which already holds g_stateMutex. Locking again
+// would deadlock. StartNetwork writes the host on the activity thread and takes
+// that same mutex, so it cannot run during this call.
+std::string QueryConnectedServer(bool includePort) {
+    if (!g_state || !g_state->network) return {};
+    return g_state->network->GetConnectedServer(includePort);
+}
+}  // namespace WorldRPG::Net

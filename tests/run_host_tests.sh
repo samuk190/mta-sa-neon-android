@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Host wire-format tests for the Neon join protocol (no device/NDK needed).
-# Compiles the transport codec + join state machine against the
-# production-proven bit semantics ported from backend_mta/scripts.
+# The join now shares resource/sync code with the headless target.
+# Reuse its production dependencies instead of compiling an incomplete stub.
 set -euo pipefail
-cd "$(dirname "$0")"
-CPP=../app/src/main/cpp
-OUT=$(mktemp -d)/test_join_codec
-g++ -std=c++20 -Wall -Wextra -Wno-unused-parameter \
-    -I "$CPP/net" -I "$CPP/net/raknet" -I "$CPP" \
-    test_join_codec.cpp "$CPP/net/raknet/RakNetWrapper.cpp" "$CPP/net/mta/"*.cpp \
-    -o "$OUT"
-"$OUT"
+neon_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+neon_build="${NEON_HOST_TEST_BUILD_DIR:-$neon_root/outputs/host-join-tests}"
+cmake -S "$neon_root/tools/headless" -B "$neon_build"
+cmake --build "$neon_build" --target neon_join_codec_tests -j "${NEON_TEST_JOBS:-2}"
+"$neon_build/neon_join_codec_tests"
