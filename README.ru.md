@@ -122,5 +122,5 @@ cp .env.example .env
 - [План переноса синхронизации и состояние проекта](README.md#project-roadmap-mta-sync-porting-plan-pc-to-android)
 - [Каталог функций Lua клиента](docs/lua-functions/README.md) и [матрица совместимости](docs/PARITY_MATRIX.md)
 - [Описание протокола](docs/PROTOCOL_REFERENCE.md) и [спецификация синхронизации](docs/MTA_SYNC_ANDROID_PORT.md)
-- [Лицензия и благодарности](README.md#license--attribution)
+- Проект распространяется на условиях [GNU AGPL версии 3 (AGPL-3.0-only)](LICENSE). [Благодарности и лицензии сторонних компонентов](README.md#license--attribution).
 - [Сообщество в Discord](https://discord.gg/DKrpU3e4pF) · [Поддержать проект на Ko-fi](https://ko-fi.com/samuk190)
