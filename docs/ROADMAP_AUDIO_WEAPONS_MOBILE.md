@@ -162,7 +162,7 @@ Explosão, temporizador e sincronização exigem validação própria.
   alinhamento de armas, corpo truncado, múltiplas entidades no mesmo pacote,
   saída/reutilização de ID, duração assíncrona e limpeza de áudio por recurso.
 - Compilação Linux: `cmake --build tools/headless/build --target neon_resource_tests -j 4`.
-- Compilação nativa ARM64/NDK: alvo `WorldRPGNeon` compilado e linkado com sucesso
+- Compilação nativa ARM64/NDK: biblioteca nativa do launcher compilada e linkada com sucesso
   usando o diretório Android já configurado em `app/.cxx/Debug/2l1o3s5b/arm64-v8a`.
 - As seis classes Java de `game/` compilaram com `javac`, Android API 34 e
   AndroidSVG 1.4; arquivos temporários ficaram fora do repositório.

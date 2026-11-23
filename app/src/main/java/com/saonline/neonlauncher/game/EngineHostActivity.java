@@ -263,7 +263,7 @@ public final class EngineHostActivity extends GTASA {
             GameLibraries.load(this, generation, assets.findLocalAssetsFolder(), assets.usesCdn());
             // Loaded here, before the engine thread exists: its JNI_OnLoad gives libGTASA a heap inside one
             // 2 GB window (GameHeap.cpp). startMtaSession loads it again, which is then a no-op.
-            System.loadLibrary("WorldRPGNeon");
+            System.loadLibrary("saonlineneon");
             Log.i(TAG, "Native GTA host prepared with generation " + generation.getName());
         } catch (IOException | LinkageError | SecurityException error) {
             bootError = error.getMessage() == null ? getString(R.string.gta_engine_load_failed) : error.getMessage();
@@ -312,8 +312,8 @@ public final class EngineHostActivity extends GTASA {
         if (ip == null || ip.isEmpty() || clientReady || bootError != null) return;
         int port = getIntent().getIntExtra(GameActivity.EXTRA_SERVER_PORT, BuildConfig.DEFAULT_SERVER_PORT);
         try {
-            // libc++ is linked statically into WorldRPGNeon.
-            System.loadLibrary("WorldRPGNeon");
+            // libc++ is linked statically into libsaonlineneon.so.
+            System.loadLibrary("saonlineneon");
             Log.i(TAG, "MTA client library loaded");
         } catch (UnsatisfiedLinkError error) {
             Log.e(TAG, "MTA client library failed to load", error);

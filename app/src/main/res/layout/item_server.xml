@@ -2,185 +2,111 @@
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/cardServer"
-    style="@style/Widget.WorldRPGNeon.Card"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_margin="4dp">
-
+    android:layout_marginBottom="5dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardBackgroundColor="@color/browser_card"
+    app:cardCornerRadius="5dp"
+    app:cardElevation="0dp"
+    app:strokeWidth="1dp"
+    app:strokeColor="@color/browser_line">
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:minHeight="80dp"
         android:orientation="horizontal"
-        android:padding="12dp">
-
+        android:minHeight="53dp"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="2dp">
         <com.google.android.material.imageview.ShapeableImageView
             android:id="@+id/ivLogo"
-            android:layout_width="@dimen/row_logo_size"
-            android:layout_height="@dimen/row_logo_size"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:importantForAccessibility="no"
             android:scaleType="centerCrop"
             app:shapeAppearanceOverlay="@style/ShapeAppearance.WorldRPGNeon.Logo" />
 
-        <!-- Name, mode and address -->
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
+            android:orientation="vertical"
             android:layout_weight="1"
-            android:orientation="vertical">
-
+            android:layout_marginStart="8dp">
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:id="@+id/tvServerName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    style="@style/BrowserText"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:textStyle="bold"
+                        android:textAllCaps="true" />
 
                 <ImageView
                     android:id="@+id/ivLock"
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
-                    android:layout_marginEnd="4dp"
-                    android:contentDescription="@string/passworded"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:importantForAccessibility="yes"
                     android:src="@drawable/ic_lock"
-                    android:visibility="gone"
-                    app:tint="?attr/colorSecondary" />
-
-                <TextView
-                    android:id="@+id/tvServerName"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    android:textAppearance="?attr/textAppearanceTitleMedium"
-                    android:textColor="?attr/colorOnSurface" />
-
+                    app:tint="@color/browser_muted"
+                    android:contentDescription="@string/passworded" />
             </LinearLayout>
 
             <TextView
                 android:id="@+id/tvGameMode"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:ellipsize="end"
+                style="@style/BrowserText.Small"
                 android:maxLines="1"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="?attr/colorOnSurfaceVariant" />
-
-            <TextView
-                android:id="@+id/tvServerAddress"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:ellipsize="middle"
-                android:singleLine="true"
-                android:textAppearance="?attr/textAppearanceBodySmall"
-                android:textColor="?attr/colorOutline" />
-
+                android:ellipsize="end" />
         </LinearLayout>
 
-        <!-- Live stats: players and ping, or querying / offline -->
-        <FrameLayout
+        <TextView
+            android:id="@+id/countries"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginHorizontal="12dp"
-            android:minWidth="88dp">
-
-            <LinearLayout
-                android:id="@+id/statsOnline"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="end|center_vertical"
-                android:gravity="end"
-                android:orientation="vertical">
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <ImageView
-                        android:layout_width="16dp"
-                        android:layout_height="16dp"
-                        android:importantForAccessibility="no"
-                        android:src="@drawable/ic_group"
-                        app:tint="?attr/colorOnSurfaceVariant" />
-
-                    <TextView
-                        android:id="@+id/tvPlayerCount"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:textAppearance="?attr/textAppearanceTitleSmall"
-                        android:textColor="?attr/colorOnSurface" />
-
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <ImageView
-                        android:id="@+id/ivPingDot"
-                        android:layout_width="8dp"
-                        android:layout_height="8dp"
-                        android:importantForAccessibility="no"
-                        android:src="@drawable/ping_dot" />
-
-                    <TextView
-                        android:id="@+id/tvPing"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:textAppearance="?attr/textAppearanceLabelMedium"
-                        android:textColor="?attr/colorOnSurfaceVariant" />
-
-                </LinearLayout>
-
-            </LinearLayout>
-
-            <com.google.android.material.progressindicator.CircularProgressIndicator
-                android:id="@+id/queryProgress"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="end|center_vertical"
-                android:indeterminate="true"
-                android:visibility="gone"
-                app:indicatorSize="20dp"
-                app:trackThickness="2dp" />
-
-            <TextView
-                android:id="@+id/tvOffline"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="end|center_vertical"
-                android:text="@string/offline"
-                android:textAppearance="?attr/textAppearanceLabelLarge"
-                android:textColor="?attr/colorError"
-                android:visibility="gone" />
-
-        </FrameLayout>
+            style="@style/BrowserText.Small"
+            android:maxLines="1"
+            android:visibility="gone" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnFavorite"
-            style="@style/Widget.Material3.Button.IconButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            style="@style/BrowserIcon"
             android:contentDescription="@string/toggle_favorite"
             app:icon="@drawable/ic_star_outline" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnConnect"
-            style="@style/Widget.Material3.Button"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:text="@string/join" />
+            android:orientation="vertical"
+            android:gravity="end"
+            android:layout_marginEnd="8dp">
+            <TextView
+                android:id="@+id/tvPlayerCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                style="@style/BrowserText.Small" />
 
+            <TextView
+                android:id="@+id/tvPing"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                style="@style/BrowserText.Small" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnConnect"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            style="@style/BrowserButton"
+            android:text="@string/browser_connect"
+            app:icon="@drawable/ic_play" />
     </LinearLayout>
-
 </com.google.android.material.card.MaterialCardView>

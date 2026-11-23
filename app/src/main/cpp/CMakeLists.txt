@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(WorldRPGNeon LANGUAGES CXX C)
+project(saonlineneon LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,9 +54,9 @@ add_subdirectory(third_party/hlslparser)
 add_subdirectory(third_party/cryptopp)
 add_subdirectory(third_party/bcrypt)
 
-add_library(WorldRPGNeon SHARED ${NATIVE_SOURCES})
+add_library(saonlineneon SHARED ${NATIVE_SOURCES})
 
-target_include_directories(WorldRPGNeon PRIVATE
+target_include_directories(saonlineneon PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/net
     ${CMAKE_CURRENT_SOURCE_DIR}/net/raknet
@@ -65,7 +65,7 @@ target_include_directories(WorldRPGNeon PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/shared
 )
 
-target_link_libraries(WorldRPGNeon
+target_link_libraries(saonlineneon
     android
     log
     EGL
@@ -81,11 +81,11 @@ target_link_libraries(WorldRPGNeon
 
 # Resolve every native dependency during the Android link
 if(ANDROID)
-    target_link_options(WorldRPGNeon PRIVATE "-Wl,--no-undefined")
+    target_link_options(saonlineneon PRIVATE "-Wl,--no-undefined")
 endif()
 
 # Align LOAD segments to 16KB pages for modern Android compatibility
-target_link_options(WorldRPGNeon PRIVATE
+target_link_options(saonlineneon PRIVATE
     "-Wl,-z,max-page-size=16384"
     "-Wl,-z,common-page-size=16384"
 )
@@ -116,7 +116,7 @@ if(ANDROID)
     add_custom_target(build_neon_gameplay DEPENDS "${quic_out}/libneon_gameplay.so" "${quic_out}/libneon_gameplay.h")
     add_library(neon_gameplay SHARED IMPORTED)
     set_target_properties(neon_gameplay PROPERTIES IMPORTED_LOCATION "${quic_out}/libneon_gameplay.so")
-    add_dependencies(WorldRPGNeon build_neon_gameplay)
-    target_link_libraries(WorldRPGNeon neon_gameplay)
-    target_include_directories(WorldRPGNeon PRIVATE "${quic_out}")
+    add_dependencies(saonlineneon build_neon_gameplay)
+    target_link_libraries(saonlineneon neon_gameplay)
+    target_include_directories(saonlineneon PRIVATE "${quic_out}")
 endif()

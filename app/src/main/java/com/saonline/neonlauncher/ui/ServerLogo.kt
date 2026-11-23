@@ -45,9 +45,11 @@ object ServerLogo {
 
     fun bind(view: ImageView, name: String, logoUrl: String) {
         val url = logoUrl.trim()
-        view.tag = url
         val sizePx = maxOf(view.layoutParams?.width ?: 0, view.width, 1)
         val key = "$url@$sizePx"
+        val request = name to key
+        if (view.tag == request) return
+        view.tag = request
 
         cache.get(key)?.let {
             view.setImageBitmap(it)
@@ -67,7 +69,7 @@ object ServerLogo {
             cache.put(key, bitmap)
             withContext(Dispatchers.Main) {
                 // The view may have been recycled for another server meanwhile.
-                if (view.tag == url) view.setImageBitmap(bitmap)
+                if (view.tag == request) view.setImageBitmap(bitmap)
             }
         }
     }

@@ -62,7 +62,18 @@ class PreferencesManager(context: Context) {
 
     fun isFavorite(key: String): Boolean = ServerAddress.fromKey(key)?.key() in getFavorites()
 
+    fun getRecentServers(): List<String> =
+        prefs.getString(KEY_RECENT_SERVERS, "").orEmpty().lineSequence()
+            .mapNotNull { ServerAddress.fromKey(it)?.key() }.distinct().take(20).toList()
+
+    fun rememberServer(key: String) {
+        val address = ServerAddress.fromKey(key)?.key() ?: return
+        val recent = (listOf(address) + getRecentServers()).distinct().take(20)
+        prefs.edit().putString(KEY_RECENT_SERVERS, recent.joinToString("\n")).apply()
+    }
+
     companion object {
+        private const val KEY_RECENT_SERVERS = "recent_servers"
         private const val PREFS_NAME = "worldrpg_neon_prefs"
 
         private const val KEY_USERNAME = "username"

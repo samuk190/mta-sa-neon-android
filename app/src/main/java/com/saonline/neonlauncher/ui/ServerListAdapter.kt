@@ -2,86 +2,83 @@ package com.saonline.neonlauncher.ui
 
 import android.content.res.ColorStateList
 import android.view.LayoutInflater
-import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.color.MaterialColors
 import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.databinding.ItemServerBinding
 import com.saonline.neonlauncher.network.ServerInfo
 
-/** Server cards. Join (or a tap on the card) opens the join dialog. */
 class ServerListAdapter(
-    private val onJoinClick: (ServerInfo) -> Unit,
-    private val onFavoriteClick: (ServerInfo) -> Unit
-) : ListAdapter<ServerInfo, ServerListAdapter.ServerViewHolder>(ServerDiffCallback()) {
+    private val onSelect: (ServerInfo) -> Unit,
+    private val onJoin: (ServerInfo) -> Unit,
+    private val onFavorite: (ServerInfo) -> Unit
+) : ListAdapter<ServerListAdapter.Row, ServerListAdapter.Holder>(Diff) {
+    data class Row(val server: ServerInfo, val selected: Boolean)
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ServerViewHolder {
-        val binding = ItemServerBinding.inflate(LayoutInflater.from(parent.context), parent, false)
-        return ServerViewHolder(binding)
-    }
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
+        Holder(ItemServerBinding.inflate(LayoutInflater.from(parent.context), parent, false))
 
-    override fun onBindViewHolder(holder: ServerViewHolder, position: Int) {
-        holder.bind(getItem(position))
-    }
+    override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(getItem(position))
 
-    inner class ServerViewHolder(
-        private val binding: ItemServerBinding
-    ) : RecyclerView.ViewHolder(binding.root) {
-
-        fun bind(server: ServerInfo) {
-            val ctx = binding.root.context
-            binding.tvServerName.text = server.name
-            binding.tvServerAddress.text = server.getKey()
-            binding.tvGameMode.text = modeLine(server)
-            binding.tvGameMode.visibility = if (binding.tvGameMode.text.isEmpty()) View.GONE else View.VISIBLE
-            binding.ivLock.visibility = if (server.passworded) View.VISIBLE else View.GONE
-            ServerLogo.bind(binding.ivLogo, server.name, server.logoUrl)
-
-            binding.queryProgress.visibility = if (server.status == ServerInfo.Status.QUERYING) View.VISIBLE else View.GONE
-            binding.tvOffline.visibility = if (server.status == ServerInfo.Status.OFFLINE) View.VISIBLE else View.GONE
-            binding.statsOnline.visibility = if (server.status == ServerInfo.Status.ONLINE) View.VISIBLE else View.INVISIBLE
-            if (server.status == ServerInfo.Status.ONLINE) {
-                binding.tvPlayerCount.text = ctx.getString(R.string.players_count, server.players, server.maxPlayers)
-                binding.tvPing.text = ctx.getString(R.string.ping_ms, server.ping)
-                binding.ivPingDot.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(ctx, pingColor(server.ping)))
+    inner class Holder(private val b: ItemServerBinding) : RecyclerView.ViewHolder(b.root) {
+        fun bind(row: Row) {
+            val server = row.server
+            val ctx = b.root.context
+            fun color(id: Int) = ContextCompat.getColor(ctx, id)
+            b.root.isSelected = row.selected
+            b.root.strokeColor = color(if (row.selected) R.color.browser_amber else R.color.browser_line)
+            b.root.setCardBackgroundColor(color(if (row.selected) R.color.browser_selected else R.color.browser_card))
+            b.tvServerName.text = server.name
+            b.tvGameMode.text = modeLine(server).ifEmpty { server.getKey() }
+            b.ivLock.isVisible = server.passworded
+            ServerLogo.bind(b.ivLogo, server.name, server.logoUrl)
+            val wide = ctx.resources.configuration.screenWidthDp >= 900
+            b.countries.isVisible = wide && server.countries.isNotEmpty()
+            if (b.countries.isVisible) {
+                b.countries.text = server.countries.take(5).joinToString(" ") { country ->
+                    country.uppercase(java.util.Locale.ROOT).map { Character.toChars(0x1F1E6 + (it - 'A')).concatToString() }.joinToString("")
+                }
+                b.countries.contentDescription = server.countries.joinToString(", ")
             }
-
-            binding.btnFavorite.setIconResource(if (server.isFavorite) R.drawable.ic_star else R.drawable.ic_star_outline)
-            binding.btnFavorite.iconTint = ColorStateList.valueOf(
-                MaterialColors.getColor(
-                    binding.btnFavorite,
-                    if (server.isFavorite) com.google.android.material.R.attr.colorSecondary
-                    else com.google.android.material.R.attr.colorOnSurfaceVariant
-                )
-            )
-            binding.btnFavorite.setOnClickListener { onFavoriteClick(server) }
-            binding.btnConnect.setOnClickListener { onJoinClick(server) }
-            binding.cardServer.setOnClickListener { onJoinClick(server) }
+            val online = server.status == ServerInfo.Status.ONLINE
+            b.tvPlayerCount.text = when (server.status) {
+                ServerInfo.Status.ONLINE -> ctx.getString(R.string.players_count, server.players, server.maxPlayers)
+                ServerInfo.Status.OFFLINE -> ctx.getString(R.string.offline)
+                ServerInfo.Status.QUERYING -> ctx.getString(R.string.querying)
+                ServerInfo.Status.DIRECT -> ""
+            }
+            b.tvPing.isVisible = online
+            if (online) {
+                b.tvPing.text = ctx.getString(R.string.ping_ms, server.ping)
+                b.tvPing.setTextColor(color(pingColor(server.ping)))
+            }
+            b.btnFavorite.setIconResource(if (server.isFavorite) R.drawable.ic_star else R.drawable.ic_star_outline)
+            b.btnFavorite.iconTint = ColorStateList.valueOf(color(if (server.isFavorite) R.color.browser_amber else R.color.browser_muted))
+            b.btnFavorite.isSelected = server.isFavorite
+            b.btnFavorite.setOnClickListener { onFavorite(server) }
+            b.btnConnect.setOnClickListener { onJoin(server) }
+            b.root.setOnClickListener { onSelect(server) }
         }
     }
 
-    class ServerDiffCallback : DiffUtil.ItemCallback<ServerInfo>() {
-        override fun areItemsTheSame(oldItem: ServerInfo, newItem: ServerInfo): Boolean =
-            oldItem.getKey() == newItem.getKey()
-
-        override fun areContentsTheSame(oldItem: ServerInfo, newItem: ServerInfo): Boolean =
-            oldItem == newItem
+    private object Diff : DiffUtil.ItemCallback<Row>() {
+        override fun areItemsTheSame(oldItem: Row, newItem: Row) = oldItem.server.getKey() == newItem.server.getKey()
+        override fun areContentsTheSame(oldItem: Row, newItem: Row) = oldItem == newItem
     }
 
     companion object {
         fun pingColor(ping: Int): Int = when {
-            ping <= 0 -> R.color.md_outline
+            ping <= 0 -> R.color.browser_muted
             ping < 100 -> R.color.ping_good
-            ping < 200 -> R.color.ping_fair
+            ping < 200 -> R.color.browser_amber
             else -> R.color.ping_bad
         }
 
-        /** "Game mode - map", whichever the server reported. */
         fun modeLine(server: ServerInfo): String =
-            listOf(server.gameMode, server.mapName).filter { it.isNotBlank() && it != "None" }.joinToString("  -  ")
+            listOf(server.gameMode, server.mapName).filter { it.isNotBlank() && it != "None" }.joinToString("  ·  ")
     }
 }

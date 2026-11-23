@@ -1,0 +1,24 @@
+<resources>
+    <string name="browser_title">Выберите сервер</string>
+    <string name="browser_subtitle">San Andreas Online · Список серверов</string>
+    <string name="browser_all">Все серверы</string>
+    <string name="browser_recent">Недавние</string>
+    <string name="browser_search">Поиск сервера или ввод адреса</string>
+    <string name="browser_filters">Фильтры</string>
+    <string name="browser_online">Только в сети</string>
+    <string name="browser_quick">Быстрый вход</string>
+    <string name="browser_browse">Серверы</string>
+    <string name="browser_quit">Выход</string>
+    <string name="browser_connect">Войти</string>
+    <string name="browser_copy">Копировать IP</string>
+    <string name="browser_copied">Адрес скопирован</string>
+    <string name="browser_endpoint">IP:порт</string>
+    <string name="browser_players">Игроки</string>
+    <string name="browser_ping">Пинг</string>
+    <string name="browser_mode">Режим</string>
+    <string name="browser_map">Карта</string>
+    <string name="browser_version">Версия</string>
+    <string name="browser_languages">Языки</string>
+    <string name="browser_no_recent">Нет недавних серверов</string>
+    <string name="browser_no_match">Совпадений нет</string>
+</resources>

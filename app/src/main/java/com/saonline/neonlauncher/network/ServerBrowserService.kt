@@ -22,7 +22,7 @@ class ServerBrowserService(
 
     sealed class BrowserState {
         object Loading : BrowserState()
-        data class Success(val servers: List<ServerInfo>) : BrowserState()
+        data class Success(val servers: List<ServerInfo>, val catalogueKeys: Set<String>) : BrowserState()
         data class Error(val message: String) : BrowserState()
     }
 
@@ -30,7 +30,7 @@ class ServerBrowserService(
      * Emits the list right away with every server QUERYING, then again each time
      * a query answers or times out.
      */
-    fun fetchServerList(favoriteKeys: Set<String> = emptySet()): Flow<BrowserState> = channelFlow {
+    fun fetchServerList(favoriteKeys: Set<String> = emptySet(), recentKeys: List<String> = emptyList()): Flow<BrowserState> = channelFlow {
         send(BrowserState.Loading)
         val favorites = favoriteKeys.mapNotNullTo(hashSetOf()) { ServerAddress.fromKey(it)?.key() }
         val catalogue = try {
@@ -44,22 +44,25 @@ class ServerBrowserService(
                 addAll(favorites.sorted().mapNotNull(ServerInfo::fromFavoriteKey))
             }
         }
-        val servers = catalogue.distinctBy { it.getKey() }.map {
-            it.copy(status = ServerInfo.Status.QUERYING, isFavorite = it.getKey() in favorites)
+        // A manually saved address remains available in its own tab even when absent from the registry.
+        val catalogueKeys = catalogue.mapTo(hashSetOf()) { it.getKey() }
+        val savedServers = (favorites + recentKeys).mapNotNull(ServerInfo::fromFavoriteKey)
+        val servers = (catalogue + savedServers).distinctBy { it.getKey() }.map {
+            it.copy(isFavorite = it.getKey() in favorites)
         }.toMutableList()
-        send(BrowserState.Success(servers.toList()))
+        send(BrowserState.Success(servers.toList(), catalogueKeys))
 
         val lock = Mutex()
         val permits = Semaphore(12)
         coroutineScope {
-            servers.indices.forEach { index ->
+            servers.indices.filter { servers[it].status != ServerInfo.Status.DIRECT }.forEach { index ->
                 launch {
                     permits.withPermit {
                         val s = servers[index]
                         val result = queryServer(s.ip, s.port)
                         lock.withLock {
                             servers[index] = servers[index].withQuery(result)
-                            send(BrowserState.Success(servers.toList()))
+                            send(BrowserState.Success(servers.toList(), catalogueKeys))
                         }
                     }
                 }

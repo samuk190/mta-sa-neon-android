@@ -20,7 +20,7 @@ The offline GTA engine boots 3D world, CJ character, HUD, and touch controls on 
 |---|---|---|
 | **Android Launcher** | Modern Kotlin UI, server list, settings, JNI bindings, and ARM64 debug APK. | Server browser connecting to real servers. Game session initializes engine rendering within `:engine` process. |
 | **Android Game Engine** | Packaged `libGTASA.so`, `libOpenAL64.so`, and `libSCAnd.so` (War Drum Studios 2.10). | Java/JNI host bound to active generation. Entity creation, streaming, and mutation queues running on the GTA main thread. |
-| **16KB Memory Page APK** | `libWorldRPGNeon.so` configured with 16KB LOAD segment alignment. Prebuilts have 64KB alignment. | Remote build passes packaging audit: static C++ runtime, compressed native libraries extracted upon installation. |
+| **16KB Memory Page APK** | `libsaonlineneon.so` configured with 16KB LOAD segment alignment. Prebuilts have 64KB alignment. | Remote build passes packaging audit: static C++ runtime, compressed native libraries extracted upon installation. |
 | **Network Transport** | `MtaClientTransport` implements OPEN51 datagram, cipher handshake, and bitstream serialization. | Fully replace legacy RakNet stub; end-to-end handshake verified on live servers. |
 | **Server Network Module** | AArch64 Linux `net.so` server binary. | Server reference for packet verification and handshake negotiation. |
 | **Desktop Reference** | `mta_neon_source` repository (reference for packet formats, Lua APIs, and sync structures). | Desktop client acts as ground-truth oracle for network packet captures. |

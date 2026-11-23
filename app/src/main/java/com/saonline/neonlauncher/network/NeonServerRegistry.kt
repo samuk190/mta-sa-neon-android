@@ -67,11 +67,12 @@ object NeonServerRegistry {
             require(serverId.matches(id) && ids.add(id)) { "Invalid or duplicate Neon server ID" }
             val name = string(server, "name", 128)
             string(server, "tagline", 256)
-            string(server, "description", 2048)
-            strings(server.getJSONArray("countries"), 16, 2).forEach { country ->
+            val description = string(server, "description", 2048)
+            val countries = strings(server.getJSONArray("countries"), 16, 2)
+            countries.forEach { country ->
                 require(country.length == 2 && country.all { it in 'a'..'z' || it in 'A'..'Z' })
             }
-            strings(server.getJSONArray("languages"), 16, 64)
+            val languages = strings(server.getJSONArray("languages"), 16, 64)
             if (server.has("public_host")) {
                 val host = string(server, "public_host", 253)
                 require(ServerAddress.normalizeHost(host) == host && '.' in host && host.substringAfterLast('.').first() in 'a'..'z')
@@ -95,7 +96,9 @@ object NeonServerRegistry {
                 require(address.key() == endpoint && address.host.all { it in '0'..'9' || it == '.' }
                     && endpoints.add(endpoint)) { "Invalid or duplicate Neon endpoint" }
                 result += ServerInfo(name = name, ip = address.host, port = address.port,
-                    registryId = id, logoUrl = artwork(server.opt("logo_url") as? String))
+                    registryId = id, logoUrl = artwork(server.opt("logo_url") as? String),
+                    bannerUrl = artwork(server.opt("banner_url") as? String),
+                    description = description, countries = countries, languages = languages)
             }
         }
         // A valid empty catalogue replaces previous entries, just as the desktop does.

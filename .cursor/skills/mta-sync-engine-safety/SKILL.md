@@ -40,7 +40,7 @@ Chat, the transfer box, HUD widgets, Lua GUI, and asset loading crash for other 
 
 - Prove the packet with `tools/headless` before the phone. That target replaces `GameEngine.cpp` with `game_script.cpp`. It catches a bad bitstream. An engine crash still requires the phone.
 - On device, keep the fault address, the `libGTASA` base, and the last ped or vehicle `DIAG`. Map the fault to a symbol, then to the last apply in `ApplyRemotePeds` or `ApplyRemoteSeats`. A successful compile is not acceptance.
-- Rebuild with `./gradlew :app:assembleDebug` and no `clean`. One changed `.cpp` recompiles and relinks `libWorldRPGNeon.so`. The new library applies on the next process start.
+- Rebuild with `./gradlew :app:assembleDebug` and no `clean`. One changed `.cpp` recompiles and relinks `libsaonlineneon.so`. The new library applies on the next process start.
 - To test whether remote apply is the fault, restart once with the word `noremote` in `/data/data/com.saonline.neonlauncher/files/neon_debug_flags`. The file is read once per process. The other words are `noheap`, `nolua`, `noresources`, `nodx`, and `notrigger`.
 
 ## Common misses

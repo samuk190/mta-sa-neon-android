@@ -1,0 +1,24 @@
+<resources>
+    <string name="browser_title">Escolha seu servidor</string>
+    <string name="browser_subtitle">San Andreas Online · Navegador de servidores</string>
+    <string name="browser_all">Todos</string>
+    <string name="browser_recent">Recentes</string>
+    <string name="browser_search">Buscar servidor ou digitar endereço</string>
+    <string name="browser_filters">Filtros</string>
+    <string name="browser_online">Somente online</string>
+    <string name="browser_quick">Conexão rápida</string>
+    <string name="browser_browse">Servidores</string>
+    <string name="browser_quit">Sair</string>
+    <string name="browser_connect">Conectar</string>
+    <string name="browser_copy">Copiar IP</string>
+    <string name="browser_copied">Endereço copiado</string>
+    <string name="browser_endpoint">IP:Porta</string>
+    <string name="browser_players">Jogadores</string>
+    <string name="browser_ping">Ping</string>
+    <string name="browser_mode">Modo</string>
+    <string name="browser_map">Mapa</string>
+    <string name="browser_version">Versão</string>
+    <string name="browser_languages">Idiomas</string>
+    <string name="browser_no_recent">Nenhum servidor recente</string>
+    <string name="browser_no_match">Nenhum servidor corresponde à busca</string>
+</resources>

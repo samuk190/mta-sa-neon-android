@@ -9,7 +9,7 @@ from pathlib import Path
 
 PAGE_SIZE = 16384
 ARM64 = 183
-REQUIRED = {"libWorldRPGNeon.so", "libGTASA.so", "libOpenAL64.so", "libSCAnd.so"}
+REQUIRED = {"libsaonlineneon.so", "libGTASA.so", "libOpenAL64.so", "libSCAnd.so"}
 
 
 def audit_elf(data, name):

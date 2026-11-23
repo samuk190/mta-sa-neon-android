@@ -1,27 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Landscape-first: a navigation rail keeps the full screen height for content. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/rootLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?android:attr/colorBackground"
-    android:orientation="horizontal">
-
-    <com.google.android.material.navigationrail.NavigationRailView
-        android:id="@+id/navigationRail"
-        android:layout_width="wrap_content"
-        android:layout_height="match_parent"
-        android:background="?attr/colorSurfaceContainerLow"
-        app:headerLayout="@layout/rail_header"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/bottom_navigation_menu"
-        app:menuGravity="center" />
-
+    android:orientation="vertical"
+    android:background="@color/browser_canvas">
     <FrameLayout
         android:id="@+id/fragmentContainer"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
         android:layout_weight="1" />
 
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/browser_line" />
+
+    <HorizontalScrollView
+        android:id="@+id/dock"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="true"
+        android:scrollbars="none"
+        android:background="@color/browser_card">
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:gravity="end|center_vertical"
+            android:paddingHorizontal="12dp">
+            <TextView
+                android:id="@+id/quickConnect"
+                style="@style/BrowserText.Tab"
+                android:text="@string/browser_quick" />
+
+            <TextView
+                android:id="@+id/nav_servers"
+                style="@style/BrowserText.Tab"
+                android:text="@string/browser_browse" />
+
+            <TextView
+                android:id="@+id/nav_settings"
+                style="@style/BrowserText.Tab"
+                android:text="@string/settings" />
+
+            <TextView
+                android:id="@+id/quit"
+                style="@style/BrowserText.Tab"
+                android:text="@string/browser_quit" />
+        </LinearLayout>
+    </HorizontalScrollView>
 </LinearLayout>

@@ -69,7 +69,7 @@ bool AntiCheatValidator::initialize() {
         char line[512];
         uintptr_t selfBase = 0;
         while (fgets(line, sizeof(line), maps)) {
-            if (std::strstr(line, "libWorldRPGNeon.so") && std::strstr(line, "r-xp")) {
+            if (std::strstr(line, "libsaonlineneon.so") && std::strstr(line, "r-xp")) {
                 char* end = nullptr;
                 selfBase = static_cast<uintptr_t>(std::strtoull(line, &end, 16));
                 break;
@@ -89,7 +89,7 @@ bool AntiCheatValidator::initialize() {
         maps = fopen("/proc/self/maps", "r");
         if (maps) {
             while (fgets(line, sizeof(line), maps)) {
-                if (std::strstr(line, "libWorldRPGNeon.so") && std::strstr(line, "r-xp")) {
+                if (std::strstr(line, "libsaonlineneon.so") && std::strstr(line, "r-xp")) {
                     foundRx = true;
                     break;
                 }

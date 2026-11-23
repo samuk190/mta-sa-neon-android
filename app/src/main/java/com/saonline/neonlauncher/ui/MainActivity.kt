@@ -3,14 +3,13 @@ package com.saonline.neonlauncher.ui
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import android.widget.ImageView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
-import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -23,6 +22,7 @@ import com.saonline.neonlauncher.network.JoinProtocolSettings
 import com.saonline.neonlauncher.game.EngineDiagnostics
 import com.saonline.neonlauncher.game.GameActivity
 import com.saonline.neonlauncher.network.ServerInfo
+import com.saonline.neonlauncher.utils.PreferencesManager
 import com.saonline.neonlauncher.utils.NativeAssetBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -49,7 +49,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        // The old rail stored a removed FavoritesFragment in the fragment-manager snapshot.
+        val state = savedInstanceState?.takeUnless { it.containsKey("launcher_nav_item") }
+        super.onCreate(state)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -67,81 +69,61 @@ class MainActivity : AppCompatActivity() {
 
         title = BuildConfig.LAUNCHER_TITLE
         applyWindowInsets()
-        setupRailHeader()
-        setupTabs(savedInstanceState)
-        setupNavigation()
+        setupNavigation(state)
+        binding.quickConnect.setOnClickListener {
+            showSettings(false)
+            val browser = supportFragmentManager.findFragmentByTag("tab_servers") as ServerBrowserFragment
+            browser.openAddressDialog(quick = true)
+        }
+        binding.quit.setOnClickListener { finish() }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putInt(STATE_NAV_ITEM, binding.navigationRail.selectedItemId)
+        outState.putBoolean("settings_open", binding.navSettings.isSelected)
         super.onSaveInstanceState(outState)
     }
 
-    /**
-     * Edge to edge: the rail background runs under the status bar and the
-     * camera cutout, and the content is padded so nothing sits beneath them.
-     */
     private fun applyWindowInsets() {
+        WindowCompat.getInsetsController(window, binding.root).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
         ViewCompat.setOnApplyWindowInsetsListener(binding.rootLayout) { _, insets ->
-            val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-            )
-            binding.navigationRail.updatePadding(left = bars.left, top = bars.top, bottom = bars.bottom)
-            binding.fragmentContainer.updatePadding(top = bars.top, right = bars.right, bottom = bars.bottom)
-            WindowInsetsCompat.CONSUMED
+            val bars = insets.getInsets(WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
+            binding.rootLayout.updatePadding(top = bars.top, bottom = bars.bottom)
+            val settings = binding.navSettings.isSelected
+            binding.fragmentContainer.updatePadding(left = if (settings) bars.left else 0, right = if (settings) bars.right else 0)
+            binding.dock.updatePadding(left = bars.left, right = bars.right)
+            insets
         }
     }
 
-    private fun setupRailHeader() {
-        val logo = binding.navigationRail.headerView?.findViewById<ImageView>(R.id.railLogo) ?: return
-        logo.contentDescription = BuildConfig.DEFAULT_SERVER_NAME
-        ServerLogo.bind(logo, BuildConfig.DEFAULT_SERVER_NAME, BuildConfig.DEFAULT_SERVER_LOGO_URL)
+    private fun setupNavigation(saved: Bundle?) {
+        val fm = supportFragmentManager
+        if (fm.findFragmentByTag("tab_servers") == null) {
+            fm.beginTransaction()
+                .add(R.id.fragmentContainer, ServerBrowserFragment(), "tab_servers")
+                .add(R.id.fragmentContainer, SettingsFragment(), "tab_settings")
+                .commitNow()
+        }
+        binding.navServers.setOnClickListener { showSettings(false) }
+        binding.navSettings.setOnClickListener { showSettings(true) }
+        showSettings(saved?.getBoolean("settings_open") == true)
     }
 
-    /**
-     * The three tabs live in one container; the selected one is shown and resumed,
-     * the others hidden and paused. ViewPager2 is not used: with swiping off it added
-     * nothing, and its page recycling cancelled taps on the server cards
-     * (RecyclerView.removeDetachedView -> ViewGroup.cancelTouchTarget during a remeasure).
-     */
-    private val tabTags = listOf("tab_servers", "tab_favorites", "tab_settings")
-
-    private fun setupTabs(savedInstanceState: Bundle?) {
-        if (savedInstanceState == null) {
-            val tx = supportFragmentManager.beginTransaction().setReorderingAllowed(true)
-            listOf(ServerBrowserFragment(), FavoritesFragment(), SettingsFragment()).forEachIndexed { i, f ->
-                tx.add(R.id.fragmentContainer, f, tabTags[i])
-            }
-            tx.commitNow()
-        }
-        val ids = listOf(R.id.nav_servers, R.id.nav_favorites, R.id.nav_settings)
-        binding.navigationRail.selectedItemId = savedInstanceState?.getInt(STATE_NAV_ITEM, R.id.nav_servers)
-            ?: R.id.nav_servers
-        showTab(ids.indexOf(binding.navigationRail.selectedItemId).coerceAtLeast(0))
-    }
-
-    private fun showTab(index: Int) {
-        val tx = supportFragmentManager.beginTransaction().setReorderingAllowed(true)
-        tabTags.forEachIndexed { i, tag ->
-            val f = supportFragmentManager.findFragmentByTag(tag) ?: return@forEachIndexed
-            if (i == index) {
-                tx.show(f).setMaxLifecycle(f, Lifecycle.State.RESUMED)
-            } else {
-                tx.hide(f).setMaxLifecycle(f, Lifecycle.State.STARTED)
-            }
-        }
-        tx.commit()
-    }
-
-    private fun setupNavigation() {
-        binding.navigationRail.setOnItemSelectedListener { item ->
-            when (item.itemId) {
-                R.id.nav_servers -> { showTab(0); true }
-                R.id.nav_favorites -> { showTab(1); true }
-                R.id.nav_settings -> { showTab(2); true }
-                else -> false
-            }
-        }
+    private fun showSettings(settings: Boolean) {
+        binding.navServers.isSelected = !settings
+        binding.navSettings.isSelected = settings
+        ViewCompat.requestApplyInsets(binding.rootLayout)
+        val fm = supportFragmentManager
+        val browser = fm.findFragmentByTag("tab_servers") ?: return
+        val options = fm.findFragmentByTag("tab_settings") ?: return
+        val visible = if (settings) options else browser
+        val hidden = if (settings) browser else options
+        fm.beginTransaction().setReorderingAllowed(true)
+            .hide(hidden).setMaxLifecycle(hidden, Lifecycle.State.STARTED)
+            .show(visible).setMaxLifecycle(visible, Lifecycle.State.RESUMED)
+            .commitNow()
     }
 
     /**
@@ -167,6 +149,7 @@ class MainActivity : AppCompatActivity() {
                     putExtra(GameActivity.EXTRA_SERVER_NAME, server.name)
                     putExtra(JoinProtocolSettings.EXTRA_JOIN_PROFILE, JoinProtocolSettings.read(this@MainActivity, server.ip, server.port))
                 })
+                PreferencesManager(this@MainActivity).rememberServer(server.getKey())
             } finally {
                 checkingGameAssets = false
             }
@@ -179,13 +162,9 @@ class MainActivity : AppCompatActivity() {
             .setMessage(R.string.game_setup_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.sync_assets) { _, _ ->
-                binding.navigationRail.selectedItemId = R.id.nav_settings
-                (supportFragmentManager.findFragmentByTag(tabTags[2]) as? SettingsFragment)?.syncGameAssets()
+                showSettings(true)
+                (supportFragmentManager.findFragmentByTag("tab_settings") as? SettingsFragment)?.syncGameAssets()
             }
             .show()
-    }
-
-    private companion object {
-        const val STATE_NAV_ITEM = "launcher_nav_item"
     }
 }
