@@ -1797,6 +1797,7 @@ static int DestroyElement(lua_State* L) {
     Args args{L};
     uint32_t id = 0;
     if (!args.gui(id, nullptr)) return Reject(L, "destroyElement", args, false);
+    ActiveVmFireDestroySubtree(L, id, GuiIsElement);
     lua_pushboolean(L, GuiDestroy(id) ? 1 : 0);
     return 1;
 }
@@ -1812,6 +1813,14 @@ static int DestroyElementDispatch(lua_State* L) {
         return 1;
     }
     const uint32_t id = ElementIdOf(L, 1);
+    // CElementDeleter::Delete fires onClientElementDestroy first, for any element the
+    // script may delete (CStaticFunctionDefinitions::DestroyElement only deletes
+    // client-created ones).
+    if (GuiIsElement(id)) ActiveVmFireDestroySubtree(L, id, GuiIsElement);
+    else if (ClientCreatedElement(id))
+        ActiveVmFireDestroySubtree(L, id, [](uint32_t e) { return ClientCreatedElement(e) || GuiIsElement(e); });
+    // DIAG: script peds, sounds and dx elements are not in the element tree, so
+    // their destroyElement fires no onClientElementDestroy yet.
     if (WorldRPG::Game::ReleaseScriptPed(id)) {
         lua_pushboolean(L, 1);
         return 1;

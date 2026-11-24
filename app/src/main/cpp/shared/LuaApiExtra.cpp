@@ -378,7 +378,49 @@ int DebugMessage(lua_State* L) {
     return 1;
 }
 
-// getElementData(element, key): values set with setElementData first, then server data.
+// Pushes what getElementData(id, key) returns: the value setElementData stored on
+// this client, else the server's value, else nil. Desktop keeps one store per
+// element; a server change replaces the client value (ApplyServerElementData).
+void PushElementDataValue(lua_State* L, uint32_t id, const char* key) {
+    lua_getfield(L, LUA_REGISTRYINDEX, kElementDataKey);
+    if (lua_istable(L, -1)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(id));
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, key);
+            if (!lua_isnil(L, -1)) {
+                lua_replace(L, -3);
+                lua_pop(L, 1);
+                return;
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    double number = 0;
+    std::string text;
+    bool isNumber = false;
+    bool isBoolean = false;
+    bool isElement = false;
+    if (!WorldRPG::ServerWorld::GetData(id, key, number, text, isNumber, &isBoolean, &isElement)) {
+        lua_pushnil(L);
+        return;
+    }
+    if (isElement) PushElement(L, static_cast<uint32_t>(number));
+    else if (isBoolean) lua_pushboolean(L, number != 0 ? 1 : 0);
+    else if (isNumber) lua_pushnumber(L, number);
+    else lua_pushlstring(L, text.data(), text.size());
+}
+
+void PushDataValue(lua_State* L, const WorldRPG::ServerWorld::ElementDataValue& value) {
+    if (value.element) PushElement(L, static_cast<uint32_t>(value.value));
+    else if (value.boolean) lua_pushboolean(L, value.value != 0 ? 1 : 0);
+    else if (value.number) lua_pushnumber(L, value.value);
+    else lua_pushlstring(L, value.text.data(), value.text.size());
+}
+
+// getElementData(element, key)
 int GetElementData(lua_State* L) {
     uint32_t id = WorldRPG::ServerWorld::LocalPlayer();
     if (lua_istable(L, 1)) {
@@ -388,29 +430,7 @@ int GetElementData(lua_State* L) {
     }
     const char* key = luaL_checkstring(L, 2);
     lua_settop(L, 2);
-    lua_getfield(L, LUA_REGISTRYINDEX, kElementDataKey);
-    if (lua_istable(L, -1)) {
-        lua_pushinteger(L, static_cast<lua_Integer>(id));
-        lua_rawget(L, -2);
-        if (lua_istable(L, -1)) {
-            lua_getfield(L, -1, key);
-            if (!lua_isnil(L, -1)) return 1;
-        }
-    }
-    lua_settop(L, 2);
-    double number = 0;
-    std::string text;
-    bool isNumber = false;
-    bool isBoolean = false;
-    bool isElement = false;
-    if (!WorldRPG::ServerWorld::GetData(id, key, number, text, isNumber, &isBoolean, &isElement)) {
-        lua_pushnil(L);
-        return 1;
-    }
-    if (isElement) PushElement(L, static_cast<uint32_t>(number));
-    else if (isBoolean) lua_pushboolean(L, number != 0 ? 1 : 0);
-    else if (isNumber) lua_pushnumber(L, number);
-    else lua_pushlstring(L, text.data(), text.size());
+    PushElementDataValue(L, id, key);
     return 1;
 }
 
@@ -439,8 +459,21 @@ int SetElementData(lua_State* L) {
         lua_pushvalue(L, -2);
         lua_rawset(L, -4);
     }
+    PushElementDataValue(L, id, key);  // old value, for onClientElementDataChange
+    const int old = lua_gettop(L);
+    // CStaticFunctionDefinitions::SetElementData sets (and fires the event) only when the
+    // value changes, so a handler that writes the same value back does not recurse.
+    if (lua_rawequal(L, old, 3)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     lua_pushvalue(L, 3);
-    lua_setfield(L, -2, key);
+    lua_setfield(L, -3, key);
+    // CClientEntity::SetCustomData (CClientEntity.cpp 473-499): key, old value, new value.
+    lua_pushstring(L, key);
+    lua_pushvalue(L, old);
+    lua_pushvalue(L, 3);
+    ActiveVmFireElementEvent(L, "onClientElementDataChange", id, 3);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -794,6 +827,55 @@ uint32_t ElementIdOf(lua_State* L, int index) {
     const uint32_t id = lua_isinteger(L, -1) ? static_cast<uint32_t>(lua_tointeger(L, -1)) : 0;
     lua_pop(L, 1);
     return id;
+}
+
+// A server custom data change (ServerWorld::LifecycleHooks::dataChange), on the
+// primary state. The client's own value for that key goes: desktop has one store.
+void ApplyServerElementData(lua_State* L, const ServerWorld::ElementDataChange& change) {
+    const int top = lua_gettop(L);
+    if (!lua_checkstack(L, 8)) return;
+    const char* key = change.key.c_str();
+    // The value scripts saw before is the client's own value when it had one;
+    // that value is dropped so getElementData returns the server's from now on.
+    lua_pushnil(L);
+    const int old = top + 1;
+    bool clientOld = false;
+    lua_getfield(L, LUA_REGISTRYINDEX, kElementDataKey);
+    if (lua_istable(L, -1)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(change.id));
+        lua_rawget(L, -2);
+        if (lua_istable(L, -1)) {
+            lua_getfield(L, -1, key);
+            if (!lua_isnil(L, -1)) {
+                clientOld = true;
+                lua_replace(L, old);
+                lua_pushnil(L);
+                lua_setfield(L, -2, key);
+            }
+        }
+    }
+    lua_settop(L, old);
+    if (!clientOld && change.hadOld) {
+        lua_pop(L, 1);
+        PushDataValue(L, change.oldValue);
+    }
+    lua_pushstring(L, key);
+    lua_pushvalue(L, old);
+    if (change.hasNew) PushDataValue(L, change.newValue);
+    else lua_pushnil(L);
+    ActiveVmFireElementEvent(L, "onClientElementDataChange", change.id, 3);
+    lua_settop(L, top);
+}
+
+void DropClientElementData(lua_State* L, uint32_t id) {
+    if (!L || !lua_checkstack(L, 4)) return;
+    lua_getfield(L, LUA_REGISTRYINDEX, kElementDataKey);
+    if (lua_istable(L, -1)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(id));
+        lua_pushnil(L);
+        lua_rawset(L, -3);
+    }
+    lua_pop(L, 1);
 }
 
 void InstallExtraBindings(lua_State* L) {

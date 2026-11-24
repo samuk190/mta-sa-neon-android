@@ -204,7 +204,7 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
     }
     switch (func) {
         case Rpc::SetElementData:
-            // Any element type (CElementRPCs.cpp:84-102). onClientElementDataChange is not fired yet.
+            // Any element type (CElementRPCs.cpp:84-102). ServerWorld fires onClientElementDataChange (LifecycleHooks).
             return WorldRPG::ServerWorld::ReadSetElementDataRpc(id, reader);
         case Rpc::RemoveElementData:
             return WorldRPG::ServerWorld::ReadRemoveElementDataRpc(id, reader);
@@ -568,7 +568,7 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
 // PACKET_ID_PLAYER_WASTED (27) and PACKET_ID_PED_WASTED (64), both read by CPacketHandler::Packet_PlayerWasted
 // (CPacketHandler.cpp 1277-1366): ElementID, killer ElementID, SWeaponTypeSync (6 bits), SBodypartSync (3 bits), stealth
 // bit, u8 time context, ReadCompressed AssocGroupId, ReadCompressed AnimationId. Then SetSyncTimeContext and Kill.
-// The local player's own death is decided locally and is not touched here. The wasted Lua events are not fired.
+// The local player's own death is decided locally and is not touched here. HandleWasted fires the wasted Lua events.
 bool HandleWasted(const uint8_t* body, size_t length, size_t bits, uint8_t packet) {
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint32_t id = 0, killer = 0, group = 0, anim = 0;
@@ -584,13 +584,23 @@ bool HandleWasted(const uint8_t* body, size_t length, size_t bits, uint8_t packe
     WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
     PKT_LOGI("Wasted: packet %u id=%u killer=%u weapon=%u part=%u stealth=%d anim=%u/%u", static_cast<unsigned>(packet), id,
              killer, static_cast<unsigned>(weapon & 0x3Fu), static_cast<unsigned>(part & 0x7u), stealth ? 1 : 0, group, anim);
+    // onClientPlayerWasted / onClientPedWasted (CPacketHandler.cpp 1333-1357). Desktop fires it for the local player
+    // when it sends its own death, and here only when that did not happen; the phone does not fire it on the local
+    // death, so the server's packet always does.
+    const bool player = id == WorldRPG::ServerWorld::LocalPlayer() || WorldRPG::ServerWorld::IsKnownPlayer(id);
+    auto fire = [&] {
+        WorldRPG::Script::ActiveVmFireWasted(player, id, killer, weapon & 0x3F, (part & 0x7) + 3, stealth,
+                                             static_cast<int>(group), static_cast<int>(anim));
+    };
     if (id == WorldRPG::ServerWorld::LocalPlayer()) {
         // Desktop runs Kill on the local player too (CPacketHandler.cpp 1319-1331, "needs to be done on the local
         // player to avoid desync"). Not wired on the phone: no local CTaskComplexDie hook.
         PKT_LOGI("DIAG WASTED local player: CClientPed::Kill not ported");
+        fire();
         return true;
     }
     WorldRPG::Game::NoteRemoteWasted(id, weapon & 0x3F, static_cast<int>(group), static_cast<int>(anim));
+    fire();
     return true;
 }
 
@@ -691,6 +701,7 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
         WorldRPG::Game::ApplyServerSpawn(x, y, z);
         WorldRPG::JniBridge::PostGameLine(2, "100|");
         WorldRPG::JniBridge::PostGameLine(1, line);
+        WorldRPG::Script::ActiveVmFirePlayerSpawn(playerId, team);  // CPacketHandler.cpp 1267-1273
         return true;
     }
     if (haveDimension) {
@@ -701,6 +712,7 @@ bool HandlePlayerSpawn(const uint8_t* body, size_t length, size_t bits) {
     float heading = rotation;
     if (std::fabs(heading) > 6.5f) heading = heading * 3.14159265f / 180.f;
     WorldRPG::Game::NoteRemotePed(playerId, x, y, z, heading);
+    WorldRPG::Script::ActiveVmFirePlayerSpawn(playerId, team);  // CPacketHandler.cpp 1267-1273
     return true;
 }
 
@@ -1697,7 +1709,12 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
                 if (!ReadElementId(reader, quitId)) break;
                 if (WorldRPG::ServerWorld::IsKnownPlayer(quitId)) {
                     if (offset) PKT_LOGI("DIAG PLAYER_QUIT id=%u found at byte %zu", quitId, offset);
-                    WorldRPG::ServerWorld::OnPlayerQuit(quitId);
+                    // SQuitReasonSync (3 bits) -> CClientGame::QuitPlayer's reason text (CClientGame.cpp 3484-3505).
+                    static const char* const kReasons[] = {"Quit", "Kicked", "Banned", "Bad Connection", "Timed Out"};
+                    uint8_t reason = 0xFF;
+                    const char* text = "Unknown";
+                    if (reader.ReadBits(&reason, 3) && (reason & 7u) < 5) text = kReasons[reason & 7u];
+                    WorldRPG::ServerWorld::OnPlayerQuit(quitId, text);
                     return true;
                 }
             }

@@ -9,9 +9,17 @@
 
 struct lua_State;
 
+namespace WorldRPG::ServerWorld { struct ElementDataChange; }
+
 namespace WorldRPG::Script {
 
 void InstallExtraBindings(lua_State* L);
+// Applies a server custom data change to the script store and fires
+// onClientElementDataChange (CClientEntity::SetCustomData / DeleteCustomData).
+void ApplyServerElementData(lua_State* L, const ServerWorld::ElementDataChange& change);
+// Forgets the values setElementData stored for an element that is gone, so a reused id starts clean.
+// L is the primary state.
+void DropClientElementData(lua_State* L, uint32_t id);
 
 // Element tables are {id = <id>, element = true}, as every element binding expects.
 void PushElement(lua_State* L, uint32_t id);

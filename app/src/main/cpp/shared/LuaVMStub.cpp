@@ -2417,6 +2417,12 @@ LuaVMStub::~LuaVMStub() {
     shutdown();
 }
 
+// ServerWorld lifecycle hooks (defined with the other network events below).
+static void OnPlayerJoinHook(uint32_t id);
+static void OnPlayerQuitHook(uint32_t id, const char* reason);
+static void OnElementDestroyHook(uint32_t id);
+static void OnDataChangeHook(const ServerWorld::ElementDataChange& change);
+
 bool LuaVMStub::initialize() {
     if (pImpl_->initialized) return true;
 
@@ -2439,6 +2445,14 @@ bool LuaVMStub::initialize() {
     // CClientGame constructor: m_bFocused = g_pCore->IsFocused(), with no focus event.
     MtaWindowAdoptFocus();
     GuiSetFocusHook(OnGuiFocusHook);
+    {
+        ServerWorld::LifecycleHooks hooks;
+        hooks.playerJoin = OnPlayerJoinHook;
+        hooks.playerQuit = OnPlayerQuitHook;
+        hooks.elementDestroy = OnElementDestroyHook;
+        hooks.dataChange = OnDataChangeHook;
+        ServerWorld::SetLifecycleHooks(hooks);
+    }
     pImpl_->initialized = true;
     // The Lua 5.1 VM is created now, before the session has elements, binds or
     // commands: installing the script API resets those (ResetCatalog,
@@ -3220,6 +3234,87 @@ void ActiveVmFirePlayerNetworkStatus(uint32_t player, uint8_t type, uint32_t tic
     lua_pushnumber(L, ticks);
     fireHandlers("onClientPlayerNetworkStatus", 2, player);
     lua_setglobal(L, "source");
+}
+
+bool ActiveVmFireElementEvent(lua_State* L, const char* name, uint32_t source, int nargs) {
+    if (!L || !source || source == 0xFFFFFFFFu) {
+        if (L) lua_pop(L, nargs);
+        return true;
+    }
+    const auto found = g_dx.handlers.find(name);
+    if (found == g_dx.handlers.end() || found->second.empty()) {
+        lua_pop(L, nargs);
+        return true;
+    }
+    lua_getglobal(L, "source");
+    lua_insert(L, -nargs - 1);
+    PushElement(L, source);
+    lua_setglobal(L, "source");
+    const bool ran = fireHandlers(name, nargs, source, L, true);
+    lua_setglobal(L, "source");
+    return ran;
+}
+
+static bool KnownEventElement(uint32_t id) {
+    return id != 0 && id != 0xFFFFFFFFu &&
+           (id == ServerWorld::LocalPlayer() || ServerWorld::IsKnownPlayer(id) || ServerWorld::ModelOf(id) >= 0 ||
+            KnownClientElement(id));
+}
+
+void ActiveVmFirePlayerSpawn(uint32_t player, uint32_t team) {
+    lua_State* L = g_dx.L;
+    if (!L) return;
+    // CPacketHandler::Packet_PlayerSpawn (CPacketHandler.cpp 1267-1273): the team, or false.
+    if (KnownEventElement(team)) PushElement(L, team);
+    else lua_pushboolean(L, 0);
+    ActiveVmFireElementEvent(L, "onClientPlayerSpawn", player, 1);
+}
+
+void ActiveVmFireWasted(bool player, uint32_t ped, uint32_t killer, int weapon, int bodypart, bool stealth,
+                        int animGroup, int animId) {
+    lua_State* L = g_dx.L;
+    if (!L) return;
+    // CPacketHandler::Packet_PlayerWasted (CPacketHandler.cpp 1336-1357). The 6-bit weapon and the
+    // 3-bit body part (SBodypartSync adds 3) are never 0xFF on the wire, so both are numbers.
+    if (KnownEventElement(killer)) PushElement(L, killer);
+    else lua_pushboolean(L, 0);
+    lua_pushnumber(L, weapon);
+    lua_pushnumber(L, bodypart);
+    lua_pushboolean(L, stealth ? 1 : 0);
+    lua_pushnumber(L, animGroup);
+    lua_pushnumber(L, animId);
+    ActiveVmFireElementEvent(L, player ? "onClientPlayerWasted" : "onClientPedWasted", ped, 6);
+}
+
+static void OnPlayerJoinHook(uint32_t id) { ActiveVmFireElementEvent(g_dx.L, "onClientPlayerJoin", id, 0); }
+
+static void OnPlayerQuitHook(uint32_t id, const char* reason) {
+    if (!g_dx.L) return;
+    lua_pushstring(g_dx.L, reason);
+    ActiveVmFireElementEvent(g_dx.L, "onClientPlayerQuit", id, 1);
+    DropClientElementData(Vms::Primary(), id);
+}
+
+static void OnElementDestroyHook(uint32_t id) {
+    ActiveVmFireElementEvent(g_dx.L, "onClientElementDestroy", id, 0);
+    DropClientElementData(Vms::Primary(), id);
+}
+
+void ActiveVmFireDestroySubtree(lua_State* L, uint32_t id, bool (*deletes)(uint32_t)) {
+    // CElementDeleter::Delete: the element's event, then DeleteClientChildren deletes
+    // (and fires for) each child, in tree order. Only elements that will be deleted.
+    if (!deletes(id)) return;
+    std::vector<uint32_t> doomed{id};
+    std::vector<uint32_t> below;
+    CollectEventDescendants(id, below);
+    for (uint32_t child : below)
+        if (deletes(child)) doomed.push_back(child);
+    for (uint32_t element : doomed) ActiveVmFireElementEvent(L, "onClientElementDestroy", element, 0);
+    for (uint32_t element : doomed) DropClientElementData(Vms::Primary(), element);
+}
+
+static void OnDataChangeHook(const ServerWorld::ElementDataChange& change) {
+    if (Vms::Primary()) ApplyServerElementData(Vms::Primary(), change);
 }
 
 void ActiveVmFireVehicleSeat(bool entered, uint32_t ped, uint32_t vehicle, uint8_t seat) {

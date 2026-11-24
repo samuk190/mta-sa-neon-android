@@ -48,6 +48,42 @@ std::vector<uint32_t> g_teamOrder;
 std::unordered_map<uint32_t, Attachment> g_attachments;
 std::vector<uint32_t> g_attachmentOrder;
 std::unordered_map<uint32_t, std::unordered_map<std::string, Datum>> g_data;
+LifecycleHooks g_hooks;
+
+ElementDataValue ToValue(const Datum& datum) {
+    ElementDataValue value;
+    value.number = datum.number;
+    value.boolean = datum.boolean;
+    value.value = datum.value;
+    value.text = datum.text;
+    value.element = datum.element;
+    return value;
+}
+
+// Sets or removes g_data[id][key] (caller holds g_lock) and describes the change.
+ElementDataChange ChangeData(uint32_t id, const std::string& key, const Datum* value) {
+    ElementDataChange change;
+    change.id = id;
+    change.key = key;
+    auto& data = g_data[id];
+    if (const auto old = data.find(key); old != data.end()) {
+        change.hadOld = true;
+        change.oldValue = ToValue(old->second);
+    }
+    if (value) {
+        change.hasNew = true;
+        change.newValue = ToValue(*value);
+        data[key] = *value;
+    } else {
+        data.erase(key);
+    }
+    return change;
+}
+
+void FireDataChanges(const std::vector<ElementDataChange>& changes) {
+    if (!g_hooks.dataChange) return;
+    for (const auto& change : changes) g_hooks.dataChange(change);
+}
 // Player nicks. PLAYER_LIST reads the nick and this keeps it. The local nick is
 // noted at join. Not part of Visual, so noting the local nick does not invent a pose.
 std::unordered_map<uint32_t, std::string> g_nicks;
@@ -800,11 +836,12 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> attachments;
+    std::vector<ElementDataChange> dataChanges;  // SetCustomData in Packet_EntityAdd fires onClientElementDataChange
     struct Seat { uint32_t ped, vehicle; uint8_t index; };
     std::vector<Seat> seats;
     for (auto& [common, visual] : batch.entities) {
         if (common.id == 0 || common.id == 0xFFFFFFFFu) continue;
-        for (auto& [key, value] : common.customData) g_data[common.id][key] = std::move(value);
+        for (auto& [key, value] : common.customData) dataChanges.push_back(ChangeData(common.id, key, &value));
         visual.interior = common.interior;
         visual.syncTimeContext = common.syncTimeContext;
         visual.dimension = static_cast<uint16_t>(common.dimension);
@@ -835,6 +872,7 @@ void OnEntityAdd(const uint8_t* body, size_t length, size_t bits) {
         Game::NoteRemoteSeat(seat.ped, seat.vehicle, seat.index);
     }
     DIAG("ENTITY_ADD stored %zu/%u", batch.entities.size(), static_cast<unsigned>(count));
+    FireDataChanges(dataChanges);
 }
 
 // CPacketHandler::Packet_EntityRemove (CPacketHandler.cpp 4491-4566) reads ids until the stream ends
@@ -845,12 +883,20 @@ void OnEntityRemove(const uint8_t* body, size_t length, size_t bits) {
     uint32_t id = 0;
     int removed = 0;
     while (ReadElementId(reader, id)) {
+        bool known = false;
         {
             std::lock_guard<std::mutex> lock(g_lock);
             if (IsListedPlayer(id)) {
                 DIAG("ENTITY_REMOVE id=%u is a player (desktop protocol error 45); packet stopped", id);
                 return;
             }
+            known = g_visuals.count(id) || g_data.count(id) || g_nicks.count(id) || g_attachments.count(id);
+        }
+        // CElementDeleter::Delete fires onClientElementDestroy before anything is unlinked. Desktop only
+        // deletes an id CElementIDs knows; an element that never reached this client gets no event.
+        if (known && g_hooks.elementDestroy) g_hooks.elementDestroy(id);
+        {
+            std::lock_guard<std::mutex> lock(g_lock);
             g_luaHandleGenerations.erase(id);
             g_visuals.erase(id);
             g_teamOrder.erase(std::remove(g_teamOrder.begin(), g_teamOrder.end(), id), g_teamOrder.end());
@@ -999,9 +1045,11 @@ bool IsKnownPlayer(uint32_t id) {
     return found != g_visuals.end() && found->second.kind == 1;
 }
 
-void OnPlayerQuit(uint32_t id) {
+void OnPlayerQuit(uint32_t id, const char* reason) {
     Combat::ForgetShooter(id);
     if (id == 0 || id == 0xFFFFFFFFu || id == g_local) return;
+    // CClientGame::QuitPlayer calls onClientPlayerQuit before deleting the player.
+    if (g_hooks.playerQuit) g_hooks.playerQuit(id, reason ? reason : "Unknown");
     {
         std::lock_guard<std::mutex> lock(g_lock);
         g_luaHandleGenerations.erase(id);
@@ -1032,8 +1080,12 @@ void OnCustomData(const uint8_t* body, size_t length, size_t bits) {
     DIAG("CUSTOM_DATA id=%u local=%u name=%.*s number=%d boolean=%d value=%g", id, g_local,
          static_cast<int>(name.size()), reinterpret_cast<const char*>(name.data()), value.number ? 1 : 0,
          value.boolean ? 1 : 0, value.value);
-    std::lock_guard<std::mutex> lock(g_lock);
-    g_data[id][std::string(name.begin(), name.end())] = value;
+    ElementDataChange change;
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        change = ChangeData(id, std::string(name.begin(), name.end()), &value);
+    }
+    FireDataChanges({change});
 }
 
 bool ReadSetElementDataRpc(uint32_t id, Net::BitStreamReader& reader) {
@@ -1044,8 +1096,12 @@ bool ReadSetElementDataRpc(uint32_t id, Net::BitStreamReader& reader) {
     if (nameLength && !reader.ReadBits(name.data(), nameLength * 8)) return false;
     Datum value;
     if (!ReadLuaValue(reader, value)) return false;
-    std::lock_guard<std::mutex> lock(g_lock);
-    g_data[id][std::string(name.begin(), name.end())] = value;
+    ElementDataChange change;
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        change = ChangeData(id, std::string(name.begin(), name.end()), &value);
+    }
+    FireDataChanges({change});
     return true;
 }
 
@@ -1056,9 +1112,16 @@ bool ReadRemoveElementDataRpc(uint32_t id, Net::BitStreamReader& reader) {
     if (nameLength && !reader.ReadBits(name.data(), nameLength * 8)) return false;
     bool recursive = false;
     if (!ReadFlag(reader, recursive)) return false;
-    std::lock_guard<std::mutex> lock(g_lock);
-    auto element = g_data.find(id);
-    if (element != g_data.end()) element->second.erase(std::string(name.begin(), name.end()));
+    // DeleteCustomData fires only when the key existed (CClientEntity.cpp 501-521).
+    // Recursive removal from children is not stored on the phone.
+    std::vector<ElementDataChange> changes;
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        auto element = g_data.find(id);
+        const std::string key(name.begin(), name.end());
+        if (element != g_data.end() && element->second.count(key)) changes.push_back(ChangeData(id, key, nullptr));
+    }
+    FireDataChanges(changes);
     return true;
 }
 
@@ -1125,9 +1188,10 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
         std::vector<uint8_t> dump((skip + 7) / 8 + 1);
         if (!reader.ReadBits(dump.data(), skip)) return;
     }
-    bool showInChat = false;
-    if (!ReadFlag(reader, showInChat)) return;
-    (void)showInChat;
+    // bJustJoined: these players have just joined (onClientPlayerJoin, CPacketHandler.cpp 1119-1125).
+    bool justJoined = false;
+    if (!ReadFlag(reader, justJoined)) return;
+    std::vector<uint32_t> joined;
     struct PlayerSeat { uint32_t player, vehicle; uint8_t index; };
     std::vector<PlayerSeat> seats;
     std::vector<std::pair<uint32_t, Game::PedRpcOp>> weapons;
@@ -1162,6 +1226,7 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
         if (!(flags & 0x40)) {
             g_nicks[id] = nick;
             DIAG("PLAYER_LIST id=%u not spawned; record ends after moveAnim", id);
+            if (justJoined && id != g_local) joined.push_back(id);
             continue;
         }
         uint32_t model = 0;
@@ -1173,6 +1238,8 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
         visual.model = static_cast<int>(model);
         Remember(id, visual);
         g_nicks[id] = nick;
+        // Known from here on, so the join fires even if the rest of the record stops early.
+        if (justJoined && id != g_local) joined.push_back(id);
         ++players;
         bool hasTeam = false;
         if (!ReadFlag(reader, hasTeam)) break;
@@ -1246,7 +1313,11 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
     // Never acquire the game registry lock while holding the world registry.
     for (const auto& [id, give] : weapons) Game::QueuePedRpc(id, give);
     if (players > 0) SW_LOGI("PLAYER_LIST stored %d player model(s), %zu bits left", players, reader.GetRemainingBits());
+    if (g_hooks.playerJoin)
+        for (uint32_t id : joined) g_hooks.playerJoin(id);
 }
+
+void SetLifecycleHooks(const LifecycleHooks& hooks) { g_hooks = hooks; }
 
 // Takes the descriptor ParseResourceStart already built for either layout (desktop or mobile shim),
 // so the layout is detected once, in ResourceFiles.cpp, and not read a second time here.

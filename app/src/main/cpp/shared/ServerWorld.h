@@ -147,7 +147,30 @@ bool CopyAttachment(uint32_t id, Attachment& out);
 void NoteAttachedOffsets(uint32_t id, float x, float y, float z, float rx, float ry, float rz);
 std::vector<uint32_t> CopyAttachedElements(uint32_t parent);
 // PLAYER_QUIT (5): CPacketHandler::Packet_PlayerQuit -> CClientGame::QuitPlayer deletes the player element.
-void OnPlayerQuit(uint32_t id);
+// reason is CClientGame::QuitPlayer's text ("Quit", "Kicked", ... "Unknown").
+void OnPlayerQuit(uint32_t id, const char* reason = "Unknown");
+
+// One server-side custom data change: SetCustomData / DeleteCustomData (CClientEntity.cpp 473-521).
+struct ElementDataChange {
+    uint32_t id = 0;
+    std::string key;
+    bool hadOld = false;
+    ElementDataValue oldValue;
+    bool hasNew = false;  // false: the key was removed
+    ElementDataValue newValue;
+};
+
+// Script events for what the server changes: onClientPlayerJoin (Packet_PlayerList, bJustJoined),
+// onClientPlayerQuit (QuitPlayer), onClientElementDestroy (CElementDeleter::Delete) and
+// onClientElementDataChange. Called on the network pulse thread, which also runs the VM, outside
+// the world lock, while the element is still known (desktop fires before deleting).
+struct LifecycleHooks {
+    void (*playerJoin)(uint32_t id) = nullptr;
+    void (*playerQuit)(uint32_t id, const char* reason) = nullptr;
+    void (*elementDestroy)(uint32_t id) = nullptr;
+    void (*dataChange)(const ElementDataChange& change) = nullptr;
+};
+void SetLifecycleHooks(const LifecycleHooks& hooks);
 // A remote player this session knows (PLAYER_LIST nick, PLAYER_SPAWN skin, or a body record of kind 1).
 bool IsKnownPlayer(uint32_t id);
 // A PLAYER_PURESYNC came from this id: it is a player (kind 1) even without a PLAYER_LIST or PLAYER_SPAWN record.

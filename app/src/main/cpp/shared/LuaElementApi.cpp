@@ -990,6 +990,11 @@ void CollectEventDescendants(uint32_t base, std::vector<uint32_t>& out) {
 }
 
 bool ClientElementInTree(uint32_t id) { return Find(id) != nullptr || GuiIsElement(id); }
+bool ClientCreatedElement(uint32_t id) {
+    const Node* node = Find(id);
+    return node && IsLocal(id) && !node->serverElement && !node->system && !node->beingDeleted &&
+           (node->canDestroy || g_forceDestroy);
+}
 
 
 void EnsureResourceNode(uint32_t resourceRoot, const std::string& name) {

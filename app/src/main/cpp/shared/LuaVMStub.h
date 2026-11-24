@@ -172,6 +172,18 @@ void CopyClientChildren(uint32_t id, std::vector<uint32_t>& out);
 bool ClientCallPropagationEnabled(uint32_t id);
 void ActiveVmFirePlayerNetworkStatus(uint32_t player, uint8_t type, uint32_t ticks);
 void ActiveVmFireVehicleSeat(bool entered, uint32_t ped, uint32_t vehicle, uint8_t seat);
+// Fires name on source with the nargs values on top of L (popped), the source's
+// parents and children called (CClientEntity::CallEvent bCallOnChildren). Sets
+// and restores `source`. Returns false when a handler cancelled it.
+bool ActiveVmFireElementEvent(lua_State* L, const char* name, uint32_t source, int nargs);
+// onClientElementDestroy for id and each descendant that `deletes` says will go,
+// parent first (CElementDeleter::Delete, DeleteClientChildren), then forgets their
+// script data. Call before deleting.
+void ActiveVmFireDestroySubtree(lua_State* L, uint32_t id, bool (*deletes)(uint32_t));
+// onClientPlayerSpawn (Packet_PlayerSpawn) and onClientPlayerWasted / onClientPedWasted (Packet_PlayerWasted).
+void ActiveVmFirePlayerSpawn(uint32_t player, uint32_t team);
+void ActiveVmFireWasted(bool player, uint32_t ped, uint32_t killer, int weapon, int bodypart, bool stealth,
+                        int animGroup, int animId);
 void ActiveVmFireSpatialEvent(const char* name,uint32_t source,uint32_t other,bool matching);
 // onClientBirdShot. True when the event was not cancelled.
 struct NativeWeaponFire {
@@ -192,6 +204,8 @@ void CollectEventDescendants(uint32_t base, std::vector<uint32_t>& out);
 // True when id is an element of the client tree (server elements outside it
 // count as children of the root, as in ClientDescendantOf).
 bool ClientElementInTree(uint32_t id);
+// An element a client script created (createObject, createElement, ...), not yet being deleted.
+bool ClientCreatedElement(uint32_t id);
 // Resource element under the client root. The dynamic map is a separate call so a
 // root read does not invent the map before the resource is running.
 void EnsureResourceNode(uint32_t resourceRoot, const std::string& name);

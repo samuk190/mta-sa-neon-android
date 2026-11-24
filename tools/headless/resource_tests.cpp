@@ -417,6 +417,105 @@ void CheckWeaponSnapshots(WorldRPG::Script::LuaVMStub& vm) {
     ServerWorld::OnPlayerQuit(903);
 }
 
+// Element data, quit, destroy, spawn and wasted events (CClientEntity::SetCustomData /
+// DeleteCustomData, CClientGame::QuitPlayer, CElementDeleter::Delete, Packet_PlayerSpawn,
+// Packet_PlayerWasted), through the same entry points the network uses.
+void CheckLifecycleEvents(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    const uint32_t local = ServerWorld::LocalPlayer();
+    RunLua(vm, "lifecycle-setup", R"LUA(
+        lcLog = {}
+        local function add(s) lcLog[#lcLog + 1] = s end
+        local function tostring(x) return type(x) == "number" and string.format("%.14g", x) or _G.tostring(x) end
+        addEventHandler("onClientElementDataChange", root, function(k, o, n)
+            if k:sub(1, 3) == "lc:" then add(table.concat({k, tostring(o), tostring(n), source == localPlayer and "lp" or "?"}, "|")) end
+        end)
+        addEventHandler("onClientPlayerQuit", root, function(r) add("quit|" .. r .. "|" .. tostring(source.id)) end)
+        addEventHandler("onClientElementDestroy", root, function() add("destroy|" .. tostring(source.id)) end)
+        addEventHandler("onClientPlayerSpawn", root, function(team) add("spawn|" .. tostring(team) .. "|" .. tostring(source == localPlayer)) end)
+        addEventHandler("onClientPlayerWasted", root, function(k, w, p, st, g, a)
+            add(table.concat({"wasted", tostring(k), tostring(w), tostring(p), tostring(st), tostring(g), tostring(a)}, "|"))
+        end)
+        assert(setElementData(localPlayer, "lc:a", 1) == true)
+        assert(setElementData(localPlayer, "lc:a", 1) == true, "same value")
+        assert(table.concat(lcLog, " ") == "lc:a|nil|1|lp", "client set (same value fires once): " .. table.concat(lcLog, " "))
+        lcLog = {}
+    )LUA");
+    auto dataRpc = [](Net::BitStreamWriter& w, const char* key, bool remove, uint32_t value) {
+        w.WriteCompressed(static_cast<uint32_t>(std::strlen(key)), 2);
+        w.WriteBits(reinterpret_cast<const uint8_t*>(key), std::strlen(key) * 8);
+        if (remove) {
+            WriteTestBits(w, 0, 1);  // not recursive
+        } else {
+            WriteTestBits(w, 3, 4);  // LUA_TNUMBER
+            WriteTestBits(w, 0, 1);  // integer
+            w.WriteCompressed(value, 4);
+        }
+    };
+    {
+        Net::BitStreamWriter w;
+        dataRpc(w, "lc:a", false, 5);
+        Net::BitStreamReader r(w.GetData(), w.GetByteLength(), w.GetBitLength());
+        CHECK(ServerWorld::ReadSetElementDataRpc(local, r));
+    }
+    RunLua(vm, "lifecycle-server-set", R"LUA(
+        assert(table.concat(lcLog, " ") == "lc:a|1|5|lp", "server set: " .. table.concat(lcLog, " "))
+        assert(getElementData(localPlayer, "lc:a") == 5, "the server value replaces the client's")
+        lcLog = {}
+    )LUA");
+    {
+        Net::BitStreamWriter w;
+        dataRpc(w, "lc:a", true, 0);
+        Net::BitStreamReader r(w.GetData(), w.GetByteLength(), w.GetBitLength());
+        CHECK(ServerWorld::ReadRemoveElementDataRpc(local, r));
+        Net::BitStreamWriter again;
+        dataRpc(again, "lc:a", true, 0);
+        Net::BitStreamReader r2(again.GetData(), again.GetByteLength(), again.GetBitLength());
+        CHECK(ServerWorld::ReadRemoveElementDataRpc(local, r2));  // no key left: no event
+    }
+    RunLua(vm, "lifecycle-server-remove", R"LUA(
+        assert(table.concat(lcLog, " ") == "lc:a|5|nil|lp", "server remove: " .. table.concat(lcLog, " "))
+        assert(getElementData(localPlayer, "lc:a") == nil)
+        lcLog = {}
+        local e = createElement("dummy")
+        lcDummy = e and e.id
+    )LUA");
+    ServerWorld::NotePlayerNick(951, "Leaver");
+    ServerWorld::OnPlayerQuit(951, "Kicked");
+    // 1500 is known (it has custom data); 1501 never reached this client and gets no event.
+    {
+        Net::BitStreamWriter w;
+        dataRpc(w, "lc:b", false, 1);
+        Net::BitStreamReader r(w.GetData(), w.GetByteLength(), w.GetBitLength());
+        CHECK(ServerWorld::ReadSetElementDataRpc(1500, r));
+    }
+    Net::BitStreamWriter removed;
+    WriteTestBits(removed, 1500, 17);
+    WriteTestBits(removed, 1501, 17);
+    ServerWorld::OnEntityRemove(removed.GetData(), removed.GetByteLength(), removed.GetBitLength());
+    Script::ActiveVmFirePlayerSpawn(local, 0xFFFFFFFFu);
+    Script::ActiveVmFireWasted(true, local, 0xFFFFFFFFu, 31, 9, false, 0, 15);
+    RunLua(vm, "lifecycle-network", R"LUA(
+        local got = table.concat(lcLog, " ")
+        assert(got == "quit|Kicked|951 lc:b|nil|1|? destroy|1500 spawn|false|true wasted|false|31|9|false|0|15", "network events: " .. got)
+        lcLog = {}
+    )LUA");
+    RunLua(vm, "lifecycle-script-destroy", R"LUA(
+        -- createElement outside a resource may not exist here; destroy only what was made.
+        local window = guiCreateWindow(0, 0, 100, 100, "w", false)
+        local button = guiCreateButton(0, 0, 10, 10, "x", false, window)
+        assert(destroyElement(window) == true, "gui destroy")
+        local want = "destroy|" .. string.format("%.14g", window.id) .. " destroy|" .. string.format("%.14g", button.id)
+        assert(table.concat(lcLog, " ") == want, "gui destroy fires for children too: " .. table.concat(lcLog, " "))
+        lcLog = {}
+        if lcDummy then
+            assert(destroyElement({id = lcDummy, element = true}) ~= nil)
+            assert(lcLog[1] == "destroy|" .. string.format("%.14g", lcDummy), "script destroy: " .. table.concat(lcLog, " "))
+        end
+        lcLog = {}
+    )LUA");
+}
+
 // encodeString / decodeString / passwordHash / passwordVerify / generateKeyPair (CLuaCryptDefs.cpp).
 void CheckCrypto(WorldRPG::Script::LuaVMStub& vm) {
     RunLua(vm, "crypt-sync", R"LUA(
@@ -5074,6 +5173,7 @@ int main(int argc, char** argv) {
     CheckHelpers(vm);
     CheckAudioQueries(vm);
     CheckNativeWeaponFire(vm);
+    CheckLifecycleEvents(vm);
     CheckWeaponSnapshots(vm);
     CheckGui(vm);
     CheckElementsGuiDx(vm);
