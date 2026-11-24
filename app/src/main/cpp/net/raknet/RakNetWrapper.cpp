@@ -748,6 +748,20 @@ void RakNetWrapper::DoPulse() {
     if (!pImpl_->running.load()) return;
 
     if (pImpl_->pc) {
+        // Hands queued game packets to the handler. Before the session is torn
+        // down everything left is delivered, so a SERVER_DISCONNECTED (kick, ban,
+        // netcode refusal) that arrived with the close is still seen.
+        const auto drain = [this](int limit) {
+            const auto user = static_cast<uint8_t>(PacketID::USER_PACKET_ENUM);
+            auto& packet = pImpl_->pcPacket;
+            size_t bits = 0;
+            for (int i = 0; i < limit && pImpl_->pc && pImpl_->pc->Pop(packet, bits); ++i) {
+                if (packet[0] > UINT8_MAX - user) continue;
+                NoteUsage(true, packet[0] + user, packet.size());
+                if (pImpl_->packetHandler) pImpl_->packetHandler(user, packet.data(), packet.size(), bits);
+            }
+        };
+        constexpr int kFinalDrain = 1 << 16;
         std::string error;
         const auto status = pImpl_->pc->Pulse(&error);
         if (status == PcNetworkTransport::Status::Loading || status == PcNetworkTransport::Status::Connecting) return;
@@ -761,21 +775,20 @@ void RakNetWrapper::DoPulse() {
             // only reports it through IsConnected.
             if (pImpl_->handshakeState.load() == HandshakeState::HANDSHAKE_COMPLETE && !pImpl_->pc->IsConnected()) {
                 LOGE("PC network: connection lost");
+                drain(kFinalDrain);
+                if (!pImpl_->running.load()) return;  // a handler already ended the session
                 StopNetwork();
                 if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(false, "Connection lost");
                 return;
             }
-            const auto user = static_cast<uint8_t>(PacketID::USER_PACKET_ENUM);
-            auto& packet = pImpl_->pcPacket;
-            size_t bits = 0;
-            for (int i = 0; i < 48 && pImpl_->pc && pImpl_->pc->Pop(packet, bits); ++i) {
-                if (packet[0] > UINT8_MAX - user) continue;
-                NoteUsage(true, packet[0] + user, packet.size());
-                if (pImpl_->packetHandler) pImpl_->packetHandler(user, packet.data(), packet.size(), bits);
-            }
+            // A burst (resource start) drains in a few frames, well before the
+            // queue limit that ends the session.
+            drain(512);
             return;
         }
         LOGE("PC network: %s", error.c_str());
+        drain(kFinalDrain);
+        if (!pImpl_->running.load()) return;  // a handler already ended the session
         if (const uint8_t code = pImpl_->pc->ConnectionError()) pImpl_->connectionError.store(code);
         StopNetwork();
         if (pImpl_->connectionStateCallback) pImpl_->connectionStateCallback(false, error.c_str());

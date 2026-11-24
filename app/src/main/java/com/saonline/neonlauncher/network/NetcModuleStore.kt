@@ -51,6 +51,8 @@ object NetcModuleStore {
         installed(context, build)?.let { return it }
         if (!isBundled(build)) return null
         return try {
+            // Another resolve may have installed it while this one waited.
+            synchronized(installLocks.getValue(build)) { installed(context, build) }?.let { return it }
             context.assets.open("netc/${build.id}/netc.dll").use { install(context, build, it) }
         } catch (e: IOException) {
             null
@@ -79,10 +81,14 @@ object NetcModuleStore {
 
     private fun target(context: Context, build: NetcBuild) = File(context.filesDir, "netc/${build.id}/netc.dll")
 
-    private fun install(context: Context, build: NetcBuild, input: InputStream): File {
+    /** One install per build at a time (a bundled copy, a pick and a download can overlap). */
+    private val installLocks = NetcBuild.values().associateWith { Any() }
+
+    private fun install(context: Context, build: NetcBuild, input: InputStream): File = synchronized(installLocks.getValue(build)) {
         val dest = target(context, build)
         dest.parentFile?.mkdirs()
-        val tmp = File(dest.path + ".part")
+        // Unique per install, so a concurrent one never deletes this file.
+        val tmp = File.createTempFile("netc", ".part", dest.parentFile)
         try {
             tmp.outputStream().use { out ->
                 val buf = ByteArray(64 * 1024)
@@ -97,7 +103,7 @@ object NetcModuleStore {
             }
             validate(tmp)
             if (!tmp.renameTo(dest)) throw IOException("cannot save netc.dll")
-            return dest
+            dest
         } finally {
             tmp.delete()
         }

@@ -154,9 +154,11 @@ struct NeonJoinClient::Impl {
     std::string password;
     std::string identityTicket;
     uint32_t deadlineMs = 0;
+    uint32_t stateSinceMs = 0;  // when the current state was entered
 
     void SetState(JoinState next, const char* detail) {
         state = next;
+        stateSinceMs = NowMs();
         deadlineMs = NowMs() + (next == JoinState::WaitingIdentity ? 20000 : JOIN_STEP_TIMEOUT_MS);
         JOIN_LOGI("NeonJoin: state -> %s (%s)", JoinStateName(next), detail ? detail : "");
         if (callback) callback(next, detail ? detail : "");
@@ -1387,6 +1389,13 @@ void NeonJoinClient::Pulse() {
             // PC Network: the step clock starts once netc is loaded and its
             // RakNet is up; the transport times out its own load and connect.
             if (d.net->IsTransportStarting()) {
+                // netc's own steps have long timeouts (DllMain and InitNetInterface
+                // 60 s each); the whole load gets this budget.
+                constexpr uint32_t kPcNetworkLoadBudgetMs = 90000;
+                if (NowMs() - d.stateSinceMs > kPcNetworkLoadBudgetMs) {
+                    d.Fail("PC network module took too long to start", DisconnectMessages::ConnectTimedOut());
+                    break;
+                }
                 d.deadlineMs = NowMs() + JOIN_STEP_TIMEOUT_MS;
                 break;
             }

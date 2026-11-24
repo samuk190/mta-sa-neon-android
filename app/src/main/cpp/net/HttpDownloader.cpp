@@ -524,21 +524,22 @@ Outcome ProcessRequest(ResourceConnection& pool, const Request& req) {
     const std::string requestPath = target.pathPrefix + "/" + EncodePath(req.resource) + "/" + EncodePath(req.file);
 
     // A server that closes the connection mid-file (seen as "short body" on
-    // large resources) fails one file and with it the whole resource. Such
-    // transport failures are retried on a fresh connection; an HTTP error
-    // status is not.
+    // large resources) fails one file and with it the whole resource. Only a
+    // body cut off after a 200 is retried, on a fresh connection and after a
+    // short pause; local errors (disk, .part file) and refusals are not.
     constexpr int kAttempts = 3;
     FileHasher hasher;
     int status = 0;
     for (int attempt = 1;; ++attempt) {
         if (FetchToFile(pool, target, requestPath, partPath, hasher, status, error)) break;
         std::remove(partPath.c_str());
-        const bool transport = status == 0 || status == 200;
-        if (!transport || attempt == kAttempts) {
+        const bool cutOff = status == 200 && (error == "short body" || error.rfind("recv: ", 0) == 0);
+        if (!cutOff || attempt == kAttempts) {
             out.note = label + ": " + error;
             return out;  // Kind::Failed (default)
         }
         HTTP_LOGI("HTTP: retrying %s/%s (%s)", req.resource.c_str(), req.file.c_str(), error.c_str());
+        std::this_thread::sleep_for(std::chrono::milliseconds(250 * attempt));
         TransferSubtract(g_transferDone, t_transferReceived);  // the partial body does not count
         t_transferReceived = 0;
         pool.idle.reset();

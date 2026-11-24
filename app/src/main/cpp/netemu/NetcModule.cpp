@@ -47,7 +47,9 @@ enum CNetSlot : uint32_t {
 };
 
 constexpr uint32_t kCoreSlots = 192;
-constexpr uint32_t kPacketQueueLimit = 8192;
+// As the native transport: a packet netc has acknowledged cannot be
+// recovered, so overflowing this ends the session instead of dropping.
+constexpr uint32_t kPacketQueueLimit = 16384;
 
 bool ReadFile(const std::string& path, std::vector<uint8_t>* out) {
     std::ifstream in(path, std::ios::binary);
@@ -72,7 +74,9 @@ void NetcModule::Unload() {
 std::string NetcModule::LastError() const { return lastError_; }
 
 bool NetcModule::ProcessExitRequested() const { return state_ && state_->processExitRequested; }
-bool NetcModule::SessionOver() const { return ProcessExitRequested() || (machine_ && machine_->Wedged()); }
+bool NetcModule::SessionOver() const {
+    return ProcessExitRequested() || queueOverflow_.load() || (machine_ && machine_->Wedged());
+}
 
 uint32_t NetcModule::GuestString(const std::string& s) {
     uint32_t va = 0;
@@ -145,8 +149,11 @@ void NetcModule::InstallHostThunks() {
                     }
                     {
                         std::lock_guard lk(packetsMutex_);
-                        if (packets_.size() < kPacketQueueLimit) packets_.push_back(std::move(*pkt));
-                        else NETEMU_LOGE("netc packet queue full; dropping packet %u", pkt->id);
+                        if (packets_.size() < kPacketQueueLimit) {
+                            packets_.push_back(std::move(*pkt));
+                        } else if (!queueOverflow_.exchange(true)) {
+                            NETEMU_LOGE("netc packet queue full (%u); ending the session", kPacketQueueLimit);
+                        }
                     }
                     k3.Return(1);
                 });

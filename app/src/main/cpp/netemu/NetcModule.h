@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -101,6 +102,7 @@ private:
 
     mutable std::mutex packetsMutex_;
     std::deque<NetcPacket> packets_;
+    std::atomic<bool> queueOverflow_{false};  // see kPacketQueueLimit
     std::string lastError_;
 };
 
