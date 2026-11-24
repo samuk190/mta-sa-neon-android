@@ -483,7 +483,11 @@ void InstallWinsock(Win32State& s) {
         ::close(fd);
         c.Return(0);
     });
-    R("bind", 3, [fail](ShimCall& c) {
+    R("bind", 3, [fail, info](ShimCall& c) {
+        if (!info(c.Arg(0))) {  // only netc's own sockets (Windows: WSAENOTSOCK)
+            fail(c, WSAENOTSOCK);
+            return;
+        }
         sockaddr_storage a{};
         socklen_t len = 0;
         if (!ReadAddr(c.mem, c.Arg(1), c.Arg(2), &a, &len)) {
@@ -496,11 +500,19 @@ void InstallWinsock(Win32State& s) {
         }
         c.Return(0);
     });
-    R("listen", 2, [fail](ShimCall& c) {
+    R("listen", 2, [fail, info](ShimCall& c) {
+        if (!info(c.Arg(0))) {  // only netc's own sockets (Windows: WSAENOTSOCK)
+            fail(c, WSAENOTSOCK);
+            return;
+        }
         if (::listen(static_cast<int>(c.Arg(0)), static_cast<int>(c.Arg(1))) != 0) fail(c, WsaError(errno));
         else c.Return(0);
     });
     R("accept", 3, [fail, info, st](ShimCall& c) {
+        if (!info(c.Arg(0))) {  // only netc's own sockets (Windows: WSAENOTSOCK)
+            fail(c, WSAENOTSOCK);
+            return;
+        }
         sockaddr_storage a{};
         socklen_t len = sizeof(a);
         const int fd = ::accept4(static_cast<int>(c.Arg(0)), reinterpret_cast<sockaddr*>(&a), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -555,12 +567,20 @@ void InstallWinsock(Win32State& s) {
         if (err) fail(c, WsaError(err));
         else c.Return(0);
     });
-    R("shutdown", 2, [fail](ShimCall& c) {
+    R("shutdown", 2, [fail, info](ShimCall& c) {
+        if (!info(c.Arg(0))) {  // only netc's own sockets (Windows: WSAENOTSOCK)
+            fail(c, WSAENOTSOCK);
+            return;
+        }
         const uint32_t how = c.Arg(1);  // SD_RECEIVE 0, SD_SEND 1, SD_BOTH 2: same as SHUT_*
         if (::shutdown(static_cast<int>(c.Arg(0)), static_cast<int>(how)) != 0) fail(c, WsaError(errno));
         else c.Return(0);
     });
-    auto nameQuery = [fail](ShimCall& c, bool peer) {
+    auto nameQuery = [fail, info](ShimCall& c, bool peer) {
+        if (!info(c.Arg(0))) {  // only netc's own sockets (Windows: WSAENOTSOCK)
+            fail(c, WSAENOTSOCK);
+            return;
+        }
         sockaddr_storage a{};
         socklen_t len = sizeof(a);
         const int rc = peer ? ::getpeername(static_cast<int>(c.Arg(0)), reinterpret_cast<sockaddr*>(&a), &len)
@@ -746,7 +766,7 @@ void InstallWinsock(Win32State& s) {
     R("recvfrom", 6, [recvFrom](ShimCall& c) { recvFrom(c, c.Arg(0), c.Arg(1), c.Arg(2), c.Arg(3), c.Arg(4), c.Arg(5)); });
 
     // fd_set on Windows: { u_int fd_count; SOCKET fd_array[64]; }.
-    R("select", 5, [fail](ShimCall& c) {
+    R("select", 5, [fail, info](ShimCall& c) {
         const uint32_t sets[3] = {c.Arg(1), c.Arg(2), c.Arg(3)};
         std::vector<pollfd> fds;
         std::vector<std::pair<int, int>> owner;  // (set index, socket)
@@ -755,6 +775,12 @@ void InstallWinsock(Win32State& s) {
             const uint32_t count = std::min<uint32_t>(c.mem.Read32(sets[k]), 64);
             for (uint32_t i = 0; i < count; ++i) {
                 const int fd = static_cast<int>(c.mem.Read32(sets[k] + 4 + i * 4));
+                // Windows select fails with WSAENOTSOCK for a handle that is not a socket
+                // (closed, or not netc's): never poll the app's own descriptors.
+                if (!info(static_cast<uint32_t>(fd))) {
+                    fail(c, WSAENOTSOCK);
+                    return;
+                }
                 fds.push_back({fd, static_cast<short>(k == 0 ? POLLIN : k == 1 ? POLLOUT : POLLPRI), 0});
                 owner.push_back({k, fd});
             }
@@ -765,6 +791,12 @@ void InstallWinsock(Win32State& s) {
         if (rc < 0) {
             fail(c, WsaError(errno));
             return;
+        }
+        for (const pollfd& p : fds) {
+            if (p.revents & POLLNVAL) {
+                fail(c, WSAENOTSOCK);
+                return;
+            }
         }
         if (rc == 0 && timeoutMs != 0 && (timeoutMs == Win32::kInfinite || c.WaitElapsedMs() < timeoutMs)) {
             c.Block(timeoutMs == Win32::kInfinite ? 2 : std::min<uint32_t>(2, timeoutMs));

@@ -1307,12 +1307,10 @@ struct NeonJoinClient::Impl {
         // Server CGame::Packet_PlayerJoinData refuses an unknown netcode with a
         // custom "requires the current ... network protocol." message. In
         // Automatic mode that is the cue to retry once with the other release.
-        // Older servers refuse through the stock bad-version types instead.
-        const uint8_t t = info.disconnectType;
-        const bool versionRefusal = info.disconnectReason.find("network protocol") != std::string::npos ||
-                                    t == DisconnectMessages::VERSION_MISMATCH || t == DisconnectMessages::DIFFERENT_BRANCH ||
-                                    t == DisconnectMessages::BAD_VERSION || t == DisconnectMessages::SERVER_NEWER ||
-                                    t == DisconnectMessages::SERVER_OLDER;
+        // The stock version refusals (VERSION_MISMATCH, SERVER_NEWER, ...) are
+        // about the MTA product version, which the other netcode cannot fix, so
+        // they are shown at once instead of after a second netc load.
+        const bool versionRefusal = info.disconnectReason.find("network protocol") != std::string::npos;
         if (autoRelease && !fallbackUsed && state != JoinState::Complete && versionRefusal) {
             fallbackUsed = true;
             fallbackPending = true;
