@@ -533,7 +533,9 @@ Outcome ProcessRequest(ResourceConnection& pool, const Request& req) {
     for (int attempt = 1;; ++attempt) {
         if (FetchToFile(pool, target, requestPath, partPath, hasher, status, error)) break;
         std::remove(partPath.c_str());
-        const bool cutOff = status == 200 && (error == "short body" || error.rfind("recv: ", 0) == 0);
+        // Chunked bodies cut between chunks fail while reading the next size line.
+        const bool cutOff = status == 200 && (error == "short body" || error.rfind("recv: ", 0) == 0 ||
+                                              error == "connection closed inside headers" || error == "bad chunk terminator");
         if (!cutOff || attempt == kAttempts) {
             out.note = label + ": " + error;
             return out;  // Kind::Failed (default)

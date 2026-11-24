@@ -1,4 +1,5 @@
 #include "LuaCryptApi.h"
+#include "LuaVmSet.h"
 
 // Port of CLuaCryptDefs (mta_neon_source/Shared/mods/deathmatch/logic/luadefs/CLuaCryptDefs.cpp)
 // for passwordHash (162-234), passwordVerify (236-316), generateKeyPair (318-397),
@@ -154,7 +155,7 @@ uint64_t g_nextTask = 1;
 void PushTask(lua_State* L, int fnIndex, std::function<Outcome()> work) {
     lua_pushvalue(L, fnIndex);
     Pending pending;
-    pending.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    pending.ref = WorldRPG::Script::Vms::Ref(L);
     pending.owner = ActiveVmOwner();
     pending.netId = ActiveVmOwnerNet();
     pending.generation = ActiveVmOwnerGeneration();
@@ -688,8 +689,11 @@ void InstallCryptLua(lua_State* L) {
     // Install runs on a fresh state (as InstallUtilLua assumes), possibly at the old
     // address: references of the previous state are gone with it. Completions of their
     // tasks no longer match g_pending and are ignored.
-    g_pending.clear();
-    g_L = L;
+    // The Lua 5.1 VM is installed beside the session's 5.3 state and keeps its tasks.
+    if (!WorldRPG::Script::Vms::Is51(L)) {
+        g_pending.clear();
+        g_L = L;
+    }
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"encodeString", EncodeString},
         {"decodeString", DecodeString},
@@ -711,7 +715,6 @@ void CryptDeliverCompletions() {
         std::lock_guard<std::mutex> lock(worker.mutex);
         batch.swap(worker.done);
     }
-    lua_State* L = g_L;
     for (auto& item : batch) {
         // A plain reference, not a structured binding: clang 14 (NDK 25) cannot capture one.
         Outcome& outcome = item.second;
@@ -722,9 +725,11 @@ void CryptDeliverCompletions() {
         g_pending.erase(found);
         if (!outcome.warning.empty()) LUA_LOGE("WARNING: %s", outcome.warning.c_str());
         if (!outcome.customError.empty()) LUA_LOGE("%s", outcome.customError.c_str());
+        // The callback runs in the VM it came from.
+        lua_State* L = WorldRPG::Script::Vms::RefVm(ref) ? WorldRPG::Script::Vms::RefVm(ref) : g_L;
         const int base = lua_gettop(L);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+        WorldRPG::Script::Vms::PushRef(L, ref);
+        WorldRPG::Script::Vms::Unref(ref);
         if (!lua_isfunction(L, -1)) {
             lua_settop(L, base);
             continue;
@@ -735,11 +740,13 @@ void CryptDeliverCompletions() {
         }
         // Desktop calls back in the resource's own CLuaMain; here the call runs as that
         // resource, so getThisResource and resource-owned elements work in the callback.
-        ActiveVmRunAsOwner(pending.owner, pending.netId, pending.generation, [&] {
-            if (lua_pcall(L, static_cast<int>(outcome.values.size()), 0, 0) != LUA_OK) {
-                const char* message = lua_tostring(L, -1);
-                LUA_LOGE("crypt callback failed: %s", message ? message : "");
-            }
+        ActiveVmRunIn(L, [&] {
+            ActiveVmRunAsOwner(pending.owner, pending.netId, pending.generation, [&] {
+                if (lua_pcall(L, static_cast<int>(outcome.values.size()), 0, 0) != LUA_OK) {
+                    const char* message = lua_tostring(L, -1);
+                    LUA_LOGE("crypt callback failed: %s", message ? message : "");
+                }
+            });
         });
         lua_settop(L, base);
     }
@@ -748,7 +755,7 @@ void CryptDeliverCompletions() {
 void CryptDropOwner(const std::string& owner, uint16_t netId, uint32_t generation) {
     for (auto it = g_pending.begin(); it != g_pending.end();) {
         if (it->second.owner == owner && it->second.netId == netId && it->second.generation == generation) {
-            if (g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, it->second.ref);
+            WorldRPG::Script::Vms::Unref(it->second.ref);
             it = g_pending.erase(it);
         } else {
             ++it;
@@ -757,8 +764,7 @@ void CryptDropOwner(const std::string& owner, uint16_t netId, uint32_t generatio
 }
 
 void CryptAbandonAll() {
-    if (g_L)
-        for (auto& [id, pending] : g_pending) luaL_unref(g_L, LUA_REGISTRYINDEX, pending.ref);
+    for (auto& [id, pending] : g_pending) WorldRPG::Script::Vms::Unref(pending.ref);
     g_pending.clear();
 }
 

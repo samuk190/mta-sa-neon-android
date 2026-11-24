@@ -1,4 +1,5 @@
 #include "LuaUtilApi.h"
+#include "LuaVmSet.h"
 #include "LuaCryptApi.h"
 #include "LuaMtaWindowApi.h"
 
@@ -857,7 +858,9 @@ int l_loadstring(lua_State* L) {
         lua_pushstring(L, "expected string");
         return 2;
     }
-    if (luaL_loadbufferx(L, text, length, "=(loadstring)", "t") != LUA_OK) {
+    // 5.1 loadstring(string [, chunkname]).
+    const char* name = luaL_optstring(L, 2, "=(loadstring)");
+    if (WorldRPG::Script::Vms::LoadScriptChunk(L, text, length, name) != LUA_OK) {
         lua_pushnil(L);
         lua_insert(L, -2);
         return 2;
@@ -994,7 +997,7 @@ int l_addCommandHandler(lua_State* L) {
     for (const Command& command : g_commands) {
         const bool match = command.sensitive ? command.name == name : Lower(command.name) == Lower(name);
         if (!match || !SameInstance(command)) continue;
-        lua_rawgeti(L, LUA_REGISTRYINDEX, command.ref);
+        WorldRPG::Script::Vms::PushRef(L, command.ref);
         const bool same = lua_rawequal(L, -1, 2) != 0;
         lua_pop(L, 1);
         if (same) {
@@ -1004,7 +1007,7 @@ int l_addCommandHandler(lua_State* L) {
         break;
     }
     lua_pushvalue(L, 2);
-    g_commands.push_back({name, luaL_ref(L, LUA_REGISTRYINDEX), sensitive, g_nextCommandId++, ActiveVmOwner(),
+    g_commands.push_back({name, WorldRPG::Script::Vms::Ref(L), sensitive, g_nextCommandId++, ActiveVmOwner(),
                           ActiveVmOwnerNet(), ActiveVmOwnerGeneration()});
     lua_pushboolean(L, 1);
     return 1;
@@ -1021,7 +1024,7 @@ int l_removeCommandHandler(lua_State* L) {
         const bool match = it->sensitive ? it->name == name : Lower(it->name) == Lower(name);
         // CRegisteredCommands::RemoveCommand (CRegisteredCommands.cpp:62-95): only this resource's handlers.
         if (!match || !SameInstance(*it)) { ++it; continue; }
-        luaL_unref(L, LUA_REGISTRYINDEX, it->ref);
+        WorldRPG::Script::Vms::Unref(it->ref);
         it = g_commands.erase(it);
         removed = true;
     }
@@ -1439,7 +1442,7 @@ int l_addDebugHook(lua_State* L) {
     // Check if already added
     for (const auto& hook : g_debugHooks) {
         if (strcasecmp(hook.hookType.c_str(), hookType.c_str()) == 0) {
-            lua_rawgeti(L, LUA_REGISTRYINDEX, hook.ref);
+            WorldRPG::Script::Vms::PushRef(L, hook.ref);
             const bool same = lua_rawequal(L, 2, -1) != 0;
             lua_pop(L, 1);
             if (same) {
@@ -1449,7 +1452,7 @@ int l_addDebugHook(lua_State* L) {
         }
     }
     lua_pushvalue(L, 2);
-    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    const int ref = WorldRPG::Script::Vms::Ref(L);
     DebugHookEntry entry;
     entry.hookType = hookType;
     entry.ref = ref;
@@ -1479,11 +1482,11 @@ int l_removeDebugHook(lua_State* L) {
     }
     for (auto it = g_debugHooks.begin(); it != g_debugHooks.end(); ++it) {
         if (strcasecmp(it->hookType.c_str(), hookType.c_str()) == 0) {
-            lua_rawgeti(L, LUA_REGISTRYINDEX, it->ref);
+            WorldRPG::Script::Vms::PushRef(L, it->ref);
             const bool same = lua_rawequal(L, 2, -1) != 0;
             lua_pop(L, 1);
             if (same) {
-                luaL_unref(L, LUA_REGISTRYINDEX, it->ref);
+                WorldRPG::Script::Vms::Unref(it->ref);
                 g_debugHooks.erase(it);
                 lua_pushboolean(L, 1);
                 return 1;
@@ -1606,7 +1609,7 @@ void CommandHandlersDropResource(lua_State* L, const std::string& owner, uint16_
             ++it;
             continue;
         }
-        luaL_unref(L, LUA_REGISTRYINDEX, it->ref);
+        WorldRPG::Script::Vms::Unref(it->ref);
         it = g_commands.erase(it);
     }
 }

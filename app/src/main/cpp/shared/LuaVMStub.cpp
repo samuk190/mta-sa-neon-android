@@ -1,5 +1,9 @@
 #include "DebugFlags.h"
 #include "LuaVMStub.h"
+#include "LuaVmSet.h"
+extern "C" {
+#include "LuaVm.h"
+}
 #include "EngineAssets.h"
 #include "LuaElementTree.h"
 #include "LuaCameraApi.h"
@@ -70,6 +74,7 @@ extern "C" {
 #include <variant>
 #include <vector>
 #include <mutex>
+#include <optional>
 
 namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
 
@@ -113,6 +118,37 @@ struct DxRuntime {
     uint32_t ownerGeneration = 0;
 };
 DxRuntime g_dx;
+
+// g_dx.L is the current VM: the Lua 5.3 state, or the Lua 5.1 state while a
+// callback that lives there runs (LuaVmSet.h). Code that pushes onto g_dx.L
+// and calls fireHandlers keeps working whichever VM is current.
+struct VmScope {
+    explicit VmScope(lua_State* vm) : saved_(g_dx.L) {
+        if (vm) g_dx.L = vm;
+    }
+    ~VmScope() { g_dx.L = saved_; }
+    VmScope(const VmScope&) = delete;
+    VmScope& operator=(const VmScope&) = delete;
+
+private:
+    lua_State* saved_;
+};
+
+// The VM a stored callback lives in, or fallback for refs that are not real.
+static lua_State* RefVmOr(int ref, lua_State* fallback) {
+    lua_State* vm = Vms::RefVm(ref);
+    return vm ? vm : fallback;
+}
+
+// ActiveVmSetResourceLua: 0 Automatic, 1 Lua 5.3, 2 Lua 5.1.
+static int g_resourceLua = 0;
+
+// Which VM each started resource runs in, by generation.
+static std::unordered_map<uint32_t, lua_State*> g_resourceVm;
+static lua_State* ResourceVm(uint32_t generation) {
+    const auto found = g_resourceVm.find(generation);
+    return found != g_resourceVm.end() && found->second ? found->second : g_dx.L;
+}
 
 // Touches from the Android UI thread, applied on the VM thread in pumpDx (desktop: CClientGame mouse
 // handling fires onClientClick only while the cursor is showing). action: 0 down, 1 up, 2 move.
@@ -211,16 +247,28 @@ static bool HandlerLive(const std::vector<DxRuntime::Handler>& live, int ref) {
 // CEvents::PreEventPulse / PostEventPulse (CEvents.cpp 136-147) around
 // CClientEntity::CallParentEvent (CClientEntity.cpp 811-823). Returns false when
 // cancelEvent ran. A nested call saves the outer cancel flag and restores it.
-static bool fireHandlers(const char* name, int nargs, uint32_t base) {
-    if (!g_dx.L) return true;
+// from is the state the nargs arguments were pushed on (default: the current
+// VM). Each handler runs in its own VM; the arguments are copied there.
+static bool fireHandlers(const char* name, int nargs, uint32_t base, lua_State* from = nullptr) {
+    if (!from) from = g_dx.L;
+    if (!from) return true;
     const bool saved = g_eventCancelled;
     g_eventCancelled = false;
     g_wasEventCancelled = false;
-    EventSourceScope source(g_dx.ownerNetId, g_dx.ownerGeneration);
+    const int argBase = lua_gettop(from) - nargs + 1;
+    std::optional<EventSourceScope> source;
+    {
+        VmScope vm(Vms::MainOf(from));
+        source.emplace(g_dx.ownerNetId, g_dx.ownerGeneration);
+    }
     auto finish = [&](bool cancelled) {
         g_wasEventCancelled = cancelled;
         g_eventCancelled = saved;
-        lua_pop(g_dx.L, nargs);
+        {
+            VmScope vm(Vms::MainOf(from));
+            source.reset();
+        }
+        lua_pop(from, nargs);
         return !cancelled;
     };
     auto found = g_dx.handlers.find(name);
@@ -236,6 +284,7 @@ static bool fireHandlers(const char* name, int nargs, uint32_t base) {
             order.push_back(handler.ref);
         }
     }
+    lua_State* fromVm = Vms::MainOf(from);
     for (int ref : order) {
         const auto live = g_dx.handlers.find(name);
         if (live == g_dx.handlers.end() || !HandlerLive(live->second, ref)) continue;
@@ -248,12 +297,30 @@ static bool fireHandlers(const char* name, int nargs, uint32_t base) {
                 netId = handler.netId;
                 generation = handler.generation;
             }
-        OwnerScope scope(owner, netId, generation);
-        lua_rawgeti(g_dx.L, LUA_REGISTRYINDEX, ref);
-        for (int i = 0; i < nargs; ++i) lua_pushvalue(g_dx.L, -1 - nargs);
-        if (lua_pcall(g_dx.L, nargs, 0, 0) != LUA_OK) {
-            LUA_LOGE("Lua %s: %s", name, lua_tostring(g_dx.L, -1));
-            lua_pop(g_dx.L, 1);
+        lua_State* T = RefVmOr(ref, fromVm);
+        VmScope vm(T);
+        // A handler in the other VM: that VM gets this event's source and
+        // sourceResource too (the caller set them in its own VM).
+        std::optional<EventSourceScope> otherSource;
+        const bool other = T != fromVm;
+        if (other) {
+            lua_getglobal(T, "source");
+            PushElement(T, base);
+            lua_setglobal(T, "source");
+            otherSource.emplace(g_dx.ownerNetId, g_dx.ownerGeneration);
+        }
+        {
+            OwnerScope scope(owner, netId, generation);
+            Vms::PushRef(T, ref);
+            Vms::CopyRange(from, argBase, nargs, T);
+            if (lua_pcall(T, nargs, 0, 0) != LUA_OK) {
+                LUA_LOGE("Lua %s: %s", name, lua_tostring(T, -1));
+                lua_pop(T, 1);
+            }
+        }
+        if (other) {
+            otherSource.reset();
+            lua_setglobal(T, "source");
         }
     }
     return finish(g_eventCancelled);
@@ -373,7 +440,9 @@ bool ActiveVmRunCommand(const char* name, const char* args) {
     for (const CommandCall& call : calls) {
         if (!CommandHandlerLive(call.id)) continue;
         OwnerScope scope(call.owner, call.netId, call.generation);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, call.ref);
+        lua_State* L = RefVmOr(call.ref, g_dx.L);
+        VmScope vm(L);
+        Vms::PushRef(L, call.ref);
         lua_pushstring(L, call.name.c_str());
         // CRegisteredCommands::CallCommandHandler (CRegisteredCommands.cpp:183-206): one string per
         // space-separated word, as strtok splits them.
@@ -432,7 +501,9 @@ static void ApplySvgUpdates() {
     for (const SvgUpdate& update : updates) {
         if (!SvgCallbackLive(update.id, update.ref)) continue;
         OwnerScope scope(update.owner, update.netId, update.generation);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, update.ref);
+        lua_State* L = RefVmOr(update.ref, g_dx.L);
+        VmScope vm(L);
+        Vms::PushRef(L, update.ref);
         PushElement(L, update.id);
         if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
             LUA_LOGE("Lua svg update callback: %s", lua_tostring(L, -1));
@@ -517,13 +588,15 @@ static void ApplyKeyEvents() {
         for (const KeyBindCall& call : calls) {
             if (!KeyBindLive(call.id)) continue;
             OwnerScope scope(call.owner, call.netId, call.generation);
-            lua_rawgeti(L, LUA_REGISTRYINDEX, call.ref);
-            lua_pushstring(L, key.c_str());
-            lua_pushstring(L, down ? "down" : "up");
-            for (int ref : call.args) lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-            if (lua_pcall(L, 2 + static_cast<int>(call.args.size()), 0, 0) != LUA_OK) {
-                LUA_LOGE("Lua bindKey %s: %s", key.c_str(), lua_tostring(L, -1));
-                lua_pop(L, 1);
+            lua_State* B = RefVmOr(call.ref, L);
+            VmScope vm(B);
+            Vms::PushRef(B, call.ref);
+            lua_pushstring(B, key.c_str());
+            lua_pushstring(B, down ? "down" : "up");
+            for (int ref : call.args) Vms::PushRef(B, ref);
+            if (lua_pcall(B, 2 + static_cast<int>(call.args.size()), 0, 0) != LUA_OK) {
+                LUA_LOGE("Lua bindKey %s: %s", key.c_str(), lua_tostring(B, -1));
+                lua_pop(B, 1);
             }
         }
         for (const KeyBindCommand& command : commands) {
@@ -579,7 +652,7 @@ static int l_addEventHandler(lua_State* L) {
     auto& list = g_dx.handlers[name];
     for (const DxRuntime::Handler& handler : list) {
         if (handler.element != element) continue;
-        lua_rawgeti(L, LUA_REGISTRYINDEX, handler.ref);
+        Vms::PushRef(L, handler.ref);
         const bool same = lua_rawequal(L, -1, 3) != 0;
         lua_pop(L, 1);
         if (!same) continue;
@@ -587,7 +660,7 @@ static int l_addEventHandler(lua_State* L) {
         return 1;
     }
     lua_pushvalue(L, 3);
-    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    const int ref = Vms::Ref(L);
     DxRuntime::Handler added{ref, element, propagated, g_dx.ownerNetId, g_dx.ownerGeneration};
     list.push_back(added);
     g_dx.handlerOwner[ref] = g_dx.owner;
@@ -610,8 +683,11 @@ static int l_getEventHandlers(lua_State* L) {
     int index = 0;
     for (const DxRuntime::Handler& handler : found->second) {
         if (handler.element != element) continue;
+        // Functions of the other VM cannot be returned here (desktop: each
+        // resource VM only sees its own).
+        if (Vms::RefVm(handler.ref) != Vms::MainOf(L)) continue;
         lua_pushinteger(L, ++index);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, handler.ref);
+        Vms::PushRef(L, handler.ref);
         lua_settable(L, -3);
     }
     return 1;
@@ -633,7 +709,7 @@ static int l_triggerEvent(lua_State* L) {
     PushElement(L, id);
     lua_setglobal(L, "source");
     for (int i = 3; i <= top; ++i) lua_pushvalue(L, i);
-    const bool ran = fireHandlers(name, nargs, id);
+    const bool ran = fireHandlers(name, nargs, id, L);
     lua_setglobal(L, "source");
     lua_pushboolean(L, ran ? 1 : 0);
     return 1;
@@ -863,11 +939,11 @@ static int l_removeEventHandler(lua_State* L) {
     auto& refs = found->second;
     for (auto it = refs.begin(); it != refs.end(); ++it) {
         if (it->element != element) continue;
-        lua_rawgeti(L, LUA_REGISTRYINDEX, it->ref);
+        Vms::PushRef(L, it->ref);
         const bool same = lua_rawequal(L, -1, 3) != 0;
         lua_pop(L, 1);
         if (!same) continue;
-        luaL_unref(L, LUA_REGISTRYINDEX, it->ref);
+        Vms::Unref(it->ref);
         g_dx.handlerOwner.erase(it->ref);
         refs.erase(it);
         if (std::strcmp(name, "onClientChatMessage") == 0) g_dx.chatHooked = !refs.empty();
@@ -955,7 +1031,7 @@ static int l_setTimer(lua_State* L) {
     const int times = static_cast<int>(luaL_optinteger(L, 3, 1));
     lua_pushvalue(L, 1);
     DxRuntime::Timer timer;
-    timer.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    timer.ref = Vms::Ref(L);
     timer.times = times == 0 ? -1 : times;
     timer.interval = interval;
     timer.next = DxNow() + static_cast<std::uint64_t>(interval);
@@ -998,7 +1074,7 @@ static int l_killTimer(lua_State* L) {
         return 1;
     }
     timer->times = 0;
-    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    Vms::Unref(ref);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2146,7 +2222,8 @@ static int lua_custom_print(lua_State* L) {
 }
 
 struct LuaVMStub::Impl {
-    lua_State* L = nullptr;
+    lua_State* L = nullptr;    // Lua 5.3: the session's state
+    lua_State* L51 = nullptr;  // Lua 5.1: desktop MTA resources (lua51())
     bool initialized = false;
     LuaOutputCallback outputCallback;
     std::unordered_map<std::string, std::function<int()>> registeredFunctions;
@@ -2160,8 +2237,9 @@ struct LuaVMStub::Impl {
         }
     }
 
-    void registerStdLibs() {
+    void registerStdLibs(lua_State* L) {
         if (!L) return;
+        const bool is51 = Vms::Is51(L);
         // Match the desktop client boundaries for scripts received from servers.
         // Register only the libraries needed by resources, plus restricted OS/debug tables.
         const luaL_Reg libraries[] = {
@@ -2176,6 +2254,7 @@ struct LuaVMStub::Impl {
 #endif
         };
         for (const auto& lib : libraries) {
+            if (is51 && lib.func == luaopen_bit32) continue;  // not in Lua 5.1
             luaL_requiref(L, lib.name, lib.func, 1);
             lua_pop(L, 1);
         }
@@ -2212,9 +2291,52 @@ struct LuaVMStub::Impl {
         // Override print() with custom version that uses output callback
         lua_pushcfunction(L, lua_custom_print);
         lua_setglobal(L, "print");
+
+        // Scripts written for the Android Lua 5.3 client that parse as 5.1 run in
+        // the 5.1 VM (ChooseResourceVm). These 5.3 library functions, missing in
+        // 5.1, keep the common ones working there; desktop scripts that define or
+        // feature-test them (table.unpack or unpack) behave as on desktop.
+        if (is51) {
+            static const char kCompat53[] = R"LUA(
+                table.unpack = table.unpack or unpack
+                table.pack = table.pack or function(...) return {n = select('#', ...), ...} end
+                table.move = table.move or function(a1, f, e, t, a2)
+                    a2 = a2 or a1
+                    if e >= f then
+                        if t > e or t <= f or a1 ~= a2 then
+                            for i = 0, e - f do a2[t + i] = a1[f + i] end
+                        else
+                            for i = e - f, 0, -1 do a2[t + i] = a1[f + i] end
+                        end
+                    end
+                    return a2
+                end
+                local floor, huge = math.floor, math.huge
+                local function integral(x) return x == x and x ~= huge and x ~= -huge and x == floor(x) end
+                math.type = math.type or function(x)
+                    if type(x) ~= 'number' then return nil end
+                    return integral(x) and 'integer' or 'float'
+                end
+                math.tointeger = math.tointeger or function(x)
+                    x = tonumber(x)
+                    if x and integral(x) then return x end
+                    return nil
+                end
+            )LUA";
+            if (luaL_loadbufferx(L, kCompat53, sizeof(kCompat53) - 1, "=(neon 5.3 compat)", "t") != LUA_OK ||
+                lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                LUA_LOGE("LuaVM: 5.3 library additions: %s", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+
+        // Desktop CLuaMain::InitSecurity (CLuaMain.cpp 77-92): the os table above
+        // holds only the functions it leaves (clock, date, difftime, time), and
+        // InstallUtilLua replaces dofile, loadfile, require, loadlib, getfenv and
+        // newproxy, on both VMs.
     }
 
-    void registerAllFunctions() {
+    void registerAllFunctions(lua_State* L) {
         if (!L) return;
         for (const auto& [name, handler] : registeredFunctions) {
             // Store a copy of the function as upvalue via light userdata
@@ -2243,12 +2365,13 @@ bool LuaVMStub::initialize() {
         return false;
     }
 
-    pImpl_->registerStdLibs();
+    Vms::SetPrimary(pImpl_->L);
+    pImpl_->registerStdLibs(pImpl_->L);
 
     // Names still without an implementation go in registeredFunctions before
     // registerAllFunctions. The list is empty: getResourceName is a real function now.
     // installDxBindings and LuaApiExtra bind everything else.
-    pImpl_->registerAllFunctions();
+    pImpl_->registerAllFunctions(pImpl_->L);
 
     g_active = this;
     g_dx.L = pImpl_->L;
@@ -2256,10 +2379,34 @@ bool LuaVMStub::initialize() {
     MtaWindowAdoptFocus();
     GuiSetFocusHook(OnGuiFocusHook);
     pImpl_->initialized = true;
+    // The Lua 5.1 VM is created now, before the session has elements, binds or
+    // commands: installing the script API resets those (ResetCatalog,
+    // KeyBinds, ResetSpatial, DxReset).
+    lua51();
     pImpl_->log("INIT", "LuaVM initialized with real Lua 5.3.6 interpreter");
     LUA_LOGI("LuaVM: registered %zu MTA client function stubs",
              pImpl_->registeredFunctions.size());
     return true;
+}
+
+lua_State* LuaVMStub::lua51() {
+    if (pImpl_->L51 || !pImpl_->initialized) return pImpl_->L51;
+    lua_State* L = neon_lua_newstate51();
+    if (!L) {
+        LUA_LOGE("LuaVM: failed to create the Lua 5.1 state");
+        return nullptr;
+    }
+    pImpl_->L51 = L;
+    Vms::SetLua51(L);
+    {
+        // installDxBindings makes the state it installs on current; the 5.3
+        // state stays the session's.
+        VmScope vm(L);
+        pImpl_->registerStdLibs(L);
+        pImpl_->registerAllFunctions(L);
+    }
+    LUA_LOGI("LuaVM: Lua 5.1 VM created for desktop MTA resources");
+    return L;
 }
 
 bool LuaVMStub::isReady() const {
@@ -2396,7 +2543,7 @@ void LuaVMStub::reset() {
     lua_pop(pImpl_->L, 1); // pop global table
 
     // Re-register MTA functions
-    pImpl_->registerAllFunctions();
+    pImpl_->registerAllFunctions(pImpl_->L);
     MtaWindowAdoptFocus();
     GuiReset();
 
@@ -2409,19 +2556,128 @@ void LuaVMStub::setScreenSize(int width, int height) {
     if (height > 0) g_dx.screenH = height;
 }
 
-// Runs one resource script with the resource's shared environment as _ENV.
-// Globals a file defines are visible to the other files of the same resource
-// (desktop: one Lua state per resource). Reads fall through to the VM globals.
-static bool RunResourceChunk(lua_State* L, const std::string& chunk, const uint8_t* source, size_t length, int envRef) {
-    if (luaL_loadbufferx(L, reinterpret_cast<const char*>(source), length, ("@" + chunk).c_str(), "t") != LUA_OK) {
-        LUA_LOGE("Resource script %s failed: %s", chunk.c_str(), lua_tostring(L, -1));
+// One resource script, ready to run in the resource's VM.
+struct PreparedScript {
+    std::string chunk;
+    std::vector<uint8_t> source;
+    int compiled = LUA_NOREF;  // the chunk, already compiled in the chosen VM (raw registry ref)
+};
+
+static size_t Utf8BomLength(const std::vector<uint8_t>& s) {
+    return s.size() >= 3 && s[0] == 0xEF && s[1] == 0xBB && s[2] == 0xBF ? 3 : 0;
+}
+
+// SharedUtil::IsLuaObfuscatedScript (0x1C, luac.mtasa.com encryption) and
+// IsLuaCompiledScript (0x1B after an optional BOM).
+static bool IsObfuscatedScript(const std::vector<uint8_t>& s) { return !s.empty() && s[0] == 0x1C; }
+static bool IsCompiledScript(const std::vector<uint8_t>& s) {
+    const size_t bom = Utf8BomLength(s);
+    return IsObfuscatedScript(s) || (s.size() > bom && s[bom] == 0x1B);
+}
+
+// Compiles one text script in L, leaving the chunk on the stack.
+static int LoadResourceScript(lua_State* L, const PreparedScript& script) {
+    const size_t bom = Utf8BomLength(script.source);
+    const char* data = reinterpret_cast<const char*>(script.source.data()) + bom;
+    return luaL_loadbufferx(L, data, script.source.size() - bom, ("@" + script.chunk).c_str(), "t");
+}
+
+// Which VM a resource runs in (lua51/README.md, luaapi/README.md): Lua 5.1, as
+// desktop MTA, unless one of its text scripts only parses as Lua 5.3 (//, the
+// bitwise operators, goto, integer literals), which marks a resource written
+// for the Android 5.3 client. 5.1 bytecode or encrypted chunks keep it 5.1.
+// The chunks compiled while choosing are kept for RunResourceJob.
+static lua_State* ChooseResourceVm(const WorldRPG::Script::ResourceLoadJob& job, std::vector<PreparedScript>& scripts,
+                                   std::string& reason) {
+    lua_State* L53 = Vms::Primary();
+    if (g_resourceLua == 1) {
+        reason = "Lua 5.3 chosen";
+        return L53;
+    }
+    lua_State* L51 = g_active ? g_active->lua51() : nullptr;
+    if (!L51) {
+        reason = "the Lua 5.1 VM is unavailable";
+        return L53;
+    }
+    bool needs51 = false;
+    std::string only53;
+    for (PreparedScript& script : scripts) {
+        const size_t bom = Utf8BomLength(script.source);
+        const uint8_t first = script.source.size() > bom ? script.source[bom] : 0;
+        (void)first;
+        if (IsCompiledScript(script.source)) {
+            needs51 = true;
+            if (reason.empty()) reason = script.chunk + " is compiled";
+            continue;
+        }
+        if (LoadResourceScript(L51, script) == LUA_OK) {
+            script.compiled = luaL_ref(L51, LUA_REGISTRYINDEX);
+            continue;
+        }
+        lua_pop(L51, 1);
+        if (only53.empty() && LoadResourceScript(L53, script) == LUA_OK) {
+            lua_pop(L53, 1);
+            only53 = script.chunk;
+        }
+    }
+    if (g_resourceLua == 2) {
+        reason = "Lua 5.1 chosen";
+        return L51;
+    }
+    if (!only53.empty() && !needs51) {
+        for (PreparedScript& script : scripts) {
+            if (script.compiled != LUA_NOREF) luaL_unref(L51, LUA_REGISTRYINDEX, script.compiled);
+            script.compiled = LUA_NOREF;
+        }
+        reason = only53 + " is Lua 5.3";
+        return L53;
+    }
+    if (!only53.empty()) reason += "; " + only53 + " is Lua 5.3 and will fail";
+    if (reason.empty()) reason = "desktop MTA scripts";
+    (void)job;
+    return L51;
+}
+
+// Runs one resource script with the resource's shared environment: _ENV in
+// Lua 5.3, the chunk's environment (setfenv) in Lua 5.1. Globals a file
+// defines are visible to the other files of the same resource (desktop: one
+// Lua state per resource). Reads fall through to the VM globals.
+static bool RunResourceChunk(lua_State* L, PreparedScript& script, int envRef) {
+    if (script.compiled != LUA_NOREF) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, script.compiled);
+        luaL_unref(L, LUA_REGISTRYINDEX, script.compiled);
+        script.compiled = LUA_NOREF;
+    } else if (IsCompiledScript(script.source)) {
+        // Compiled scripts load as on desktop (CLuaMain::LoadScriptFromBuffer):
+        // netc's CNet::DeobfuscateScript accepts or decrypts them first, which
+        // only the PC Network session has. Lua 5.1 does not verify bytecode, so
+        // none is loaded without it.
+        PreparedScript plain{script.chunk, {}};
+        if (!Vms::Is51(L) ||
+            !Net::DeobfuscateScriptForSession(script.source.data(), script.source.size(), script.chunk, plain.source)) {
+            LUA_LOGE("Resource script %s is compiled (luac.mtasa.com): it loads only with PC Network compatibility",
+                     script.chunk.c_str());
+            return false;
+        }
+        const size_t bom = Utf8BomLength(plain.source);
+        const int status = luaL_loadbufferx(L, reinterpret_cast<const char*>(plain.source.data()) + bom,
+                                            plain.source.size() - bom, ("@" + script.chunk).c_str(), "bt");
+        std::fill(plain.source.begin(), plain.source.end(), 0);
+        if (status != LUA_OK) {
+            LUA_LOGE("Resource script %s failed: %s", script.chunk.c_str(), lua_tostring(L, -1));
+            lua_pop(L, 1);
+            return false;
+        }
+    } else if (LoadResourceScript(L, script) != LUA_OK) {
+        LUA_LOGE("Resource script %s failed: %s", script.chunk.c_str(), lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
     lua_rawgeti(L, LUA_REGISTRYINDEX, envRef);
-    lua_setupvalue(L, -2, 1);
+    if (Vms::Is51(L)) neon_lua51_setfenv(L, -2);
+    else lua_setupvalue(L, -2, 1);
     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-        LUA_LOGE("Resource script %s failed: %s", chunk.c_str(), lua_tostring(L, -1));
+        LUA_LOGE("Resource script %s failed: %s", script.chunk.c_str(), lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
@@ -2461,8 +2717,28 @@ static void SendResourceStarted(const WorldRPG::Script::ResourceLoadJob& job) {
 
 // Desktop CResource::Load: no-cache scripts first, then the CLIENT_SCRIPT files in
 // list order, then onClientResourceStart with the resource root as source.
-static void RunResourceJob(lua_State* L, const WorldRPG::Script::ResourceLoadJob& job) {
+static void RunResourceJob(const WorldRPG::Script::ResourceLoadJob& job) {
     if (WorldRPG::Debug::Flag("nolua")) return;
+    // Desktop order: no-cache scripts first, then the CLIENT_SCRIPT files.
+    std::vector<PreparedScript> scripts;
+    int failed = 0;
+    for (const ResourceScript& script : job.noCacheScripts) scripts.push_back({script.chunkName, script.source});
+    const size_t noCacheCount = scripts.size();
+    for (const ResourceScript& script : job.clientScripts) {
+        PreparedScript prepared{script.chunkName, {}};
+        if (!ReadCachedScript(script.cachePath, prepared.source) || prepared.source.empty()) {
+            LUA_LOGE("Resource script %s: cached file unreadable (%s)", script.chunkName.c_str(), script.cachePath.c_str());
+            ++failed;
+            continue;
+        }
+        scripts.push_back(std::move(prepared));
+    }
+    std::string reason;
+    lua_State* L = ChooseResourceVm(job, scripts, reason);
+    if (!L) return;
+    g_resourceVm[job.generation] = L;
+    LUA_LOGI("LuaVM: resource %s runs in Lua %s (%s)", job.name.c_str(), Vms::Is51(L) ? "5.1" : "5.3", reason.c_str());
+    VmScope vm(L);
     OwnerScope owner(job.name, job.netId, job.generation);
     refreshLocalPlayer(L);
     lua_newtable(L);                       // resource environment
@@ -2474,19 +2750,9 @@ static void RunResourceJob(lua_State* L, const WorldRPG::Script::ResourceLoadJob
     lua_setfield(L, -2, "resourceRoot");
     KeepResourceEnvironment(L, job.generation, -1);
     const int envRef = luaL_ref(L, LUA_REGISTRYINDEX);
-    int cachedOk = 0, noCacheOk = 0, failed = 0;
-    for (const ResourceScript& script : job.noCacheScripts) {
-        if (RunResourceChunk(L, script.chunkName, script.source.data(), script.source.size(), envRef)) ++noCacheOk;
-        else ++failed;
-    }
-    for (const ResourceScript& script : job.clientScripts) {
-        std::vector<uint8_t> source;
-        if (!ReadCachedScript(script.cachePath, source) || source.empty()) {
-            LUA_LOGE("Resource script %s: cached file unreadable (%s)", script.chunkName.c_str(), script.cachePath.c_str());
-            ++failed;
-            continue;
-        }
-        if (RunResourceChunk(L, script.chunkName, source.data(), source.size(), envRef)) ++cachedOk;
+    int cachedOk = 0, noCacheOk = 0;
+    for (size_t i = 0; i < scripts.size(); ++i) {
+        if (RunResourceChunk(L, scripts[i], envRef)) ++(i < noCacheCount ? noCacheOk : cachedOk);
         else ++failed;
     }
     luaL_unref(L, LUA_REGISTRYINDEX, envRef);
@@ -2592,14 +2858,16 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
         if (g_dx.timers[i].times == 0 || g_dx.timers[i].paused || now < g_dx.timers[i].next) continue;
         {
             OwnerScope scope(g_dx.timers[i].owner, g_dx.timers[i].netId, g_dx.timers[i].generation);
-            lua_rawgeti(pImpl_->L, LUA_REGISTRYINDEX, g_dx.timers[i].ref);
-            if (lua_pcall(pImpl_->L, 0, 0, 0) != LUA_OK) {
-                LUA_LOGE("Lua timer: %s", lua_tostring(pImpl_->L, -1));
-                lua_pop(pImpl_->L, 1);
+            lua_State* T = RefVmOr(g_dx.timers[i].ref, pImpl_->L);
+            VmScope vm(T);
+            Vms::PushRef(T, g_dx.timers[i].ref);
+            if (lua_pcall(T, 0, 0, 0) != LUA_OK) {
+                LUA_LOGE("Lua timer: %s", lua_tostring(T, -1));
+                lua_pop(T, 1);
             }
         }
         g_dx.timers[i].next = now + static_cast<std::uint64_t>(g_dx.timers[i].interval);
-        if (g_dx.timers[i].times > 0) --g_dx.timers[i].times;
+        if (g_dx.timers[i].times > 0 && --g_dx.timers[i].times == 0) Vms::Unref(g_dx.timers[i].ref);  // expired
     }
     g_dx.timers.erase(std::remove_if(g_dx.timers.begin(), g_dx.timers.end(),
         [](const DxRuntime::Timer& timer) { return timer.times == 0; }), g_dx.timers.end());
@@ -2702,9 +2970,16 @@ void LuaVMStub::shutdown() {
     GuiReset();
     WeaponsReset();
 
+    g_resourceVm.clear();
+    if (pImpl_->L51) {
+        lua_close(pImpl_->L51);
+        pImpl_->L51 = nullptr;
+        Vms::SetLua51(nullptr);
+    }
     if (pImpl_->L) {
         lua_close(pImpl_->L);
         pImpl_->L = nullptr;
+        Vms::SetPrimary(nullptr);
         // __gc handlers can call installed DX functions during lua_close.
         // Their late handles must also be invalidated after the registry dies.
         DxReset();
@@ -2945,28 +3220,30 @@ static void DropResourceState(lua_State* L, const std::string& name, uint16_t ne
     GuiDropResource(name, netId, generation);
     NativeUiDropResource(name, netId, generation);
     DropResourceModelAssets(generation);
-    DropResourceEnvironment(L, generation);
+    DropResourceEnvironment(ResourceVm(generation), generation);
     Events::DropOwner(name, netId, generation);
     KeyBindsDropResource(L, name, netId, generation);
     CommandHandlersDropResource(L, name, netId, generation);
     DxDropResource(name, netId, generation);
     WeaponsDropOwner(name, netId, generation);
     CryptDropOwner(name, netId, generation);
+    g_resourceVm.erase(generation);
     for (auto& [event, refs] : g_dx.handlers) {
         refs.erase(std::remove_if(refs.begin(), refs.end(), [&](const DxRuntime::Handler& handler) {
             if (OwnerOfHandler(handler.ref) != name) return false;
             if (netId != 0 && handler.netId != 0 && handler.netId != netId) return false;
             if (generation != 0 && handler.generation != 0 && handler.generation != generation) return false;
-            luaL_unref(L, LUA_REGISTRYINDEX, handler.ref);
+            Vms::Unref(handler.ref);
             g_dx.handlerOwner.erase(handler.ref);
             return true;
         }), refs.end());
     }
     for (auto& timer : g_dx.timers) {
+        if (timer.times == 0) continue;  // expired this pulse: its ref is already released
         if (timer.owner != name) continue;
         if (netId != 0 && timer.netId != 0 && timer.netId != netId) continue;
         if (generation != 0 && timer.generation != 0 && timer.generation != generation) continue;
-        luaL_unref(L, LUA_REGISTRYINDEX, timer.ref);
+        Vms::Unref(timer.ref);
         timer.times = 0;
     }
     g_dx.timers.erase(std::remove_if(g_dx.timers.begin(), g_dx.timers.end(),
@@ -3000,15 +3277,24 @@ static void RunResourceStop(lua_State* L, const std::string& name, uint32_t root
             }
             if (!match) continue;
             OwnerScope scope(name, handler.netId, handler.generation);
-            lua_rawgeti(L, LUA_REGISTRYINDEX, handler.ref);
+            lua_State* T = RefVmOr(handler.ref, L);
+            VmScope vm(T);
+            const bool other = T != L;  // source was set in L above
+            if (other) {
+                lua_getglobal(T, "source");
+                PushElement(T, root);
+                lua_setglobal(T, "source");
+            }
+            Vms::PushRef(T, handler.ref);
             // CResource::Stop (CResource.cpp 1651-1653) passes the resource. source
             // stays the resource root, set above.
-            const bool pushed = PushResourceInstance(L, netId, generation);
-            if (!pushed) PushElement(L, root);
-            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                LUA_LOGE("Lua onClientResourceStop (%s): %s", name.c_str(), lua_tostring(L, -1));
-                lua_pop(L, 1);
+            const bool pushed = PushResourceInstance(T, netId, generation);
+            if (!pushed) PushElement(T, root);
+            if (lua_pcall(T, 1, 0, 0) != LUA_OK) {
+                LUA_LOGE("Lua onClientResourceStop (%s): %s", name.c_str(), lua_tostring(T, -1));
+                lua_pop(T, 1);
             }
+            if (other) lua_setglobal(T, "source");
         }
     }
     DropResourceState(L, name, netId, generation);
@@ -3049,7 +3335,7 @@ bool ActiveVmPulseResources() {
     if (!g_active || !g_active->isReady() || !g_dx.L) return false;
     const bool wasHooked = g_dx.chatHooked;
     std::vector<ResourceLoader::FileDownloadEvent> downloads;
-    for (const auto& job : ResourceLoader::Pump(downloads)) RunResourceJob(g_dx.L, job);
+    for (const auto& job : ResourceLoader::Pump(downloads)) RunResourceJob(job);
     for (const auto& done : downloads) {
         ResourceLoader::ResourceView target;
         if (!ResourceLoader::CopyResourceByGeneration(done.generation, target) || !target.root) continue;
@@ -3091,6 +3377,18 @@ void ActiveVmAppendDraw(const std::string& lines) { g_dx.frame += lines; }
 void ActiveVmAppendPostGuiDraw(const std::string& lines) { g_dx.postGuiFrame += lines; }
 std::string ActiveVmResourceFile(const std::string& path) { return DxImageFile(path); }
 lua_State* ActiveVmState() { return g_dx.L; }
+
+void ActiveVmSetResourceLua(int mode) { g_resourceLua = mode >= 0 && mode <= 2 ? mode : 0; }
+
+lua_State* ActiveVmResourceVm(uint32_t generation) {
+    const auto found = g_resourceVm.find(generation);
+    return found == g_resourceVm.end() ? nullptr : found->second;
+}
+
+void ActiveVmRunIn(lua_State* vm, const std::function<void()>& fn) {
+    VmScope scope(vm);
+    fn();
+}
 
 std::string ActiveVmPump(bool renderFrame) {
     return g_active ? g_active->pumpDx(renderFrame) : std::string();

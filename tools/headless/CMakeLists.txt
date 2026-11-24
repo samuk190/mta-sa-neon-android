@@ -68,6 +68,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/LuaCameraApi.cpp"
     "${NATIVE_DIR}/shared/LuaFieldApi.cpp"
     "${NATIVE_DIR}/shared/LuaUtilApi.cpp"
+    "${NATIVE_DIR}/shared/LuaVmSet.cpp"
     "${NATIVE_DIR}/shared/LuaCryptApi.cpp"
     "${NATIVE_DIR}/shared/SharedCrypto.cpp"
     "${NATIVE_DIR}/shared/LuaFileApi.cpp"

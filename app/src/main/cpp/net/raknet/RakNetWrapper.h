@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <string>
+#include <vector>
 #include <memory>
 #include <functional>
 #include <atomic>
@@ -222,6 +223,9 @@ public:
     // True while the session runs through PC Network (emulated netc). The
     // server then sees a desktop client and writes desktop packet layouts.
     bool IsPcNetwork() const;
+    // Decrypts a luac.mtasa.com encrypted script through the PC Network netc,
+    // as desktop MTA does (CNet::DeobfuscateScript). False off PC Network.
+    bool DeobfuscateScript(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out);
     // CNet::SetServerBitStreamVersion for netc; nothing to do on other transports.
     void SetServerBitStreamVersion(uint16_t version);
 
@@ -293,5 +297,8 @@ std::string NormalizeAscii(const std::string& input);
 // True when WriteNormVector emits the same bytes as the VehicleSync 16-bit
 // encoding. The later headless check calls this; it does not change the wire.
 bool NormVectorBytesMatchVehicleSync();
+
+// RakNetWrapper::DeobfuscateScript on the live session, if any.
+bool DeobfuscateScriptForSession(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out);
 
 } // namespace WorldRPG::Net

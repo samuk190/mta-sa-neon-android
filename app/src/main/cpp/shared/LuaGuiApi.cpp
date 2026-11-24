@@ -1,4 +1,5 @@
 #include "LuaGuiApi.h"
+#include "LuaVmSet.h"
 
 #include "LuaApiExtra.h"
 #include "LuaDxApi.h"
@@ -558,7 +559,7 @@ static void ReleaseGridData(GuiElement& element) {
     for (auto& row : element.gridRows) {
         for (auto& cell : row) {
             if (cell.dataRef == LUA_NOREF) continue;
-            luaL_unref(g_guiVm, LUA_REGISTRYINDEX, cell.dataRef);
+            WorldRPG::Script::Vms::Unref(cell.dataRef);
             cell.dataRef = LUA_NOREF;
         }
     }
@@ -2500,7 +2501,8 @@ static int CountGridSelection(const GuiElement& grid) {
 
 static void ReleaseCell(lua_State* L, GuiElement::GridCell& cell) {
     if (cell.dataRef != LUA_NOREF) {
-        luaL_unref(L, LUA_REGISTRYINDEX, cell.dataRef);
+        (void)L;
+        WorldRPG::Script::Vms::Unref(cell.dataRef);
         cell.dataRef = LUA_NOREF;
     }
 }
@@ -2770,7 +2772,7 @@ static int GuiGridListSetItemData(lua_State* L) {
     if (GuiElement::GridCell* cell = grid ? GridCellAt(*grid, row, column, true) : nullptr) {
         ReleaseCell(L, *cell);
         lua_pushvalue(L, 4);
-        cell->dataRef = luaL_ref(L, LUA_REGISTRYINDEX);
+        cell->dataRef = WorldRPG::Script::Vms::Ref(L);
     }
     lua_pushboolean(L, grid ? 1 : 0);
     return 1;
@@ -2788,7 +2790,7 @@ static int GuiGridListGetItemData(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    lua_rawgeti(L, LUA_REGISTRYINDEX, cell->dataRef);
+    WorldRPG::Script::Vms::PushRefCopy(L, cell->dataRef);
     return 1;
 }
 
@@ -3062,7 +3064,7 @@ static int GuiGetCursorType(lua_State* L) {
 }
 
 static void RegisterGuiExtensions(lua_State* L) {
-    g_guiVm = L;
+    if (!WorldRPG::Script::Vms::Is51(L)) g_guiVm = L;  // the session's state; 5.1 is installed beside it
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"dxGetPixelColor", DxGetPixelColor},
         {"dxGetPixelsFormat", DxGetPixelsFormat},

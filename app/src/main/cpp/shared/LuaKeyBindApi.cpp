@@ -1,4 +1,5 @@
 #include "LuaKeyBindApi.h"
+#include "LuaVmSet.h"
 
 #include "LuaVMStub.h"
 
@@ -105,8 +106,9 @@ void RefreshBoundKeys() {
 }
 
 void Unref(lua_State* L, const FunctionBind& bind) {
-    luaL_unref(L, LUA_REGISTRYINDEX, bind.ref);
-    for (int ref : bind.args) luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    (void)L;
+    WorldRPG::Script::Vms::Unref(bind.ref);
+    for (int ref : bind.args) WorldRPG::Script::Vms::Unref(ref);
 }
 
 bool SameInstance(const FunctionBind& bind) {
@@ -115,7 +117,7 @@ bool SameInstance(const FunctionBind& bind) {
 }
 
 bool SameFunction(lua_State* L, int ref, int index) {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    WorldRPG::Script::Vms::PushRef(L, ref);
     const bool same = lua_rawequal(L, -1, index) != 0;
     lua_pop(L, 1);
     return same;
@@ -212,10 +214,10 @@ int BindKey(lua_State* L) {
         bind.control = control != nullptr;
         bind.down = pass == 0;
         lua_pushvalue(L, 3);
-        bind.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+        bind.ref = WorldRPG::Script::Vms::Ref(L);
         for (int i = 4; i <= top; ++i) {
             lua_pushvalue(L, i);
-            bind.args.push_back(luaL_ref(L, LUA_REGISTRYINDEX));
+            bind.args.push_back(WorldRPG::Script::Vms::Ref(L));
         }
         bind.owner = ActiveVmOwner();
         bind.netId = ActiveVmOwnerNet();
@@ -337,8 +339,9 @@ int GetFunctionsBoundToKey(lua_State* L) {
     for (const FunctionBind& bind : g_functions) {
         if (check && bind.down != down) continue;
         if (name != bind.name) continue;
+        if (WorldRPG::Script::Vms::RefVm(bind.ref) != WorldRPG::Script::Vms::MainOf(L)) continue;  // functions of the other VM
         lua_pushinteger(L, ++index);
-        lua_rawgeti(L, LUA_REGISTRYINDEX, bind.ref);
+        WorldRPG::Script::Vms::PushRef(L, bind.ref);
         lua_settable(L, -3);
     }
     return 1;

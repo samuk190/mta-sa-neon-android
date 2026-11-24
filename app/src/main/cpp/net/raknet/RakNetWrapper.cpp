@@ -724,6 +724,16 @@ void RakNetWrapper::StopNetwork() {
 
 bool RakNetWrapper::IsPcNetwork() const { return pImpl_->pc != nullptr; }
 
+bool RakNetWrapper::DeobfuscateScript(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out) {
+    out.clear();
+    return pImpl_->pc && pImpl_->pc->DeobfuscateScript(data, size, name, out);
+}
+
+bool DeobfuscateScriptForSession(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out) {
+    out.clear();
+    return g_liveWrapper && g_liveWrapper->DeobfuscateScript(data, size, name, out);
+}
+
 bool RakNetWrapper::IsTransportStarting() const {
     return pImpl_->pc && pImpl_->handshakeState.load() == HandshakeState::IDLE;
 }

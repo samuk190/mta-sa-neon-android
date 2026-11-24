@@ -62,6 +62,10 @@ public:
     void SetServerBitStreamVersion(uint16_t version);
     uint16_t GetServerBitStreamVersion();
     std::string GetSerial();
+    // CNet::DeobfuscateScript: a luac.mtasa.com encrypted script (0x1C) to the
+    // Lua bytecode desktop MTA loads (CLuaMain::LoadScriptFromBuffer). Other
+    // scripts come back unchanged. The guest copies are zeroed afterwards.
+    bool DeobfuscateScript(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out);
     uint8_t GetConnectionError();
     uint16_t GetNetRev();
     uint16_t GetNetRel();

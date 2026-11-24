@@ -13,6 +13,7 @@
 // CModelInfo::SetModel and onClientElementModelChange are not run.
 
 #include "LuaApiExtra.h"
+#include "LuaVmSet.h"
 #include "LuaElementTree.h"
 #include "LuaGuiApi.h"
 #include "LuaVMStub.h"
@@ -1239,7 +1240,7 @@ void InstallElementBindings(lua_State* L) {
     Bind(L, "getElementChildrenCount", GetElementChildrenCount);
     Bind(L, "getElementParent", GetElementParent);
     Bind(L, "isElementLocal", IsElementLocal);
-    Bind(L, "hasElementData", HasElementData);
+    Bind(L, "hasElementData", WorldRPG::Script::Vms::OnPrimary<HasElementData>);
     Bind(L, "isElementCallPropagationEnabled", IsElementCallPropagationEnabled);
     Bind(L, "isElementCollidableWith", IsElementCollidableWith);
     Bind(L, "createElement", CreateElement);
@@ -1250,7 +1251,7 @@ void InstallElementBindings(lua_State* L) {
     Bind(L, "isElement", IsElement);
     Bind(L, "getElementType", GetElementType);
     Bind(L, "destroyElement", DestroyElement);
-    Bind(L, "getAllElementData", GetAllElementData);
+    Bind(L, "getAllElementData", WorldRPG::Script::Vms::OnPrimary<GetAllElementData>);
     Bind(L, "isElementInWater", IsElementInWater);
     // CLuaCompatibilityDefs.cpp:22-23. Same function as isElementInWater.
     Bind(L, "isPedInWater", IsElementInWater);

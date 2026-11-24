@@ -85,6 +85,11 @@ public:
     /// "R x y w h argb" and "T x y size argb text" commands.
     std::string pumpDx(bool renderFrame = true);
 
+    // The Lua 5.1 VM for desktop MTA resources, created by initialize() with
+    // desktop's libraries and sandbox and the same script API. Null when it
+    // could not be created.
+    lua_State* lua51();
+
 private:
     struct Impl;
     std::unique_ptr<Impl> pImpl_;
@@ -138,6 +143,14 @@ uint32_t ActiveVmOwnerGeneration();
 // Runs fn as that resource (OwnerScope), as timers and event handlers run. Used by
 // callbacks that complete later on the VM thread, for example the crypt worker.
 void ActiveVmRunAsOwner(const std::string& owner, uint16_t netId, uint32_t generation, const std::function<void()>& fn);
+// Runs fn with vm as the current VM (the Lua 5.3 or 5.1 state a callback lives in).
+void ActiveVmRunIn(lua_State* vm, const std::function<void()>& fn);
+// Which VM resources started from now on run in: 0 Automatic (5.1 unless a
+// script only parses as 5.3), 1 always Lua 5.3, 2 always Lua 5.1.
+void ActiveVmSetResourceLua(int mode);
+
+// The VM a started resource runs in, or null when it has not started.
+lua_State* ActiveVmResourceVm(uint32_t generation);
 bool ActiveVmChatHooked();
 // Client root id, or 0 before the element bindings are installed.
 uint32_t ClientRootElement();

@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 // Bump on any incompatible change to the structs or the function table.
-#define NETEMU_ABI_VERSION 1
+#define NETEMU_ABI_VERSION 2
 
 typedef struct NetEmuConfig {
     uint32_t size;                // sizeof(NetEmuConfig), for forward compatibility
@@ -63,6 +63,13 @@ typedef struct NetEmuApi {
     // Discards the next received packet without copying it (one pop_packet
     // reported too large for the caller). Returns 1 when one was dropped.
     int (*drop_packet)(NetEmuHandle* h);
+
+    // ABI 2. CNet::DeobfuscateScript: a luac.mtasa.com encrypted script to the
+    // bytecode desktop MTA loads. Returns 1 with *out (free with free_buffer)
+    // and *out_size set, 0 when netc refused it.
+    int (*deobfuscate_script)(NetEmuHandle* h, const uint8_t* in, size_t in_size, const char* name, uint8_t** out,
+                              size_t* out_size);
+    void (*free_buffer)(void* p);
 } NetEmuApi;
 
 // The one exported symbol.

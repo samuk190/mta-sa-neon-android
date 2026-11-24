@@ -1,4 +1,5 @@
 #include "LuaSvgApi.h"
+#include "LuaVmSet.h"
 
 #include "LuaApiExtra.h"
 #include "LuaDxApi.h"
@@ -98,13 +99,13 @@ void CheckSize(lua_State* L, double width, double height) {
 
 void SetCallback(lua_State* L, Svg& svg, int index) {
     if (!lua_isfunction(L, index)) return;
-    if (svg.callback != LUA_NOREF) luaL_unref(L, LUA_REGISTRYINDEX, svg.callback);
+    if (svg.callback != LUA_NOREF) WorldRPG::Script::Vms::Unref(svg.callback);
     lua_pushvalue(L, index);
-    svg.callback = luaL_ref(L, LUA_REGISTRYINDEX);
+    svg.callback = WorldRPG::Script::Vms::Ref(L);
 }
 
 void Destroy(lua_State* L, const Svg& svg) {
-    if (L && svg.callback != LUA_NOREF) luaL_unref(L, LUA_REGISTRYINDEX, svg.callback);
+    if (L && svg.callback != LUA_NOREF) WorldRPG::Script::Vms::Unref(svg.callback);
     DxFreeOverlayBitmap(svg.id);
 }
 
@@ -249,7 +250,7 @@ int SvgSetUpdateCallback(lua_State* L) {
         return 1;
     }
     if (lua_isboolean(L, 2) && lua_toboolean(L, 2) == 0) {
-        if (svg->callback != LUA_NOREF) luaL_unref(L, LUA_REGISTRYINDEX, svg->callback);
+        if (svg->callback != LUA_NOREF) WorldRPG::Script::Vms::Unref(svg->callback);
         svg->callback = LUA_NOREF;
         lua_pushboolean(L, 1);
         return 1;

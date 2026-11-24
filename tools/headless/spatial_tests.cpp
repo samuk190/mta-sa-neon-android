@@ -168,6 +168,7 @@ void DriftVehicleChecks() {
 int main() {
     GeometryChecks();DriftVehicleChecks();ServerWorld::ResetSession();Script::ResourceLoader::Reset();ServerWorld::SetLocalPlayer(1);
     Game::ApplyServerSpawn(100.25f,100.25f,10); ServerWorld::NotePlayerSkin(2,7);ServerWorld::NoteElementPosition(2,100.5f,100,10);ServerWorld::NoteElementDimension(2,3);
+    Script::ActiveVmSetResourceLua(1);  // the checks run in the 5.3 VM with the resource
     Script::LuaVMStub vm;Check(vm.initialize(),"VM initializes");
     Lua(vm,"assert(createColSphere(0,0,0,1)==false and isElementWithinColShape({}, {})==nil and getElementsWithinColShape({})==false)");
     Resource(41,4000,"spatial",R"LUA(

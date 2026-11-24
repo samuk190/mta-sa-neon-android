@@ -53,6 +53,9 @@ public:
     // Applied now, or as soon as netc is up.
     void SetServerBitStreamVersion(uint16_t version);
     void SetTimeoutTime(uint32_t ms);
+    // CNet::DeobfuscateScript through the emulated netc (encrypted
+    // luac.mtasa.com scripts). False until netc is up or when it refuses.
+    bool DeobfuscateScript(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out);
 
 private:
     PcNetworkTransport() = default;

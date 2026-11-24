@@ -1,6 +1,8 @@
 // C ABI over NetcModule (see NetEmuApi.h).
 
 #include "NetEmuApi.h"
+#include <vector>
+#include <cstdlib>
 
 #include "NetcModule.h"
 
@@ -111,11 +113,29 @@ int DropPacket(NetEmuHandle* h) {
 
 int SessionOver(NetEmuHandle* h) { return !h || h->netc.SessionOver() ? 1 : 0; }
 
+int DeobfuscateScript(NetEmuHandle* h, const uint8_t* in, size_t size, const char* name, uint8_t** out, size_t* outSize) {
+    if (out) *out = nullptr;
+    if (outSize) *outSize = 0;
+    if (!h || !out || !outSize) return 0;
+    std::vector<uint8_t> plain;
+    if (!h->netc.DeobfuscateScript(in, size, name ? name : "", plain)) return 0;
+    auto* buffer = static_cast<uint8_t*>(std::malloc(plain.size()));
+    if (!buffer) return 0;
+    std::memcpy(buffer, plain.data(), plain.size());
+    std::fill(plain.begin(), plain.end(), 0);
+    *out = buffer;
+    *outSize = plain.size();
+    return 1;
+}
+
+void FreeBuffer(void* p) { std::free(p); }
+
 const NetEmuApi kApi = {
     NETEMU_ABI_VERSION, Load,       Unload,          StartNetwork,         StopNetwork,
     DoPulse,            IsConnected, IsReady,        GetPing,              GetConnectionError,
     SetServerBitStreamVersion,       SetTimeoutTime, GetSerial,            SendPacket,
     PopPacket,          SessionOver,     DropPacket,
+    DeobfuscateScript,  FreeBuffer,
 };
 
 }  // namespace

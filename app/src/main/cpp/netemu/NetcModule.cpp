@@ -44,7 +44,10 @@ enum CNetSlot : uint32_t {
     kGetNetRev = 26,
     kGetNetRel = 27,
     kSetTimeoutTime = 37,
+    kDeobfuscateScript = 41,  // CNet.h: bool DeobfuscateScript(in, size, &out, &outSize, scriptName)
 };
+
+constexpr size_t kMaxScriptBytes = 64u << 20;
 
 constexpr uint32_t kCoreSlots = 192;
 // As the native transport: a packet netc has acknowledged cannot be
@@ -389,6 +392,46 @@ std::string NetcModule::GetSerial() {
     const std::string serial = machine_->Mem().ReadA(buf, 64);
     FreeGuest(buf);
     return serial;
+}
+
+bool NetcModule::DeobfuscateScript(const uint8_t* data, size_t size, const std::string& name, std::vector<uint8_t>& out) {
+    out.clear();
+    if (!cnet_ || !data || size == 0 || size > kMaxScriptBytes) return false;
+    uint32_t in = 0, slots = 0, nameBuf = 0;
+    machine_->RunSync([&] {
+        GuestMemory& m = machine_->Mem();
+        in = m.HeapAlloc(static_cast<uint32_t>(size), false);
+        slots = m.HeapAlloc(8, true);  // const char* out, uint size
+        nameBuf = m.HeapAlloc(static_cast<uint32_t>(name.size() + 1), true);
+        if (in) m.WriteBytes(in, data, size);
+        if (nameBuf) m.WriteBytes(nameBuf, name.data(), name.size());
+    });
+    bool ok = false;
+    if (in && slots && nameBuf) {
+        bool called = false;
+        const uint64_t r = CallMethod(kDeobfuscateScript, {in, static_cast<uint32_t>(size), slots, slots + 4, nameBuf}, &called);
+        machine_->RunSync([&] {
+            GuestMemory& m = machine_->Mem();
+            const uint32_t p = m.Read32(slots);
+            const uint32_t n = m.Read32(slots + 4);
+            if (called && (r & 0xFF) && p && n > 0 && n <= kMaxScriptBytes && m.Valid(p, n)) {
+                out.resize(n);
+                ok = m.ReadBytes(p, out.data(), n);
+                // Desktop clears the plain script once loaded; do the same in the guest.
+                if (p != in) {
+                    std::vector<uint8_t> zeros(n, 0);
+                    m.WriteBytes(p, zeros.data(), n);
+                }
+            }
+            std::vector<uint8_t> zeros(size, 0);
+            m.WriteBytes(in, zeros.data(), size);
+        });
+    }
+    FreeGuest(in);
+    FreeGuest(slots);
+    FreeGuest(nameBuf);
+    if (!ok) out.clear();
+    return ok;
 }
 
 std::string NetcModule::GetConnectedServer(bool includePort) {

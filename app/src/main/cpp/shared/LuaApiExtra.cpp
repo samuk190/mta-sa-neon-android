@@ -1,4 +1,5 @@
 #include "LuaApiExtra.h"
+#include "LuaVmSet.h"
 
 #include "LuaGuiApi.h"
 #include "LuaJsonApi.h"
@@ -815,8 +816,9 @@ void InstallExtraBindings(lua_State* L) {
     SetGlobal(L, "setMobileRadarArea", SetMobileRadarArea);
     SetGlobal(L, "iprint", Iprint);
     SetGlobal(L, "debugMessage", DebugMessage);
-    SetGlobal(L, "getElementData", GetElementData);
-    SetGlobal(L, "setElementData", SetElementData);
+    // One element data store for both VMs (LuaVmSet.h ProxyToPrimary).
+    SetGlobal(L, "getElementData", WorldRPG::Script::Vms::OnPrimary<GetElementData>);
+    SetGlobal(L, "setElementData", WorldRPG::Script::Vms::OnPrimary<SetElementData>);
     SetGlobal(L, "Vector3", Vector3New);
     SetGlobal(L, "getCameraMatrix", GetCameraMatrix);
     InstallGuiBindings(L);

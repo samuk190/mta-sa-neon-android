@@ -530,6 +530,92 @@ void CheckCrypto(WorldRPG::Script::LuaVMStub& vm) {
     WorldRPG::Script::ActiveVmOnResourceStop(stopOwner.GetData(), stopOwner.GetByteLength(), stopOwner.GetBitLength());
 }
 
+// Resources in the two VMs (shared/LuaVmSet.h): Automatic picks Lua 5.3 for a
+// script that only parses as 5.3 and Lua 5.1 otherwise; events, call(),
+// element data, timers and crypto callbacks work across them.
+void CheckTwoVms(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    Script::ActiveVmSetResourceLua(0);
+    auto start = [](const char* name, uint16_t netId, uint32_t entity, std::vector<std::string> exports) {
+        Net::ResourceStartInfo info;
+        info.name = name;
+        info.resourceId = netId;
+        info.entityId = entity;
+        info.dynamicEntityId = entity + 1;
+        info.noClientCacheScripts = 1;
+        info.startCounter = 1;
+        info.exportedFunctions = std::move(exports);
+        Script::ActiveVmOnResourceStart(info);
+    };
+    start("vm53", 120, 0x4100, {"add"});
+    start("vm51", 121, 0x4110, {});
+    const std::vector<uint8_t> body53 = NoCacheScriptBody(120, R"LUA(
+        addEvent("vmPing")
+        addEvent("vmShape")
+        addEventHandler("vmShape", root, function(v) _G.vmShape = v end)
+        function add(a, t) return a + t.x // 1, getResourceName(sourceResource) end
+        addEventHandler("vmPing", root, function(payload, el)
+            _G.vmPing = {payload = payload, el = el, src = source, from = getResourceName(sourceResource)}
+        end)
+    )LUA");
+    const std::vector<uint8_t> body51 = NoCacheScriptBody(121, R"LUA(
+        addEvent("vmPong")
+        local a, b = unpack({1, 2})
+        local t = {x = 7.9, nested = {}}
+        t.nested.self = t
+        triggerEvent("vmPing", root, t, localPlayer)
+        local sum, caller = call(getResourceFromName("vm53"), "add", 3, t)
+        setElementData(root, "vm51.call", sum)
+        setElementData(root, "vm51.caller", caller)
+        setElementData(root, "vm51.unpack", a + b)
+        setElementData(root, "vm51.lua", _VERSION)
+        setElementData(root, "vm51.getfenv", getfenv == nil or getfenv() == false)
+        setElementData(root, "vm51.compat", table.unpack == unpack and math.type(3) == "integer" and
+            math.tointeger("4") == 4 and table.pack(1, nil).n == 2 and table.move({1, 2}, 1, 2, 2)[3] == 2)
+        setElementData(root, "vm51.bytecode", loadstring(string.char(27) .. "Lua\81") == nil)
+        triggerEvent("vmShape", root, {element = true, id = 1, resource = true})
+        setTimer(function() setElementData(root, "vm51.timer", true) end, 1, 1)
+        encodeString("base64", "owner", function(r) setElementData(root, "vm51.crypt", r) end)
+        addEventHandler("vmPong", root, function(v) setElementData(root, "vm51.pong", v .. "!") end)
+    )LUA");
+    CHECK(Script::ActiveVmFeedScripts(body53.data(), body53.size(), body53.size() * 8));
+    CHECK(Script::ActiveVmFeedScripts(body51.data(), body51.size(), body51.size() * 8));
+    Script::ActiveVmPulseResources();
+    Script::CryptWaitIdleForTests();
+    Script::CryptDeliverCompletions();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    vm.pumpDx();
+    RunLua(vm, "two-vms", R"LUA(
+        local p = _G.vmPing
+        assert(p, "5.1 event reached the 5.3 handler")
+        assert(p.payload.x == 7.9 and p.payload.nested.self == p.payload, "tables copied, cycle kept")
+        assert(p.el == localPlayer and p.src == root and p.from == "vm51", "elements and sourceResource cross")
+        assert(getElementData(root, "vm51.call") == 10 and getElementData(root, "vm51.caller") == "vm51", "call() across VMs")
+        assert(getElementData(root, "vm51.unpack") == 3, "unpack in 5.1")
+        assert(getElementData(root, "vm51.lua") == "Lua 5.1", "resource ran in Lua 5.1")
+        assert(getElementData(root, "vm51.getfenv") == true, "getfenv disabled as on desktop")
+        assert(getElementData(root, "vm51.compat") == true, "5.3 library additions in 5.1")
+        assert(getElementData(root, "vm51.bytecode") == true, "no bytecode without PC Network")
+        assert(type(_G.vmShape) == "table" and _G.vmShape.element == true and _G.vmShape.id == 1 and
+            _G.vmShape.resource == true, "a table shaped like an element is copied as a table")
+        assert(getElementData(root, "vm51.timer") == true, "5.1 timer")
+        assert(getElementData(root, "vm51.crypt") == "b3duZXI=", "5.1 crypto callback")
+        triggerEvent("vmPong", root, "hi")
+        assert(getElementData(root, "vm51.pong") == "hi!", "5.3 event reached the 5.1 handler")
+    )LUA");
+    for (uint16_t netId : {static_cast<uint16_t>(121), static_cast<uint16_t>(120)}) {
+        Net::BitStreamWriter stop;
+        stop.Write(netId);
+        Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+    }
+    RunLua(vm, "two-vms-stopped", R"LUA(
+        _G.vmPing = nil
+        triggerEvent("vmPong", root, "late")
+        assert(getElementData(root, "vm51.pong") == "hi!", "stopped 5.1 handlers are gone")
+    )LUA");
+    Script::ActiveVmSetResourceLua(1);
+}
+
 // createWeapon and the CClientWeapon element functions (CLuaWeaponDefs.cpp:150-695).
 void CheckCustomWeapons(WorldRPG::Script::LuaVMStub& vm) {
     using namespace WorldRPG;
@@ -4703,6 +4789,9 @@ void CheckSight(WorldRPG::Script::LuaVMStub& vm) {
 }
 
 int main(int argc, char** argv) {
+    // These scenarios check the script API from the Lua 5.3 VM, with the
+    // resources in the same VM; CheckTwoVms covers resources in Lua 5.1.
+    WorldRPG::Script::ActiveVmSetResourceLua(1);
     CheckPacketLayouts();
     CheckVehiclePackets();
     CheckPedEntityBody();
@@ -4750,6 +4839,7 @@ int main(int argc, char** argv) {
     CheckSvg(vm);
     CheckStopLifecycle(vm);
     CheckCustomWeapons(vm);
+    CheckTwoVms(vm);
     CheckObjects(vm);
     CheckWater(vm);
     CheckFires(vm);

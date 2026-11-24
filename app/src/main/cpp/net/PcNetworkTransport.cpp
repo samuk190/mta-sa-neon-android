@@ -272,6 +272,20 @@ void PcNetworkTransport::SetServerBitStreamVersion(uint16_t version) {
     if (session_->handle) session_->api->set_server_bitstream_version(session_->handle, version);
 }
 
+bool PcNetworkTransport::DeobfuscateScript(const uint8_t* data, size_t size, const std::string& name,
+                                           std::vector<uint8_t>& out) {
+    out.clear();
+    if (!Up()) return false;
+    std::lock_guard lk(session_->mutex);
+    uint8_t* plain = nullptr;
+    size_t plainSize = 0;
+    if (!session_->api->deobfuscate_script(session_->handle, data, size, name.c_str(), &plain, &plainSize)) return false;
+    out.assign(plain, plain + plainSize);
+    std::memset(plain, 0, plainSize);
+    session_->api->free_buffer(plain);
+    return true;
+}
+
 void PcNetworkTransport::SetTimeoutTime(uint32_t ms) {
     std::lock_guard lk(session_->mutex);
     session_->timeoutMs = ms;

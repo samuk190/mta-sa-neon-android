@@ -4,6 +4,7 @@
 // so getThisResource is the resource whose code is running (ActiveVmOwner).
 
 #include "LuaResourceApi.h"
+#include "LuaVmSet.h"
 
 #include "LuaApiExtra.h"
 #include "LuaGuiApi.h"
@@ -247,6 +248,40 @@ int l_call(lua_State* L) {
         return 1;
     }
 
+    // The target resource runs in the other VM (LuaVmSet.h): call it there, with
+    // the arguments and results copied as desktop copies them between resources.
+    lua_State* target = ActiveVmResourceVm(view.generation);
+    if (target && Vms::MainOf(target) != Vms::MainOf(L)) {
+        const int top = lua_gettop(L);
+        const int base = lua_gettop(target);
+        bool ok = false;
+        ActiveVmRunIn(target, [&] {
+            // Nothing in here may raise in L: the target is the current VM.
+            if (!lua_checkstack(target, top + 2)) return;
+            lua_pushcfunction(target, l_call);
+            Vms::CopyRange(L, 1, top, target);
+            ok = lua_pcall(target, top, LUA_MULTRET, 0) == LUA_OK;
+            if (!ok) {
+                const char* error = lua_tostring(target, -1);
+                LUA_LOGE("call: failed to call '%s:%s': %s", view.name.c_str(), funcName.c_str(),
+                         error ? error : "unknown error");
+                lua_settop(target, base);
+            }
+        });
+        if (!ok) {
+            PushFail(L);
+            return 1;
+        }
+        const int nresults = lua_gettop(target) - base;
+        if (!lua_checkstack(L, nresults + 1)) {
+            lua_settop(target, base);
+            return luaL_error(L, "stack overflow (call results)");
+        }
+        Vms::CopyRange(target, base + 1, nresults, L);
+        lua_settop(target, base);
+        return nresults;
+    }
+
     lua_rawgetp(L, LUA_REGISTRYINDEX, &kResourceEnvironments);
     if (lua_istable(L, -1)) {
         lua_rawgeti(L, -1, view.generation);
@@ -346,7 +381,7 @@ int l_load(lua_State* L) {
         lua_pushstring(L, "bad argument #1 to 'load' (function or string expected)");
         return 2;
     }
-    if (luaL_loadbufferx(L, code.data(), code.size(), name.c_str(), "t") != LUA_OK) {
+    if (Vms::LoadScriptChunk(L, code.data(), code.size(), name.c_str()) != LUA_OK) {
         lua_pushnil(L);
         lua_insert(L, -2);
         return 2;

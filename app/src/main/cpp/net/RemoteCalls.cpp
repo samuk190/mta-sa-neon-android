@@ -1,4 +1,6 @@
 #include "RemoteCalls.h"
+#include "../shared/LuaVmSet.h"
+#include "../shared/LuaVMStub.h"
 
 extern "C" {
 #include "lauxlib.h"
@@ -357,11 +359,11 @@ State& GetState() {
 void Unref(Call& call) {
     if (!g_L) return;
     if (call.callbackRef != LUA_NOREF) {
-        luaL_unref(g_L, LUA_REGISTRYINDEX, call.callbackRef);
+        WorldRPG::Script::Vms::Unref(call.callbackRef);
         call.callbackRef = LUA_NOREF;
     }
     if (call.argsRef != LUA_NOREF) {
-        luaL_unref(g_L, LUA_REGISTRYINDEX, call.argsRef);
+        WorldRPG::Script::Vms::Unref(call.argsRef);
         call.argsRef = LUA_NOREF;
     }
 }
@@ -1099,7 +1101,7 @@ int CaptureArgs(lua_State* L, int first, int last) {
     // "n" keeps nil arguments. lua_rawseti(nil) deletes the slot, and rawlen would stop there.
     lua_pushinteger(L, count);
     lua_setfield(L, -2, "n");
-    return luaL_ref(L, LUA_REGISTRYINDEX);
+    return WorldRPG::Script::Vms::Ref(L);
 }
 
 int CaptureArgTable(lua_State* L, int index) {
@@ -1119,7 +1121,7 @@ int CaptureArgTable(lua_State* L, int index) {
     }
     lua_pushinteger(L, count);
     lua_setfield(L, -2, "n");
-    return luaL_ref(L, LUA_REGISTRYINDEX);
+    return WorldRPG::Script::Vms::Ref(L);
 }
 
 void PrepareWire(Call& call) {
@@ -1176,7 +1178,7 @@ void ForgetCalls(State& state, std::vector<std::shared_ptr<Call>>& unref) {
 
 void PushExtras(lua_State* L, int argsRef, int& nargs) {
     if (argsRef == LUA_NOREF) return;
-    lua_rawgeti(L, LUA_REGISTRYINDEX, argsRef);
+    WorldRPG::Script::Vms::PushRef(L, argsRef);
     const int table = lua_gettop(L);
     lua_getfield(L, table, "n");
     const int count = static_cast<int>(lua_tointeger(L, -1));
@@ -1192,7 +1194,7 @@ void PushExtras(lua_State* L, int argsRef, int& nargs) {
 
 void Invoke(lua_State* L, const Done& done, const std::shared_ptr<Call>& call) {
     const int base = lua_gettop(L);
-    lua_rawgeti(L, LUA_REGISTRYINDEX, call->callbackRef);
+    WorldRPG::Script::Vms::PushRef(L, call->callbackRef);
     if (!lua_isfunction(L, -1)) {
         lua_settop(L, base);
         return;
@@ -1234,6 +1236,9 @@ void Invoke(lua_State* L, const Done& done, const std::shared_ptr<Call>& call) {
 
 void BindState(lua_State* L) {
     if (g_L == L) return;
+    // The Lua 5.1 VM is installed beside the session's 5.3 state; its calls are
+    // told apart by their refs, and the 5.3 state's pending calls stay.
+    if (g_L && WorldRPG::Script::Vms::Is51(L)) return;
     if (g_L) {
         State& state = GetState();
         std::vector<std::shared_ptr<Call>> ignored;
@@ -1278,7 +1283,10 @@ void DeliverCompletions() {
             found->second->finishing = true;
             call = found->second;
         }
-        Invoke(g_L, done, call);
+        // The callback runs in the VM it came from.
+        lua_State* vm = WorldRPG::Script::Vms::RefVm(call->callbackRef);
+        if (!vm) vm = g_L;
+        WorldRPG::Script::ActiveVmRunIn(vm, [&] { Invoke(vm, done, call); });
         {
             std::lock_guard<std::mutex> lock(state.mutex);
             auto found = state.calls.find(done.id);
@@ -1408,7 +1416,7 @@ int LuaFetchRemote(lua_State* L) {
     }
 
     lua_pushvalue(L, callbackIndex);
-    const int callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    const int callbackRef = WorldRPG::Script::Vms::Ref(L);
     auto call = std::make_shared<Call>();
     call->options = std::move(options);
     call->url = std::move(url);
