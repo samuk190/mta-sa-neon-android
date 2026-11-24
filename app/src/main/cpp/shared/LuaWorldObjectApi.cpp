@@ -4,7 +4,8 @@
 //   CClientObject.cpp 51-88, 113-155, 656-718, 1044-1090
 //   CClientObjectManager.cpp 17-32 and 92-139
 //   CDeathmatchObject.cpp 53-92 and CDeathmatchObject.h IsMoving
-// CObject is not created. Break, gang-tag alpha, and texture replace fail closed.
+// The CObject is created by the game thread when the object streams in (gtasa/WorldObjects.cpp).
+// Break, gang-tag alpha, and texture replace fail closed.
 // onClientObjectMoveStart / onClientObjectMoveStop are not dispatched.
 
 #include "LuaWorldObjectApi.h"
@@ -14,6 +15,8 @@
 #include "ModelInfoRead.h"
 #include "ResourceLoader.h"
 #include "ServerWorld.h"
+#include "LuaFieldApi.h"
+#include "WorldObjectFeed.h"
 
 #include "lua.hpp"
 
@@ -64,6 +67,8 @@ struct Material {
 
 struct Object {
     uint32_t id = 0;
+    bool clientCreated = false;  // createObject (server objects adopted by object functions are not)
+    bool localOverride = false;  // a script moved, rotated or froze an adopted server object
     uint16_t model = 0;
     bool lowLod = false;
     uint32_t lowLodId = 0;
@@ -468,6 +473,7 @@ void NoteCurveGap() {
 
 bool StartMove(Object& object, uint32_t durationMs, const Vec3& target, const Vec3& deltaDeg, bool linear) {
     NoteMoveGap();
+    object.localOverride = true;
     if (!linear) NoteCurveGap();
     Vec3 source = object.rot;
     source.x = WrapOnce(source.x);
@@ -518,11 +524,8 @@ int CreateObject(lua_State* L) {
     created.lowLod = lowLod;
     created.pos = pos;
     created.rot = {rotDeg.x * kPi / 180.f, rotDeg.y * kPi / 180.f, rotDeg.z * kPi / 180.f};
-    g_objects[id] = created;
-    if (!g_diagSpawn) {
-        g_diagSpawn = true;
-        LUA_LOGE("DIAG createObject: CDeathmatchObject is stored; CObject is not created");
-    }
+    created.clientCreated = true;
+    g_objects[id] = created;  // the game thread creates the CObject when it streams in (WorldObjects)
     PushElement(L, id);
     return 1;
 }
@@ -539,6 +542,7 @@ int SetObjectStatic(lua_State* L) {
     bool frozen = false;
     if (!ReadObject(L, "setObjectStatic", object) || !ReadBool(L, "setObjectStatic", 2, frozen, false, false)) return Fail(L);
     object->frozen = frozen;
+    object->localOverride = true;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -980,6 +984,8 @@ int GetElementPositionObject(lua_State* L) {
 int SetElementPositionObject(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     Object* object = Find(id);
+    // A server object moved by a script is adopted, so the streamed CObject follows it.
+    if (!object && KnownClientElement(id) && std::strcmp(ServerWorld::ElementKindName(id), "object") == 0) object = Live(id);
     if (!object) {
         if (!lua_isfunction(L, lua_upvalueindex(1))) return Fail(L);
         const int count = lua_gettop(L);
@@ -995,6 +1001,7 @@ int SetElementPositionObject(lua_State* L) {
     ApplyTree(id, [&](Object& item) {
         Sample(item);
         if (!item.move.active) item.pos = pos;
+        item.localOverride = true;
         return true;
     });
     lua_pushboolean(L, 1);
@@ -1091,5 +1098,61 @@ bool SetObjectLod(uint32_t id, uint32_t lowId, bool clear) {
 }
 
 void InstallWorldObjectLua(lua_State* L) { Register(L); }
+
+void PublishClientObjects() {
+    // CClientObject positions as scripts see them (moving objects interpolated), for the
+    // game-thread streamer: client-created objects, and server objects a script moved,
+    // rotated or froze (they override the server's state of the same id). Destroyed
+    // objects are forgotten here.
+    std::vector<WorldObjects::State> states;
+    std::vector<uint32_t> gone;
+    states.reserve(g_objects.size());
+    for (auto& [id, object] : g_objects) {
+        if (!KnownClientElement(id)) {
+            gone.push_back(id);
+            continue;
+        }
+        if (!object.clientCreated && !object.localOverride) continue;
+        Sample(object);
+        WorldObjects::State state;
+        state.id = id;
+        state.model = object.model;
+        state.x = object.pos.x;
+        state.y = object.pos.y;
+        state.z = object.pos.z;
+        state.rx = object.rot.x;
+        state.ry = object.rot.y;
+        state.rz = object.rot.z;
+        ClientElementWorldState(id, state.interior, state.dimension, state.collisions, state.frozen, state.alpha);
+        if (!object.clientCreated) {
+            state.dimension = ServerWorld::DimensionOf(id);
+            state.interior = ServerWorld::InteriorOf(id);
+        }
+        state.frozen = state.frozen || object.frozen;
+        states.push_back(state);
+    }
+    for (uint32_t id : gone) Forget(id);
+    WorldObjects::Publish(WorldObjects::Source::Client, std::move(states));
+}
+
+bool IsWorldObject(uint32_t id) { return Live(id) != nullptr; }
+
+bool SetObjectRotation(uint32_t id, float rx, float ry, float rz) {
+    Object* object = Live(id);
+    if (!object) return false;
+    Sample(*object);
+    object->move.active = false;
+    object->rot = {rx, ry, rz};
+    if (!object->clientCreated) object->localOverride = true;
+    return true;
+}
+
+bool SetObjectFrozen(uint32_t id, bool frozen) {
+    Object* object = Live(id);
+    if (!object) return false;
+    object->frozen = frozen;
+    if (!object->clientCreated) object->localOverride = true;
+    return true;
+}
 
 }  // namespace WorldRPG::Script

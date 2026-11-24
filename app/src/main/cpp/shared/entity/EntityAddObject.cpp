@@ -201,15 +201,16 @@ bool ReadEntityBodyObject(Net::BitStreamReader& reader, const EntityCommon& comm
     } else {
         DIAG("object stored id=%u model=%u pos=%.2f,%.2f,%.2f health=%.1f", common.id, static_cast<unsigned>(objectId), x, y, z, health);
     }
-    (void)rotX;
-    (void)rotY;
-    (void)alpha;
-    (void)lowLodFlag;
+    // Objects keep the full rotation (radians) for the world streamer (WorldObjectFeed).
+    visual.rotX = rotX;
+    visual.rotY = rotY;
+    visual.a = static_cast<int>(alpha);
+    visual.objectLowLod = lowLodFlag;
+    visual.objectAllDimensions = visibleInAllDimensions;
+    visual.objectFrozen = frozen;
     (void)lowLodId;
     (void)doubleSided;
     (void)breakable;
-    (void)visibleInAllDimensions;
-    (void)frozen;
     (void)broken;
     (void)respawnEnabled;
     return true;

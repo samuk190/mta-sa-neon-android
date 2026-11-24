@@ -233,7 +233,9 @@ bool RewriteStage(Rewrite& r, std::string glsl, bool vertex, bool compressedUv, 
     }
     // GTA uniforms the stage now refers to.
     std::string gta;
-    for (const auto& [name, declaration] : GtaUniforms()) {
+    for (const auto& entry : GtaUniforms()) {
+        const std::string& name = entry.first;
+        const std::string& declaration = entry.second;
         if (!std::regex_search(body, std::regex("\\b" + name + "\\b"))) continue;
         gta += declaration + "\n";
         const std::string engineName = name.substr(4);  // without mta_

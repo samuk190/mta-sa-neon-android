@@ -9,6 +9,7 @@
 // Engine writes that are not hooked stay as DIAG. The value is still stored.
 
 #include "LuaFieldApi.h"
+#include "LuaWorldObjectApi.h"
 #include "LuaElementTree.h"
 #include "LuaSpatialApi.h"
 #include "LuaApiExtra.h"
@@ -143,7 +144,7 @@ bool Number(lua_State* L, int index, float& out) {
     return std::isfinite(out);
 }
 
-enum class Kind { None, Player, Ped, Vehicle, Marker };
+enum class Kind { None, Player, Ped, Vehicle, Marker, Object };
 
 Kind KindOf(uint32_t id) {
     if (id == 0) return Kind::None;
@@ -153,11 +154,12 @@ Kind KindOf(uint32_t id) {
     if (Game::CopyScriptPedFacts(id, model, heading, frozen)) return Kind::Ped;
     if (id == ServerWorld::LocalPlayer()) return Kind::Player;
     ServerWorld::ActorSpawn visual;
-    if (!ServerWorld::CopyVisual(id, visual)) return Kind::None;
+    if (!ServerWorld::CopyVisual(id, visual)) return IsWorldObject(id) ? Kind::Object : Kind::None;
     if (visual.kind == 1) return Kind::Player;
     if (visual.kind == 2) return Kind::Vehicle;
     if (visual.kind == 14) return Kind::Ped;
     if (visual.kind == 4) return Kind::Marker;
+    if (visual.kind == 3) return Kind::Object;
     return Kind::None;
 }
 
@@ -329,7 +331,7 @@ int l_getElementMatrix(lua_State* L) {
 int l_getElementAlpha(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     const Kind kind = KindOf(id);
-    if (!BodyKind(kind) && kind != Kind::Marker) {
+    if (!BodyKind(kind) && kind != Kind::Marker && kind != Kind::Object) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -342,7 +344,8 @@ int l_setElementAlpha(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     float value = 0.f;
     const Kind kind = KindOf(id);
-    if ((!BodyKind(kind) && kind != Kind::Marker) || !Number(L, 2, value) || value < 0.f || value > 255.f) {
+    if ((!BodyKind(kind) && kind != Kind::Marker && kind != Kind::Object) || !Number(L, 2, value) || value < 0.f ||
+        value > 255.f) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -1650,6 +1653,24 @@ void InstallFieldLua(lua_State* L) {
         lua_pushcfunction(L, bind.fn);
         lua_setglobal(L, bind.name);
     }
+}
+
+void ClientElementWorldState(uint32_t id, uint8_t& interior, uint16_t& dimension, bool& collisions, bool& frozen,
+                             uint8_t& alpha) {
+    alpha = 255;
+    interior = 0;
+    dimension = 0;
+    collisions = true;
+    frozen = false;
+    const auto found = g_fields.find(id);
+    if (found == g_fields.end()) return;
+    if (found->second.areaGeneration == AreaGeneration(id)) {
+        if (found->second.interiorSet) interior = found->second.interior;
+        if (found->second.dimensionSet) dimension = found->second.dimension;
+    }
+    if (found->second.collisionsSet) collisions = found->second.collisions;
+    if (found->second.frozenSet) frozen = found->second.frozen;
+    if (found->second.alphaSet) alpha = found->second.alpha;
 }
 
 }  // namespace WorldRPG::Script

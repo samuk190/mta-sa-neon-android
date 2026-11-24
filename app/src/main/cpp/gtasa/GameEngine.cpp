@@ -1,5 +1,6 @@
 #include "../shared/DebugFlags.h"
 #include "GameEngine.h"
+#include "WorldObjects.h"
 #include "GameTasks.h"
 #include "VehiclePaint.h"
 #include "SpatialNative.h"
@@ -2584,7 +2585,16 @@ uint32_t EntityElementId(void* entity) {
     if (entity == g_sampledLocalPed) return ServerWorld::LocalPlayer();
     auto car = g_vehicleBodyIds.find(entity);
     if (car != g_vehicleBodyIds.end()) return car->second;
-    return 0xFFFFFFFFu;
+    return WorldObjects::ElementOf(entity);
+}
+
+void* ElementEntity(uint32_t id) {
+    if (id == 0 || id == 0xFFFFFFFFu) return nullptr;
+    if (id == ServerWorld::LocalPlayer() && g_sampledLocalPed) return g_sampledLocalPed;
+    if (const auto body = g_remoteBodies.find(id); body != g_remoteBodies.end() && body->second.ped) return body->second.ped;
+    for (const auto& [entity, element] : g_vehicleBodyIds)
+        if (element == id) return entity;
+    return WorldObjects::EntityOf(id);
 }
 
 static HostedWasted ReadDeathEvent(uint32_t id, void* event, void* ped) {
@@ -3764,6 +3774,8 @@ static void ApplyRemotePeds() {
         // The local ped leaves its car before any car body is destroyed (DropCarLocked).
         for (auto& entry : g_remoteCars) DropCarLocked(entry.first, entry.second);
         g_remoteCars.clear();
+        // The old session's objects leave GTA's world with it.
+        WorldObjects::Reset();
         // A new session starts on foot: drop the stale vehicle, its packet 33 sample, any queued VEHICLE_INOUT
         // events and shots, and the hosted snapshots of the old session's element ids.
         g_localVehicleId = kNoVehicle;
@@ -5629,6 +5641,9 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         if (!WorldRPG::Debug::Flag("noremote")) ApplyRemoteBullets();
         PublishPedQueries();
         ServerWorld::Tick(g_poseX.load(), g_poseY.load(), g_poseZ.load());
+        // Server and client objects into GTA's world (CClientObject streaming), after ServerWorld
+        // has published this frame's server objects. Game thread, like the ped and vehicle bodies.
+        WorldObjects::Pulse(g_poseX.load(), g_poseY.load(), g_poseZ.load());
         --depth;
         return;
     }

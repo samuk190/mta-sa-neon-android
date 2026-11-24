@@ -22,6 +22,7 @@
 #include "LuaVMStub.h"
 #include "LuaVmSet.h"
 #include "DdsDecode.h"
+#include "WorldObjectFeed.h"
 #include "ModelNames.h"
 #include "ModelInfoRead.h"
 #include "ObjectGroups.h"
@@ -336,6 +337,24 @@ void WriteWeaponHeader(WorldRPG::Net::BitStreamWriter& w, uint32_t id, uint32_t 
     }
     WriteTestBits(w, 1, 1); // collisions (no callProp at 0x0030)
     w.WriteCompressed(0u, 2); w.WriteCompressed(0u, 2); // custom count, name length (no syncTimeContext at 0x0030)
+}
+
+// One OBJECT (type 3) ENTITY_ADD record: the weapon header with type 3 and the
+// object part of the body (ReadEntityBodyObject order), position in SPositionSync.
+void WriteObjectEntity(WorldRPG::Net::BitStreamWriter& w, uint32_t id, uint32_t model, float, float, float) {
+    auto bits = [&](uint32_t v, size_t n) { WriteTestBits(w, v, n); };
+    bits(id, 17); w.Write(static_cast<uint8_t>(3)); bits(0, 17);
+    w.Write(static_cast<uint8_t>(0)); w.WriteCompressed(0u, 2);
+    bits(0, 1);                                   // not attached
+    bits(1, 1);                                   // collisions
+    w.WriteCompressed(0u, 2); w.WriteCompressed(0u, 2);  // custom data, name
+    bits(1024, 24); bits(2048, 24); w.Write(3.f);  // SPositionSync
+    bits(0, 16); bits(0, 16); bits(0, 16);        // rotation
+    w.WriteCompressed(model, 2); w.WriteCompressed(0u, 1);  // model, alpha
+    bits(0, 1); bits(0x1FFFF, 17);                // LOD
+    bits(0, 1); bits(0, 1); bits(0, 1); bits(0, 1);  // double sided, breakable, all dimensions, moving
+    bits(1, 1); bits(1, 1); bits(0, 1);           // uniform, unit scale, not frozen
+    bits(2000, 11); bits(0, 1); bits(1, 1);       // health, broken, respawn
 }
 
 void CheckNativeWeaponFire(WorldRPG::Script::LuaVMStub& vm) {
@@ -956,6 +975,68 @@ void CheckRocketSoccer(WorldRPG::Script::LuaVMStub& vm) {
     Script::ActiveVmPulseResources();
     CHECK(Script::ActiveVmTakeScriptErrors().empty());
     Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+}
+
+// createObject reaches the game-thread streamer (WorldObjectFeed) with its transform and area.
+void CheckWorldObjectFeed(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    Net::ResourceStartInfo info;
+    info.name = "objectfeed";
+    info.resourceId = 297;
+    info.entityId = 0x4D00;
+    info.dynamicEntityId = 0x4D01;
+    info.noClientCacheScripts = 1;
+    info.startCounter = 1;
+    // A server object (ENTITY_ADD type 3) the script moves: the client state overrides it.
+    {
+        Net::BitStreamWriter add;
+        add.WriteCompressed(1u, 4);
+        WriteObjectEntity(add, 2900, 1338, 1.f, 2.f, 3.f);
+        ServerWorld::OnEntityAdd(add.GetData(), add.GetByteLength(), add.GetBitLength());
+    }
+    Script::ActiveVmOnResourceStart(info);
+    const std::vector<uint8_t> body = NoCacheScriptsBody(297, {{"objects.lua", R"LUA(
+        serverFeedObject = {id = 2900, element = true}
+        feedObject = createObject(1337, 10, 20, 30, 0, 0, 90)
+        setElementDimension(feedObject, 3)
+        setElementInterior(feedObject, 5)
+        assert(setElementRotation(feedObject, 0, 0, 45) == true, "object rotation")
+        assert(setElementFrozen(feedObject, true) == true, "object frozen")
+        setElementAlpha(feedObject, 0)
+        assert(setElementPosition(serverFeedObject, 7, 8, 9) == true, "script moves a server object")
+    )LUA"}});
+    CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+    Script::ActiveVmPulseResources();
+    CHECK(Script::ActiveVmTakeScriptErrors().empty());
+    vm.pumpDx();
+    std::vector<WorldObjects::State> states;
+    WorldObjects::Copy(states);
+    const WorldObjects::State* found = nullptr;
+    for (const auto& s : states)
+        if (s.model == 1337) found = &s;
+    CHECK(found != nullptr);
+    if (found) {
+        CHECK(found->x == 10.f && found->y == 20.f && found->z == 30.f);
+        CHECK(std::fabs(found->rz - 0.7853982f) < 1e-4f && found->rx == 0.f);
+        CHECK(found->dimension == 3 && found->interior == 5 && found->collisions);
+        CHECK(found->frozen && found->alpha == 0);
+    }
+    {
+        // Copy lists the server source first; the script's move of 2900 comes later and wins.
+        const WorldObjects::State* last = nullptr;
+        for (const auto& s : states)
+            if (s.id == 2900) last = &s;
+        CHECK(last && last->x == 7.f && last->y == 8.f && last->z == 9.f && last->model == 1338);
+    }
+    Net::BitStreamWriter stop;
+    stop.Write(static_cast<uint16_t>(297));
+    Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+    vm.pumpDx();
+    WorldObjects::Copy(states);
+    bool still = false;
+    for (const auto& s : states)
+        if (s.model == 1337) still = true;
+    CHECK(!still);  // the stopped resource's object leaves the world
 }
 
 // createWeapon and the CClientWeapon element functions (CLuaWeaponDefs.cpp:150-695).
@@ -5246,6 +5327,7 @@ int main(int argc, char** argv) {
     CheckTwoVms(vm);
     CheckOfficialResources(vm);
     CheckRocketSoccer(vm);
+    CheckWorldObjectFeed(vm);
     // CLuaRadioPlaybackDefs.cpp: the table is checked, then the missing radio hook gives false.
     RunLua(vm, "radio-playback-state", R"LUA(
         assert(getRadioPlaybackState() == false, "no radio hook")

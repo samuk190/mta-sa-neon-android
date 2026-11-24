@@ -212,6 +212,8 @@ void QueueRemoteBullet(const Combat::SBulletSync& shot);
 // Native bullet hooks use these on the game thread.
 bool IsRemoteNetworkPlayer(void* entity);
 uint32_t EntityElementId(void* entity); // Game-thread lookup; never retains the GTA pointer.
+// The game entity of an element (local player, remote ped or vehicle, streamed object), or null. Game thread.
+void* ElementEntity(uint32_t id);
 float NativeWeaponRange(int type);
 // One game-thread snapshot; false on unavailable native data or a stale element.
 bool CopyPedQuery(uint32_t id, PedQueries::Snapshot& out);

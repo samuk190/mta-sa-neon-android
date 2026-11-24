@@ -1,4 +1,5 @@
 #include "ServerWorld.h"
+#include "WorldObjectFeed.h"
 #include "PedQueries.h"
 #include "CombatSync.h"
 #include "ResourceFiles.h"
@@ -1344,7 +1345,42 @@ void ForgetPlaceholder(uint32_t id) {
     if (g_resourceRoot == id) g_resourceRoot = 0;
 }
 
+// Server objects (ENTITY_ADD type 3) for the game-thread streamer, twice a second.
+static void PublishServerObjects() {
+    static int frames = 0;
+    if (++frames < 30) return;
+    frames = 0;
+    std::vector<WorldObjects::State> states;
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        for (const auto& [id, visual] : g_visuals) {
+            if (visual.kind != 3 || visual.model < 0) continue;
+            WorldObjects::State state;
+            state.id = id;
+            state.model = visual.model;
+            state.x = visual.x;
+            state.y = visual.y;
+            state.z = visual.z;
+            state.rx = visual.rotX;
+            state.ry = visual.rotY;
+            state.rz = visual.heading;
+            state.dimension = visual.dimension;
+            state.interior = visual.interior;
+            state.alpha = static_cast<uint8_t>(std::clamp(visual.a, 0, 255));
+            state.allDimensions = visual.objectAllDimensions;
+            state.frozen = visual.objectFrozen;
+            // Low LOD twins (setLowLODElement) are drawn by the high LOD object's
+            // CEntity::m_pLod link on desktop; that link is not built here, so they
+            // stay out rather than drawing on top of their high LOD object.
+            state.visible = !visual.objectLowLod;
+            states.push_back(state);
+        }
+    }
+    WorldObjects::Publish(WorldObjects::Source::Server, std::move(states));
+}
+
 void Tick(float playerX, float playerY, float playerZ) {
+    PublishServerObjects();
 #ifdef __ANDROID__
     ResolveBlips();
     if (!g_setBlip) return;

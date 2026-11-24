@@ -1961,6 +1961,20 @@ static int l_removePedClothes(lua_State* L) {
 
 static int l_setElementRotation(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
+    if (IsWorldObject(id)) {
+        // CStaticFunctionDefinitions::SetElementRotation, CCLIENTOBJECT: degrees in the
+        // object's own order ("default"); other rotation orders are not converted yet.
+        const double rx = luaL_optnumber(L, 2, 0), ry = luaL_optnumber(L, 3, 0), rz = luaL_optnumber(L, 4, 0);
+        const char* order = lua_type(L, 5) == LUA_TSTRING ? lua_tostring(L, 5) : "default";
+        if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz) ||
+            (std::strcmp(order, "default") != 0 && std::strcmp(order, "ZXY") != 0)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        constexpr double k = 3.14159265358979323846 / 180.0;
+        lua_pushboolean(L, SetObjectRotation(id, float(rx * k), float(ry * k), float(rz * k)) ? 1 : 0);
+        return 1;
+    }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") == 0) {
         const float rx = luaL_checknumber(L, 2), ry = luaL_checknumber(L, 3), rz = luaL_checknumber(L, 4);
         lua_pushboolean(L, Game::SetTrafficVehicleRotation(id, rx, ry, rz));
@@ -1984,6 +1998,10 @@ static int l_setElementRotation(lua_State* L) {
 
 static int l_setElementFrozen(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
+    if (IsWorldObject(id)) {
+        lua_pushboolean(L, SetObjectFrozen(id, lua_toboolean(L, 2) != 0) ? 1 : 0);
+        return 1;
+    }
     if (Game::ScriptPedAlive(id)) Game::NoteScriptFrozen(id, lua_toboolean(L, 2) != 0);
     lua_pushboolean(L, 1);
     return 1;

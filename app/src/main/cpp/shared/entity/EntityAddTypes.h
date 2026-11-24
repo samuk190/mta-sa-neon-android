@@ -88,9 +88,12 @@ struct Visual {
     int markerArrowR = 255, markerArrowG = 64, markerArrowB = 64, markerArrowA = 255;
     float markerArrowSize = 0.625f;
     float heading = 0;
-    // Vehicles (kind 2) only, from the ENTITY_ADD body: roll and pitch in degrees and SVehicleHealthSync.
+    // Vehicles (kind 2): roll and pitch in degrees, from the ENTITY_ADD body, and SVehicleHealthSync.
+    // Objects (kind 3): rotation x and y in radians (heading is z).
     // health < 0 means the body did not carry one.
     float rotX = 0, rotY = 0;
+    // Objects (kind 3): CObject flags from the ENTITY_ADD body.
+    bool objectLowLod = false, objectAllDimensions = false, objectFrozen = false;
     float health = -1.f;
     int vehicleDoorLock = 1;
     bool vehicleFrozen = false;

@@ -17,5 +17,13 @@ bool CopyObjectLod(uint32_t id, bool& createdLow, uint32_t& linkedLow);
 // CClientObject::SetLowLodObject. clear drops the link. False when this object is low LOD,
 // the target is not a low LOD object, or a clear finds no link.
 bool SetObjectLod(uint32_t id, uint32_t lowId, bool clear);
+// Publishes the client objects to the game-thread streamer (WorldObjectFeed). VM thread, once per pump.
+void PublishClientObjects();
+// setElementRotation / setElementFrozen on an object (radians, createObject's order).
+// False when id is not an object.
+// A client object, or a server object (adopted on first use).
+bool IsWorldObject(uint32_t id);
+bool SetObjectRotation(uint32_t id, float rx, float ry, float rz);
+bool SetObjectFrozen(uint32_t id, bool frozen);
 
 }  // namespace WorldRPG::Script
