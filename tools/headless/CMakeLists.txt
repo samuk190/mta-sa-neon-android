@@ -105,6 +105,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/LuaEventRegistry.cpp"
     "${NATIVE_DIR}/shared/LuaKeyBindApi.cpp"
     "${NATIVE_DIR}/shared/LuaDxApi.cpp"
+    "${NATIVE_DIR}/shared/DdsDecode.cpp"
     "${NATIVE_DIR}/shared/DxShader.cpp"
     "${NATIVE_DIR}/shared/LuaDxShaderApi.cpp"
     "${NATIVE_DIR}/shared/LuaModelEffects.cpp"

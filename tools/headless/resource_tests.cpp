@@ -21,6 +21,7 @@
 #include "LuaMtaWindowApi.h"
 #include "LuaVMStub.h"
 #include "LuaVmSet.h"
+#include "DdsDecode.h"
 #include "ModelNames.h"
 #include "ModelInfoRead.h"
 #include "ObjectGroups.h"
@@ -130,6 +131,61 @@ std::vector<uint8_t> NoCacheScriptsBody(uint16_t netId, const std::vector<std::p
         body.insert(body.end(), one.begin() + 4, one.end());  // drop that body's net id and count
     }
     return body;
+}
+
+// DDS decoding for dxCreateTexture (DdsDecode.h): hand-made DXT1/DXT5 blocks and,
+// when NEON_DDS_SAMPLE names one, a real file.
+void CheckDdsDecode() {
+    using WorldRPG::Script::DecodeDds;
+    auto header = [](std::vector<uint8_t>& d, unsigned w, unsigned h, const char* fourcc) {
+        d.assign(128, 0);
+        std::memcpy(d.data(), "DDS ", 4);
+        auto put = [&](size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) d[at + i] = static_cast<uint8_t>(v >> (8 * i)); };
+        put(4, 124);
+        put(12, h);
+        put(16, w);
+        put(76, 32);
+        put(80, 0x4);
+        std::memcpy(d.data() + 84, fourcc, 4);
+    };
+    std::vector<uint32_t> argb;
+    unsigned w = 0, h = 0;
+    {
+        // DXT1: colour 0 pure red (0xF800), colour 1 pure blue (0x001F), all indices 1 -> blue.
+        std::vector<uint8_t> d;
+        header(d, 4, 4, "DXT1");
+        const uint8_t block[8] = {0x00, 0xF8, 0x1F, 0x00, 0x55, 0x55, 0x55, 0x55};
+        d.insert(d.end(), block, block + 8);
+        CHECK(DecodeDds(d.data(), d.size(), argb, w, h) && w == 4 && h == 4);
+        CHECK(argb.size() == 16 && argb[0] == 0xFF0000FFu && argb[15] == 0xFF0000FFu);
+        d.pop_back();
+        CHECK(!DecodeDds(d.data(), d.size(), argb, w, h));  // truncated
+    }
+    {
+        // DXT5: alpha endpoints 255/0 with index 1 (alpha 0) everywhere, colour white.
+        std::vector<uint8_t> d;
+        header(d, 4, 4, "DXT5");
+        const uint8_t block[16] = {255, 0, 0x49, 0x92, 0x24, 0x49, 0x92, 0x24, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0};
+        d.insert(d.end(), block, block + 16);
+        CHECK(DecodeDds(d.data(), d.size(), argb, w, h));
+        CHECK(argb[0] == 0x00FFFFFFu && argb[15] == 0x00FFFFFFu);
+    }
+    {
+        std::vector<uint8_t> d;
+        header(d, 4, 4, "ATI2");
+        d.resize(d.size() + 16);
+        CHECK(!DecodeDds(d.data(), d.size(), argb, w, h));  // BC5 is not decoded
+    }
+    if (const char* sample = std::getenv("NEON_DDS_SAMPLE")) {
+        std::ifstream in(sample, std::ios::binary);
+        const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(DecodeDds(bytes.data(), bytes.size(), argb, w, h));
+        std::printf("dds sample %s: %ux%u first pixel %08x\n", sample, w, h, argb.empty() ? 0u : argb[0]);
+        if (const char* dump = std::getenv("NEON_DDS_DUMP")) {
+            std::ofstream out(dump, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(argb.data()), static_cast<std::streamsize>(argb.size() * 4));
+        }
+    }
 }
 
 void CheckPacketLayouts() {
@@ -5138,6 +5194,7 @@ int main(int argc, char** argv) {
     // resources in the same VM; CheckTwoVms covers resources in Lua 5.1.
     WorldRPG::Script::ActiveVmSetResourceLua(1);
     CheckPacketLayouts();
+    CheckDdsDecode();
     CheckVehiclePackets();
     CheckPedEntityBody();
     CheckPlayerListCapture();

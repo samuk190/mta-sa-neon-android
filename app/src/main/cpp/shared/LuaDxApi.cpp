@@ -1,4 +1,5 @@
 #include "LuaDxApi.h"
+#include "DdsDecode.h"
 
 #include "LuaApiExtra.h"
 #include "LuaGuiApi.h"
@@ -495,6 +496,8 @@ bool PixelsToArgb(const char* data, size_t size, std::vector<uint32_t>& argb, un
     }
     if (std::strcmp(format, "png") == 0 || std::strcmp(format, "jpeg") == 0)
         return WorldRPG::JniBridge::DecodePixels(data, size, argb, width, height);
+    if (std::strcmp(format, "dds") == 0)
+        return DecodeDds(reinterpret_cast<const uint8_t*>(data), size, argb, width, height);
     return false;
 }
 
@@ -524,7 +527,7 @@ bool EncodedSize(const char* data, size_t size, unsigned& width, unsigned& heigh
 
 // A texture whose picture is an overlay bitmap. Pushes the element. False when the overlay
 // cannot take the bitmap.
-bool CreateMemoryTexture(lua_State* L, const std::vector<uint32_t>& argb, unsigned width, unsigned height) {
+bool CreateMemoryTexture(lua_State* L, const std::vector<uint32_t>& argb, unsigned width, unsigned height, int edge = 0) {
     const uint32_t id = g_nextTexture;
     const std::string name = "tx:" + std::to_string(id);
     if (!WorldRPG::JniBridge::StorePixels(name, argb, width, height)) return false;
@@ -534,6 +537,7 @@ bool CreateMemoryTexture(lua_State* L, const std::vector<uint32_t>& argb, unsign
     texture.width = width;
     texture.height = height;
     texture.memory = true;
+    texture.edge = edge;
     texture.owner = ActiveVmOwner();
     texture.netId = ActiveVmOwnerNet();
     texture.generation = ActiveVmOwnerGeneration();
@@ -601,7 +605,32 @@ int DxCreateTexture(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    char magic[4] = {};
+    const bool dds = std::fread(magic, 1, 4, exists) == 4 && std::memcmp(magic, "DDS ", 4) == 0;
     std::fclose(exists);
+    if (dds) {
+        // Android's image decoder has no DDS: decode it here into a memory texture (DdsDecode.h).
+        std::vector<uint8_t> bytes;
+        if (std::FILE* in = std::fopen(file.c_str(), "rb")) {
+            std::fseek(in, 0, SEEK_END);
+            const long length = std::ftell(in);
+            std::fseek(in, 0, SEEK_SET);
+            if (length > 0 && length < (256L << 20)) {
+                bytes.resize(static_cast<size_t>(length));
+                if (std::fread(bytes.data(), 1, bytes.size(), in) != bytes.size()) bytes.clear();
+            }
+            std::fclose(in);
+        }
+        std::vector<uint32_t> argb;
+        unsigned width = 0, height = 0;
+        if (bytes.empty() || !DecodeDds(bytes.data(), bytes.size(), argb, width, height) ||
+            !CreateMemoryTexture(L, argb, width, height, edge)) {
+            LUA_LOGI("WARNING: [DxCreateTexture] Failed to create texture from file '%.200s' (may be corrupt, unsupported format, or out of memory)",
+                     path.c_str());
+            lua_pushnil(L);
+        }
+        return 1;
+    }
     Texture texture;
     if (!ImageSize(file, texture.width, texture.height)) {
         LUA_LOGI("WARNING: [DxCreateTexture] Failed to create texture from file '%.200s' (may be corrupt, unsupported format, or out of memory)",
