@@ -1,3 +1,6 @@
+#include <filesystem>
+#include "FxCompiler.h"
+#include "FxWorld.h"
 #include <iterator>
 #include <fstream>
 #include "shared/DxShader.h"
@@ -158,6 +161,39 @@ technique T { pass P0 { VertexShader=compile vs_2_0 VS(); PixelShader=compile ps
         if(featured) {
             DX::Image image;DX::Tile full=tile;
             Check(DX::SetTexture(*featured,"gTexture0",{1,1,{0xff808080}})&&DX::Render(*featured,full,32,32,image),"desktop FX constructs render");
+        }
+        // World shaders (FxWorld): GTA attribute names bound like ES2Shader::Build,
+        // engine values become GTA uniforms, the object texture becomes Diffuse.
+        auto world=[&](const std::string& fx,WorldRPG::FxWorld::Effect& built,std::string& why){
+            WorldRPG::Fx::Effect parsed;
+            if(!WorldRPG::Fx::Parse(fx,{},parsed,why)||!WorldRPG::FxWorld::Build(parsed,built,why))return false;
+            const std::vector<std::string> gta={"Position","TexCoord0","Normal","GlobalColor"};
+            for(const auto& pass:built.passes)
+                for(const std::string* vs:{&pass.vertex,&pass.vertexCompressedUv})
+                    if(!DX::LinkCheck(*vs,pass.fragment,gta,why))return false;
+            return true;
+        };
+        {
+            WorldRPG::FxWorld::Effect built;std::string why;
+            const bool ok=world(features,built,why);if(!ok)std::fprintf(stderr,"World diagnostic: %s\n",why.c_str());
+            Check(ok,"world program builds and links with GTA attributes");
+            const std::string& vs=ok?built.passes[0].vertex:std::string();
+            const std::string& fs=ok?built.passes[0].fragment:std::string();
+            Check(vs.find("#define gWorldViewProjection (ProjMatrix * ViewMatrix * ObjMatrix)")!=std::string::npos,"WVP semantic bound to GTA matrices");
+            Check(vs.find("attribute highp vec3 Position;")!=std::string::npos&&vs.find("uniform mat4 gWorldViewProjection;")==std::string::npos,"GTA attribute, no WVP uniform");
+            Check(ok&&built.passes[0].vertexCompressedUv.find("TexCoord0 / 512.0")!=std::string::npos,"compressed texture coordinate variant");
+            Check(fs.find("#define Source Diffuse")!=std::string::npos,"object texture is GTA's Diffuse");
+            Check(ok&&built.samplers.empty()&&built.passes[0].state.alphaBlend==1&&built.passes[0].state.zWrite==0,"pass states kept");
+        }
+        if(const char* dir=std::getenv("NEON_FX_DIR")) {
+            for(const auto& entry:std::filesystem::directory_iterator(dir)) {
+                if(entry.path().extension()!=".fx")continue;
+                std::ifstream in(entry.path());const std::string text((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+                WorldRPG::FxWorld::Effect built;std::string why;
+                const bool ok=world(text,built,why);
+                std::fprintf(stderr,"world %s: %s\n",entry.path().filename().c_str(),ok?"ok":why.c_str());
+                Check(ok,"sample world effect builds");
+            }
         }
         if(const char* fx=std::getenv("NEON_FX_SAMPLE")) {
             std::ifstream in(fx);const std::string text((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());

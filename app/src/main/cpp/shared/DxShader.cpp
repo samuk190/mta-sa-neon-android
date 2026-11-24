@@ -212,6 +212,21 @@ void SetUniform(const Program::Uniform& u,const std::vector<float>& v) {
     }
 }
 }
+bool LinkCheck(const std::string& vertex,const std::string& fragment,const std::vector<std::string>& attributes,std::string& error) {
+    Context context;
+    if(!context.valid){error="EGL shader context unavailable";return false;}
+    GLuint v=Compile(GL_VERTEX_SHADER,vertex,error);
+    if(!v){error="vertex: "+error;return false;}
+    GLuint f=Compile(GL_FRAGMENT_SHADER,fragment,error);
+    if(!f){glDeleteShader(v);error="fragment: "+error;return false;}
+    GLuint id=glCreateProgram();glAttachShader(id,v);glAttachShader(id,f);
+    for(size_t i=0;i<attributes.size();++i)glBindAttribLocation(id,GLuint(i),attributes[i].c_str());
+    glLinkProgram(id);glDeleteShader(v);glDeleteShader(f);
+    GLint success=0;glGetProgramiv(id,GL_LINK_STATUS,&success);
+    if(!success){char log[4096]{};glGetProgramInfoLog(id,sizeof(log),nullptr,log);error=std::string("link: ")+log;}
+    glDeleteProgram(id);
+    return success!=0;
+}
 bool SetNumbers(Program& p,const std::string& name,const std::vector<float>& values,bool boolean) {
     std::lock_guard lock(gpuMutex);auto* u=Find(p,name);if(!u) return false;
     unsigned components=Components(u->type);

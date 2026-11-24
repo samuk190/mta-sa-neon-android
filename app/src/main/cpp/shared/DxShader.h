@@ -33,6 +33,10 @@ void MaterialSize(Program&,unsigned&,unsigned&);
 bool SetTessellation(Program&,unsigned,unsigned);
 bool SetTransform(Program&,const Transform&);
 bool Render(Program&,const Tile&,unsigned width,unsigned height,Image&);
+// Compiles and links a vertex/fragment pair in the shader context, binding the
+// attribute names in order (as GTA's ES2Shader::Build does). Host checks of
+// generated world programs; error is the compile or link log.
+bool LinkCheck(const std::string& vertex,const std::string& fragment,const std::vector<std::string>& attributes,std::string& error);
 void InstallShaderLua(lua_State*);
 void Reset();
 bool Exists(uint32_t);
