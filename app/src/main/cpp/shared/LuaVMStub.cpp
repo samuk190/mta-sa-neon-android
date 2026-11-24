@@ -2718,7 +2718,26 @@ static lua_State* ChooseResourceVm(const WorldRPG::Script::ResourceLoadJob& job,
 // Lua 5.3, the chunk's environment (setfenv) in Lua 5.1. Globals a file
 // defines are visible to the other files of the same resource (desktop: one
 // Lua state per resource). Reads fall through to the VM globals.
+#ifndef __ANDROID__
+// Host tools: NEON_DUMP_SCRIPTS=<dir> saves each resource script as it runs, so
+// a server's client scripts can be read when porting what they call.
+static void DumpScriptForHost(const PreparedScript& script) {
+    const char* dir = std::getenv("NEON_DUMP_SCRIPTS");
+    if (!dir || !*dir || script.source.empty()) return;
+    std::string name = script.chunk;
+    for (char& c : name)
+        if (c == '/' || c == '\\' || c == ':') c = '_';
+    if (std::FILE* f = std::fopen((std::string(dir) + "/" + name).c_str(), "wb")) {
+        std::fwrite(script.source.data(), 1, script.source.size(), f);
+        std::fclose(f);
+    }
+}
+#endif
+
 static bool RunResourceChunk(lua_State* L, PreparedScript& script, int envRef) {
+#ifndef __ANDROID__
+    DumpScriptForHost(script);
+#endif
     if (script.compiled != LUA_NOREF) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, script.compiled);
         luaL_unref(L, LUA_REGISTRYINDEX, script.compiled);
