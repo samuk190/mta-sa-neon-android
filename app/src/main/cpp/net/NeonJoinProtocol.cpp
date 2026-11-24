@@ -392,9 +392,9 @@ struct NeonJoinClient::Impl {
 
     // CClientGame::PostWeaponFire queues one reliable PLAYER_BULLETSYNC per shot.
     uint8_t bulletOrder = 0;  // desktop m_ucBulletSyncOrderCounter (CNetAPI.cpp 2398)
-    static constexpr int kBulletSendTries = 5;  // pulses a failing shot holds sync back
+    static constexpr uint32_t kBulletSendGiveUpMs = 2000;  // how long a failing shot holds sync back
     uint64_t failedShotSerial = 0;
-    int failedShotTries = 0;
+    uint32_t failedShotSinceMs = 0;
     bool SendBulletSync() {
         if (!net || !net->IsConnected()) return false;
         WorldRPG::Game::LocalShot shot;
@@ -418,21 +418,22 @@ struct NeonJoinClient::Impl {
             if (!net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                                  PacketPriority::MEDIUM, PacketReliability::RELIABLE)) {
                 // Pure and key sync wait for this shot (see Pulse). A send that keeps
-                // failing would stop them for good, so the shot is dropped after a few
-                // pulses: the server then sees the ammo without this bullet, as for a
-                // shot it never received.
+                // failing would stop them for good, so after kBulletSendGiveUpMs the
+                // shot is dropped: the server then sees the ammo without this bullet,
+                // as for a shot it never received. A short stall keeps every shot.
+                const uint32_t now = NowMs();
                 if (failedShotSerial != shot.serial) {
                     failedShotSerial = shot.serial;
-                    failedShotTries = 0;
+                    failedShotSinceMs = now;
                 }
-                if (++failedShotTries < kBulletSendTries) return false;
-                JOIN_LOGE("DIAG NeonJoin: PLAYER_BULLETSYNC for weapon %d not sent after %d tries; dropped",
-                          shot.weapon, failedShotTries);
+                if (now - failedShotSinceMs < kBulletSendGiveUpMs) return false;
+                JOIN_LOGE("DIAG NeonJoin: PLAYER_BULLETSYNC for weapon %d not sent for %u ms; dropped",
+                          shot.weapon, now - failedShotSinceMs);
                 WorldRPG::Game::FinishLocalShot(shot.serial);
-                failedShotTries = 0;
+                failedShotSerial = 0;
                 continue;
             }
-            failedShotTries = 0;
+            failedShotSerial = 0;
             WorldRPG::Game::FinishLocalShot(shot.serial);
             ++bulletOrder;
             static int reports = 0;

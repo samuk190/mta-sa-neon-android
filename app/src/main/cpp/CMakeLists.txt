@@ -60,6 +60,9 @@ add_subdirectory(third_party/hlslparser)
 add_subdirectory(third_party/cryptopp)
 add_subdirectory(third_party/bcrypt)
 
+# RocketWeb physics kernel for rocketSim* (rocketweb/README.md).
+add_subdirectory(rocketweb)
+
 # PC netc.dll emulator, a separate library loaded on demand (netemu/README.md).
 add_subdirectory(netemu)
 
@@ -82,6 +85,7 @@ target_link_libraries(saonlineneon
     GLESv2
     z
     luaapi
+    rocketweb
     opus
     neon_speex
     neon_hlsl

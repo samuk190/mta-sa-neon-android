@@ -734,6 +734,75 @@ void CheckOfficialResources(WorldRPG::Script::LuaVMStub& vm) {
     Script::ActiveVmSetResourceLua(1);
 }
 
+// rocketSim* (desktop CLuaRocketSoccerDefs.cpp) over the RocketWeb kernel.
+void CheckRocketSoccer(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    RunLua(vm, "rocket-soccer-no-resource", R"LUA(
+        assert(not pcall(rocketSimCreate), "a scene needs a running resource")
+    )LUA");
+    const char* script = R"LUA(
+        local mesh = rocketSimGetArenaMesh()
+        assert(type(mesh) == "table" and #mesh > 1000 and #mesh[1] == 10, "arena mesh: " .. #mesh)
+        assert(rocketSimGamepad() == false, "no gamepad hook")
+        local scene = rocketSimCreate()
+        assert(type(scene) == "userdata", "scene")
+        assert(not pcall(rocketSimCreate), "one scene per resource")
+        local first = rocketSimStep(scene, 1 / 120, {})
+        assert(first.ticks == 1 and #first.cars >= 1 and #first.ball.position == 3, "first tick")
+        local startX, startY = first.car.position[1], first.car.position[2]
+        local state
+        for i = 1, 120 do state = rocketSimStep(scene, 1 / 60, {throttle = 1, boost = true}) end
+        assert(state.ticks == 241, "ticks: " .. state.ticks)
+        local moved = math.sqrt((state.car.position[1] - startX) ^ 2 + (state.car.position[2] - startY) ^ 2)
+        assert(moved > 100, "car drove: " .. moved)
+        local f = state.car.forward
+        assert(math.abs(f[1] * f[1] + f[2] * f[2] + f[3] * f[3] - 1) < 1e-3, "unit forward")
+        local compact = rocketSimStep(scene, 1 / 120, {}, true)
+        assert(compact.nativeDecoded == true and type(compact.pads) == "table" and compact.car.wheels[4], "compact")
+        assert(type(rocketSimPads(scene)) == "table", "pads")
+        assert(rocketSimCommand(scene, "goal") == 0 and rocketSimCommand(scene, "nope") == 0, "commands")
+        assert(rocketSimCommand(scene, "kickoff", 0.9) == 1 and rocketSimReset(scene) == true, "kickoff")
+        local predicted = rocketSimPredict(scene, nil, {{1, 0, 0, 0, 0, 0, 0, 0}}, 1, {0, 0, 0, 0, 0, 0, 0, 0}, 0.5)
+        assert(type(predicted.raw) == "table" and #predicted.cars >= 1, "predict")
+        assert(not pcall(rocketSimPredict, scene, nil, {}, 3, {}, 0), "bad slot")
+        local camera = {}
+        for i = 1, 28 do camera[i] = 0 end
+        local okCamera, out = pcall(rocketSimCameraStep, scene, camera)
+        assert(not okCamera or #out == 42, "camera")
+        -- The scene lives until rocketSimDestroy, not until its handle is collected.
+        scene = nil
+        collectgarbage()
+        collectgarbage()
+        assert(not pcall(rocketSimCreate), "dropped handle keeps the scene")
+    )LUA";
+    Script::ActiveVmTakeScriptErrors();
+    Net::ResourceStartInfo info;
+    info.name = "rocketcheck";
+    info.resourceId = 298;
+    info.entityId = 0x4E00;
+    info.dynamicEntityId = 0x4E01;
+    info.noClientCacheScripts = 1;
+    info.startCounter = 1;
+    Script::ActiveVmOnResourceStart(info);
+    const std::vector<uint8_t> body = NoCacheScriptsBody(298, {{"rocket.lua", script}});
+    CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+    Script::ActiveVmPulseResources();
+    const std::vector<std::string> errors = Script::ActiveVmTakeScriptErrors();
+    CHECK(errors.empty());
+    for (const auto& error : errors) std::printf("FAIL rocket-soccer: %s\n", error.c_str());
+    Net::BitStreamWriter stop;
+    stop.Write(static_cast<uint16_t>(298));
+    Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+    // A new start of the resource gets a new scene: the stop freed the old one.
+    info.startCounter = 2;
+    Script::ActiveVmOnResourceStart(info);
+    const std::vector<uint8_t> again = NoCacheScriptsBody(298, {{"again.lua", "local s = rocketSimCreate() rocketSimDestroy(s)"}});
+    CHECK(Script::ActiveVmFeedScripts(again.data(), again.size(), again.size() * 8));
+    Script::ActiveVmPulseResources();
+    CHECK(Script::ActiveVmTakeScriptErrors().empty());
+    Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+}
+
 // createWeapon and the CClientWeapon element functions (CLuaWeaponDefs.cpp:150-695).
 void CheckCustomWeapons(WorldRPG::Script::LuaVMStub& vm) {
     using namespace WorldRPG;
@@ -5019,6 +5088,7 @@ int main(int argc, char** argv) {
     CheckCustomWeapons(vm);
     CheckTwoVms(vm);
     CheckOfficialResources(vm);
+    CheckRocketSoccer(vm);
     // CLuaRadioPlaybackDefs.cpp: the table is checked, then the missing radio hook gives false.
     RunLua(vm, "radio-playback-state", R"LUA(
         assert(getRadioPlaybackState() == false, "no radio hook")

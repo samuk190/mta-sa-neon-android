@@ -1,6 +1,7 @@
 #include "DebugFlags.h"
 #include "LuaVMStub.h"
 #include "LuaVmSet.h"
+#include "LuaRocketSoccerApi.h"
 extern "C" {
 #include "LuaVm.h"
 }
@@ -2203,6 +2204,7 @@ static void installDxBindings(lua_State* L) {
     InstallXmlLua(L);
     InstallBrowserLua(L);
     InstallDiscordLua(L);
+    InstallRocketSoccerLua(L);
     InstallStoredElementLua(L);
     InstallClothesLua(L);
     InstallWeaponLua(L);
@@ -2605,6 +2607,7 @@ void LuaVMStub::reset() {
     pImpl_->registerAllFunctions(pImpl_->L);
     MtaWindowAdoptFocus();
     GuiReset();
+    RocketSoccerReset();
 
     pImpl_->loadedScripts.clear();
     LUA_LOGI("LuaVM: reset complete");
@@ -3088,6 +3091,7 @@ void LuaVMStub::shutdown() {
     g_dx = DxRuntime{};
     Events::Reset();
     GuiReset();
+    RocketSoccerReset();
     WeaponsReset();
 
     g_resourceVm.clear();
@@ -3339,6 +3343,7 @@ static void DropResourceState(lua_State* L, const std::string& name, uint16_t ne
     Projectiles::DropOwner(name, netId, generation);
     AudioStopOwnedSounds(&name, netId, generation);
     GuiDropResource(name, netId, generation);
+    RocketSoccerDropResource(generation);
     NativeUiDropResource(name, netId, generation);
     DropResourceModelAssets(generation);
     DropResourceEnvironment(ResourceVm(generation), generation);
