@@ -56,6 +56,7 @@ struct Entry {
     bool stopping = false;
     uint32_t dynamic = 0;
     std::vector<std::string> exports;
+    std::string minClientRequirement;           // meta.xml min_mta_version client
     uint32_t startCounter = 0;                  // PLAYER_RESOURCE_START value
     bool startCounterFromWire = false;          // false: stripped by the mobile shim, assumed
     uint32_t generation = 0;                    // unique for every RESOURCE_START, even when the net id is reused
@@ -78,6 +79,7 @@ ResourceView ViewOf(const Entry& entry) {
     view.dynamic = entry.dynamic;
     view.state = StateOf(entry);
     view.exports = entry.exports;
+    view.minClientRequirement = entry.minClientRequirement;
     return view;
 }
 
@@ -180,6 +182,7 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
     entry.root = info.entityId == kInvalidElement ? 0 : info.entityId;
     entry.dynamic = info.dynamicEntityId == kInvalidElement ? 0 : info.dynamicEntityId;
     entry.exports = info.exportedFunctions;
+    entry.minClientRequirement = info.minClientRequirement;
     entry.noCacheExpected = info.noClientCacheScripts;
     // The mobile-shim layout has no start counter on the wire (the shim strips it). The server's
     // first start of a resource is kFirstStartCounter, so that value is used; a restarted resource

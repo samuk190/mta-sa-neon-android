@@ -127,7 +127,10 @@ void CopyOne(CopyContext& c, int idx) {
     lua_rawseti(to, c.scratch, ++c.count);
     c.copied[key] = c.count;
     ++c.depth;
-    if (!lua_checkstack(from, 3)) return;  // the empty copy is on `to`
+    if (!lua_checkstack(from, 3)) {  // the empty copy is on `to`
+        --c.depth;
+        return;
+    }
     lua_pushnil(from);
     while (lua_next(from, idx)) {
         CopyOne(c, -2);  // key

@@ -61,6 +61,18 @@ static void Exercise(lua_State *L, int is51) {
     CHECK(lua_getfield(L, -1, "answer") == LUA_TNUMBER, "getfield type");
     CHECK(lua_isinteger(L, -1) && lua_tointeger(L, -1) == 42, "integer");
     lua_settop(L, 0);
+    {
+        /* 5.1 truncates a fractional number as desktop MTA's lua_tointeger does;
+         * 5.3 has no integer for it. lua_isinteger is exact on both. */
+        int isnum = -1;
+        lua_pushnumber(L, 1000.0 / 30.0);
+        const long long v = lua_tointegerx(L, -1, &isnum);
+        CHECK(is51 ? (isnum == 1 && v == 33) : (isnum == 0 && v == 0), "fractional tointegerx");
+        CHECK(!lua_isinteger(L, -1), "fractional is not an integer");
+        lua_pushnumber(L, 0.0 / 0.0);
+        CHECK(lua_tointegerx(L, -1, &isnum) == 0 && isnum == 0, "nan has no integer");
+        lua_settop(L, 0);
+    }
     CHECK(lua_getglobal(L, "answer") == LUA_TNUMBER, "getglobal type");
     lua_settop(L, 0);
 

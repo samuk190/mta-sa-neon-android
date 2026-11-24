@@ -96,6 +96,7 @@ struct ResourceView {
     uint32_t dynamic = 0;
     std::string state;
     std::vector<std::string> exports;
+    std::string minClientRequirement;  // RESOURCE_START min client version (CResource::GetMinClientReq)
 };
 
 // RESOURCE_START order. CopyResource returns the newest entry for a name.

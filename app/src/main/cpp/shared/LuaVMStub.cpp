@@ -143,6 +143,15 @@ static lua_State* RefVmOr(int ref, lua_State* fallback) {
 // ActiveVmSetResourceLua: 0 Automatic, 1 Lua 5.3, 2 Lua 5.1.
 static int g_resourceLua = 0;
 
+// Script errors raised by resource code since the last ActiveVmTakeScriptErrors
+// ("where: message"). Kept for the host tests; capped so a script that fails
+// every frame cannot grow it without bound.
+static std::vector<std::string> g_scriptErrors;
+static void NoteScriptError(const char* where, const char* message) {
+    if (g_scriptErrors.size() >= 256) return;
+    g_scriptErrors.push_back(std::string(where ? where : "?") + ": " + (message ? message : "(error object is not a string)"));
+}
+
 // Which VM each started resource runs in, by generation.
 static std::unordered_map<uint32_t, lua_State*> g_resourceVm;
 static lua_State* ResourceVm(uint32_t generation) {
@@ -238,6 +247,25 @@ static int l_wasEventCancelled(lua_State* L) {
     return 1;
 }
 
+// CallEvent's minClientVersion (CMapEventManager.cpp:169-173): when set, only
+// handlers of resources whose meta.xml asks for at least that client version run.
+static const char* g_eventMinClient = nullptr;
+
+// CMtaVersion::operator< (CMtaVersion.h:39-48): compared as strings with the
+// build type character (index 6) set to 9 on both sides.
+static bool MtaVersionLess(std::string a, std::string b) {
+    if (a.size() > 6) a[6] = '9';
+    if (b.size() > 6) b[6] = '9';
+    return a < b;
+}
+
+static bool HandlerMeetsMinClient(const DxRuntime::Handler& handler, const char* minClient) {
+    if (!minClient) return true;
+    ResourceLoader::ResourceView view;
+    if (!ResourceLoader::CopyResourceByGeneration(handler.generation, view)) return false;
+    return !MtaVersionLess(view.minClientRequirement, minClient);
+}
+
 static bool HandlerLive(const std::vector<DxRuntime::Handler>& live, int ref) {
     for (const DxRuntime::Handler& handler : live)
         if (handler.ref == ref) return true;
@@ -249,9 +277,16 @@ static bool HandlerLive(const std::vector<DxRuntime::Handler>& live, int ref) {
 // cancelEvent ran. A nested call saves the outer cancel flag and restores it.
 // from is the state the nargs arguments were pushed on (default: the current
 // VM). Each handler runs in its own VM; the arguments are copied there.
-static bool fireHandlers(const char* name, int nargs, uint32_t base, lua_State* from = nullptr) {
+// callOnChildren is CallEvent's bCallOnChildren: after the element and its
+// parents, the propagated handlers on its descendants run, in tree order
+// (CClientEntity::CallEvent 746-781, CallEventNoParent 783-809).
+static bool fireHandlers(const char* name, int nargs, uint32_t base, lua_State* from = nullptr,
+                         bool callOnChildren = false) {
     if (!from) from = g_dx.L;
     if (!from) return true;
+    // This call's minimum client version; events the handlers fire have none.
+    const char* const minClient = g_eventMinClient;
+    g_eventMinClient = nullptr;
     const bool saved = g_eventCancelled;
     g_eventCancelled = false;
     g_wasEventCancelled = false;
@@ -281,7 +316,28 @@ static bool fireHandlers(const char* name, int nargs, uint32_t base, lua_State* 
         for (const DxRuntime::Handler& handler : copy) {
             if (handler.element != chain[i]) continue;
             if (i > 0 && !handler.propagated) continue;
-            order.push_back(handler.ref);
+            if (HandlerMeetsMinClient(handler, minClient)) order.push_back(handler.ref);
+        }
+    }
+    if (callOnChildren) {
+        // Only handlers below base can run here; the tree is walked only when one exists.
+        std::vector<const DxRuntime::Handler*> below;
+        for (const DxRuntime::Handler& handler : copy)
+            if (handler.propagated && handler.element != base &&
+                std::find(chain.begin(), chain.end(), handler.element) == chain.end() &&
+                ClientDescendantOf(handler.element, base))
+                below.push_back(&handler);
+        if (!below.empty()) {
+            std::vector<uint32_t> tree;
+            CollectEventDescendants(base, tree);
+            for (uint32_t element : tree)
+                for (const DxRuntime::Handler* handler : below)
+                    if (handler->element == element && HandlerMeetsMinClient(*handler, minClient)) order.push_back(handler->ref);
+            // Server elements outside the client tree are children of the root.
+            if (base == ClientRootElement())
+                for (const DxRuntime::Handler* handler : below)
+                    if (!ClientElementInTree(handler->element) && HandlerMeetsMinClient(*handler, minClient))
+                        order.push_back(handler->ref);
         }
     }
     lua_State* fromVm = Vms::MainOf(from);
@@ -315,6 +371,7 @@ static bool fireHandlers(const char* name, int nargs, uint32_t base, lua_State* 
             Vms::CopyRange(from, argBase, nargs, T);
             if (lua_pcall(T, nargs, 0, 0) != LUA_OK) {
                 LUA_LOGE("Lua %s: %s", name, lua_tostring(T, -1));
+                NoteScriptError(name, lua_tostring(T, -1));
                 lua_pop(T, 1);
             }
         }
@@ -349,7 +406,7 @@ static void FireElementEvent(const char* name, uint32_t id, bool withArg) {
     PushElement(g_dx.L, id);
     lua_setglobal(g_dx.L, "source");
     if (withArg) PushElement(g_dx.L, id);
-    fireHandlers(name, withArg ? 1 : 0, id);
+    fireHandlers(name, withArg ? 1 : 0, id, nullptr, true);  // CClientGUIElement events call children
     lua_setglobal(g_dx.L, "source");
 }
 
@@ -459,6 +516,7 @@ bool ActiveVmRunCommand(const char* name, const char* args) {
         }
         if (lua_pcall(L, count, 0, 0) != LUA_OK) {
             LUA_LOGE("Lua command %s: %s", call.name.c_str(), lua_tostring(L, -1));
+            NoteScriptError(call.name.c_str(), lua_tostring(L, -1));
             lua_pop(L, 1);
         }
         handled = true;
@@ -596,6 +654,7 @@ static void ApplyKeyEvents() {
             for (int ref : call.args) Vms::PushRef(B, ref);
             if (lua_pcall(B, 2 + static_cast<int>(call.args.size()), 0, 0) != LUA_OK) {
                 LUA_LOGE("Lua bindKey %s: %s", key.c_str(), lua_tostring(B, -1));
+                NoteScriptError(key.c_str(), lua_tostring(B, -1));
                 lua_pop(B, 1);
             }
         }
@@ -709,7 +768,7 @@ static int l_triggerEvent(lua_State* L) {
     PushElement(L, id);
     lua_setglobal(L, "source");
     for (int i = 3; i <= top; ++i) lua_pushvalue(L, i);
-    const bool ran = fireHandlers(name, nargs, id, L);
+    const bool ran = fireHandlers(name, nargs, id, L, true);  // CStaticFunctionDefinitions.cpp:168
     lua_setglobal(L, "source");
     lua_pushboolean(L, ran ? 1 : 0);
     return 1;
@@ -2657,6 +2716,7 @@ static bool RunResourceChunk(lua_State* L, PreparedScript& script, int envRef) {
             !Net::DeobfuscateScriptForSession(script.source.data(), script.source.size(), script.chunk, plain.source)) {
             LUA_LOGE("Resource script %s is compiled (luac.mtasa.com): it loads only with PC Network compatibility",
                      script.chunk.c_str());
+            NoteScriptError(script.chunk.c_str(), "compiled script without PC Network");
             return false;
         }
         const size_t bom = Utf8BomLength(plain.source);
@@ -2665,11 +2725,13 @@ static bool RunResourceChunk(lua_State* L, PreparedScript& script, int envRef) {
         std::fill(plain.source.begin(), plain.source.end(), 0);
         if (status != LUA_OK) {
             LUA_LOGE("Resource script %s failed: %s", script.chunk.c_str(), lua_tostring(L, -1));
+            NoteScriptError(script.chunk.c_str(), lua_tostring(L, -1));
             lua_pop(L, 1);
             return false;
         }
     } else if (LoadResourceScript(L, script) != LUA_OK) {
         LUA_LOGE("Resource script %s failed: %s", script.chunk.c_str(), lua_tostring(L, -1));
+        NoteScriptError(script.chunk.c_str(), lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
@@ -2678,6 +2740,7 @@ static bool RunResourceChunk(lua_State* L, PreparedScript& script, int envRef) {
     else lua_setupvalue(L, -2, 1);
     if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
         LUA_LOGE("Resource script %s failed: %s", script.chunk.c_str(), lua_tostring(L, -1));
+        NoteScriptError(script.chunk.c_str(), lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
@@ -2761,7 +2824,7 @@ static void RunResourceJob(const WorldRPG::Script::ResourceLoadJob& job) {
     // CResource::Load (CResource.cpp 1626-1628): the argument is the resource, and
     // the event is called on the resource element so it reaches its parents.
     const int startArgs = PushResourceInstance(L, job.netId, job.generation) ? 1 : 0;
-    fireHandlers("onClientResourceStart", startArgs, job.rootElement ? job.rootElement : ClientRootElement());
+    fireHandlers("onClientResourceStart", startArgs, job.rootElement ? job.rootElement : ClientRootElement(), nullptr, true);
     LUA_LOGI("LuaVM: resource %s started: %d cached scripts, %d no-cache scripts", job.name.c_str(), cachedOk, noCacheOk);
     if (failed) LUA_LOGE("LuaVM: resource %s: %d script(s) failed to load", job.name.c_str(), failed);
     SendResourceStarted(job);
@@ -2801,6 +2864,58 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
 }
 
 // Fires onClientClick (and onClientCursorMove) for the queued touches. Signature as on desktop:
+// CClientGame GUI mouse handlers (CClientGame.cpp 6660-6812), on the widget
+// GuiPick finds, with the source's children called. Touch is the left button.
+static constexpr const char* kMinClientGuiClickDown = "1.7.0-7.26369";  // MIN_CLIENT_REQ_ON_MOUSE_BUTTON_DOWN
+static constexpr uint64_t kGuiDoubleClickMs = 330;                    // CEGUI System default double-click timeout
+static uint32_t g_guiPressed = 0;      // widget under the last press (CEGUI click tracker)
+static uint32_t g_guiLastPress = 0;    // for double clicks
+static uint64_t g_guiLastPressMs = 0;
+
+static void FireGuiMouseEvent(const char* name, uint32_t widget, const char* state, double x, double y,
+                              const char* minClient = nullptr) {
+    lua_State* L = g_dx.L;
+    if (!L || !widget || !KnownClientElement(widget)) return;
+    lua_getglobal(L, "source");
+    PushElement(L, widget);
+    lua_setglobal(L, "source");
+    lua_pushstring(L, "left");
+    if (state) lua_pushstring(L, state);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    const char* saved = g_eventMinClient;
+    g_eventMinClient = minClient;
+    fireHandlers(name, state ? 4 : 3, widget, nullptr, true);
+    g_eventMinClient = saved;
+    lua_setglobal(L, "source");
+}
+
+// OnMouseButtonDown: onClientGUIMouseDown, then onClientGUIClick "down" for
+// resources that ask for client 1.7.0-7.26369 or newer; a second press on the
+// same widget within the timeout is also a double click (OnMouseDoubleClick).
+// OnMouseButtonUp: onClientGUIMouseUp, then OnMouseClick's onClientGUIClick
+// "up" when the release is on the widget that was pressed.
+static void ApplyGuiMouse(const CursorEvent& ev) {
+    const uint32_t hit = GuiPick(ev.x, ev.y);
+    if (ev.action == 0) {
+        g_guiPressed = hit;
+        if (!hit) return;
+        const uint64_t now = DxNow();
+        const bool doubleClick = hit == g_guiLastPress && now - g_guiLastPressMs <= kGuiDoubleClickMs;
+        g_guiLastPress = doubleClick ? 0 : hit;
+        g_guiLastPressMs = now;
+        FireGuiMouseEvent("onClientGUIMouseDown", hit, nullptr, ev.x, ev.y);
+        FireGuiMouseEvent("onClientGUIClick", hit, "down", ev.x, ev.y, kMinClientGuiClickDown);
+        if (doubleClick) FireGuiMouseEvent("onClientGUIDoubleClick", hit, "up", ev.x, ev.y);
+        return;
+    }
+    const uint32_t pressed = g_guiPressed;
+    g_guiPressed = 0;
+    if (!hit) return;
+    FireGuiMouseEvent("onClientGUIMouseUp", hit, nullptr, ev.x, ev.y);
+    if (hit == pressed) FireGuiMouseEvent("onClientGUIClick", hit, "up", ev.x, ev.y);
+}
+
 // button, state, absoluteX, absoluteY, worldX, worldY, worldZ, clickedElement.
 static void ApplyCursorEvent(const CursorEvent& ev) {
     float px = 0, py = 0, pz = 0, heading = 0;
@@ -2829,6 +2944,10 @@ static void ApplyCursorEvent(const CursorEvent& ev) {
         fireHandlers("onClientCursorMove", 7, ClientRootElement());
         return;
     }
+    // The GUI sees the message first (CMessageLoopHook::ProcessMessage 512-523),
+    // then the client's onClientClick, which desktop fires over widgets too.
+    ApplyGuiMouse(ev);
+    if (!GuiCursorShown()) return;
     lua_pushstring(L, "left");
     lua_pushstring(L, ev.action == 0 ? "down" : "up");
     lua_pushnumber(L, ev.x);
@@ -2863,6 +2982,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
             Vms::PushRef(T, g_dx.timers[i].ref);
             if (lua_pcall(T, 0, 0, 0) != LUA_OK) {
                 LUA_LOGE("Lua timer: %s", lua_tostring(T, -1));
+                NoteScriptError("timer", lua_tostring(T, -1));
                 lua_pop(T, 1);
             }
         }
@@ -2899,7 +3019,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
                 lua_pushnumber(L, shot.sy);
                 lua_pushnumber(L, shot.sz);
             }
-            fireHandlers(shot.player ? "onClientPlayerWeaponFire" : "onClientPedWeaponFire", shot.player ? 10 : 7, shot.ped);
+            fireHandlers(shot.player ? "onClientPlayerWeaponFire" : "onClientPedWeaponFire", shot.player ? 10 : 7, shot.ped, nullptr, true);
             lua_setglobal(L, "source");
         }
     }
@@ -3115,7 +3235,7 @@ void ActiveVmFireVehicleSeat(bool entered, uint32_t ped, uint32_t vehicle, uint8
         pushActor(other);
         lua_pushnumber(L, seat);
         if (!entered) lua_pushboolean(L, 0);  // jacker
-        fireHandlers(name, entered ? 2 : 3, source);
+        fireHandlers(name, entered ? 2 : 3, source, nullptr, true);
         lua_setglobal(L, "source");
     };
     if (entered) {
@@ -3132,7 +3252,7 @@ void ActiveVmFireSpatialEvent(const char* name,uint32_t source,uint32_t other,bo
     lua_State* L=g_dx.L;
     lua_getglobal(L,"source"); PushElement(L,source); lua_setglobal(L,"source");
     PushElement(L,other); lua_pushboolean(L,matching);
-    fireHandlers(name,2,source);
+    fireHandlers(name, 2, source, nullptr, true);
     lua_setglobal(L,"source");
 }
 
@@ -3153,7 +3273,7 @@ bool ActiveVmFireBirdShot(uint32_t bird, uint32_t attacker, int weapon, float x,
     lua_pushnumber(L, x);
     lua_pushnumber(L, y);
     lua_pushnumber(L, z);
-    const bool allowed = fireHandlers("onClientBirdShot", 5, bird);
+    const bool allowed = fireHandlers("onClientBirdShot", 5, bird, nullptr, true);
     lua_setglobal(L, "source");
     return allowed;
 }
@@ -3207,7 +3327,8 @@ bool ActiveVmOnServerEvent(const uint8_t* body, size_t length, size_t bits) {
     if (handlers == g_dx.handlers.end() || handlers->second.empty()) {
         LUA_LOGI("LuaVM: server event %s has no client handler (%u args)", name.c_str(), static_cast<unsigned>(count));
     }
-    fireHandlers(name.c_str(), static_cast<int>(count), source ? source : ClientRootElement());
+    // CPacketHandler::Packet_LuaEvent (CPacketHandler.cpp:5231): CallEvent(..., true).
+    fireHandlers(name.c_str(), static_cast<int>(count), source ? source : ClientRootElement(), nullptr, true);
     return true;
 }
 
@@ -3292,6 +3413,7 @@ static void RunResourceStop(lua_State* L, const std::string& name, uint32_t root
             if (!pushed) PushElement(T, root);
             if (lua_pcall(T, 1, 0, 0) != LUA_OK) {
                 LUA_LOGE("Lua onClientResourceStop (%s): %s", name.c_str(), lua_tostring(T, -1));
+                NoteScriptError(name.c_str(), lua_tostring(T, -1));
                 lua_pop(T, 1);
             }
             if (other) lua_setglobal(T, "source");
@@ -3379,6 +3501,12 @@ std::string ActiveVmResourceFile(const std::string& path) { return DxImageFile(p
 lua_State* ActiveVmState() { return g_dx.L; }
 
 void ActiveVmSetResourceLua(int mode) { g_resourceLua = mode >= 0 && mode <= 2 ? mode : 0; }
+
+std::vector<std::string> ActiveVmTakeScriptErrors() {
+    std::vector<std::string> errors;
+    errors.swap(g_scriptErrors);
+    return errors;
+}
 
 lua_State* ActiveVmResourceVm(uint32_t generation) {
     const auto found = g_resourceVm.find(generation);

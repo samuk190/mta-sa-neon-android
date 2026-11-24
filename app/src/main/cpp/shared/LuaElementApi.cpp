@@ -918,7 +918,8 @@ bool ClientDescendantOf(uint32_t id,uint32_t ancestor) {
     for(unsigned depth=0;id&&depth<64;++depth) {
         if(id==ancestor) return true;
         Node* node=Find(id);
-        id=node&&node->parent?node->parent:(id!=g_root?g_root:0);
+        const uint32_t parent=node?node->parent:(GuiIsElement(id)?GuiEventParent(id):0);
+        id=parent?parent:(id!=g_root?g_root:0);
     }
     return false;
 }
@@ -955,6 +956,40 @@ void CopyClientChildren(uint32_t id, std::vector<uint32_t>& out) {
 }
 
 bool ClientCallPropagationEnabled(uint32_t id) { return CallPropOf(id); }
+
+void CollectEventDescendants(uint32_t base, std::vector<uint32_t>& out) {
+    // CClientEntity::CallEventNoParent (CClientEntity.cpp 783-809): each child,
+    // then its children, skipping elements being deleted.
+    // GUI elements hang under their GUI parent, guiroot and resource root
+    // (GuiEventEdges); a GUI element with no resource is a child of the root.
+    out.clear();
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    GuiEventEdges(edges);
+    std::unordered_map<uint32_t, std::vector<uint32_t>> guiChildren;
+    for (const auto& [child, parent] : edges) guiChildren[parent ? parent : g_root].push_back(child);
+    std::vector<std::pair<uint32_t, int>> stack;
+    std::unordered_set<uint32_t> seen{base};
+    auto pushChildren = [&](uint32_t id, int depth) {
+        if (depth >= 64) return;
+        std::vector<uint32_t> kids;
+        if (Node* node = Find(id))
+            for (uint32_t child : node->children)
+                if (Node* kid = Find(child); kid && !kid->beingDeleted) kids.push_back(child);
+        if (const auto gui = guiChildren.find(id); gui != guiChildren.end())
+            kids.insert(kids.end(), gui->second.begin(), gui->second.end());
+        for (auto it = kids.rbegin(); it != kids.rend(); ++it)
+            if (seen.insert(*it).second) stack.emplace_back(*it, depth + 1);
+    };
+    pushChildren(base, 0);
+    while (!stack.empty()) {
+        const auto [id, depth] = stack.back();
+        stack.pop_back();
+        out.push_back(id);
+        pushChildren(id, depth);
+    }
+}
+
+bool ClientElementInTree(uint32_t id) { return Find(id) != nullptr || GuiIsElement(id); }
 
 
 void EnsureResourceNode(uint32_t resourceRoot, const std::string& name) {
@@ -1029,7 +1064,7 @@ void CollectEventChain(uint32_t base, std::vector<uint32_t>& out) {
         if (node) propagate = node->callPropagation;
         else if (const auto flag = g_callProp.find(current); flag != g_callProp.end()) propagate = flag->second;
         if (!propagate) return;
-        const uint32_t parent = node ? node->parent : 0;
+        const uint32_t parent = node ? node->parent : (GuiIsElement(current) ? GuiEventParent(current) : 0);
         if (parent) {
             current = parent;
             continue;

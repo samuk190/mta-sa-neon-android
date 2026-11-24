@@ -148,6 +148,9 @@ void ActiveVmRunIn(lua_State* vm, const std::function<void()>& fn);
 // Which VM resources started from now on run in: 0 Automatic (5.1 unless a
 // script only parses as 5.3), 1 always Lua 5.3, 2 always Lua 5.1.
 void ActiveVmSetResourceLua(int mode);
+// The script errors resource code raised (load, run, event handlers, timers,
+// binds, commands) since the last call, as "where: message". For tests.
+std::vector<std::string> ActiveVmTakeScriptErrors();
 
 // The VM a started resource runs in, or null when it has not started.
 lua_State* ActiveVmResourceVm(uint32_t generation);
@@ -183,6 +186,12 @@ bool ActiveVmFireBirdShot(uint32_t bird, uint32_t attacker, int weapon, float x,
 // is enabled. An element that is not in the tree still reaches the root.
 // CClientEntity::CallParentEvent (CClientEntity.cpp 811-823).
 void CollectEventChain(uint32_t base, std::vector<uint32_t>& out);
+// The descendants of base in tree order (each child, then its children), for
+// events called on children (CClientEntity::CallEventNoParent, CClientEntity.cpp 783-809).
+void CollectEventDescendants(uint32_t base, std::vector<uint32_t>& out);
+// True when id is an element of the client tree (server elements outside it
+// count as children of the root, as in ClientDescendantOf).
+bool ClientElementInTree(uint32_t id);
 // Resource element under the client root. The dynamic map is a separate call so a
 // root read does not invent the map before the resource is running.
 void EnsureResourceNode(uint32_t resourceRoot, const std::string& name);

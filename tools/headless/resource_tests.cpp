@@ -20,6 +20,7 @@
 #include "LuaGuiApi.h"
 #include "LuaMtaWindowApi.h"
 #include "LuaVMStub.h"
+#include "LuaVmSet.h"
 #include "ModelNames.h"
 #include "ModelInfoRead.h"
 #include "ObjectGroups.h"
@@ -63,6 +64,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <regex>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -116,6 +118,17 @@ std::vector<uint8_t> NoCacheScriptBody(uint16_t netId, const std::string& source
     const uint32_t length = static_cast<uint32_t>(item.size());
     for (int i = 0; i < 4; ++i) body.push_back(static_cast<uint8_t>(length >> (8 * i)));
     body.insert(body.end(), item.begin(), item.end());
+    return body;
+}
+
+// Packet 95 with several named scripts, in order (the current Neon layout).
+std::vector<uint8_t> NoCacheScriptsBody(uint16_t netId, const std::vector<std::pair<std::string, std::string>>& scripts) {
+    std::vector<uint8_t> body = {static_cast<uint8_t>(netId & 0xFF), static_cast<uint8_t>(netId >> 8),
+                                 static_cast<uint8_t>(scripts.size() & 0xFF), static_cast<uint8_t>(scripts.size() >> 8)};
+    for (const auto& [filename, source] : scripts) {
+        const std::vector<uint8_t> one = NoCacheScriptBody(netId, source, filename);
+        body.insert(body.end(), one.begin() + 4, one.end());  // drop that body's net id and count
+    }
     return body;
 }
 
@@ -613,6 +626,111 @@ void CheckTwoVms(WorldRPG::Script::LuaVMStub& vm) {
         triggerEvent("vmPong", root, "late")
         assert(getElementData(root, "vm51.pong") == "hi!", "stopped 5.1 handlers are gone")
     )LUA");
+    Script::ActiveVmSetResourceLua(1);
+}
+
+// The Neon official-resources (desktop repo official-resources/) as fixtures:
+// each resource's client and shared scripts start through RESOURCE_START and
+// packet 95 with the VM chosen by syntax, as on a server, and must raise no
+// script error while loading and over a few frames. The directory comes from
+// NEON_OFFICIAL_RESOURCES; the check is skipped without it.
+void CheckOfficialResources(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    Script::ActiveVmSetResourceLua(0);
+    Script::ActiveVmTakeScriptErrors();
+    {
+        // The error record this check relies on: a failing script and a failing
+        // timer are both reported.
+        Net::ResourceStartInfo info;
+        info.name = "errcheck";
+        info.resourceId = 299;
+        info.entityId = 0x4F00;
+        info.dynamicEntityId = 0x4F01;
+        info.noClientCacheScripts = 2;
+        info.startCounter = 1;
+        Script::ActiveVmOnResourceStart(info);
+        const std::vector<uint8_t> body = NoCacheScriptsBody(299, {{"bad.lua", "error('boom')"},
+                                                                   {"timer.lua", "setTimer(function() error('tick') end, 1, 1)"}});
+        CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+        Script::ActiveVmPulseResources();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        vm.pumpDx();
+        const std::vector<std::string> errors = Script::ActiveVmTakeScriptErrors();
+        CHECK(errors.size() == 2);
+        CHECK(errors.size() == 2 && errors[0].find("boom") != std::string::npos && errors[1].find("tick") != std::string::npos);
+        Net::BitStreamWriter stop;
+        stop.Write(static_cast<uint16_t>(299));
+        Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+    }
+    const char* rootDir = std::getenv("NEON_OFFICIAL_RESOURCES");
+    if (!rootDir || !*rootDir) {
+        std::printf("SKIP official-resources: NEON_OFFICIAL_RESOURCES is not set\n");
+        Script::ActiveVmSetResourceLua(1);
+        return;
+    }
+    std::vector<std::filesystem::path> dirs;
+    for (const auto& entry : std::filesystem::directory_iterator(rootDir))
+        if (entry.is_directory() && std::filesystem::exists(entry.path() / "meta.xml")) dirs.push_back(entry.path());
+    std::sort(dirs.begin(), dirs.end());
+    CHECK(!dirs.empty());
+    uint16_t netId = 300;
+    std::vector<uint16_t> started;
+    for (const auto& dir : dirs) {
+        std::ifstream metaFile(dir / "meta.xml");
+        const std::string meta((std::istreambuf_iterator<char>(metaFile)), std::istreambuf_iterator<char>());
+        std::vector<std::pair<std::string, std::string>> scripts;
+        const std::regex scriptTag(R"(<script\b[^>]*>)");
+        const std::regex src(R"re(\bsrc\s*=\s*"([^"]+)")re");
+        const std::regex type(R"re(\btype\s*=\s*"([^"]+)")re");
+        for (auto it = std::sregex_iterator(meta.begin(), meta.end(), scriptTag); it != std::sregex_iterator(); ++it) {
+            const std::string tag = it->str();
+            std::smatch m;
+            if (!std::regex_search(tag, m, src)) continue;
+            const std::string file = m[1];
+            std::string kind = "server";
+            if (std::regex_search(tag, m, type)) kind = m[1];
+            if (kind != "client" && kind != "shared") continue;
+            std::ifstream in(dir / file, std::ios::binary);
+            CHECK(static_cast<bool>(in));
+            scripts.emplace_back(file, std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+        }
+        if (scripts.empty()) continue;
+        const std::string name = dir.filename().string();
+        Net::ResourceStartInfo info;
+        info.name = name;
+        info.resourceId = netId;
+        info.entityId = 0x5000 + netId * 2;
+        info.dynamicEntityId = info.entityId + 1;
+        info.noClientCacheScripts = static_cast<uint16_t>(scripts.size());
+        info.startCounter = 1;
+        Script::ActiveVmOnResourceStart(info);
+        const std::vector<uint8_t> body = NoCacheScriptsBody(netId, scripts);
+        CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+        Script::ActiveVmPulseResources();
+        for (int frame = 0; frame < 5; ++frame) {
+            vm.pumpDx();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        const std::vector<std::string> errors = Script::ActiveVmTakeScriptErrors();
+        ++g_checks;
+        Script::ResourceLoader::ResourceView view;
+        lua_State* runIn = Script::ResourceLoader::CopyResourceByNet(netId, view)
+                               ? Script::ActiveVmResourceVm(view.generation) : nullptr;
+        std::printf("official-resources %s: %zu script(s) in %s, %zu error(s)\n", name.c_str(), scripts.size(),
+                    runIn ? (Script::Vms::Is51(runIn) ? "Lua 5.1" : "Lua 5.3") : "no VM", errors.size());
+        if (!runIn || !errors.empty()) {
+            ++g_failures;
+            for (const auto& error : errors) std::printf("FAIL official-resources %s: %s\n", name.c_str(), error.c_str());
+        }
+        started.push_back(netId++);
+    }
+    for (uint16_t id : started) {
+        Net::BitStreamWriter stop;
+        stop.Write(id);
+        Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+    }
+    for (const auto& error : Script::ActiveVmTakeScriptErrors())
+        std::printf("FAIL official-resources stop: %s\n", error.c_str());
     Script::ActiveVmSetResourceLua(1);
 }
 
@@ -1856,10 +1974,17 @@ void CheckHelpers(WorldRPG::Script::LuaVMStub& vm) {
         local nested = true
         addEventHandler("onOuter", me, function() nested = triggerEvent("onStop", me) end)
         assert(triggerEvent("onOuter", me) == true and nested == false, "nested cancel")
+        -- CClientEntity::CallEvent calls children: a propagated handler on the
+        -- player runs for root, one added with propagate false does not.
         local playerOnly = false
         local function onlyMe() playerOnly = true end
-        assert(addEventHandler("onPlayerOnly", me, onlyMe) == true, "player handler")
+        assert(addEventHandler("onPlayerOnly", me, onlyMe, false) == true, "player handler")
         assert(triggerEvent("onPlayerOnly", root) == true and playerOnly == false, "element filter")
+        assert(triggerEvent("onPlayerOnly", me) == true and playerOnly == true, "source handler")
+        assert(removeEventHandler("onPlayerOnly", me, onlyMe) == true, "remove")
+        playerOnly = false
+        assert(addEventHandler("onPlayerOnly", me, onlyMe) == true, "propagated player handler")
+        assert(triggerEvent("onPlayerOnly", root) == true and playerOnly == true, "children called")
         assert(removeEventHandler("onPlayerOnly", root, onlyMe) == false, "remove is per element")
         assert(removeEventHandler("onPlayerOnly", me, onlyMe) == true, "remove on the element")
         local bubbled = false
@@ -2094,6 +2219,58 @@ void CheckGui(WorldRPG::Script::LuaVMStub& vm) {
     )LUA");
     frame = WorldRPG::Script::ActiveVmPump();
     CHECK(!Has(frame, "\nK\n"));
+}
+
+// CClientGame GUI mouse handlers (CClientGame.cpp 6660-6812) and CallEvent's
+// child walk (CClientEntity.cpp 746-809) for touches on widgets.
+void CheckGuiClicks(WorldRPG::Script::LuaVMStub& vm) {
+    RunLua(vm, "gui-click-setup", R"LUA(
+        _G.clickLog = {}
+        local function log(tag) return function(...) clickLog[#clickLog + 1] = tag .. ":" .. table.concat({...}, ",", 1, 2) end end
+        clickWin = guiCreateWindow(0, 0, 400, 300, "w", false)
+        clickBtn = guiCreateButton(10, 40, 100, 40, "b", false, clickWin)
+        _G.btnTag = function() return source == clickBtn and "btn" or (source == clickWin and "win" or "?") end
+        addEventHandler("onClientGUIMouseDown", clickBtn, function(b) clickLog[#clickLog + 1] = "md:" .. b .. ":" .. btnTag() end, false)
+        addEventHandler("onClientGUIMouseUp", root, function(b) clickLog[#clickLog + 1] = "mu:" .. btnTag() end)
+        addEventHandler("onClientGUIClick", clickBtn, function(b, st) clickLog[#clickLog + 1] = "c:" .. st .. ":" .. btnTag() end)
+        addEventHandler("onClientGUIDoubleClick", clickBtn, function(b, st) clickLog[#clickLog + 1] = "dc:" .. btnTag() end, false)
+        showCursor(true)
+    )LUA");
+    auto tap = [](float x, float y) {
+        WorldRPG::Script::ActiveVmQueueCursor(0, x, y);
+        WorldRPG::Script::ActiveVmQueueCursor(1, x, y);
+        WorldRPG::Script::ActiveVmPump();
+    };
+    // Window chrome and button origin: the button's screen box is inside the window's client area.
+    tap(60.f, 70.f);
+    RunLua(vm, "gui-click-button", R"LUA(
+        local got = table.concat(clickLog, " ")
+        -- The "down" click needs a resource asking for 1.7.0-7.26369; core code has none.
+        assert(got == "md:left:btn mu:btn c:up:btn", "button tap: " .. got)
+        clickLog = {}
+    )LUA");
+    tap(60.f, 70.f);
+    RunLua(vm, "gui-double-click", R"LUA(
+        local got = table.concat(clickLog, " ")
+        assert(got == "md:left:btn dc:btn mu:btn c:up:btn", "second tap is a double click: " .. got)
+        clickLog = {}
+    )LUA");
+    tap(300.f, 250.f);
+    RunLua(vm, "gui-click-window", R"LUA(
+        local got = table.concat(clickLog, " ")
+        -- The button's propagated handler runs for a click on its window (CallEventNoParent).
+        assert(got == "mu:win c:up:win", "window tap: " .. got)
+        clickLog = {}
+    )LUA");
+    WorldRPG::Script::ActiveVmQueueCursor(0, 60.f, 70.f);
+    WorldRPG::Script::ActiveVmQueueCursor(1, 300.f, 250.f);
+    WorldRPG::Script::ActiveVmPump();
+    RunLua(vm, "gui-click-drag-off", R"LUA(
+        local got = table.concat(clickLog, " ")
+        assert(got == "md:left:btn mu:win", "release elsewhere is not a click: " .. got)
+        destroyElement(clickWin)
+        showCursor(false)
+    )LUA");
 }
 
 // Client window state calls (desktop CLuaGUIDefs.cpp:642-700, 3631-3748, 4066-4086).
@@ -4833,6 +5010,7 @@ int main(int argc, char** argv) {
     CheckElementsGuiDx(vm);
     CheckDxTextLayout(vm);
     CheckMemoInput(vm);
+    CheckGuiClicks(vm);
     CheckMtaWindow(vm);
     CheckCoreClientCalls(vm);
     CheckDxDrawing(vm);
@@ -4840,6 +5018,18 @@ int main(int argc, char** argv) {
     CheckStopLifecycle(vm);
     CheckCustomWeapons(vm);
     CheckTwoVms(vm);
+    CheckOfficialResources(vm);
+    // CLuaRadioPlaybackDefs.cpp: the table is checked, then the missing radio hook gives false.
+    RunLua(vm, "radio-playback-state", R"LUA(
+        assert(getRadioPlaybackState() == false, "no radio hook")
+        assert(setRadioPlaybackState() == false and setRadioPlaybackState({}) == false, "needs a full table")
+        local q = {}
+        for i = 1, 5 do q[i] = {id = -1, type = 6, index = -1} end
+        local state = {station = 1, trackId = 0, trackType = 0, trackIndex = 0, position = 0, length = -1, flags = 0, queue = q}
+        assert(setRadioPlaybackState(state) == false, "valid table, no radio hook")
+        state.station = 13
+        assert(setRadioPlaybackState(state) == false, "station out of range")
+    )LUA");
     CheckObjects(vm);
     CheckWater(vm);
     CheckFires(vm);

@@ -827,6 +827,83 @@ int l_getRadioChannel(lua_State* L) {
     return 1;
 }
 
+// getRadioPlaybackState / setRadioPlaybackState (CLuaRadioPlaybackDefs.cpp:12-150).
+// Desktop reads and writes CAERadioTrackManager through
+// CAERadioTrackManagerSA::Get/SetPlaybackState. The phone has no hook on the
+// radio track manager yet (the radio channel above is only stored), so both
+// take desktop's path for a missing manager and return false. setRadioPlaybackState
+// checks its table first, in desktop's order, so a bad table fails the same way.
+constexpr int kRadioQueueSize = 5;  // SRadioPlaybackState::QUEUE_SIZE (CAERadioTrackManager.h:16)
+constexpr int kMinNativeTrackIndex = -128;
+constexpr int kMaxNativeTrackIndex = 127;
+
+bool ReadRadioIntegerField(lua_State* L, int tableIndex, const char* name, int& value) {
+    lua_getfield(L, tableIndex, name);
+    if (!lua_isnumber(L, -1)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    value = static_cast<int>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    return true;
+}
+
+void NoteRadioManagerMissing(const char* function) {
+    static bool logged = false;
+    if (logged) return;
+    logged = true;
+    LUA_LOGE("DIAG %s: CAERadioTrackManager is not hooked on this client", function);
+}
+
+int l_getRadioPlaybackState(lua_State* L) {
+    NoteRadioManagerMissing("getRadioPlaybackState");
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+int l_setRadioPlaybackState(lua_State* L) {
+    if (!lua_istable(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int station = 0, mode = 0, trackId = 0, trackType = 0, trackIndex = 0, position = 0, length = 0, flags = 0;
+    if (!ReadRadioIntegerField(L, 1, "station", station) || !ReadRadioIntegerField(L, 1, "trackId", trackId) ||
+        !ReadRadioIntegerField(L, 1, "trackType", trackType) || !ReadRadioIntegerField(L, 1, "trackIndex", trackIndex) ||
+        !ReadRadioIntegerField(L, 1, "position", position) || !ReadRadioIntegerField(L, 1, "length", length) ||
+        !ReadRadioIntegerField(L, 1, "flags", flags)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    ReadRadioIntegerField(L, 1, "mode", mode);
+    if (station < 0 || station >= 13 || trackId < 0 || trackType < 0 || trackType > 7 || trackIndex < kMinNativeTrackIndex ||
+        trackIndex > kMaxNativeTrackIndex || position < 0 || length < -1 || flags < 0 || flags > 255) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_getfield(L, 1, "queue");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    for (int i = 0; i < kRadioQueueSize; ++i) {
+        lua_rawgeti(L, -1, i + 1);
+        int id = 0, type = 0, index = 0;
+        if (!lua_istable(L, -1) || !ReadRadioIntegerField(L, -1, "id", id) || !ReadRadioIntegerField(L, -1, "type", type) ||
+            !ReadRadioIntegerField(L, -1, "index", index) || id < -1 || type < 0 || type > 7 ||
+            index < kMinNativeTrackIndex || index > kMaxNativeTrackIndex) {
+            lua_pop(L, 2);
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    NoteRadioManagerMissing("setRadioPlaybackState");
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
 int l_setAmbientSoundEnabled(lua_State* L) {
     const char* typeStr = lua_isstring(L, 1) ? lua_tostring(L, 1) : "general";
     const int boolIdx = lua_isstring(L, 1) ? 2 : 1;
@@ -1062,6 +1139,8 @@ void InstallAudioLua(lua_State* L) {
         // Lot 3 additions
         {"setRadioChannel", l_setRadioChannel},
         {"getRadioChannel", l_getRadioChannel},
+        {"getRadioPlaybackState", l_getRadioPlaybackState},
+        {"setRadioPlaybackState", l_setRadioPlaybackState},
         {"setAmbientSoundEnabled", l_setAmbientSoundEnabled},
         {"isAmbientSoundEnabled", l_isAmbientSoundEnabled},
         {"resetAmbientSounds", l_resetAmbientSounds},

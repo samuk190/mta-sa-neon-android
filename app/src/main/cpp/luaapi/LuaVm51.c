@@ -145,10 +145,22 @@ double n51_tonumberx(lua_State *L, int idx, int *isnum) {
     return ok ? lua_tonumber(L, idx) : 0;
 }
 
+/* Lua 5.1's lua_tointeger truncates a fractional number (lua_number2integer),
+ * and desktop MTA's argument reader accepts one, so 5.1 states convert it
+ * instead of failing as 5.3 does: setTimer(f, 1000/30) runs every 33 ms as on
+ * desktop. Non-finite and out-of-range numbers still fail. lua_isinteger keeps
+ * the exact rule. */
 long long n51_tointegerx(lua_State *L, int idx, int *isnum) {
     idx = ToIndex51(idx);
+    int ok = 0;
     long long v = 0;
-    const int ok = lua_isnumber(L, idx) && IntegralNumber(lua_tonumber(L, idx), &v);
+    if (lua_isnumber(L, idx)) {
+        const double n = lua_tonumber(L, idx);
+        if (n == n && n >= -9223372036854775808.0 && n < 9223372036854775808.0) {
+            v = (long long)n;
+            ok = 1;
+        }
+    }
     if (isnum) *isnum = ok;
     return ok ? v : 0;
 }

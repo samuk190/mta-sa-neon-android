@@ -8,6 +8,8 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 struct lua_State;
 
@@ -31,6 +33,12 @@ void GuiDropResource(const std::string& owner, uint16_t netId, uint32_t generati
 // resource instance, accepted by guiCreate* as a parent. The same id is returned
 // every call for that instance.
 uint32_t GuiEnsureResourceRoot(const std::string& owner, uint16_t netId, uint32_t generation);
+// Event parents of GUI elements, as desktop's element tree has them: the GUI
+// parent, else the resource's guiroot, and the guiroot's parent is the resource
+// root (CResource.cpp 87-88). 0 is the client root. GuiEventEdges lists
+// (element, parent) for every GUI element at once.
+uint32_t GuiEventParent(uint32_t id);
+void GuiEventEdges(std::vector<std::pair<uint32_t, uint32_t>>& out);
 // Drops every GUI element (new VM or session).
 void GuiReset();
 // CClientGuiFont::Unlink restores default-normal on every widget using that font.

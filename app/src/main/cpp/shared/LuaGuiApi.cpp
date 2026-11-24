@@ -6,6 +6,7 @@
 #include "LuaVMStub.h"
 #include "LuaAudioApi.h"
 #include "LuaStoredElementApi.h"
+#include "ResourceLoader.h"
 #include "../gtasa/GameEngine.h"
 
 extern "C" {
@@ -505,6 +506,46 @@ bool GuiDestroy(uint32_t id) {
         g_elements.erase(gone);
     }
     return true;
+}
+
+void GuiEventEdges(std::vector<std::pair<uint32_t, uint32_t>>& out) {
+    out.clear();
+    // The guiroot of each resource start (CResource.cpp 87-88: its parent is the resource root).
+    std::map<uint32_t, uint32_t> guiRoots;
+    for (const auto& [id, element] : g_elements)
+        if (element.type == "guiroot" && element.generation != 0) guiRoots.emplace(element.generation, id);
+    std::map<uint32_t, uint32_t> resourceRoots;
+    auto resourceRoot = [&](uint32_t generation) -> uint32_t {
+        if (generation == 0) return 0;
+        if (const auto found = resourceRoots.find(generation); found != resourceRoots.end()) return found->second;
+        ResourceLoader::ResourceView view;
+        const uint32_t root = ResourceLoader::CopyResourceByGeneration(generation, view) ? view.root : 0;
+        resourceRoots.emplace(generation, root);
+        return root;
+    };
+    for (const auto& [id, element] : g_elements) {
+        uint32_t parent = 0;
+        if (element.parent && Find(element.parent)) {
+            parent = element.parent;
+        } else if (element.type != "guiroot") {
+            const auto root = guiRoots.find(element.generation);
+            parent = root != guiRoots.end() ? root->second : resourceRoot(element.generation);
+        } else {
+            parent = resourceRoot(element.generation);
+        }
+        out.emplace_back(id, parent);
+    }
+}
+
+uint32_t GuiEventParent(uint32_t id) {
+    const GuiElement* element = Find(id);
+    if (!element) return 0;
+    if (element->parent && Find(element->parent)) return element->parent;
+    if (element->type != "guiroot" && element->generation != 0)
+        for (const auto& [rootId, root] : g_elements)
+            if (root.type == "guiroot" && root.generation == element->generation) return rootId;
+    ResourceLoader::ResourceView view;
+    return element->generation != 0 && ResourceLoader::CopyResourceByGeneration(element->generation, view) ? view.root : 0;
 }
 
 uint32_t GuiEnsureResourceRoot(const std::string& owner, uint16_t netId, uint32_t generation) {
