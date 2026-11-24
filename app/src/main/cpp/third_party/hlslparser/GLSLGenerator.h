@@ -1,3 +1,4 @@
+#include <vector>
 //=============================================================================
 //
 // Render/GLSLGenerator.h
@@ -132,6 +133,13 @@ private:
     Options             m_options;
 
     bool                m_outputPosition;
+    // Mobile patch: GLSL ES 1.00 has no array constructors. Initialised arrays
+    // are declared bare and filled element by element: locals right after the
+    // declaration, globals at the start of main().
+    int                 m_functionDepth = 0;
+    struct ArrayInit { const char* name; HLSLType elementType; HLSLExpression* values; };
+    std::vector<ArrayInit> m_globalArrayInits;
+    void                OutputArrayFill(const char* name, const HLSLType& elementType, HLSLExpression* values, const char* separator);
     int                 m_outputTargets;
 
     const char*         m_outAttribPrefix;

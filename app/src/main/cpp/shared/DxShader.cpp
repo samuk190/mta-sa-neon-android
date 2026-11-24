@@ -1,5 +1,5 @@
 #include "DxShader.h"
-#include "../third_party/hlslparser/HLSLParser.h"
+#include "FxCompiler.h"
 #include "../third_party/hlslparser/GLSLGenerator.h"
 #undef assert
 #include <EGL/egl.h>
@@ -18,9 +18,7 @@ namespace WorldRPG::DxShader {
 namespace {
 std::recursive_mutex gpuMutex;
 constexpr size_t MaxSourceBytes=512*1024;
-std::string Key(std::string name) {
-    for(char& c:name)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));return name;
-}
+using Fx::Key;
 bool IntegerUniform(GLenum type) {
     return type==GL_INT||type==GL_BOOL||(type>=GL_INT_VEC2&&type<=GL_BOOL_VEC4);
 }
@@ -75,110 +73,6 @@ struct Context {
         if (oldDisplay!=EGL_NO_DISPLAY) eglMakeCurrent(oldDisplay,oldDraw,oldRead,oldContext);
     }
 };
-std::string StripComments(const std::string& source) {
-    std::string result=source;
-    bool block=false,line=false,quote=false;
-    for (size_t i=0;i<result.size();++i) {
-        char c=source[i],next=i+1<source.size()?source[i+1]:0;
-        if (block) { if (c=='*' && next=='/') { result[i]=result[i+1]=' '; ++i; block=false; } else if(c!='\n') result[i]=' '; }
-        else if (line) { if(c=='\n') line=false; else result[i]=' '; }
-        else if (!quote && c=='/' && (next=='*'||next=='/')) { block=next=='*'; line=next=='/'; result[i]=result[i+1]=' '; ++i; }
-        else if(c=='"' && (!i||source[i-1]!='\\')) quote=!quote;
-    }
-    return result;
-}
-struct Technique { std::string name,body; };
-bool Techniques(std::string& source,std::vector<Technique>& techniques) {
-    std::regex start(R"(\btechnique(?:9)?\s+(\w+)\s*\{)");
-    std::smatch match;
-    size_t from=0;
-    while (from<source.size()) {
-        auto begin=source.cbegin()+from;
-        if (!std::regex_search(begin,source.cend(),match,start)) break;
-        size_t first=from+match.position(),body=first+match.length(),end=body;
-        unsigned depth=1;
-        for (;end<source.size() && depth;++end) { if(source[end]=='{') ++depth; else if(source[end]=='}') --depth; }
-        if (depth) return false;
-        techniques.push_back({match[1],source.substr(body,end-body-1)});
-        std::fill(source.begin()+first,source.begin()+end,' '); from=end;
-    }
-    return !techniques.empty();
-}
-unsigned Width(M4::HLSLBaseType type) {
-    using namespace M4;
-    switch(type){case HLSLBaseType_Float:case HLSLBaseType_Half:case HLSLBaseType_Int:case HLSLBaseType_Bool:return 1;
-    case HLSLBaseType_Float2:case HLSLBaseType_Half2:return 2;case HLSLBaseType_Float3:case HLSLBaseType_Half3:return 3;
-    case HLSLBaseType_Float4:case HLSLBaseType_Half4:return 4;case HLSLBaseType_Float4x4:return 16;default:return 0;}
-}
-bool Constant(M4::HLSLTree& tree,M4::HLSLExpression* expression,std::vector<float>& result,unsigned depth=0) {
-    using namespace M4;
-    if(!expression||depth>32)return false;
-    if(expression->nodeType==HLSLNodeType_LiteralExpression) {
-        auto* literal=static_cast<HLSLLiteralExpression*>(expression);
-        switch(expression->expressionType.baseType) {
-        case HLSLBaseType_Float:case HLSLBaseType_Half:result={literal->fValue};return std::isfinite(literal->fValue);
-        case HLSLBaseType_Int:result={float(literal->iValue)};return true;
-        case HLSLBaseType_Bool:result={float(literal->bValue)};return true;default:return false;}
-    }
-    if(expression->nodeType==HLSLNodeType_IdentifierExpression) {
-        auto* declaration=tree.FindGlobalDeclaration(static_cast<HLSLIdentifierExpression*>(expression)->name);
-        return declaration && (declaration->type.flags&HLSLTypeFlag_Const) && Constant(tree,declaration->assignment,result,depth+1);
-    }
-    if(expression->nodeType==HLSLNodeType_ConstructorExpression) {
-        auto* constructor=static_cast<HLSLConstructorExpression*>(expression);
-        for(auto* arg=constructor->argument;arg;arg=arg->nextExpression) {
-            std::vector<float> values;if(!Constant(tree,arg,values,depth+1)||result.size()+values.size()>16)return false;
-            result.insert(result.end(),values.begin(),values.end());
-        }
-        const unsigned width=Width(constructor->type.baseType);
-        if(result.size()==1&&width<=4)result.resize(width,result[0]);
-        return width && result.size()==width;
-    }
-    if(expression->nodeType==HLSLNodeType_UnaryExpression) {
-        auto* unary=static_cast<HLSLUnaryExpression*>(expression);
-        if(!Constant(tree,unary->expression,result,depth+1))return false;
-        if(unary->unaryOp==HLSLUnaryOp_Negative){for(float& value:result)value=-value;return true;}
-        return unary->unaryOp==HLSLUnaryOp_Positive;
-    }
-    if(expression->nodeType==HLSLNodeType_BinaryExpression) {
-        auto* binary=static_cast<HLSLBinaryExpression*>(expression);std::vector<float> a,b;
-        if(!Constant(tree,binary->expression1,a,depth+1)||!Constant(tree,binary->expression2,b,depth+1))return false;
-        if(a.size()==1)a.resize(b.size(),a[0]);if(b.size()==1)b.resize(a.size(),b[0]);if(a.size()!=b.size())return false;
-        for(size_t i=0;i<a.size();++i){float value;
-            switch(binary->binaryOp){case HLSLBinaryOp_Add:value=a[i]+b[i];break;case HLSLBinaryOp_Sub:value=a[i]-b[i];break;
-            case HLSLBinaryOp_Mul:value=a[i]*b[i];break;case HLSLBinaryOp_Div:if(!b[i])return false;value=a[i]/b[i];break;default:return false;}
-            if(!std::isfinite(value))return false;result.push_back(value);
-        }return true;
-    }
-    return false;
-}
-bool Translate(const std::string& source,const std::string& entry,bool vertex,std::string& output,
-               std::map<std::string,std::vector<float>>& defaults) {
-    M4::Allocator allocator;
-    M4::HLSLParser parser(&allocator,"mobile.fx",source.c_str(),source.size());
-    M4::HLSLTree tree(&allocator);
-    if (!parser.Parse(&tree)) return false;
-    for(auto* statement=tree.GetRoot()->statement;statement;statement=statement->nextStatement) {
-        if(statement->nodeType!=M4::HLSLNodeType_Declaration)continue;
-        for(auto* d=static_cast<M4::HLSLDeclaration*>(statement);d;d=d->nextDeclaration) {
-            if(d->type.flags&M4::HLSLTypeFlag_Const)d->type.flags|=M4::HLSLTypeFlag_Static;
-            if(!d->assignment||(d->type.flags&M4::HLSLTypeFlag_Static))continue;
-            std::vector<float> values;if(!Constant(tree,d->assignment,values))return false;
-            if(values.size()==1 && Width(d->type.baseType)<=4)values.resize(Width(d->type.baseType),values[0]);
-            defaults[Key(d->name)]=values;d->assignment=nullptr;
-        }
-    }
-    M4::GLSLGenerator generator;
-    M4::GLSLGenerator::Options options;
-    options.flags=M4::GLSLGenerator::Flag_PackMatrixRowMajor;
-    if (!generator.Generate(&tree,vertex?M4::GLSLGenerator::Target_VertexShader:M4::GLSLGenerator::Target_FragmentShader,
-                            M4::GLSLGenerator::Version_100_ES,entry.c_str(),options)) return false;
-    output=generator.GetResult();
-    // ES100 defaults to different integer precision in VS and PS. The same
-    // reflected uniform must have matching precision in both stages to link.
-    output.insert(output.find('\n')+1,"precision highp int;\n");
-    return true;
-}
 GLuint Compile(GLenum type,const std::string& source,std::string& error) {
     GLuint shader=glCreateShader(type); const char* data=source.c_str();
     glShaderSource(shader,1,&data,nullptr); glCompileShader(shader);
@@ -215,82 +109,17 @@ struct Program {
 };
 std::shared_ptr<Program> Create(const std::string& original,const std::map<std::string,std::string>& macros,
                                std::string& technique,std::string& diagnostic) {
-    diagnostic="unsupported or invalid FX source";
-    if (original.size()>MaxSourceBytes || original.find('\0')!=std::string::npos) return {};
-    std::string source=StripComments(original);
-    auto definitions=macros;
-    std::istringstream lines(source); std::string line,expanded;
-    std::regex define(R"(^\s*#\s*define\s+(\w+)\s+(.*?)\s*$)");
-    while (std::getline(lines,line)) {
-        std::smatch match;
-        if (std::regex_match(line,match,define)) { if(!definitions.count(match[1])) definitions[match[1]]=match[2]; }
-        else if(line.find('#')!=std::string::npos) { diagnostic="FX preprocessor directive not supported"; return {}; }
-        else expanded+=line+'\n';
-    }
-    source=expanded;
-    auto appendSource=[&](std::string& out,std::string_view piece) {
-        if(piece.size()>MaxSourceBytes-out.size()) {
-            diagnostic="expanded shader source exceeds the 512 KiB limit";return false;
-        }
-        out.append(piece.data(),piece.size());return true;
-    };
-    if(source.size()>MaxSourceBytes){diagnostic="expanded shader source exceeds the 512 KiB limit";return {};}
-    for (const auto& [name,value]:definitions) {
-        if(!std::regex_match(name,std::regex("[A-Za-z_][A-Za-z_0-9]*")) || value.size()>256) return {};
-        const std::regex identifier("\\b"+name+"\\b");
-        std::string replaced;size_t end=0;const std::string_view current(source);
-        for(auto it=std::sregex_iterator(source.begin(),source.end(),identifier);it!=std::sregex_iterator();++it) {
-            if(!appendSource(replaced,current.substr(end,it->position()-end)) || !appendSource(replaced,value))return {};
-            end=it->position()+it->length();
-        }
-        if(!appendSource(replaced,current.substr(end)))return {};
-        source=std::move(replaced);
-    }
-    std::vector<Technique> techniques;
-    if (!Techniques(source,techniques)) return {};
-    // DX9 effect texture objects are bound to GLES sampler uniforms. Preserve
-    // the original texture parameter name as an alias for dxSetShaderValue.
+    Fx::Effect effect;
+    if (!Fx::Parse(original,macros,effect,diagnostic)) return {};
     std::map<std::string,std::vector<std::string>> aliases;
     std::map<std::string,Program::SamplerState> samplers;
-    std::smatch firstTexture;
-    const bool hasTexture=std::regex_search(source,firstTexture,std::regex(R"(\b(?:texture|sampler2D)\s+(\w+)\b)"));
-    const std::string sizeParameter=hasTexture?Key(firstTexture[1]):std::string{};
-    std::regex sampler(R"(\bsampler(?:2D)?\s+(\w+)\s*=\s*sampler_state\s*\{([^{}]*)\}\s*;)",std::regex::icase);
-    std::smatch match;
-    while (std::regex_search(source,match,sampler)) {
-        std::string body=match[2]; std::smatch texture;
-        if (!std::regex_search(body,texture,std::regex(R"(Texture\s*=\s*<\s*(\w+)\s*>\s*;)",std::regex::icase))) return {};
-        // D3D9 filter and address states map to GL texture parameters at bind
-        // time: Point/Linear (Anisotropic as Linear, None as Point), Clamp/Wrap/
-        // Mirror. The 2D tile path has no mip chain, so MipFilter changes nothing.
-        // Any other state is rejected: silently dropping FX state is not safe.
-        Program::SamplerState state;
-        std::string remainder=std::regex_replace(body,std::regex(R"(Texture\s*=\s*<\s*\w+\s*>\s*;)",std::regex::icase),"");
-        const std::regex assignment(R"(\b(MinFilter|MagFilter|MipFilter|AddressU|AddressV|MaxAnisotropy)\s*=\s*(\w+)\s*;)",std::regex::icase);
-        for(auto it=std::sregex_iterator(remainder.begin(),remainder.end(),assignment);it!=std::sregex_iterator();++it) {
-            std::string key=(*it)[1],value=(*it)[2];
-            for(auto& ch:key)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            for(auto& ch:value)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            GLint filter=-1,wrap=-1;
-            if(value=="linear"||value=="anisotropic")filter=GL_LINEAR;
-            else if(value=="point"||value=="none")filter=GL_NEAREST;
-            if(value=="clamp")wrap=GL_CLAMP_TO_EDGE;else if(value=="wrap")wrap=GL_REPEAT;else if(value=="mirror")wrap=GL_MIRRORED_REPEAT;
-            bool ok=true;
-            if(key=="maxanisotropy")ok=std::all_of(value.begin(),value.end(),[](char ch){return ch>='0'&&ch<='9';});
-            else if(key=="minfilter"){ok=filter>=0;if(ok)state.minFilter=filter;}
-            else if(key=="magfilter"){ok=filter>=0;if(ok)state.magFilter=filter;}
-            else if(key=="mipfilter")ok=filter>=0;
-            else if(key=="addressu"){ok=wrap>=0;if(ok)state.wrapS=wrap;}
-            else if(key=="addressv"){ok=wrap>=0;if(ok)state.wrapT=wrap;}
-            if(!ok){diagnostic="unsupported sampler state";return {};}
-        }
-        remainder=std::regex_replace(remainder,assignment,"");
-        if(remainder.find_first_not_of(" \t\r\n")!=std::string::npos) { diagnostic="unsupported sampler state"; return {}; }
-        samplers[Key(match[1])]=state;
-        aliases[Key(texture[1])].push_back(Key(match[1]));
-        source.replace(match.position(),match.length(),"sampler2D "+match[1].str()+";");
+    for(const auto& [name,sampler]:effect.samplers) {
+        // D3D9 filter and address states map to GL texture parameters at bind time (FxCompiler).
+        samplers[name]={sampler.state.minFilter,sampler.state.magFilter,sampler.state.wrapS,sampler.state.wrapT};
+        aliases[sampler.texture].push_back(name);
     }
-    source=std::regex_replace(source,std::regex(R"(\btexture\s+\w+\s*;)"),"");
+    const std::string sizeParameter=effect.firstTexture;
+    std::string source=effect.hlsl;
     if (source.find("gWorldViewProjection")==std::string::npos) source="float4x4 gWorldViewProjection;\n"+source;
     const char* defaultVertex=R"(
 struct MobileVertex { float3 Position:POSITION; float2 TexCoord:TEXCOORD0; float4 Color:COLOR0; };
@@ -303,22 +132,17 @@ MobileOutput MobileDefaultVS(MobileVertex input) {
     source+=defaultVertex;
     Context context;
     if (!context.valid) { diagnostic="EGL shader context unavailable"; return {}; }
-    for (const auto& candidate:techniques) {
-        std::string body=candidate.body;
-        const std::regex pass(R"(\bpass\b)");
-        if (std::distance(std::sregex_iterator(body.begin(),body.end(),pass),std::sregex_iterator())!=1) continue;
-        std::smatch pixel,vertex;
-        if (!std::regex_search(body,pixel,std::regex(R"(PixelShader\s*=\s*compile\s+ps_\w+\s+(\w+)\s*\(\s*\)\s*;)",std::regex::icase))) continue;
-        std::string ps=pixel[1],vs="MobileDefaultVS";
-        if(std::regex_search(body,vertex,std::regex(R"(VertexShader\s*=\s*compile\s+vs_\w+\s+(\w+)\s*\(\s*\)\s*;)",std::regex::icase))) vs=vertex[1];
-        body=std::regex_replace(body,std::regex(R"((?:PixelShader|VertexShader)\s*=\s*compile\s+\w+\s+\w+\s*\(\s*\)\s*;|VertexShader\s*=\s*(?:NULL|0)\s*;|\bpass\s*\w*\s*[{}]|[{}])",std::regex::icase),"");
-        // Render states the 2D tile path already has, or that cannot change one flat
-        // quad drawn without fog or a depth buffer: no fog, no alpha test, no blending,
-        // no culling, and any depth test/write. Any other state still drops the technique.
-        body=std::regex_replace(body,std::regex(R"(\b(?:FogEnable|ZEnable|ZWriteEnable)\s*=\s*(?:True|False|0|1)\s*;|\b(?:AlphaTestEnable|AlphaBlendEnable)\s*=\s*(?:False|0)\s*;|\bCullMode\s*=\s*(?:None|1)\s*;)",std::regex::icase),"");
-        if(body.find_first_not_of(" \t\r\n")!=std::string::npos) { diagnostic="unsupported FX pass state"; continue; }
+    for (const auto& candidate:effect.techniques) {
+        // The tile path draws one quad offscreen and the result is composited with
+        // the usual alpha blending, so a pass's blend, depth, cull and fog states
+        // have nothing more to change here. One pass per technique, as before.
+        if (candidate.passes.size()!=1) { diagnostic="multi-pass technique"; continue; }
+        const Fx::Pass& pass=candidate.passes.front();
+        const std::string ps=pass.pixelEntry,vs=pass.vertexEntry.empty()?"MobileDefaultVS":pass.vertexEntry;
         std::string vertexSource,pixelSource;std::map<std::string,std::vector<float>> defaults;
-        if(!Translate(source,vs,true,vertexSource,defaults)||!Translate(source,ps,false,pixelSource,defaults)) continue;
+        Fx::TranslateOptions vertexOptions;vertexOptions.vertex=true;
+        if(!Fx::Translate(source,vs,vertexOptions,vertexSource,defaults,diagnostic)||
+           !Fx::Translate(source,ps,{},pixelSource,defaults,diagnostic)) continue;
         GLuint v=Compile(GL_VERTEX_SHADER,vertexSource,diagnostic);
         if(!v) continue;
         GLuint f=Compile(GL_FRAGMENT_SHADER,pixelSource,diagnostic);

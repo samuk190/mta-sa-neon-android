@@ -386,7 +386,7 @@ bool GLSLGenerator::Generate(HLSLTree* tree, Target target, Version version, con
 	m_writer.WriteLine( 0, "vec4 %s(bvec4 cond, vec4 trueExpr, vec4 falseExpr) { vec4 ret; ret.x = cond.x ? trueExpr.x : falseExpr.x; ret.y = cond.y ? trueExpr.y : falseExpr.y; ret.z = cond.z ? trueExpr.z : falseExpr.z; ret.w = cond.w ? trueExpr.w : falseExpr.w; return ret; }", m_bvecTernary );
 
     // Output the extension used for dFdx/dFdy in GLES2
-    if (m_version == Version_100_ES && (m_tree->NeedsFunction("ddx") || m_tree->NeedsFunction("ddy")))
+    if (m_version == Version_100_ES && (m_tree->NeedsFunction("ddx") || m_tree->NeedsFunction("ddy") || m_tree->NeedsFunction("fwidth")))
     {
         m_writer.WriteLine(0, "#extension GL_OES_standard_derivatives : require");
     }
@@ -470,11 +470,9 @@ void GLSLGenerator::OutputExpression(HLSLExpression* expression, const HLSLType*
 {
 
     bool cast = dstType != NULL && !GetCanImplicitCast(expression->expressionType, *dstType);
-    if (expression->nodeType == HLSLNodeType_CastingExpression)
-    {
-        // No need to include a cast if the expression is already doing it.
-        cast = false;
-    }
+    // Mobile patch: a casting expression only makes the conversion unnecessary
+    // when its own type already converts to dstType; min(19, (int)x) still needs
+    // float((int)x) for the float overload. expressionType is the cast's type.
 
     if (cast)
     {
@@ -926,6 +924,10 @@ void GLSLGenerator::OutputIdentifier(const char* name)
     {
         name = "fract";
     }
+    else if (String_Equal(name, "rsqrt"))
+    {
+        name = "inversesqrt";
+    }
     else if (String_Equal(name, "ddx"))
     {
         name = "dFdx";
@@ -1046,7 +1048,9 @@ void GLSLGenerator::OutputStatements(int indent, HLSLStatement* statement, const
                 m_writer.Write(") {");
                 m_writer.EndLine();
 
+                ++m_functionDepth;
                 OutputStatements(indent + 1, function->statement, &function->returnType);
+                --m_functionDepth;
                 m_writer.WriteLine(indent, "}");
             }
         }
@@ -1648,6 +1652,12 @@ void GLSLGenerator::OutputEntryCaller(HLSLFunction* entryFunction)
     HLSLRoot* root = m_tree->GetRoot();
 
     m_writer.WriteLine(0, "void main() {");
+    for (const ArrayInit& init : m_globalArrayInits)
+    {
+        m_writer.BeginLine(1);
+        OutputArrayFill(init.name, init.elementType, init.values, "");
+        m_writer.EndLine();
+    }
 
     // Create local variables for each of the parameters we'll need to pass
     // into the entry point function.
@@ -1755,8 +1765,41 @@ void GLSLGenerator::OutputEntryCaller(HLSLFunction* entryFunction)
     m_writer.WriteLine(0, "}");
 }
 
+void GLSLGenerator::OutputArrayFill(const char* name, const HLSLType& elementType, HLSLExpression* values, const char* separator)
+{
+    int index = 0;
+    for (HLSLExpression* value = values; value != NULL; value = value->nextExpression, ++index)
+    {
+        m_writer.Write("%s%s[%d] = ", separator, name, index);
+        OutputExpression(value, &elementType);
+        if (separator[0] != ';') m_writer.Write(";");
+    }
+}
+
 void GLSLGenerator::OutputDeclaration(HLSLDeclaration* declaration)
 {
+	if( m_versionLegacy && declaration->type.array && declaration->assignment != NULL )
+	{
+		// Mobile patch: see m_globalArrayInits.
+		HLSLType bare = declaration->type;
+		bare.flags &= ~(HLSLTypeFlag_Const | HLSLTypeFlag_Static);
+		HLSLType element = declaration->type;
+		element.array = false;
+		element.arraySize = NULL;
+		OutputDeclarationType( bare );
+		OutputDeclarationBody( bare, GetSafeIdentifierName( declaration->name ) );
+		if( m_functionDepth > 0 )
+			OutputArrayFill( GetSafeIdentifierName( declaration->name ), element, declaration->assignment, "; " );
+		else
+			m_globalArrayInits.push_back( { GetSafeIdentifierName( declaration->name ), element, declaration->assignment } );
+		if( declaration->nextDeclaration )
+		{
+			m_writer.Write( "; " );
+			OutputDeclaration( declaration->nextDeclaration );
+		}
+		return;
+	}
+
 	OutputDeclarationType( declaration->type );
 
 	HLSLDeclaration* lastDecl = nullptr;
@@ -1881,7 +1924,9 @@ const char* GLSLGenerator::GetBuiltInSemantic(const char* semantic, AttributeMod
     if (outputIndex)
         *outputIndex = -1;
 
-    if (m_target == Target_VertexShader && modifier == AttributeModifier_Out && String_Equal(semantic, "POSITION"))
+    // Mobile patch: D3D9 FX names the output position POSITION0 as often as POSITION.
+    if (m_target == Target_VertexShader && modifier == AttributeModifier_Out &&
+        (String_Equal(semantic, "POSITION") || String_Equal(semantic, "POSITION0")))
         return "gl_Position";
 
     if (m_target == Target_VertexShader && modifier == AttributeModifier_Out && String_Equal(semantic, "SV_Position"))
@@ -1896,7 +1941,10 @@ const char* GLSLGenerator::GetBuiltInSemantic(const char* semantic, AttributeMod
     if (m_target == Target_FragmentShader && modifier == AttributeModifier_Out && String_Equal(semantic, "SV_Depth"))
         return "gl_FragDepth";
 
-    if (m_target == Target_FragmentShader && modifier == AttributeModifier_In && String_Equal(semantic, "SV_Position"))
+    // Mobile patch: a D3D9 pixel shader that shares the vertex output struct names
+    // POSITION/POSITION0 as an input it cannot read; it maps to gl_FragCoord.
+    if (m_target == Target_FragmentShader && modifier == AttributeModifier_In &&
+        (String_Equal(semantic, "SV_Position") || String_Equal(semantic, "POSITION") || String_Equal(semantic, "POSITION0")))
         return "gl_FragCoord";
 
     if (m_target == Target_FragmentShader && modifier == AttributeModifier_Out)

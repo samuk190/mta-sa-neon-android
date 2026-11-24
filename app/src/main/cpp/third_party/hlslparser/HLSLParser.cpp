@@ -495,6 +495,11 @@ const Intrinsic _intrinsic[] =
         Intrinsic( "clip", HLSLBaseType_Void,  HLSLBaseType_Half3    ),
         Intrinsic( "clip", HLSLBaseType_Void,  HLSLBaseType_Half4    ),
 
+        // Mobile patch: distance(a, b), as GLSL distance.
+        Intrinsic( "distance", HLSLBaseType_Float, HLSLBaseType_Float,  HLSLBaseType_Float  ),
+        Intrinsic( "distance", HLSLBaseType_Float, HLSLBaseType_Float2, HLSLBaseType_Float2 ),
+        Intrinsic( "distance", HLSLBaseType_Float, HLSLBaseType_Float3, HLSLBaseType_Float3 ),
+        Intrinsic( "distance", HLSLBaseType_Float, HLSLBaseType_Float4, HLSLBaseType_Float4 ),
         Intrinsic( "dot", HLSLBaseType_Float,  HLSLBaseType_Float,   HLSLBaseType_Float  ),
         Intrinsic( "dot", HLSLBaseType_Float,  HLSLBaseType_Float2,  HLSLBaseType_Float2 ),
         Intrinsic( "dot", HLSLBaseType_Float,  HLSLBaseType_Float3,  HLSLBaseType_Float3 ),
@@ -557,6 +562,7 @@ const Intrinsic _intrinsic[] =
         INTRINSIC_FLOAT1_FUNCTION( "log2" ),
 
         INTRINSIC_FLOAT1_FUNCTION( "ddx" ),
+        INTRINSIC_FLOAT1_FUNCTION( "fwidth" ),
         INTRINSIC_FLOAT1_FUNCTION( "ddy" ),
 
         INTRINSIC_FLOAT1_FUNCTION( "sign" ),
@@ -3672,6 +3678,11 @@ bool HLSLParser::GetIsFunction(const char* name) const
     return false;
 }
 
+static bool IsHalfType(HLSLBaseType type)
+{
+    return type == HLSLBaseType_Half || type == HLSLBaseType_Half2 || type == HLSLBaseType_Half3 || type == HLSLBaseType_Half4;
+}
+
 const HLSLFunction* HLSLParser::MatchFunctionCall(const HLSLFunctionCall* functionCall, const char* name)
 {
     const HLSLFunction* matchedFunction     = NULL;
@@ -3717,7 +3728,14 @@ const HLSLFunction* HLSLParser::MatchFunctionCall(const HLSLFunctionCall* functi
             }
             else if (result == FunctionsEqual)
             {
-                ++numMatchedOverloads;
+                // Mobile patch: integer arguments convert equally well to the float
+                // and half overloads (min(19, i)); fxc picks float, and GLSL has
+                // no half, so the half overload never wins a tie.
+                const bool newHalf = IsHalfType(function->returnType.baseType);
+                const bool oldHalf = matchedFunction && IsHalfType(matchedFunction->returnType.baseType);
+                if (oldHalf && !newHalf) matchedFunction = function;
+                else if (!oldHalf && newHalf) {}
+                else ++numMatchedOverloads;
             }
         }
     }

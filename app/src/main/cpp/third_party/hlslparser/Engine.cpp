@@ -82,15 +82,20 @@ void Log_Error(const char * format, ...) {
     va_end(args);
 }
 
+static thread_local void (*g_logSink)(const char*) = NULL;
+
+void Log_SetSink(void (*sink)(const char*)) { g_logSink = sink; }
+
 void Log_ErrorArgList(const char * format, va_list args) {
-#if 1 // @@ Don't we need to do this?
-    va_list tmp;
-    va_copy(tmp, args);
+    // Mobile patch: errors go to the caller's sink when one is set (the
+    // translator reports them as the shader diagnostic).
+    if (g_logSink) {
+        char line[512];
+        vsnprintf(line, sizeof(line), format, args);
+        g_logSink(line);
+        return;
+    }
     vprintf( format, args );
-    va_end(tmp);
-#else
-    vprintf( format, args );
-#endif
 }
 
 

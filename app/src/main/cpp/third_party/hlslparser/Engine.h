@@ -59,6 +59,8 @@ int String_ToInteger(const char * str, char ** end);
 
 void Log_Error(const char * format, ...);
 void Log_ErrorArgList(const char * format, va_list args);
+// Mobile patch: send errors of this thread to sink (NULL restores stdout).
+void Log_SetSink(void (*sink)(const char*));
 
 
 // Engine/Array.h

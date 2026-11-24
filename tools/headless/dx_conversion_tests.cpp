@@ -133,6 +133,32 @@ technique Textured {pass P {PixelShader=compile ps_2_0 PS();}})";
             Check(at==want,"sampler address mode applied");
         }
         Check(!DX::Create(addressed("Border"),{},technique,error)&&error=="unsupported sampler state","unsupported address rejected");
+        // Constructs desktop MTA effects use that the translator now handles: annotations,
+        // blend states, POSITION0 in a shared struct, derivatives only in the pixel stage,
+        // fwidth, rsqrt, distance, min on ints, and initialised constant arrays.
+        const char* features=R"(
+float4x4 gWorldViewProjection : WORLDVIEWPROJECTION;
+texture gTexture0 < string textureState="0,Texture"; >;
+sampler Source = sampler_state { Texture=<gTexture0>; MinFilter=Linear; MagFilter=Linear; MipFilter=Linear; };
+static const float table[3] = {0.25, 0.5, 1.0};
+struct V { float3 position : POSITION0; float2 uv : TEXCOORD0; float4 color : COLOR0; };
+struct P { float4 position : POSITION0; float2 uv : TEXCOORD0; float4 color : COLOR0; };
+P VS(V v) { P p; p.position=mul(float4(v.position,1),gWorldViewProjection); p.uv=v.uv; p.color=v.color; return p; }
+float4 PS(P p) : COLOR0 {
+    int i = min(2, (int)floor(p.uv.x * 3));
+    float edge = fwidth(p.uv.x) + ddx(p.uv.y) * 0 + distance(p.uv, p.uv) + rsqrt(4) * 0;
+    clip(p.color.a - 0.01);
+    return float4(tex2D(Source, p.uv).rgb * table[i] + edge * 0, 1);
+}
+technique T { pass P0 { VertexShader=compile vs_2_0 VS(); PixelShader=compile ps_2_0 PS();
+    AlphaBlendEnable=True; SrcBlend=SrcAlpha; DestBlend=InvSrcAlpha; ZEnable=True; ZWriteEnable=False; CullMode=None; FogEnable=False; } }
+)";
+        auto featured=DX::Create(features,{},technique,error);if(!featured)std::fprintf(stderr,"Features diagnostic: %s\n",error.c_str());
+        Check(bool(featured)&&technique=="T","desktop FX constructs translate");
+        if(featured) {
+            DX::Image image;DX::Tile full=tile;
+            Check(DX::SetTexture(*featured,"gTexture0",{1,1,{0xff808080}})&&DX::Render(*featured,full,32,32,image),"desktop FX constructs render");
+        }
         if(const char* fx=std::getenv("NEON_FX_SAMPLE")) {
             std::ifstream in(fx);const std::string text((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
             auto real=DX::Create(text,{},technique,error);if(!real)std::fprintf(stderr,"%s diagnostic: %s\n",fx,error.c_str());
@@ -146,7 +172,7 @@ technique Textured {pass P {PixelShader=compile ps_2_0 PS();}})";
     Check(!DX::Create("technique T{pass P{PixelShader=compile ps_2_0 PS()",{},technique,error),"truncated FX terminates");
     Check(!DX::Create("#include <unknown.fx>\n"+source,{},technique,error),"unsupported preprocessor rejected");
     auto fallback=DX::Create("float4 PS():COLOR0{return float4(CHANNEL,0,0,1);}"
-        "technique Unsupported{pass P{AlphaBlendEnable=true;PixelShader=compile ps_2_0 PS();}}"
+        "technique Unsupported{pass P{StencilEnable=true;PixelShader=compile ps_2_0 PS();}}"
         "technique Supported{pass P{PixelShader=compile ps_2_0 PS();}}",{{"CHANNEL","1"}},technique,error);
     Check(bool(fallback)&&technique=="Supported","macro and technique fallback");
     std::string curved=R"(
