@@ -13,3 +13,9 @@ else()
     target_compile_definitions(lua51 PRIVATE LUA_USE_LINUX)
 endif()
 target_compile_options(lua51 PRIVATE -w)  # vendored C, unchanged warnings
+# Lua 5.1 keeps a string's bytes after its header and reads them as
+# (TString*)ts + 1 (getstr, lobject.h:210). Bionic's FORTIFY sees a pointer
+# past the end of the header and aborts the first strchr on one (the weak
+# table check in lgc.c:167, at luaopen_math on a device). Upstream code is
+# correct; build it without FORTIFY instead of changing it.
+target_compile_options(lua51 PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)

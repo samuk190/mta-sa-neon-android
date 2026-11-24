@@ -39,4 +39,9 @@ remaining global symbols listed in `symbols.txt`. To regenerate it, build
 both files with an empty `lua51_prefix.h` and list the defined globals:
 `nm -g --defined-only lua51_all.o lua51_utf8.o`.
 
+Both files build without `_FORTIFY_SOURCE`. Lua 5.1 reads a string's bytes
+as `(TString*)ts + 1` (`getstr`), which bionic's FORTIFY takes for a read
+past the end of the header: the first `strchr` on a Lua string aborts the
+process on Android.
+
 Host test: `tests/lua51/run.sh`.
