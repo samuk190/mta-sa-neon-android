@@ -1,3 +1,5 @@
+#include <iterator>
+#include <fstream>
 #include "shared/DxShader.h"
 #include "shared/ModelEffects.h"
 #include "shared/LuaDx3DApi.h"
@@ -113,6 +115,30 @@ technique Textured {pass P {PixelShader=compile ps_2_0 PS();}})";
     Check(bool(sampler),"legacy sampler translated");
     Check(DX::SetTexture(*sampler,"image",{1,1,{0xff123456}})&&DX::Render(*sampler,tile,32,32,second),"texture alias binds actual pixels");
     Check(second.pixels[12*32+12]==0xff123456,"texture sampled by GPU");
+    {
+        // sampler_state filter/address (D3D9 -> GL): u runs 0..2 across the tile, so at
+        // u=1.25 Wrap samples the left texel and Clamp the right one.
+        auto addressed=[&](const char* address){
+            return std::string("texture image; sampler s=sampler_state { Texture=<image>; MinFilter=Point; MagFilter=Point; MipFilter=None; AddressU=")+address+
+                "; AddressV=Clamp; };\nfloat4 PS(float2 uv:TEXCOORD0):COLOR0 {return tex2D(s,uv);}\ntechnique T {pass P {PixelShader=compile ps_2_0 PS();}}";
+        };
+        DX::Tile wide=tile;wide.usize=2;
+        for(const char* mode:{"Wrap","Clamp","Mirror"}) {
+            auto shader=DX::Create(addressed(mode),{},technique,error);if(!shader)std::fprintf(stderr,"%s diagnostic: %s\n",mode,error.c_str());
+            DX::Image image;
+            Check(shader&&DX::SetTexture(*shader,"image",{2,1,{0xffff0000,0xff0000ff}})&&DX::Render(*shader,wide,32,32,image),"addressed sampler renders");
+            const uint32_t at=image.pixels.empty()?0:image.pixels[12*32+18];
+            const uint32_t want=std::strcmp(mode,"Wrap")==0?0xffff0000u:0xff0000ffu;  // Mirror at 1.25 reads 0.75: right
+            if(at!=want)std::fprintf(stderr,"%s sampled %08x\n",mode,at);
+            Check(at==want,"sampler address mode applied");
+        }
+        Check(!DX::Create(addressed("Border"),{},technique,error)&&error=="unsupported sampler state","unsupported address rejected");
+        if(const char* fx=std::getenv("NEON_FX_SAMPLE")) {
+            std::ifstream in(fx);const std::string text((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+            auto real=DX::Create(text,{},technique,error);if(!real)std::fprintf(stderr,"%s diagnostic: %s\n",fx,error.c_str());
+            Check(bool(real),"sample FX compiles");
+        }
+    }
     unsigned materialWidth=0,materialHeight=0;
     Check(DX::SetTexture(*sampler,"image",{2,1,{0xff123456,0xff123456}}),"texture dimensions updated");
     DX::MaterialSize(*sampler,materialWidth,materialHeight);Check(materialWidth==2&&materialHeight==1,"size mirrors first declared texture");

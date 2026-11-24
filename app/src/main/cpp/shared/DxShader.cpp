@@ -205,6 +205,9 @@ struct Program {
     struct Uniform { GLint location=-1; GLenum type=0; GLint count=0; std::vector<float> numbers; Image image; };
     std::map<std::string,Uniform> uniforms;
     std::map<std::string,std::vector<std::string>> aliases;
+    // D3D9 sampler_state filtering and addressing per sampler (Key name).
+    struct SamplerState { GLint minFilter=GL_LINEAR, magFilter=GL_LINEAR, wrapS=GL_CLAMP_TO_EDGE, wrapT=GL_CLAMP_TO_EDGE; };
+    std::map<std::string,SamplerState> samplers;
     std::string firstTexture;
     unsigned tessX=1,tessY=1;
     Transform transform;
@@ -248,6 +251,7 @@ std::shared_ptr<Program> Create(const std::string& original,const std::map<std::
     // DX9 effect texture objects are bound to GLES sampler uniforms. Preserve
     // the original texture parameter name as an alias for dxSetShaderValue.
     std::map<std::string,std::vector<std::string>> aliases;
+    std::map<std::string,Program::SamplerState> samplers;
     std::smatch firstTexture;
     const bool hasTexture=std::regex_search(source,firstTexture,std::regex(R"(\b(?:texture|sampler2D)\s+(\w+)\b)"));
     const std::string sizeParameter=hasTexture?Key(firstTexture[1]):std::string{};
@@ -256,11 +260,33 @@ std::shared_ptr<Program> Create(const std::string& original,const std::map<std::
     while (std::regex_search(source,match,sampler)) {
         std::string body=match[2]; std::smatch texture;
         if (!std::regex_search(body,texture,std::regex(R"(Texture\s*=\s*<\s*(\w+)\s*>\s*;)",std::regex::icase))) return {};
-        // Filtering/addressing other than the implemented linear/clamp path is
-        // rejected. Silently dropping FX render state changes is not safe.
+        // D3D9 filter and address states map to GL texture parameters at bind
+        // time: Point/Linear (Anisotropic as Linear, None as Point), Clamp/Wrap/
+        // Mirror. The 2D tile path has no mip chain, so MipFilter changes nothing.
+        // Any other state is rejected: silently dropping FX state is not safe.
+        Program::SamplerState state;
         std::string remainder=std::regex_replace(body,std::regex(R"(Texture\s*=\s*<\s*\w+\s*>\s*;)",std::regex::icase),"");
-        remainder=std::regex_replace(remainder,std::regex(R"(\b(?:MinFilter|MagFilter|MipFilter)\s*=\s*Linear\s*;|\bAddress[UV]\s*=\s*Clamp\s*;)",std::regex::icase),"");
+        const std::regex assignment(R"(\b(MinFilter|MagFilter|MipFilter|AddressU|AddressV|MaxAnisotropy)\s*=\s*(\w+)\s*;)",std::regex::icase);
+        for(auto it=std::sregex_iterator(remainder.begin(),remainder.end(),assignment);it!=std::sregex_iterator();++it) {
+            std::string key=(*it)[1],value=(*it)[2];
+            for(auto& ch:key)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            for(auto& ch:value)ch=static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            GLint filter=-1,wrap=-1;
+            if(value=="linear"||value=="anisotropic")filter=GL_LINEAR;
+            else if(value=="point"||value=="none")filter=GL_NEAREST;
+            if(value=="clamp")wrap=GL_CLAMP_TO_EDGE;else if(value=="wrap")wrap=GL_REPEAT;else if(value=="mirror")wrap=GL_MIRRORED_REPEAT;
+            bool ok=true;
+            if(key=="maxanisotropy")ok=std::all_of(value.begin(),value.end(),[](char ch){return ch>='0'&&ch<='9';});
+            else if(key=="minfilter"){ok=filter>=0;if(ok)state.minFilter=filter;}
+            else if(key=="magfilter"){ok=filter>=0;if(ok)state.magFilter=filter;}
+            else if(key=="mipfilter")ok=filter>=0;
+            else if(key=="addressu"){ok=wrap>=0;if(ok)state.wrapS=wrap;}
+            else if(key=="addressv"){ok=wrap>=0;if(ok)state.wrapT=wrap;}
+            if(!ok){diagnostic="unsupported sampler state";return {};}
+        }
+        remainder=std::regex_replace(remainder,assignment,"");
         if(remainder.find_first_not_of(" \t\r\n")!=std::string::npos) { diagnostic="unsupported sampler state"; return {}; }
+        samplers[Key(match[1])]=state;
         aliases[Key(texture[1])].push_back(Key(match[1]));
         source.replace(match.position(),match.length(),"sampler2D "+match[1].str()+";");
     }
@@ -286,6 +312,10 @@ MobileOutput MobileDefaultVS(MobileVertex input) {
         std::string ps=pixel[1],vs="MobileDefaultVS";
         if(std::regex_search(body,vertex,std::regex(R"(VertexShader\s*=\s*compile\s+vs_\w+\s+(\w+)\s*\(\s*\)\s*;)",std::regex::icase))) vs=vertex[1];
         body=std::regex_replace(body,std::regex(R"((?:PixelShader|VertexShader)\s*=\s*compile\s+\w+\s+\w+\s*\(\s*\)\s*;|VertexShader\s*=\s*(?:NULL|0)\s*;|\bpass\s*\w*\s*[{}]|[{}])",std::regex::icase),"");
+        // Render states the 2D tile path already has, or that cannot change one flat
+        // quad drawn without fog or a depth buffer: no fog, no alpha test, no blending,
+        // no culling, and any depth test/write. Any other state still drops the technique.
+        body=std::regex_replace(body,std::regex(R"(\b(?:FogEnable|ZEnable|ZWriteEnable)\s*=\s*(?:True|False|0|1)\s*;|\b(?:AlphaTestEnable|AlphaBlendEnable)\s*=\s*(?:False|0)\s*;|\bCullMode\s*=\s*(?:None|1)\s*;)",std::regex::icase),"");
         if(body.find_first_not_of(" \t\r\n")!=std::string::npos) { diagnostic="unsupported FX pass state"; continue; }
         std::string vertexSource,pixelSource;std::map<std::string,std::vector<float>> defaults;
         if(!Translate(source,vs,true,vertexSource,defaults)||!Translate(source,ps,false,pixelSource,defaults)) continue;
@@ -307,7 +337,7 @@ MobileOutput MobileDefaultVS(MobileVertex input) {
                  (key=="TEXCOORD0"&&type==GL_FLOAT_VEC2) || (key=="COLOR0"&&type==GL_FLOAT_VEC4));
         }
         if(!supported){diagnostic="unsupported vertex input semantic";glDeleteProgram(id);continue;}
-        auto result=std::make_shared<Program>();result->id=id;result->aliases=aliases;result->firstTexture=sizeParameter;
+        auto result=std::make_shared<Program>();result->id=id;result->aliases=aliases;result->samplers=samplers;result->firstTexture=sizeParameter;
         GLint count=0;glGetProgramiv(id,GL_ACTIVE_UNIFORMS,&count);
         bool supportedUniforms=true;
         for(GLint i=0;i<count;++i) {
@@ -395,6 +425,13 @@ bool SetTransform(Program& p,const Transform& t) {
     for(float v:t.perspectiveCenter)if(!std::isfinite(v))return false;
     p.transform=t;return true;
 }
+// Whether the current context repeats non-power-of-two textures (GLES 3, or the extension).
+bool NpotRepeat() {
+    const char* version=reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if(version&&std::strncmp(version,"OpenGL ES ",10)==0&&version[10]>='3')return true;
+    const char* extensions=reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    return extensions&&std::strstr(extensions,"GL_OES_texture_npot");
+}
 bool Render(Program& p,const Tile& tile,unsigned width,unsigned height,Image& output) {
     if(!width||!height||width>4096||height>4096||uint64_t(width)*height>8*1024*1024) return false;
     for(float value:{tile.x,tile.y,tile.width,tile.height,tile.u,tile.v,tile.usize,tile.vsize,tile.rotation,tile.offsetX,tile.offsetY})
@@ -436,8 +473,15 @@ bool Render(Program& p,const Tile& tile,unsigned width,unsigned height,Image& ou
         if(u.type==GL_SAMPLER_2D) {
             if(unit>=maxUnits)return false;
             GLuint texture;glGenTextures(1,&texture);textures.push_back(texture);glActiveTexture(GL_TEXTURE0+unit);glBindTexture(GL_TEXTURE_2D,texture);
-            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+            const auto found=p.samplers.find(name);
+            Program::SamplerState state=found==p.samplers.end()?Program::SamplerState{}:found->second;
+            // GLES 2 without GL_OES_texture_npot cannot repeat a non-power-of-two texture
+            // (it samples black); clamp there instead. GLES 3 contexts repeat any size.
+            const unsigned tw=u.image.width?u.image.width:1,th=u.image.height?u.image.height:1;
+            const bool pot=(tw&(tw-1))==0&&(th&(th-1))==0;
+            if(!pot&&!NpotRepeat()){state.wrapS=GL_CLAMP_TO_EDGE;state.wrapT=GL_CLAMP_TO_EDGE;}
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,state.minFilter);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,state.magFilter);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,state.wrapS);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,state.wrapT);
             std::vector<uint8_t> rgba;for(uint32_t c:u.image.pixels) { rgba.push_back(c>>16);rgba.push_back(c>>8);rgba.push_back(c);rgba.push_back(c>>24); }
             const uint8_t white[]={255,255,255,255};
             glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,u.image.width?u.image.width:1,u.image.height?u.image.height:1,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba.empty()?white:rgba.data());glUniform1i(u.location,unit++);
