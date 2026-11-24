@@ -41,6 +41,9 @@ list(FILTER NATIVE_SOURCES EXCLUDE REGEX ".*/net/mta/RakNetDirectTransport\\.cpp
 # ---------------------------------------------------------------------------
 add_subdirectory(lua53)
 
+# Lua 5.1.5 for desktop MTA resources (lua51/README.md). Symbols are lua51_*.
+add_subdirectory(lua51)
+
 # ---------------------------------------------------------------------------
 # Opus 1.4 Static Library (vendored for Android NDK cross-compilation)
 # Source: https://downloads.xiph.org/releases/opus/opus-1.4.tar.gz
@@ -76,6 +79,7 @@ target_link_libraries(saonlineneon
     GLESv2
     z
     lua53
+    lua51
     opus
     neon_speex
     neon_hlsl
