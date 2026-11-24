@@ -115,6 +115,19 @@ void WriteFieldLsb(BitStreamWriter& w, uint32_t value, uint32_t bits) {
 enum class VehicleInOutPending : uint8_t { None, RequestIn, RequestOut, NotifyIn, NotifyOut };
 VehicleInOutPending g_inOutPending = VehicleInOutPending::None;
 uint32_t g_inOutVehicle = 0xFFFFFFFFu;
+uint32_t g_inOutSinceMs = 0;  // when g_inOutPending was last set
+// Desktop has no timer: GTA only starts the task after the server answers, and
+// the flag clears with the answer or when the vehicle is removed (CPacketHandler.cpp:4522).
+// Here GTA has already moved the ped, and the server drops some requests
+// without a reply (CGame::Packet_VehicleInOut returns early for a vehicle or ped
+// it cannot use), which would block every later seat change. DIAG deviation:
+// give up on an unanswered request after this long.
+constexpr uint32_t kVehicleInOutTimeoutMs = 5000;
+
+void SetVehicleInOutPending(VehicleInOutPending pending) {
+    g_inOutPending = pending;
+    g_inOutSinceMs = NowMs();
+}
 // Normal entries and scripted warps share the occupancy map used by the receiver.
 bool ConfirmedSeat(uint32_t player, const Game::LocalCarState& car) {
     uint32_t vehicle = 0;
@@ -379,6 +392,9 @@ struct NeonJoinClient::Impl {
 
     // CClientGame::PostWeaponFire queues one reliable PLAYER_BULLETSYNC per shot.
     uint8_t bulletOrder = 0;  // desktop m_ucBulletSyncOrderCounter (CNetAPI.cpp 2398)
+    static constexpr int kBulletSendTries = 5;  // pulses a failing shot holds sync back
+    uint64_t failedShotSerial = 0;
+    int failedShotTries = 0;
     bool SendBulletSync() {
         if (!net || !net->IsConnected()) return false;
         WorldRPG::Game::LocalShot shot;
@@ -400,7 +416,23 @@ struct NeonJoinClient::Impl {
             w.Write(bulletOrder);                      // order counter (CNetAPI.cpp 2398)
             Combat::WriteBulletHit(w, shot.hit);
             if (!net->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
-                                 PacketPriority::MEDIUM, PacketReliability::RELIABLE)) return false;
+                                 PacketPriority::MEDIUM, PacketReliability::RELIABLE)) {
+                // Pure and key sync wait for this shot (see Pulse). A send that keeps
+                // failing would stop them for good, so the shot is dropped after a few
+                // pulses: the server then sees the ammo without this bullet, as for a
+                // shot it never received.
+                if (failedShotSerial != shot.serial) {
+                    failedShotSerial = shot.serial;
+                    failedShotTries = 0;
+                }
+                if (++failedShotTries < kBulletSendTries) return false;
+                JOIN_LOGE("DIAG NeonJoin: PLAYER_BULLETSYNC for weapon %d not sent after %d tries; dropped",
+                          shot.weapon, failedShotTries);
+                WorldRPG::Game::FinishLocalShot(shot.serial);
+                failedShotTries = 0;
+                continue;
+            }
+            failedShotTries = 0;
             WorldRPG::Game::FinishLocalShot(shot.serial);
             ++bulletOrder;
             static int reports = 0;
@@ -1003,6 +1035,11 @@ struct NeonJoinClient::Impl {
     // Events come from WatchLocalVehicle (GameEngine.cpp), so GTA has already moved the ped when this runs.
     void SendVehicleInOut() {
         if (!net || !net->IsConnected() || info.localPlayerId == 0xFFFFFFFFu) return;
+        if (g_inOutPending != VehicleInOutPending::None && NowMs() - g_inOutSinceMs > kVehicleInOutTimeoutMs) {
+            JOIN_LOGE("DIAG VehInOut: no reply for veh=%u in %u ms (pending=%d); next seat change goes ahead",
+                      g_inOutVehicle, kVehicleInOutTimeoutMs, static_cast<int>(g_inOutPending));
+            g_inOutPending = VehicleInOutPending::None;
+        }
         WorldRPG::Game::LocalVehicleEvent ev;
         while (g_inOutPending == VehicleInOutPending::None && WorldRPG::Game::ConsumeLocalVehicleEvent(ev)) {
             // DIAG: trains are not requested. Once the server seats the ped it expects packet 33 with the train block
@@ -1037,7 +1074,7 @@ struct NeonJoinClient::Impl {
                 JOIN_LOGE("VehInOut: send %s failed veh=%u", ev.entered ? "request_in" : "request_out", ev.vehicleId);
                 continue;
             }
-            g_inOutPending = ev.entered ? VehicleInOutPending::RequestIn : VehicleInOutPending::RequestOut;
+            SetVehicleInOutPending(ev.entered ? VehicleInOutPending::RequestIn : VehicleInOutPending::RequestOut);
             g_inOutVehicle = ev.vehicleId;
             JOIN_LOGI("VehInOut: sent %s ped=%u veh=%u", ev.entered ? "request_in" : "request_out",
                       info.localPlayerId, ev.vehicleId);
@@ -1480,13 +1517,16 @@ bool SendVehicleInOutNotify(uint32_t pedId, uint32_t vehicleId, uint8_t action) 
     const bool sent = g_joinedNet->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
                                               PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
     if (!sent) {
+        // The server is still waiting for this notify and will not answer the request
+        // again; end it so the next seat change is not blocked behind it.
         JOIN_LOGE("VehInOut: send %s failed veh=%u", action == 1 ? "notify_in" : "notify_out", vehicleId);
+        g_inOutPending = VehicleInOutPending::None;
         return false;
     }
     if (vehicleId != g_inOutVehicle) {
         JOIN_LOGI("VehInOut: reply for veh=%u differs from pending veh=%u", vehicleId, g_inOutVehicle);
     }
-    g_inOutPending = action == 1 ? VehicleInOutPending::NotifyIn : VehicleInOutPending::NotifyOut;
+    SetVehicleInOutPending(action == 1 ? VehicleInOutPending::NotifyIn : VehicleInOutPending::NotifyOut);
     // NOTIFY_IN seats the local ped on the server; NOTIFY_OUT unseats it.
 
     JOIN_LOGI("VehInOut: sent %s ped=%u veh=%u", action == 1 ? "notify_in" : "notify_out", pedId, vehicleId);

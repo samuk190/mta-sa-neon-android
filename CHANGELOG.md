@@ -53,6 +53,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Game Sync
 
+- A vehicle enter/exit request that gets no reply no longer blocks every later seat change: it is given up after 5 s with a `DIAG` line, and a failed NOTIFY_IN/OUT send ends it (desktop has no timer because GTA only moves the ped after the server answers; the server drops some requests without a reply). A PLAYER_BULLETSYNC that keeps failing to send is dropped after 5 pulses instead of holding pure and key sync back for good. Not yet run on a device.
+
 - Android traffic owners can probe the task of a stalled pedestrian, ground and eight escape corridors in one game-thread query. Uses desktop CWorldSA.cpp:708–729,737–763 and the collision flags from Dryxio/san-andreas-online#133.
 
 - Wanted police can run the native on-foot attack task when Android owns the ped. Android observers replay the owner's shot animation, muzzle flash and audio without simulating another bullet (desktop TaskAttackSA.cpp and CClientGame.cpp, onClientPedWeaponFire). The Lua bridge preserves element-valued custom data and handle identity across events, including the police suspect and resource root.
