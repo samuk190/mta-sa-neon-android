@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <regex>
 #include <sstream>
 #include <string_view>
@@ -103,13 +104,32 @@ bool ExpandMacros(std::string& source, const std::map<std::string, std::string>&
 
 // `name [: SEMANTIC] < string key = "value"; ... >` on global declarations.
 // The block is removed (hlslparser has no annotations) and its strings kept.
+// Brace depth at each position, ignoring braces inside quoted strings.
+std::vector<int> BraceDepths(const std::string& source) {
+    std::vector<int> depth(source.size() + 1, 0);
+    int d = 0;
+    bool quote = false;
+    for (size_t i = 0; i < source.size(); ++i) {
+        depth[i] = d;
+        const char c = source[i];
+        if (c == '"' && (!i || source[i - 1] != '\\')) quote = !quote;
+        else if (!quote && c == '{') ++d;
+        else if (!quote && c == '}') --d;
+    }
+    depth[source.size()] = d;
+    return depth;
+}
+
 void TakeAnnotations(std::string& source, Effect& out) {
-    static const std::regex block(R"(\b(\w+)\s*(?::\s*\w+\s*)?(<\s*(?:string|float|int|bool|half)\b[^<>]*>))");
+    // Global declarations only (brace depth 0): `<` and `>` inside functions are comparisons.
+    static const std::regex block(R"re(\b(\w+)\s*(?::\s*\w+\s*)?(<\s*(?:string|float|int|bool|half)\b(?:[^<>"]|"[^"]*")*>))re");
+    const std::vector<int> depth = BraceDepths(source);
     static const std::regex entry(R"re(\bstring\s+(\w+)\s*=\s*"([^"]*)"\s*;)re");
     std::string result;
     size_t end = 0;
     for (auto it = std::sregex_iterator(source.begin(), source.end(), block); it != std::sregex_iterator(); ++it) {
         const auto& m = *it;
+        if (depth[static_cast<size_t>(m.position())] != 0) continue;
         const std::string body = m[2];
         auto& map = out.annotations[Key(m[1])];
         for (auto e = std::sregex_iterator(body.begin(), body.end(), entry); e != std::sregex_iterator(); ++e)
@@ -131,7 +151,11 @@ bool SamplerValue(const std::string& key, const std::string& value, SamplerState
     else if (value == "mirror") wrap = kGlMirroredRepeat;
     if (key == "maxanisotropy" || key == "maxmiplevel")
         return std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; });
-    if (key == "mipmaplodbias") return true;  // no mip chain on the tile path; GTA keeps its own
+    if (key == "mipmaplodbias") {  // no mip chain on the tile path; GTA keeps its own
+        char* end = nullptr;
+        std::strtod(value.c_str(), &end);
+        return end && !*end;
+    }
     if (key == "minfilter") { if (filter < 0) return false; state.minFilter = filter; return true; }
     if (key == "magfilter") { if (filter < 0) return false; state.magFilter = filter; return true; }
     if (key == "mipfilter") return filter >= 0;
@@ -145,7 +169,7 @@ bool SamplerValue(const std::string& key, const std::string& value, SamplerState
 bool TakeSamplers(std::string& source, Effect& out, std::string& diagnostic) {
     static const std::regex sampler(R"(\bsampler(?:2D)?\s+(\w+)\s*=\s*sampler_state\s*\{([^{}]*)\}\s*;)", std::regex::icase);
     static const std::regex texture(R"(\bTexture\s*=\s*(?:<\s*(\w+)\s*>|\(\s*(\w+)\s*\))\s*;)", std::regex::icase);
-    static const std::regex assignment(R"(\b(\w+)\s*=\s*(\w+)\s*;)");
+    static const std::regex assignment(R"(\b(\w+)\s*=\s*([-+]?[\w.]+)\s*;)");
     std::smatch match;
     while (std::regex_search(source, match, sampler)) {
         const std::string body = match[2];

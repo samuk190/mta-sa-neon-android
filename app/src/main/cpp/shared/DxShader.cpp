@@ -133,11 +133,16 @@ MobileOutput MobileDefaultVS(MobileVertex input) {
     Context context;
     if (!context.valid) { diagnostic="EGL shader context unavailable"; return {}; }
     for (const auto& candidate:effect.techniques) {
-        // The tile path draws one quad offscreen and the result is composited with
-        // the usual alpha blending, so a pass's blend, depth, cull and fog states
-        // have nothing more to change here. One pass per technique, as before.
+        // The tile path draws one quad offscreen and composites it with the usual
+        // alpha blending. Depth and fog cannot change one flat quad; standard alpha
+        // blending is what the composite already does. Other blending, alpha test
+        // and culling would draw differently, so such a technique is skipped and
+        // the next one tried. One pass per technique, as before.
         if (candidate.passes.size()!=1) { diagnostic="multi-pass technique"; continue; }
         const Fx::Pass& pass=candidate.passes.front();
+        const Fx::PassState& st=pass.state;
+        const bool standardBlend=st.alphaBlend!=1||((st.srcBlend<0||st.srcBlend==GL_SRC_ALPHA)&&(st.dstBlend<0||st.dstBlend==GL_ONE_MINUS_SRC_ALPHA));
+        if (!standardBlend||st.alphaTest==1||st.cull>0) { diagnostic="unsupported FX pass state"; continue; }
         const std::string ps=pass.pixelEntry,vs=pass.vertexEntry.empty()?"MobileDefaultVS":pass.vertexEntry;
         std::string vertexSource,pixelSource;std::map<std::string,std::vector<float>> defaults;
         Fx::TranslateOptions vertexOptions;vertexOptions.vertex=true;

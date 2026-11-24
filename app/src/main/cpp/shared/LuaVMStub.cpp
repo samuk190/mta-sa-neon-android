@@ -1,6 +1,7 @@
 #include "DebugFlags.h"
 #include "LuaVMStub.h"
 #include "LuaVmSet.h"
+#include "WorldObjectFeed.h"
 #include "LuaRocketSoccerApi.h"
 extern "C" {
 #include "LuaVm.h"
@@ -2622,6 +2623,7 @@ void LuaVMStub::reset() {
     MtaWindowAdoptFocus();
     GuiReset();
     RocketSoccerReset();
+    WorldObjects::Reset();
 
     pImpl_->loadedScripts.clear();
     LUA_LOGI("LuaVM: reset complete");
@@ -2714,10 +2716,6 @@ static lua_State* ChooseResourceVm(const WorldRPG::Script::ResourceLoadJob& job,
     return L51;
 }
 
-// Runs one resource script with the resource's shared environment: _ENV in
-// Lua 5.3, the chunk's environment (setfenv) in Lua 5.1. Globals a file
-// defines are visible to the other files of the same resource (desktop: one
-// Lua state per resource). Reads fall through to the VM globals.
 #ifndef __ANDROID__
 // Host tools: NEON_DUMP_SCRIPTS=<dir> saves each resource script as it runs, so
 // a server's client scripts can be read when porting what they call.
@@ -2734,6 +2732,10 @@ static void DumpScriptForHost(const PreparedScript& script) {
 }
 #endif
 
+// Runs one resource script with the resource's shared environment: _ENV in
+// Lua 5.3, the chunk's environment (setfenv) in Lua 5.1. Globals a file
+// defines are visible to the other files of the same resource (desktop: one
+// Lua state per resource). Reads fall through to the VM globals.
 static bool RunResourceChunk(lua_State* L, PreparedScript& script, int envRef) {
 #ifndef __ANDROID__
     DumpScriptForHost(script);
@@ -2997,6 +2999,7 @@ static void ApplyCursorEvent(const CursorEvent& ev) {
 
 std::string LuaVMStub::pumpDx(bool renderFrame) {
     if (!pImpl_->L) return {};
+    PublishClientObjects();  // the game thread streams CObjects from this (WorldObjectFeed)
     // CClientGame::OnWindowFocusChange (CClientGame.cpp:8069-8078). One report per pump.
     bool windowFocused = false;
     if (MtaWindowTakeFocusChange(windowFocused)) {
@@ -3125,6 +3128,7 @@ void LuaVMStub::shutdown() {
     Events::Reset();
     GuiReset();
     RocketSoccerReset();
+    WorldObjects::Reset();
     WeaponsReset();
 
     g_resourceVm.clear();

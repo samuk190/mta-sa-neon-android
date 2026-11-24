@@ -1,12 +1,13 @@
 #pragma once
 // World shaders (engineApplyShaderToWorldTexture): a D3D9 effect rewritten as
-// GLSL ES 1.00 programs that GTA's renderer can run in place of its own for a
-// replaced texture. They use GTA's vertex attributes (Position, Normal,
-// GlobalColor, TexCoord0) and the uniforms GTA's render queue sets on every
-// shader by name (ProjMatrix, ViewMatrix, ObjMatrix, CameraPosition, the
-// lights and material colours, and the Diffuse texture). Engine values bound
-// by semantic or annotation on desktop (CRenderItem.EffectParameters.cpp)
-// become those uniforms; everything else stays a uniform the client uploads.
+// GLSL ES 1.00 programs the client runs on GTA's render thread in place of
+// GTA's own for a replaced texture. They read GTA's vertex attributes
+// (Position, Normal, GlobalColor, TexCoord0, bound at GTA's locations) and
+// GTA's per-draw values (matrices, camera, lights, material colours) under
+// reserved mta_ names that the client copies from GTA's program of that draw.
+// Engine values desktop binds by semantic or annotation
+// (CRenderItem.EffectParameters.cpp) become those; script parameters and
+// textures stay uniforms the client uploads.
 
 #include "FxCompiler.h"
 
@@ -46,6 +47,10 @@ struct Effect {
     std::vector<Pass> passes;
     std::vector<Uniform> uniforms;
     std::vector<Sampler> samplers;
+    // Samplers that read the mesh's own texture (textureState "0,Texture"): unit 0 as GTA bound it.
+    std::vector<std::string> objectSamplers;
+    // GTA values the programs read: (uniform in our GLSL, GTA's uniform of the same draw).
+    std::vector<std::pair<std::string, std::string>> engineUniforms;
 };
 
 // Builds the first technique that translates. diagnostic says why none did.

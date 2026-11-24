@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include "FxCompiler.h"
 #include "FxWorld.h"
@@ -179,11 +180,33 @@ technique T { pass P0 { VertexShader=compile vs_2_0 VS(); PixelShader=compile ps
             Check(ok,"world program builds and links with GTA attributes");
             const std::string& vs=ok?built.passes[0].vertex:std::string();
             const std::string& fs=ok?built.passes[0].fragment:std::string();
-            Check(vs.find("#define gWorldViewProjection (ProjMatrix * ViewMatrix * ObjMatrix)")!=std::string::npos,"WVP semantic bound to GTA matrices");
+            Check(vs.find("#define gWorldViewProjection (mta_ProjMatrix * mta_ViewMatrix * mta_ObjMatrix)")!=std::string::npos,"WVP semantic bound to GTA matrices");
+            Check(ok&&std::count_if(built.engineUniforms.begin(),built.engineUniforms.end(),[](const auto& e){return e.first=="mta_ObjMatrix"&&e.second=="ObjMatrix";})==1,"engine uniform map");
             Check(vs.find("attribute highp vec3 Position;")!=std::string::npos&&vs.find("uniform mat4 gWorldViewProjection;")==std::string::npos,"GTA attribute, no WVP uniform");
             Check(ok&&built.passes[0].vertexCompressedUv.find("TexCoord0 / 512.0")!=std::string::npos,"compressed texture coordinate variant");
-            Check(fs.find("#define Source Diffuse")!=std::string::npos,"object texture is GTA's Diffuse");
+            Check(ok&&built.objectSamplers.size()==1&&built.objectSamplers[0]=="Source"&&fs.find("uniform sampler2D Source;")!=std::string::npos,"object texture sampler recorded");
             Check(ok&&built.samplers.empty()&&built.passes[0].state.alphaBlend==1&&built.passes[0].state.zWrite==0,"pass states kept");
+        }
+        {
+            // Review cases: comparisons that look like annotations, a negative LOD bias,
+            // a pixel input named like a GTA uniform, and an additive technique the 2D path skips.
+            const char* tricky=R"(
+texture gTexture0 < string textureState="0,Texture"; string note="a > b"; >;
+sampler S0 = sampler_state { Texture=<gTexture0>; MipMapLodBias = -0.5; };
+float gSamples = 3;
+float4 PS(float4 Diffuse : COLOR0, float2 uv : TEXCOORD0) : COLOR0 {
+    float4 c = 0;
+    for (int i = 0; i < int(gSamples); i++) { if (uv.x > 0.5) c += tex2D(S0, uv) * Diffuse; }
+    return c;
+}
+technique Glow { pass P { AlphaBlendEnable=True; SrcBlend=One; DestBlend=One; PixelShader=compile ps_2_0 PS(); } }
+technique Plain { pass P { PixelShader=compile ps_2_0 PS(); } }
+)";
+            auto plain=DX::Create(tricky,{},technique,error);if(!plain)std::fprintf(stderr,"Tricky diagnostic: %s\n",error.c_str());
+            Check(bool(plain)&&technique=="Plain","2D path skips additive technique; comparisons and lod bias parse");
+            WorldRPG::FxWorld::Effect built;std::string why;
+            const bool ok=world(tricky,built,why);if(!ok)std::fprintf(stderr,"Tricky world diagnostic: %s\n",why.c_str());
+            Check(ok&&built.technique=="Glow"&&built.objectSamplers.size()==1,"world keeps additive technique; Diffuse parameter compiles");
         }
         if(const char* dir=std::getenv("NEON_FX_DIR")) {
             for(const auto& entry:std::filesystem::directory_iterator(dir)) {

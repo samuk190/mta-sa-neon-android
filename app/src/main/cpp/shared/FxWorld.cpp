@@ -28,22 +28,23 @@ MtaWorldOutput MtaWorldVS(MtaWorldVertex v) {
 }
 )";
 
-// GTA uniform declarations, added to a stage when its code uses the name.
+// The GTA values a stage reads, under reserved mta_ names so they cannot collide
+// with script identifiers. The client copies each from GTA's program of the same
+// draw (the uniform of the name without the prefix) before drawing with ours.
 const std::map<std::string, std::string>& GtaUniforms() {
     static const std::map<std::string, std::string> uniforms = {
-        {"ProjMatrix", "uniform highp mat4 ProjMatrix;"},
-        {"ViewMatrix", "uniform highp mat4 ViewMatrix;"},
-        {"ObjMatrix", "uniform highp mat4 ObjMatrix;"},
-        {"CameraPosition", "uniform highp vec3 CameraPosition;"},
-        {"AmbientLightColor", "uniform lowp vec3 AmbientLightColor;"},
-        {"DirLightDiffuseColor", "uniform lowp vec3 DirLightDiffuseColor;"},
-        {"DirLightDirection", "uniform highp vec3 DirLightDirection;"},
-        {"MaterialDiffuse", "uniform lowp vec4 MaterialDiffuse;"},
-        {"MaterialAmbient", "uniform lowp vec4 MaterialAmbient;"},
-        {"MaterialEmissive", "uniform lowp vec4 MaterialEmissive;"},
-        {"FogColor", "uniform lowp vec3 FogColor;"},
-        {"FogDistances", "uniform highp vec3 FogDistances;"},
-        {"Diffuse", "uniform sampler2D Diffuse;"},
+        {"mta_ProjMatrix", "uniform highp mat4 mta_ProjMatrix;"},
+        {"mta_ViewMatrix", "uniform highp mat4 mta_ViewMatrix;"},
+        {"mta_ObjMatrix", "uniform highp mat4 mta_ObjMatrix;"},
+        {"mta_CameraPosition", "uniform highp vec3 mta_CameraPosition;"},
+        {"mta_AmbientLightColor", "uniform lowp vec3 mta_AmbientLightColor;"},
+        {"mta_DirLightDiffuseColor", "uniform lowp vec3 mta_DirLightDiffuseColor;"},
+        {"mta_DirLightDirection", "uniform highp vec3 mta_DirLightDirection;"},
+        {"mta_MaterialDiffuse", "uniform lowp vec4 mta_MaterialDiffuse;"},
+        {"mta_MaterialAmbient", "uniform lowp vec4 mta_MaterialAmbient;"},
+        {"mta_MaterialEmissive", "uniform lowp vec4 mta_MaterialEmissive;"},
+        {"mta_FogColor", "uniform lowp vec3 mta_FogColor;"},
+        {"mta_FogDistances", "uniform highp vec3 mta_FogDistances;"},
     };
     return uniforms;
 }
@@ -81,22 +82,22 @@ std::string EngineValue(const std::string& semantic, const std::map<std::string,
                         const std::string& type, bool& time, bool& rigidInverse) {
     std::string s = semantic;
     if (s.size() > 11 && s.compare(s.size() - 11, 11, "_MAIN_SCENE") == 0) s.resize(s.size() - 11);
-    if (s == "WORLD") return "ObjMatrix";
-    if (s == "VIEW") return "ViewMatrix";
-    if (s == "PROJECTION") return "ProjMatrix";
-    if (s == "WORLDVIEW") return "(ViewMatrix * ObjMatrix)";
-    if (s == "VIEWPROJECTION") return "(ProjMatrix * ViewMatrix)";
-    if (s == "WORLDVIEWPROJECTION") return "(ProjMatrix * ViewMatrix * ObjMatrix)";
-    if (s == "WORLDINVERSETRANSPOSE") return "ObjMatrix";  // rigid transforms: the same for normals
-    if (s == "VIEWINVERSE") { rigidInverse = true; return "mtaRigidInverse(ViewMatrix)"; }
-    if (s == "VIEWINVERSETRANSPOSE") { rigidInverse = true; return "mtaRigidInverse(ViewMatrix)"; }
-    if (s == "CAMERAPOSITION") return Fit("CameraPosition", 3, type);
+    if (s == "WORLD") return "mta_ObjMatrix";
+    if (s == "VIEW") return "mta_ViewMatrix";
+    if (s == "PROJECTION") return "mta_ProjMatrix";
+    if (s == "WORLDVIEW") return "(mta_ViewMatrix * mta_ObjMatrix)";
+    if (s == "VIEWPROJECTION") return "(mta_ProjMatrix * mta_ViewMatrix)";
+    if (s == "WORLDVIEWPROJECTION") return "(mta_ProjMatrix * mta_ViewMatrix * mta_ObjMatrix)";
+    if (s == "WORLDINVERSETRANSPOSE") return "mta_ObjMatrix";  // rigid transforms: the same for normals
+    if (s == "VIEWINVERSE") { rigidInverse = true; return "mtaRigidInverse(mta_ViewMatrix)"; }
+    if (s == "VIEWINVERSETRANSPOSE") return "mta_ViewMatrix";  // rigid: (V^-1)^T is V
+    if (s == "CAMERAPOSITION") return Fit("mta_CameraPosition", 3, type);
     if (s == "CAMERADIRECTION")  // GL view looks down -Z: the third row of the rotation, negated
-        return Fit("(-vec3(ViewMatrix[0].z, ViewMatrix[1].z, ViewMatrix[2].z))", 3, type, "0.0", "0.0");
-    if (s == "LIGHTDIFFUSE") return Fit("DirLightDiffuseColor", 3, type);
-    if (s == "LIGHTAMBIENT") return Fit("AmbientLightColor", 3, type);
+        return Fit("(-vec3(mta_ViewMatrix[0].z, mta_ViewMatrix[1].z, mta_ViewMatrix[2].z))", 3, type, "0.0", "0.0");
+    if (s == "LIGHTDIFFUSE") return Fit("mta_DirLightDiffuseColor", 3, type);
+    if (s == "LIGHTAMBIENT") return Fit("mta_AmbientLightColor", 3, type);
     if (s == "LIGHTSPECULAR") return Fit("vec3(0.0)", 3, type);
-    if (s == "LIGHTDIRECTION") return Fit("DirLightDirection", 3, type, "0.0", "0.0");
+    if (s == "LIGHTDIRECTION") return Fit("mta_DirLightDirection", 3, type, "0.0", "0.0");
     if (s == "TIME") { time = true; return {}; }
     if (annotations) {
         auto value = [&](const char* name) -> std::string {
@@ -104,20 +105,20 @@ std::string EngineValue(const std::string& semantic, const std::map<std::string,
             return found == annotations->end() ? std::string() : found->second;
         };
         const std::string material = Fx::Key(value("materialstate"));
-        if (material == "diffuse") return Fit("MaterialDiffuse", 4, type);
-        if (material == "ambient") return Fit("MaterialAmbient", 4, type);
-        if (material == "emissive") return Fit("MaterialEmissive", 4, type);
+        if (material == "diffuse") return Fit("mta_MaterialDiffuse", 4, type);
+        if (material == "ambient") return Fit("mta_MaterialAmbient", 4, type);
+        if (material == "emissive") return Fit("mta_MaterialEmissive", 4, type);
         if (material == "specular") return Fit("vec4(0.0)", 4, type);
         if (material == "power") return Fit("0.0", 1, type);
         const std::string light = Fx::Key(value("lightstate"));
-        if (light.find("diffuse") != std::string::npos) return Fit("DirLightDiffuseColor", 3, type);
-        if (light.find("ambient") != std::string::npos) return Fit("AmbientLightColor", 3, type);
-        if (light.find("direction") != std::string::npos) return Fit("DirLightDirection", 3, type, "0.0", "0.0");
+        if (light.find("diffuse") != std::string::npos) return Fit("mta_DirLightDiffuseColor", 3, type);
+        if (light.find("ambient") != std::string::npos) return Fit("mta_AmbientLightColor", 3, type);
+        if (light.find("direction") != std::string::npos) return Fit("mta_DirLightDirection", 3, type, "0.0", "0.0");
         const std::string renderState = Fx::Key(value("renderstate"));
-        if (renderState == "fogcolor") return Fit("FogColor", 3, type);
+        if (renderState == "fogcolor") return Fit("mta_FogColor", 3, type);
         if (renderState == "fogenable") return Fit("1.0", 1, type);
-        if (renderState == "fogstart") return Fit("FogDistances.x", 1, type);
-        if (renderState == "fogend") return Fit("FogDistances.y", 1, type);
+        if (renderState == "fogstart") return Fit("mta_FogDistances.x", 1, type);
+        if (renderState == "fogend") return Fit("mta_FogDistances.y", 1, type);
     }
     return {};
 }
@@ -191,7 +192,10 @@ bool RewriteStage(Rewrite& r, std::string glsl, bool vertex, bool compressedUv, 
                 const std::string texture = sampler == r.effect.samplers.end() ? key : sampler->second.texture;
                 const auto textureAnnotation = r.effect.annotations.find(texture);
                 if (ObjectTexture(textureAnnotation == r.effect.annotations.end() ? nullptr : &textureAnnotation->second)) {
-                    body += "#define " + name + " Diffuse\n";
+                    // The texture GTA binds for the mesh (unit 0) is sampled here.
+                    if (std::find(r.out.objectSamplers.begin(), r.out.objectSamplers.end(), name) == r.out.objectSamplers.end())
+                        r.out.objectSamplers.push_back(name);
+                    body += line + "\n";
                     continue;
                 }
                 if (r.samplerNames.insert(name).second) {
@@ -229,8 +233,14 @@ bool RewriteStage(Rewrite& r, std::string glsl, bool vertex, bool compressedUv, 
     }
     // GTA uniforms the stage now refers to.
     std::string gta;
-    for (const auto& [name, declaration] : GtaUniforms())
-        if (std::regex_search(body, std::regex("\\b" + name + "\\b"))) gta += declaration + "\n";
+    for (const auto& [name, declaration] : GtaUniforms()) {
+        if (!std::regex_search(body, std::regex("\\b" + name + "\\b"))) continue;
+        gta += declaration + "\n";
+        const std::string engineName = name.substr(4);  // without mta_
+        if (std::find_if(r.out.engineUniforms.begin(), r.out.engineUniforms.end(),
+                         [&](const auto& e) { return e.first == name; }) == r.out.engineUniforms.end())
+            r.out.engineUniforms.emplace_back(name, engineName);
+    }
     // After #version, #extension and the precision lines the generator writes.
     size_t at = 0;
     for (int i = 0; i < 6; ++i) {
