@@ -44,6 +44,9 @@ add_subdirectory(lua53)
 # Lua 5.1.5 for desktop MTA resources (lua51/README.md). Symbols are lua51_*.
 add_subdirectory(lua51)
 
+# The public Lua C API over both VMs (luaapi/README.md).
+add_subdirectory(luaapi)
+
 # ---------------------------------------------------------------------------
 # Opus 1.4 Static Library (vendored for Android NDK cross-compilation)
 # Source: https://downloads.xiph.org/releases/opus/opus-1.4.tar.gz
@@ -78,8 +81,7 @@ target_link_libraries(saonlineneon
     EGL
     GLESv2
     z
-    lua53
-    lua51
+    luaapi
     opus
     neon_speex
     neon_hlsl

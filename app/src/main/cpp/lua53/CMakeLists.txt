@@ -43,6 +43,10 @@ add_library(lua53 STATIC ${LUA_CORE_SOURCES})
 
 target_include_directories(lua53 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# Every global is lua53_* (lua53_prefix.h): the public lua_*/luaL_* names are
+# defined by luaapi/, which sends 5.3 states here and 5.1 states to lua51/.
+target_compile_options(lua53 PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/lua53_prefix.h)
+
 # Lua requires POSIX; Android Bionic provides it natively
 if(ANDROID)
     target_compile_definitions(lua53 PRIVATE LUA_USE_POSIX)

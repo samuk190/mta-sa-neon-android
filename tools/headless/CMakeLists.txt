@@ -172,6 +172,8 @@ target_include_directories(neon_core PRIVATE ${HEADLESS_INCLUDE_DIRS})
 
 # Vendored Lua 5.3.6 (static, built into the headless build directory only).
 add_subdirectory("${NATIVE_DIR}/lua53" "${CMAKE_CURRENT_BINARY_DIR}/lua53")
+add_subdirectory("${NATIVE_DIR}/lua51" "${CMAKE_CURRENT_BINARY_DIR}/lua51")
+add_subdirectory("${NATIVE_DIR}/luaapi" "${CMAKE_CURRENT_BINARY_DIR}/luaapi")
 add_subdirectory("${NATIVE_DIR}/third_party/hlslparser" "${CMAKE_CURRENT_BINARY_DIR}/hlslparser")
 add_subdirectory("${NATIVE_DIR}/third_party/cryptopp" "${CMAKE_CURRENT_BINARY_DIR}/cryptopp")
 add_subdirectory("${NATIVE_DIR}/third_party/bcrypt" "${CMAKE_CURRENT_BINARY_DIR}/bcrypt")
@@ -213,7 +215,7 @@ if(Java_FOUND)
     endif()
 endif()
 # Usage requirements only (Lua and zlib headers): the objects are linked by the executables below.
-target_link_libraries(neon_core PRIVATE lua53 ZLIB::ZLIB neon_cryptopp neon_bcrypt ${CMAKE_DL_LIBS})
+target_link_libraries(neon_core PRIVATE luaapi ZLIB::ZLIB neon_cryptopp neon_bcrypt ${CMAKE_DL_LIBS})
 # Link-time wrap of the one RakNetWrapper send entry point (see send_tap.cpp). The
 # symbol is RakNetWrapper::SendPacket(uint8_t, BitStreamWriter const&, PacketPriority,
 # PacketReliability, PacketOrdering); the calls come from NeonJoinProtocol.cpp.
@@ -232,7 +234,7 @@ foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tes
     target_link_options(${headless_target} PRIVATE
         "-Wl,--wrap=_ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE")
     target_link_libraries(${headless_target} PRIVATE
-        lua53
+        luaapi
         neon_hlsl
         neon_cryptopp
         neon_bcrypt
