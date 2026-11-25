@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 struct lua_State;
+namespace WorldRPG::WorldShaders { struct ShaderInfo; }
 namespace WorldRPG::DxShader {
 struct Program;
 struct Transform {
@@ -42,6 +43,8 @@ void Reset();
 bool Exists(uint32_t);
 bool Size(uint32_t,unsigned&,unsigned&);
 bool Release(uint32_t);
+// The shader element's dxCreateShader world-texture options (false: not a shader).
+bool WorldInfo(uint32_t,WorldShaders::ShaderInfo&);
 void DropResource(const std::string&,uint16_t,uint32_t);
 bool DrawImage(uint32_t,const Tile&,bool section,bool postGUI);
 } // namespace WorldRPG::DxShader

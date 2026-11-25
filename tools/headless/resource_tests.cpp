@@ -20,6 +20,7 @@
 #include "LuaGuiApi.h"
 #include "LuaMtaWindowApi.h"
 #include "LuaVMStub.h"
+#include "WorldShaderMatches.h"
 #include "DesktopLuaString.h"
 #include "LuaVmSet.h"
 #include "DdsDecode.h"
@@ -1054,6 +1055,70 @@ void CheckDesktopNumberText() {
     lua_pushinteger(L, 1700);
     CHECK(WorldRPG::Script::DesktopNumberText(L, -1) == "1700");  // a 5.3 integer reads like the 5.1 number
     lua_close(L);
+}
+
+// WorldShaderMatches: CMatchChannelManager results (CRenderWareSA.ShaderMatching.cpp/.h).
+void CheckWorldShaderMatches() {
+    namespace W = WorldRPG::WorldShaders;
+    // SharedUtil_WildcardMatch_Tests (SharedUtil.Tests.hpp:464-515).
+    const struct { const char* wild; const char* text; bool result; } wildcard[] = {
+        {"*bd*", "abcbde", true}, {"*bd?f*", "abcbdef_bdgh", true}, {"*bd?h*", "abcbdef_bdgh", true},
+        {"*bd?g*", "abcbdef_bdgh", false}, {"scr*w?d", "screeeewywxd", true}, {"A*B", "A_B_B", true},
+        {"", "", true}, {"*", "", true}, {"*", "A", true}, {"", "A", false}, {"A*", "", false},
+        {"A*", "AAB", true}, {"A*", "BAA", false}, {"A*B", "AABA", false}, {"A*B", "ABAB", true},
+        {"A*B*C", "ABCBBBCBCCCBCBCCCC", true}, {"A?", "AAB", false}, {"A?B", "AAB", true},
+        {"A?*", "A", false}, {"A?*", "ABBCC", true}, {"A?*", "BAA", false}};
+    for (const auto& c : wildcard) CHECK(W::WildcardMatch(c.wild, c.text) == c.result);
+
+    W::Reset();
+    W::ShaderInfo low{1, 0, 1, false, W::kAll, false};
+    W::ShaderInfo high{2, 5, 2, false, W::kVehicle, true};
+    W::ShaderInfo later{3, 0, 3, false, W::kAll, false};
+    W::ShaderInfo layerA{4, 1, 4, true, W::kAll, false};
+    W::ShaderInfo layerB{5, -1, 5, true, W::kAll, false};
+    CHECK(!W::Active());
+    W::AppendAdditive(low, 0, "Body*", true);
+    CHECK(W::Active());
+    CHECK(W::Resolve("body_paint", 0, W::kObject).base == 1u);            // case-insensitive
+    CHECK(W::Resolve("wheel", 0, W::kObject).base == 0u);
+    W::AppendAdditive(high, 0, "*", true);
+    CHECK(W::Resolve("body_paint", 0, W::kVehicle).base == 2u);           // higher priority wins
+    CHECK(W::Resolve("body_paint", 0, W::kObject).base == 1u);            // type mask
+    CHECK(W::Resolve("body_paint", 0, W::kVehicle).usesVertexShader);
+    W::AppendAdditive(later, 0, "body*", true);
+    CHECK(W::Resolve("body_paint", 0, W::kObject).base == 3u);            // same priority: later created
+    // The last matching pattern decides; a leading subtractive match is dropped.
+    W::AppendSubtractive(3, 0, "body_p*");
+    CHECK(W::Resolve("body_paint", 0, W::kObject).base == 1u);
+    CHECK(W::Resolve("body_x", 0, W::kObject).base == 3u);
+    W::AppendAdditive(later, 0, "body_paint", true);
+    CHECK(W::Resolve("body_paint", 0, W::kObject).base == 3u);
+    W::AppendSubtractive(99, 0, "*");                                      // unknown shader: ignored
+    // Layers are sorted by order value, lowest first.
+    W::AppendAdditive(layerA, 0, "body*", true);
+    W::AppendAdditive(layerB, 0, "body*", true);
+    const W::Layers layered = W::Resolve("body_paint", 0, W::kObject);
+    CHECK(layered.base == 3u && (layered.layers == std::vector<uint32_t>{5u, 4u}));
+    // Entity matches; the all-entities base and layers mix in when applied with appendLayers.
+    W::ShaderInfo own{6, 0, 6, false, W::kAll, false};
+    W::AppendAdditive(own, 77, "glass", true);
+    CHECK(W::Resolve("glass", 77, W::kObject).base == 6u);
+    CHECK(W::Resolve("body_paint", 77, W::kObject).base == 3u);           // inherited base
+    CHECK((W::Resolve("body_paint", 77, W::kObject).layers == std::vector<uint32_t>{5u, 4u}));
+    CHECK(W::Resolve("glass", 88, W::kObject).base == 0u);                // unknown entity: all-entities result
+    W::ShaderInfo noMix{7, 9, 7, false, W::kAll, false};
+    W::AppendAdditive(noMix, 0, "glass*", false);
+    CHECK(W::Resolve("glass", 77, W::kObject).base == 6u);                // own base kept
+    CHECK(W::Resolve("glass_x", 77, W::kObject).base == 0u);              // appendLayers=false: not mixed in
+    CHECK(W::Resolve("glass_x", 0, W::kObject).base == 7u);
+    const uint64_t before = W::Revision();
+    W::RemoveEntityRefs(77);
+    // Its own match is gone; it now gets the all-entities result (shader 7, "glass*").
+    CHECK(W::Revision() != before && W::Resolve("glass", 77, W::kObject).base == 7u);
+    W::RemoveShaderRefs(3);
+    CHECK(W::Resolve("body_paint", 0, W::kObject).base == 1u);
+    W::Reset();
+    CHECK(!W::Active());
 }
 
 void CheckCustomWeapons(WorldRPG::Script::LuaVMStub& vm) {
@@ -5344,6 +5409,7 @@ int main(int argc, char** argv) {
     CheckSvg(vm);
     CheckStopLifecycle(vm);
     CheckCustomWeapons(vm);
+    CheckWorldShaderMatches();
     CheckDesktopNumberText();
     CheckTwoVms(vm);
     CheckOfficialResources(vm);

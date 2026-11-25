@@ -8,6 +8,7 @@
 #include "shared/ModelEffects.h"
 #include "shared/LuaDx3DApi.h"
 #include "shared/LuaVMStub.h"
+#include "shared/WorldShaderMatches.h"
 #include "shared/LuaDxApi.h"
 #include "gtasa/GameTasks.h"
 #include "stubs/test_bitmaps.h"
@@ -289,7 +290,38 @@ technique Curved{pass P{VertexShader=compile vs_2_0 VS();PixelShader=compile ps_
     )LUA";
     auto result=vm.executeBuffer(script,std::strlen(script),"dx-shader-integration");
     if(!result.success)std::fprintf(stderr,"Lua diagnostic: %s\n",result.errorMessage.c_str());
-    Check(result.success,"shader Lua API, type, image failure and destruction");vm.shutdown();
+    Check(result.success,"shader Lua API, type, image failure and destruction");
+    // engineApplyShaderToWorldTexture / engineRemoveShaderFromWorldTexture record desktop's
+    // matches (WorldShaderMatches) and return true; dxCreateShader keeps the world options.
+    const char* world=R"LUA(
+        local fx=[[float4 PS():COLOR0{return float4(1,0,0,1);} technique World{pass P{PixelShader=compile ps_2_0 PS();}}]]
+        _G.worldBase=dxCreateShader(fx,2,50,false,"vehicle,object")
+        _G.worldLayer=dxCreateShader(fx,0,0,true,"all")
+        assert(isElement(worldBase) and isElement(worldLayer), 'priority, distance, layered and element types accepted')
+        assert(dxCreateShader(fx,0,0,false,"world,nope")==false, 'unknown element type')
+        assert(engineApplyShaderToWorldTexture(worldBase,"Body*"), 'apply to all entities')
+        assert(engineApplyShaderToWorldTexture(worldLayer,"body*",nil,true), 'layer')
+        assert(engineApplyShaderToWorldTexture(worldBase,"wheel",nil), 'nil entity')
+        assert(engineRemoveShaderFromWorldTexture(worldBase,"wheel"), 'subtractive match')
+        assert(engineApplyShaderToWorldTexture({id=12345},"x")==false, 'not a shader')
+        assert(engineApplyShaderToWorldTexture(worldBase,"x",{id=987654})==false, 'unknown element')
+        assert(engineApplyShaderToWorldTexture(worldBase)==false, 'texture name needed')
+        assert(engineApplyShaderToWorldTexture(worldBase,1337), 'a number name reads as its text')
+    )LUA";
+    result=vm.executeBuffer(world,std::strlen(world),"world-shader-api");
+    if(!result.success)std::fprintf(stderr,"Lua diagnostic: %s\n",result.errorMessage.c_str());
+    Check(result.success,"world shader Lua API");
+    namespace W=WorldRPG::WorldShaders;
+    const W::Layers vehicle=W::Resolve("BODY_paint",0,W::kVehicle);
+    Check(vehicle.base!=0&&vehicle.layers.size()==1,"apply recorded: base and layer for a vehicle texture");
+    Check(W::Resolve("body_paint",0,W::kPed).base==0&&W::Resolve("body_paint",0,W::kPed).layers.size()==1,"element types of the shader");
+    Check(W::Resolve("wheel",0,W::kVehicle).base==0&&W::Resolve("1337",0,W::kObject).base!=0,"remove recorded; number pattern");
+    const char* destroy="assert(destroyElement(worldBase))";
+    result=vm.executeBuffer(destroy,std::strlen(destroy),"world-shader-destroy");
+    Check(result.success&&W::Resolve("body_paint",0,W::kVehicle).base==0&&W::Resolve("body_paint",0,W::kVehicle).layers.size()==1,
+          "destroying the shader drops its matches");
+    vm.shutdown();
+    Check(!W::Active(),"VM shutdown clears world matches");
 }
 void ContextPreservation() {
     auto platform=reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT"));

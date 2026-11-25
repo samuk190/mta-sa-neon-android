@@ -1,4 +1,6 @@
 #include "DxShader.h"
+#include "FxCompiler.h"
+#include "WorldShaderMatches.h"
 #include "LuaDxApi.h"
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
@@ -19,7 +21,26 @@ struct Element {
     std::string owner;
     uint16_t net=0;
     uint32_t generation=0;
+    // dxCreateShader world-texture options (CLuaDrawingDefs::DxCreateShader): used by
+    // engineApplyShaderToWorldTexture matching (WorldShaderMatches), not by image drawing.
+    WorldShaders::ShaderInfo world;
+    float maxDistance=0;
 };
+uint32_t createCounter=0;  // CShaderItem::m_uiCreateTime order
+// ReadEnumStringList(EEntityTypeMask, "world,vehicle,object,other") (CLuaFunctionParseHelpers.cpp:365-371).
+bool TypeMaskOf(const std::string& list,int& mask) {
+    mask=0;size_t start=0;
+    while(start<=list.size()) {
+        size_t end=list.find(',',start);if(end==std::string::npos)end=list.size();
+        const std::string name=list.substr(start,end-start);
+        if(name=="none")mask|=WorldShaders::kNone;else if(name=="world")mask|=WorldShaders::kWorld;
+        else if(name=="ped")mask|=WorldShaders::kPed;else if(name=="vehicle")mask|=WorldShaders::kVehicle;
+        else if(name=="object")mask|=WorldShaders::kObject;else if(name=="other")mask|=WorldShaders::kOther;
+        else if(name=="all")mask|=WorldShaders::kAll;else return false;
+        start=end+1;
+    }
+    return true;
+}
 std::map<uint32_t,Element> elements;
 uint32_t nextId=0x38000000,nextBitmap=0x39000000;
 bool Number(lua_State* L,int index,float& value,float fallback=0,bool optional=false) {
@@ -55,15 +76,29 @@ int CreateLua(lua_State* L) {
     if(!Number(L,index,priority,0,true)||!Number(L,index+1,distance,0,true)||distance<0 ||
        (!lua_isnoneornil(L,index+2)&&!lua_isboolean(L,index+2)) ||
        (!lua_isnoneornil(L,index+3)&&lua_type(L,index+3)!=LUA_TSTRING))return Result(L,false);
-    // Priority/distance/layering and element-type masks are world-texture
-    // application options. This backend exposes DX image shaders only.
-    if(priority!=0 || distance!=0 || lua_toboolean(L,index+2))return Result(L,false);
+    // Priority, distance, layering and element types only matter for world textures
+    // (engineApplyShaderToWorldTexture). Desktop accepts them on every shader.
+    int typeMask=WorldShaders::kWorld|WorldShaders::kVehicle|WorldShaders::kObject|WorldShaders::kOther;
+    if(lua_type(L,index+3)==LUA_TSTRING && !TypeMaskOf(lua_tostring(L,index+3),typeMask)) {
+        LUA_LOGE("dxCreateShader: expected element types at argument %d",index+3);return Result(L,false);
+    }
+    const bool layered=lua_toboolean(L,index+2);
     std::string technique,diagnostic;
     auto program=Create(source,macros,technique,diagnostic);
     if(!program){LUA_LOGI("dxCreateShader: %s",diagnostic.c_str());return Result(L,false);}
     if(elements.size()>=128)return Result(L,false);
     const uint32_t id=++nextId;
-    elements[id]={std::move(program),Script::ActiveVmOwner(),Script::ActiveVmOwnerNet(),Script::ActiveVmOwnerGeneration()};
+    Element element{std::move(program),Script::ActiveVmOwner(),Script::ActiveVmOwnerNet(),Script::ActiveVmOwnerGeneration()};
+    element.world.shader=id;element.world.priority=priority;element.world.createTime=++createCounter;
+    element.world.layered=layered;element.world.typeMask=typeMask;element.maxDistance=distance;
+    {
+        // CShaderItem::GetUsesVertexShader: the chosen technique has a vertex shader.
+        Fx::Effect parsed;std::string ignored;
+        if(Fx::Parse(source,macros,parsed,ignored))
+            for(const auto& t:parsed.techniques)if(t.name==technique)
+                for(const auto& pass:t.passes)element.world.usesVertexShader|=!pass.vertexEntry.empty();
+    }
+    elements[id]=std::move(element);
     Script::PushElement(L,id);lua_pushlstring(L,technique.data(),technique.size());return 2;
 }
 int ValueLua(lua_State* L) {
@@ -99,17 +134,19 @@ int TransformLua(lua_State* L) {
     return Result(L,SetTransform(*element->program,t));
 }
 }
-void Reset(){elements.clear();}
+void Reset(){elements.clear();WorldShaders::Reset();}
 bool Exists(uint32_t id){return elements.count(id);}
 bool Size(uint32_t id,unsigned& width,unsigned& height) {
     auto it=elements.find(id);if(it==elements.end())return false;
     MaterialSize(*it->second.program,width,height);return true;
 }
-bool Release(uint32_t id){return elements.erase(id)>0;}
+// CRenderItemManager::RemoveShaderItemFromWatchLists when the shader goes.
+bool Release(uint32_t id){if(!elements.erase(id))return false;WorldShaders::RemoveShaderRefs(id);return true;}
+bool WorldInfo(uint32_t id,WorldShaders::ShaderInfo& out){auto it=elements.find(id);if(it==elements.end())return false;out=it->second.world;return true;}
 void DropResource(const std::string& owner,uint16_t net,uint32_t generation) {
     for(auto it=elements.begin();it!=elements.end();) {
         auto& e=it->second;
-        if(e.owner==owner && (!net||!e.net||e.net==net)&&(!generation||!e.generation||e.generation==generation))it=elements.erase(it);else ++it;
+        if(e.owner==owner && (!net||!e.net||e.net==net)&&(!generation||!e.generation||e.generation==generation)){WorldShaders::RemoveShaderRefs(it->first);it=elements.erase(it);}else ++it;
     }
 }
 bool DrawImage(uint32_t id,const Tile& original,bool section,bool postGUI) {

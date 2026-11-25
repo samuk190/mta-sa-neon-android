@@ -4,6 +4,8 @@
 // replacements when it streams the target model.
 
 #include "DesktopLuaString.h"
+#include "DxShader.h"
+#include "WorldShaderMatches.h"
 #include "EngineAssets.h"
 #include "EngineModelLoader.h"
 #include "LuaApiExtra.h"
@@ -588,32 +590,71 @@ int RestoreAnim(lua_State* L) {
     return 1;
 }
 
+// ReadUserData(CClientShader*): a dxCreateShader element.
+bool ReadShaderElement(lua_State* L, const char* function, WorldShaders::ShaderInfo& info, std::string& error) {
+    if (lua_istable(L, 1) && DxShader::WorldInfo(ElementIdOf(L, 1), info)) return true;
+    error = ScriptBad(L, function, "shader", 1);
+    return false;
+}
+
+// ReadUserData(CClientEntity*, NULL): nil or none is every entity.
+bool ReadOptionalEntity(lua_State* L, const char* function, uint32_t& entity, std::string& error) {
+    entity = 0;
+    const int type = lua_type(L, 3);
+    if (type == LUA_TNONE || type == LUA_TNIL) return true;
+    if (type == LUA_TTABLE) {
+        entity = ElementIdOf(L, 3);
+        if (entity && KnownClientElement(entity)) return true;
+    }
+    error = ScriptBad(L, function, "element", 3);
+    return false;
+}
+
+// Desktop drops an entity's matches when it is destroyed (RemoveClientEntityRefs).
+// The phone checks the entities that have matches whenever matches change.
+void DropDestroyedMatchEntities() {
+    for (uint32_t entity : WorldShaders::KnownEntities())
+        if (!KnownClientElement(entity)) WorldShaders::RemoveEntityRefs(entity);
+}
+
+bool g_diagWorldShaderDraw = false;
+
+// CLuaEngineDefs::EngineApplyShaderToWorldTexture (CLuaEngineDefs.cpp) +
+// CRenderItemManager::ApplyShaderItemToWorldTexture (CRenderItemManager.TextureReplace.cpp:95-102):
+// records an additive match and returns true.
 int ApplyShader(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineApplyShaderToWorldTexture", "material", 1), true);
+    WorldShaders::ShaderInfo info;
     std::string texture;
     std::string error;
+    uint32_t entity = 0;
     bool append = true;
+    if (!ReadShaderElement(L, "engineApplyShaderToWorldTexture", info, error)) return FailFalse(L, error, true);
     if (!ReadScriptString(L, 2, "engineApplyShaderToWorldTexture", texture, error, false, "")) return FailFalse(L, error, true);
-    if (lua_type(L, 3) != LUA_TNONE && lua_type(L, 3) != LUA_TNIL && lua_type(L, 3) != LUA_TUSERDATA)
-        return FailFalse(L, ScriptBad(L, "engineApplyShaderToWorldTexture", "element", 3), true);
+    if (!ReadOptionalEntity(L, "engineApplyShaderToWorldTexture", entity, error)) return FailFalse(L, error, true);
     if (!ReadOptionalBool(L, 4, "engineApplyShaderToWorldTexture", true, append, error)) return FailFalse(L, error, true);
-    (void)texture;
-    (void)append;
-    LUA_LOGI("DIAG engineApplyShaderToWorldTexture: the shader pipeline is not hooked");
-    lua_pushboolean(L, 0);
+    DropDestroyedMatchEntities();
+    WorldShaders::AppendAdditive(info, entity, texture, append);
+    if (!g_diagWorldShaderDraw) {
+        g_diagWorldShaderDraw = true;
+        LUA_LOGI("DIAG engineApplyShaderToWorldTexture: matches are recorded; GTA's renderer does not draw them yet");
+    }
+    lua_pushboolean(L, 1);
     return 1;
 }
 
+// CLuaEngineDefs::EngineRemoveShaderFromWorldTexture +
+// CRenderItemManager::RemoveShaderItemFromWorldTexture (111-116): a subtractive match, true.
 int RemoveShader(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineRemoveShaderFromWorldTexture", "material", 1), true);
+    WorldShaders::ShaderInfo info;
     std::string texture;
     std::string error;
+    uint32_t entity = 0;
+    if (!ReadShaderElement(L, "engineRemoveShaderFromWorldTexture", info, error)) return FailFalse(L, error, true);
     if (!ReadScriptString(L, 2, "engineRemoveShaderFromWorldTexture", texture, error, false, "")) return FailFalse(L, error, true);
-    if (lua_type(L, 3) != LUA_TNONE && lua_type(L, 3) != LUA_TNIL && lua_type(L, 3) != LUA_TUSERDATA)
-        return FailFalse(L, ScriptBad(L, "engineRemoveShaderFromWorldTexture", "element", 3), true);
-    (void)texture;
-    LUA_LOGI("DIAG engineRemoveShaderFromWorldTexture: the shader pipeline is not hooked");
-    lua_pushboolean(L, 0);
+    if (!ReadOptionalEntity(L, "engineRemoveShaderFromWorldTexture", entity, error)) return FailFalse(L, error, true);
+    DropDestroyedMatchEntities();
+    WorldShaders::AppendSubtractive(info.shader, entity, texture);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
