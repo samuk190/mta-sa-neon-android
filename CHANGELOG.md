@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — engineRequestModel / engineFreeModel for object models (2026-11-25)
+
+- **`engineRequestModel("object", parent)`** (`shared/EngineAssets.cpp`, `shared/EngineModelLoader.cpp`) follows `CModelInfoSA::MakeObjectModel` and `CopyStreamingInfoFromModel` (CModelInfoSA.cpp:2039-2060, 1925-1935): the parent's model info (default 1337, atomic or clump object parents only) is copied with no references, RwObject or 2D effects into the lowest id with neither model info nor a streaming entry (`CClientModelManager::GetFirstFreeModelID`), streaming from the parent's archive entry, on the game thread. A model replacement for the new id loads instead of the parent's DFF. `createObject` accepts the id (`LuaWorldObjectApi.cpp`). Vehicle, ped, clump and timed-object models still return false with a DIAG line.
+- **`engineFreeModel`** follows `CModelInfoSA::DeallocateModel`: the slot is cleared once no entity references it; otherwise it is retried on the next request. A stopping resource frees its models, and the session reset frees all.
+- Model info sizes (0x48 atomic, 0x50 clump) and the 0x14-byte streaming entry layout are the GTA 2.10 arm64 values used by the existing model loader; the allocation has not been run on a device. Host suites pass (the host stub allocates nothing) and the arm64 APK builds.
+
 ### Fixed — dxCreateShader accepts NORMAL0 (2026-11-25)
 
 - **`dxCreateShader`** refused any effect whose vertex shader reads `NORMAL0` ("unsupported vertex input semantic", `shared/DxShader.cpp`): the 2D tile path only checked the inputs its quad carries (`POSITION`, `TEXCOORD0`, `COLOR0`). Model shaders light with a normal, so GTA Rocket League's `neon-rocket-soccer/visual.fx` failed and its garage never loaded (S25 log 2026-11-25 07:48:05 and 07:53:06: `visual.lua:45: shader creation failed`, `Garage loading failed`). `NORMAL`/`NORMAL0` (vec3/vec4) is now accepted. The world path already feeds GTA's normals (`FxWorld::Attribute`); on the 2D quad the normal is a constant zero, as an unset D3D9 vertex element and FxWorld's other missing inputs read.

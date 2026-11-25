@@ -445,13 +445,40 @@ int RestoreModel(lua_State* L) {
     return 1;
 }
 
+// engineRequestModel ids, by owning resource start. A model still used by an entity
+// when its resource stops is freed on a later call (pendingFree).
+std::unordered_map<int, uint32_t> g_customModels;
+std::vector<int> g_pendingFree;
+
+void RetryPendingFrees() {
+    std::erase_if(g_pendingFree, [](int id) { return NativeFreeModel(id); });
+}
+
+// CLuaEngineDefs::EngineRequestModel (CLuaEngineDefs.cpp): a new model id of the
+// type, copied from the parent (default 1337 for objects). Object models only on
+// this client; vehicle, ped and clump models log and return false.
 int RequestModel(lua_State* L) {
     const char* text = lua_type(L, 1) == LUA_TSTRING ? lua_tostring(L, 1) : nullptr;
     const std::string kind = text ? text : "";
     if (kind != "ped" && kind != "object" && kind != "object-damageable" && kind != "vehicle" && kind != "timed-object" && kind != "clump")
         return FailFalse(L, ScriptBad(L, "engineRequestModel", "client-model-type", 1), true);
-    if (ActiveVmOwnerNet() != 0) LUA_LOGI("DIAG engineRequestModel: custom model allocation is not hooked");
-    lua_pushboolean(L, 0);
+    double parent = 1337;
+    std::string error;
+    if (!lua_isnoneornil(L, 2) && !ReadBounded(L, 2, "engineRequestModel", 0, static_cast<double>(kTxdBase - 1), parent, error))
+        return FailFalse(L, error, true);
+    if (kind != "object") {
+        LUA_LOGI("DIAG engineRequestModel: %s models are not allocated on this client (objects only)", kind.c_str());
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    RetryPendingFrees();
+    const int id = NativeAllocateObjectModel(static_cast<int>(parent));
+    if (id < 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_customModels[id] = ActiveVmOwnerGeneration();
+    lua_pushinteger(L, id);
     return 1;
 }
 
@@ -459,8 +486,15 @@ int FreeModel(lua_State* L) {
     double model = 0;
     std::string error;
     if (!ReadBounded(L, 1, "engineFreeModel", 0, static_cast<double>(kTxdBase - 1), model, error)) return FailFalse(L, error, true);
-    (void)model;
-    lua_pushboolean(L, 0);
+    const int id = static_cast<int>(model);
+    const auto found = g_customModels.find(id);
+    if (found == g_customModels.end()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_customModels.erase(found);
+    if (!NativeFreeModel(id)) g_pendingFree.push_back(id);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -736,11 +770,25 @@ void DropResourceModelAssets(uint32_t generation) {
         if (asset.generation == generation) owned.push_back(id);
     for (uint32_t id : owned)
         if (!DestroyClientElementForced(id)) ReleaseModelAsset(id);
+    // Its requested models go too; one an entity still uses is retried later.
+    for (auto it = g_customModels.begin(); it != g_customModels.end();) {
+        if (it->second != generation) {
+            ++it;
+            continue;
+        }
+        if (!NativeFreeModel(it->first)) g_pendingFree.push_back(it->first);
+        it = g_customModels.erase(it);
+    }
 }
+
+bool CustomModelAllocated(uint32_t model) { return g_customModels.count(static_cast<int>(model)) > 0; }
 
 void ResetModelAssets() {
     for (const auto& [id, asset] : g_assets) NativeReleaseModelAsset(asset.serial, asset.txd);
     g_assets.clear();
+    for (const auto& [id, generation] : g_customModels)
+        if (!NativeFreeModel(id)) g_pendingFree.push_back(id);
+    g_customModels.clear();
 }
 
 void BindEngineAssetLua(lua_State* L) {

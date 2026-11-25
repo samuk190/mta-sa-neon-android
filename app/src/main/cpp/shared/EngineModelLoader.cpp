@@ -250,6 +250,7 @@ struct ModelAssets {
 
 // CStreaming::ConvertBufferToObject calls the loaders synchronously on the game thread.
 thread_local std::unordered_map<std::uint16_t, ModelAssets> modelAssets;
+std::unordered_map<int, void*> customModels;  // engineRequestModel slots this client owns
 thread_local std::unordered_set<std::uint16_t> pendingRefreshes;
 thread_local bool refreshQueued = false;
 thread_local const std::vector<ImportedTxd>* currentTextures = nullptr;
@@ -553,6 +554,72 @@ void NativeReleaseModelAsset(std::uint64_t asset, void* dictionary) {
     });
 }
 
+// CModelInfoSA::MakeObjectModel / CopyStreamingInfoFromModel (CModelInfoSA.cpp
+// 2039-2060, 1925-1935): a new object model is a copy of the parent's model info
+// with no references, no RwObject and no 2D effects, in a free ms_modelInfoPtrs
+// slot, streaming from the parent's archive entry. A model replacement for the new
+// id then loads instead of the parent's DFF (the streaming override above).
+// CClientModelManager::GetFirstFreeModelID: the lowest id with neither model info
+// nor a streaming entry.
+int NativeAllocateObjectModel(int parent) {
+    int allocated = -1;
+    GameTasks::Run([&] {
+        if (!ResolveRenderWare() || parent < 0 || parent >= static_cast<int>(Models::kStockModelCount)) return;
+        void* base = rw.models[parent];
+        // Object parents only: their model info is a CAtomicModelInfo (0x48 bytes) or a
+        // CClumpModelInfo (0x50, the animation index at +0x48).
+        if (!base || (ModelType(base) != 1 && ModelType(base) != 5)) return;
+        auto* streaming = const_cast<std::uint8_t*>(rw.streamingInfo);
+        for (int id = 1; id < static_cast<int>(Models::kStockModelCount); ++id) {
+            std::uint8_t* entry = streaming + 0x14 * id;
+            if (rw.models[id] || entry[0x10] != 0 || Field<std::uint32_t>(entry, 0x0C) != 0) continue;
+            auto* info = static_cast<std::uint8_t*>(::operator new(0x50));
+            std::memset(info, 0, 0x50);
+            std::memcpy(info, base, 0x48);
+            Field<std::uint16_t>(info, 0x22) = 0;     // CBaseModelInfo::AddRef count
+            Field<void*>(info, 0x40) = nullptr;        // RwObject (CAtomicModelInfo::SetAtomic)
+            Field<std::uint8_t>(info, 0x27) = 0;       // 2D effect count (SetAtomic recomputes it)
+            Field<std::int32_t>(info, 0x48) = -1;      // CClumpModelInfo animation index
+            const std::uint8_t* from = streaming + 0x14 * parent;
+            std::memset(entry, 0, 0x14);
+            Field<std::uint16_t>(entry, 0x0) = 0xFFFF;  // prev, next, next in IMG: unlinked
+            Field<std::uint16_t>(entry, 0x2) = 0xFFFF;
+            Field<std::uint16_t>(entry, 0x4) = 0xFFFF;
+            entry[0x7] = from[0x7];                                                   // archive
+            std::memcpy(entry + 0x8, from + 0x8, 8);  // offset and size in blocks
+            rw.models[id] = info;
+            customModels[id] = info;
+            allocated = id;
+            return;
+        }
+    });
+    return allocated;
+}
+
+// CModelInfoSA::DeallocateModel: the slot is cleared once nothing uses the model.
+bool NativeFreeModel(int id) {
+    bool freed = false;
+    GameTasks::Run([&] {
+        const auto found = customModels.find(id);
+        if (found == customModels.end() || !ResolveRenderWare()) return;
+        auto* info = static_cast<std::uint8_t*>(found->second);
+        if (Field<std::uint16_t>(info, 0x22) != 0) return;  // still referenced by an entity
+        auto* entry = const_cast<std::uint8_t*>(rw.streamingInfo) + 0x14 * id;
+        if (entry[0x10] == 1) rw.removeModel(id);
+        if (entry[0x10] != 0) return;
+        rw.models[id] = nullptr;
+        std::memset(entry, 0, 0x14);
+        Field<std::uint16_t>(entry, 0x0) = 0xFFFF;
+        Field<std::uint16_t>(entry, 0x2) = 0xFFFF;
+        Field<std::uint16_t>(entry, 0x4) = 0xFFFF;
+        ::operator delete(info);
+        customModels.erase(found);
+        modelAssets.erase(static_cast<std::uint16_t>(id));
+        freed = true;
+    });
+    return freed;
+}
+
 } // namespace WorldRPG::Script
 
 #else
@@ -564,6 +631,8 @@ bool NativeImportTXD(std::uint16_t, std::uint64_t, void*) { return false; }
 bool NativeReplaceDFF(std::uint16_t, std::uint64_t, const DffSource&, bool) { return false; }
 bool NativeRestoreDFF(std::uint16_t) { return false; }
 void NativeReleaseModelAsset(std::uint64_t, void*) {}
+int NativeAllocateObjectModel(int) { return -1; }
+bool NativeFreeModel(int) { return false; }
 
 } // namespace WorldRPG::Script
 

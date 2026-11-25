@@ -16,6 +16,7 @@
 #include "ResourceLoader.h"
 #include "ServerWorld.h"
 #include "LuaFieldApi.h"
+#include "EngineAssets.h"
 #include "WorldObjectFeed.h"
 
 #include "lua.hpp"
@@ -289,6 +290,7 @@ bool StockObjectRange(uint32_t model) {
 }
 
 bool ObjectModelAllowed(uint32_t model) {
+    if (CustomModelAllocated(model)) return true;  // engineRequestModel("object")
     if (!StockObjectRange(model)) return false;
     Models::StockModelView view;
     const Models::LiveModelStatus status = Models::ReadLiveStockModel(static_cast<uint16_t>(model), view);
