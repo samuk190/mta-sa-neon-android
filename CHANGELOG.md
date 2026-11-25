@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — dxCreateShader accepts NORMAL0 (2026-11-25)
+
+- **`dxCreateShader`** refused any effect whose vertex shader reads `NORMAL0` ("unsupported vertex input semantic", `shared/DxShader.cpp`): the 2D tile path only checked the inputs its quad carries (`POSITION`, `TEXCOORD0`, `COLOR0`). Model shaders light with a normal, so GTA Rocket League's `neon-rocket-soccer/visual.fx` failed and its garage never loaded (S25 log 2026-11-25 07:48:05 and 07:53:06: `visual.lua:45: shader creation failed`, `Garage loading failed`). `NORMAL`/`NORMAL0` (vec3/vec4) is now accepted. The world path already feeds GTA's normals (`FxWorld::Attribute`); on the 2D quad the normal is a constant zero, as an unset D3D9 vertex element and FxWorld's other missing inputs read.
+- Test: `neon_dx_conversion_tests` creates and renders a `vs_3_0` shader that reads `NORMAL0` (fails without the fix with the device's diagnostic); 8284 checks pass.
+
 - The Android launcher now ships and loads its native client as `libsaonlineneon.so`. The APK audit and runtime integrity checks use the same name.
 
 ### License

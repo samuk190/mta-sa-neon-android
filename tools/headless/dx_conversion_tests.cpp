@@ -163,6 +163,27 @@ technique T { pass P0 { VertexShader=compile vs_2_0 VS(); PixelShader=compile ps
             DX::Image image;DX::Tile full=tile;
             Check(DX::SetTexture(*featured,"gTexture0",{1,1,{0xff808080}})&&DX::Render(*featured,full,32,32,image),"desktop FX constructs render");
         }
+        {
+            // A model shader that lights with NORMAL0 (neon-rocket-soccer visual.fx shape).
+            // dxCreateShader used to refuse it ("unsupported vertex input semantic").
+            const char* lit=R"(
+float4x4 gWorldViewProjection : WORLDVIEWPROJECTION;
+float4x4 gWorld : WORLD;
+struct Input { float3 position : POSITION0; float4 color : COLOR0; float3 normal : NORMAL0; float2 uv : TEXCOORD0; };
+struct Output { float4 position : POSITION0; float3 normal : TEXCOORD0; float2 uv : TEXCOORD1; float4 color : TEXCOORD2; };
+Output VS(Input i) { Output o; o.position=mul(float4(i.position,1),gWorldViewProjection);
+    o.normal=mul(i.normal,(float3x3)gWorld); o.uv=i.uv; o.color=i.color; return o; }
+float4 PS(Output o) : COLOR0 { float lit=0.5+0.5*saturate(dot(normalize(o.normal+float3(0,0,1e-4)),float3(0,0,1)));
+    return float4(o.color.rgb*lit,1); }
+technique Lit { pass P0 { VertexShader=compile vs_3_0 VS(); PixelShader=compile ps_3_0 PS(); } }
+)";
+            auto program=DX::Create(lit,{},technique,error);if(!program)std::fprintf(stderr,"NORMAL0 diagnostic: %s\n",error.c_str());
+            Check(bool(program)&&technique=="Lit","NORMAL0 vertex input is accepted");
+            if(program) {
+                DX::Image image;DX::Tile full=tile;
+                Check(DX::Render(*program,full,32,32,image)&&!image.pixels.empty(),"NORMAL0 shader renders on the 2D quad (normal reads zero)");
+            }
+        }
         // World shaders (FxWorld): GTA attribute names bound like ES2Shader::Build,
         // engine values become GTA uniforms, the object texture becomes Diffuse.
         auto world=[&](const std::string& fx,WorldRPG::FxWorld::Effect& built,std::string& why){

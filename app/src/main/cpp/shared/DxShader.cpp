@@ -163,7 +163,10 @@ MobileOutput MobileDefaultVS(MobileVertex input) {
             const std::string key=name;
             supported=supported && size==1 &&
                 (((key=="POSITION"||key=="POSITION0")&&(type==GL_FLOAT_VEC3||type==GL_FLOAT_VEC4)) ||
-                 (key=="TEXCOORD0"&&type==GL_FLOAT_VEC2) || (key=="COLOR0"&&type==GL_FLOAT_VEC4));
+                 (key=="TEXCOORD0"&&type==GL_FLOAT_VEC2) || (key=="COLOR0"&&type==GL_FLOAT_VEC4) ||
+                 // Model shaders light with a normal (neon-rocket-soccer visual.fx). The world path
+                 // feeds GTA's normals (FxWorld Attribute); the 2D quad has none and reads zero.
+                 ((key=="NORMAL"||key=="NORMAL0")&&(type==GL_FLOAT_VEC3||type==GL_FLOAT_VEC4)));
         }
         if(!supported){diagnostic="unsupported vertex input semantic";glDeleteProgram(id);continue;}
         auto result=std::make_shared<Program>();result->id=id;result->aliases=aliases;result->samplers=samplers;result->firstTexture=sizeParameter;
@@ -348,6 +351,9 @@ bool Render(Program& p,const Tile& tile,unsigned width,unsigned height,Image& ou
     glGenBuffers(1,&vbo);glBindBuffer(GL_ARRAY_BUFFER,vbo);glBufferData(GL_ARRAY_BUFFER,vertices.size()*sizeof(Vertex),vertices.data(),GL_STREAM_DRAW);
     auto attribute=[&](const char* name,int count,size_t offset){GLint location=glGetAttribLocation(p.id,name);if(location>=0){glEnableVertexAttribArray(location);glVertexAttribPointer(location,count,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<void*>(offset));}};
     attribute("POSITION",3,0);attribute("POSITION0",3,0);attribute("TEXCOORD0",2,3*sizeof(float));attribute("COLOR0",4,5*sizeof(float));
+    // The quad carries no normal. An unset D3D9 vertex element reads zero, as FxWorld
+    // does for inputs GTA's buffers lack: a constant attribute, not an array.
+    for(const char* name:{"NORMAL","NORMAL0"}){GLint location=glGetAttribLocation(p.id,name);if(location>=0){glDisableVertexAttribArray(location);glVertexAttrib4f(location,0,0,0,1);}}
     glDrawArrays(GL_TRIANGLES,0,vertices.size());
     std::vector<uint8_t> rgba(size_t(width)*height*4);glReadPixels(0,0,width,height,GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());
     if(glGetError()!=GL_NO_ERROR)return false;
