@@ -20,6 +20,7 @@
 #include "LuaGuiApi.h"
 #include "LuaMtaWindowApi.h"
 #include "LuaVMStub.h"
+#include "DesktopLuaString.h"
 #include "LuaVmSet.h"
 #include "DdsDecode.h"
 #include "WorldObjectFeed.h"
@@ -1040,6 +1041,21 @@ void CheckWorldObjectFeed(WorldRPG::Script::LuaVMStub& vm) {
 }
 
 // createWeapon and the CClientWeapon element functions (CLuaWeaponDefs.cpp:150-695).
+// CScriptArgReader::ReadString text of a number: MTA Lua 5.1 lua_objlen / lua_tostring ("%.14g").
+void CheckDesktopNumberText() {
+    lua_State* L = luaL_newstate();
+    const struct { double value; const char* text; } cases[] = {
+        {1337, "1337"}, {-1, "-1"}, {1.5, "1.5"}, {0.1, "0.1"}, {1e20, "1e+20"}, {123456789012345.0, "1.2345678901234e+14"}};
+    for (const auto& c : cases) {
+        lua_pushnumber(L, c.value);
+        CHECK(WorldRPG::Script::DesktopNumberText(L, -1) == c.text);
+        lua_pop(L, 1);
+    }
+    lua_pushinteger(L, 1700);
+    CHECK(WorldRPG::Script::DesktopNumberText(L, -1) == "1700");  // a 5.3 integer reads like the 5.1 number
+    lua_close(L);
+}
+
 void CheckCustomWeapons(WorldRPG::Script::LuaVMStub& vm) {
     using namespace WorldRPG;
     RunLua(vm, "weapon-create-outside-resource", R"LUA(
@@ -4592,6 +4608,10 @@ void CheckEngineModelNames(WorldRPG::Script::LuaVMStub& vm) {
         assert(engineGetModelIDFromName("Street Clean Trailer") == false)
         assert(engineGetModelIDFromName("411") == false)
         assert(engineGetModelIDFromName(411) == false)
+        -- CScriptArgReader::ReadString reads a number as its text (MTA Lua 5.1 lua_objlen):
+        -- engineGetModelLODDistance(1337) is engineGetModelLODDistance("1337").
+        _G.lodById, _G.lodByText = engineGetModelLODDistance(1337), engineGetModelLODDistance("1337")
+        assert(_G.lodById == _G.lodByText, 'numeric model id reads as its text')
         assert(engineGetModelIDFromName("") == false)
         assert(engineGetModelNameFromID() == false)
         assert(engineGetModelNameFromID(nil) == false)
@@ -5324,6 +5344,7 @@ int main(int argc, char** argv) {
     CheckSvg(vm);
     CheckStopLifecycle(vm);
     CheckCustomWeapons(vm);
+    CheckDesktopNumberText();
     CheckTwoVms(vm);
     CheckOfficialResources(vm);
     CheckRocketSoccer(vm);

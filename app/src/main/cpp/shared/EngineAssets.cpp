@@ -3,6 +3,7 @@
 // DFF and TXD elements are owned by their resources. GTA applies their
 // replacements when it streams the target model.
 
+#include "DesktopLuaString.h"
 #include "EngineAssets.h"
 #include "EngineModelLoader.h"
 #include "LuaApiExtra.h"
@@ -129,8 +130,7 @@ bool ReadScriptString(lua_State* L, int index, const char* function, std::string
         return true;
     }
     if (type == LUA_TNUMBER) {
-        (void)lua_rawlen(L, index);
-        out.clear();
+        out = DesktopNumberText(L, index);
         return true;
     }
     if (type != LUA_TSTRING) {

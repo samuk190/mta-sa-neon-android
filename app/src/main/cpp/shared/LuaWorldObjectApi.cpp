@@ -8,6 +8,7 @@
 // Break, gang-tag alpha, and texture replace fail closed.
 // onClientObjectMoveStart / onClientObjectMoveStop are not dispatched.
 
+#include "DesktopLuaString.h"
 #include "LuaWorldObjectApi.h"
 
 #include "LuaApiExtra.h"
@@ -216,12 +217,11 @@ bool ReadBool(lua_State* L, const char* function, int index, bool& out, bool opt
     return false;
 }
 
-// CScriptArgReader::ReadString. A number has lua_objlen 0, so the text is empty.
+// CScriptArgReader::ReadString. A number reads as its text (DesktopLuaString.h).
 bool ReadScriptString(lua_State* L, const char* function, int index, std::string& out) {
     const int type = lua_type(L, index);
     if (type == LUA_TNUMBER) {
-        (void)lua_rawlen(L, index);
-        out.clear();
+        out = DesktopNumberText(L, index);
         return true;
     }
     if (type != LUA_TSTRING) {

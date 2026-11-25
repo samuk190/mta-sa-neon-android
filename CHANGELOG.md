@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — numeric model ids in engine, world object and vehicle string arguments (2026-11-25)
+
+- **Four string readers** (`LuaEngineApi.cpp` `ReadModelName`, `EngineAssets.cpp` and `LuaWorldObjectApi.cpp` `ReadScriptString`, `LuaVehicleApi.cpp` `ReadScriptStringArg`) turned a number into an empty string, on the assumption that `lua_objlen` of a number is 0. That is Lua 5.3's `lua_rawlen`. Desktop `CScriptArgReader::ReadString` (CScriptArgReader.h:607-625) runs on MTA's Lua 5.1, whose `lua_objlen` converts the number to its text first (vendor/lua/src/lapi.c:401-406). So `engineSetModelLODDistance(1700, ...)` failed with `got ""` for every numeric id, including the ids `engineRequestModel` returns (GTA Rocket League garage, S25 2026-11-25 08:47:57, ten calls). Numbers now read as their `"%.14g"` text (`shared/DesktopLuaString.h`), on both VMs.
+- Tests: `CheckDesktopNumberText` pins the text form; `engineGetModelLODDistance(1337)` equals the `"1337"` call. 562 resource checks pass.
+
 ### Added — engineRequestModel / engineFreeModel for object models (2026-11-25)
 
 - **`engineRequestModel("object", parent)`** (`shared/EngineAssets.cpp`, `shared/EngineModelLoader.cpp`) follows `CModelInfoSA::MakeObjectModel` and `CopyStreamingInfoFromModel` (CModelInfoSA.cpp:2039-2060, 1925-1935): the parent's model info (default 1337, atomic or clump object parents only) is copied with no references, RwObject or 2D effects into the lowest id with neither model info nor a streaming entry (`CClientModelManager::GetFirstFreeModelID`), streaming from the parent's archive entry, on the game thread. A model replacement for the new id loads instead of the parent's DFF. `createObject` accepts the id (`LuaWorldObjectApi.cpp`). Vehicle, ped, clump and timed-object models still return false with a DIAG line.

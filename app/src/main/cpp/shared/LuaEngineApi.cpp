@@ -1,6 +1,7 @@
 // Stock model names and the CBaseModelInfo fields the phone can read.
 // DFF/TXD/COL replacement is not in this file.
 
+#include "DesktopLuaString.h"
 #include "LuaEngineApi.h"
 
 #include "LuaVMStub.h"
@@ -62,12 +63,12 @@ bool ReadBoundedModelId(lua_State* L, int& modelId, const char*& error) {
     return true;
 }
 
-// CScriptArgReader::ReadString (CScriptArgReader.h:607-647). A number is accepted,
-// then lua_strlen (lua_objlen) is 0, so the copied text is empty.
+// CScriptArgReader::ReadString (CScriptArgReader.h:607-647). A number is accepted
+// and read as its text (DesktopLuaString.h): engineSetModelLODDistance(1700, ...).
 bool ReadModelName(lua_State* L, std::string& name, const char*& error) {
     const int type = lua_type(L, 1);
     if (type == LUA_TNUMBER) {
-        name.clear();
+        name = DesktopNumberText(L, 1);
         return true;
     }
     if (type != LUA_TSTRING) {

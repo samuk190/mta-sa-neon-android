@@ -1,3 +1,4 @@
+#include "DesktopLuaString.h"
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
@@ -876,8 +877,7 @@ bool ReadByteArg(lua_State* L, const char* function, int index, unsigned char& o
 bool ReadScriptStringArg(lua_State* L, const char* function, int index, std::string& out) {
     const int type = lua_type(L, index);
     if (type == LUA_TNUMBER) {
-        (void)lua_rawlen(L, index);
-        out.clear();
+        out = DesktopNumberText(L, index);
         return true;
     }
     if (type != LUA_TSTRING) {
