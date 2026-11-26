@@ -322,6 +322,7 @@ public final class EngineHostActivity extends GTASA {
     public void onResume() {
         super.onResume();
         foreground = true;
+        refreshHardwareInput();
         // The launcher can change this while the separate engine process is paused.
         interfaceScalePercent = InterfaceScaleSettings.read(this);
         GameSettingsView.applyHudSettings(this, settingsHost);
@@ -505,6 +506,11 @@ public final class EngineHostActivity extends GTASA {
         chatInput.setOnEditorActionListener((v, action, event) -> {
             if (action == EditorInfo.IME_ACTION_SEND) {
                 submitChat();
+                return true;
+            }
+            if (action == EditorInfo.IME_NULL && event != null
+                    && (event.getKeyCode() == KeyEvent.KEYCODE_ENTER || event.getKeyCode() == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) submitChat();
                 return true;
             }
             return false;
@@ -743,6 +749,11 @@ public final class EngineHostActivity extends GTASA {
                 finishScriptField();
                 return true;
             }
+            if (action == EditorInfo.IME_NULL && !scriptMultiline && event != null
+                    && (event.getKeyCode() == KeyEvent.KEYCODE_ENTER || event.getKeyCode() == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) finishScriptField();
+                return true;
+            }
             return false;
         });
         scriptInput.addTextChangedListener(new TextWatcher() {
@@ -854,6 +865,10 @@ public final class EngineHostActivity extends GTASA {
     // This down event is the gesture. Lua then keeps the field focused, or the next
     // frame closes the keyboard if the tap was a button.
     private void onCursorTouch(int action, float x, float y) {
+        if (visible(mtaPause) || visible(settingsView) || isPlayerMapShowing()
+                || visible(downloadPanel) || (loadingView != null && loadingView.isActive())) {
+            return;
+        }
         nativeCursorEvent(action, x, y);
         // K is already set when the login form is open. This tap is the gesture Android
         // accepts. A tap before that line exists still queues the click, and the click
@@ -923,9 +938,8 @@ public final class EngineHostActivity extends GTASA {
         if (Build.VERSION.SDK_INT >= 30) chatInputBar.requestApplyInsets();
     }
 
-    private void submitChat() {
+    private void closeChatInput() {
         if (chatInput == null) return;
-        String typed = chatInput.getText() == null ? "" : chatInput.getText().toString().trim();
         chatInput.setText("");
         if (chatInputBar != null) chatInputBar.setVisibility(View.GONE);
         refreshHardwareInput();
@@ -935,6 +949,12 @@ public final class EngineHostActivity extends GTASA {
         chatInput.clearFocus();
         InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(chatInput.getWindowToken(), 0);
+    }
+
+    private void submitChat() {
+        if (chatInput == null) return;
+        String typed = chatInput.getText() == null ? "" : chatInput.getText().toString().trim();
+        closeChatInput();
         if (typed.isEmpty()) return;
         String command = typed.startsWith("/") ? typed.substring(1).trim() : "say " + typed;
         if (command.equalsIgnoreCase("disconnect")) {
@@ -951,12 +971,16 @@ public final class EngineHostActivity extends GTASA {
     private void showDownload(int percent, String label) {
         if (downloadPanel == null) return;
         downloadPanel.setVisibility(View.VISIBLE);
+        refreshHardwareInput();
         downloadBar.setProgress(Math.max(0, Math.min(100, percent)));
         downloadLabel.setText(label == null ? "" : label);
     }
 
     private void hideDownload() {
-        if (downloadPanel != null) downloadPanel.setVisibility(View.GONE);
+        if (downloadPanel != null) {
+            downloadPanel.setVisibility(View.GONE);
+            refreshHardwareInput();
+        }
     }
 
     private void appendChat(String line) {
@@ -982,7 +1006,10 @@ public final class EngineHostActivity extends GTASA {
             } else {
                 hideDownload();
                 // Never leave the loading screen over a disconnect (desktop ~CClientGame ends it first).
-                if (loadingView != null) loadingView.end();
+                if (loadingView != null) {
+                    loadingView.end();
+                    refreshHardwareInput();
+                }
                 setKeyListAvailable(false);
                 radarControlEnabled = true;
                 setRadarArea("");
@@ -1251,6 +1278,7 @@ public final class EngineHostActivity extends GTASA {
                 if (loadingView == null) return;
                 if (text.startsWith("E")) {
                     loadingView.end();
+                    refreshHardwareInput();
                     return;
                 }
                 String[] parts = text.split("\\|", 5);
@@ -1268,6 +1296,7 @@ public final class EngineHostActivity extends GTASA {
                 if ("B".equals(parts[0]) && !loadingView.isActive()) loadingView.begin(status, fill, segStart, segEnd);
                 else loadingView.update(status, fill, segStart, segEnd);
                 if (downloadPanel != null) hideDownload();
+                refreshHardwareInput();
                 return;
             }
             if (kind == 3) {
@@ -1910,11 +1939,14 @@ public final class EngineHostActivity extends GTASA {
         if (!event.isFromSource(InputDevice.SOURCE_MOUSE)) return super.onTouchEvent(event);
         if (isHardwareGameplayBlocked() || !nativeHardwareMouseReady() || view == null) return false;
         // Capture only on a gameplay click that no Android UI view handled.
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
             pendingCaptureButtons = event.getButtonState();
-            view.requestFocus();
-            view.requestPointerCapture();
-        } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+            if (action == MotionEvent.ACTION_DOWN) {
+                view.requestFocus();
+                view.requestPointerCapture();
+            }
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             pendingCaptureButtons = 0;
         }
         return true;
@@ -1930,8 +1962,7 @@ public final class EngineHostActivity extends GTASA {
             releaseHardwareMouse();
             return true;
         }
-        int buttons = event.getButtonState();
-        if (action == MotionEvent.ACTION_UP) buttons &= ~MotionEvent.BUTTON_PRIMARY;
+        int buttons = action == MotionEvent.ACTION_UP ? 0 : event.getButtonState();
         setMouseButtons(buttons);
         float x = 0, y = 0, wheel = 0;
         if (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_HOVER_MOVE) {
@@ -1964,7 +1995,14 @@ public final class EngineHostActivity extends GTASA {
         boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
         boolean up = event.getAction() == KeyEvent.ACTION_UP;
         if (!down && !up) return super.dispatchKeyEvent(event);
-        if (visible(chatInputBar) || scriptKeyboardShown) return super.dispatchKeyEvent(event);
+        if (visible(chatInputBar)) {
+            if (code == KeyEvent.KEYCODE_ESCAPE) {
+                if (down && event.getRepeatCount() == 0) closeChatInput();
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+        if (scriptKeyboardShown) return super.dispatchKeyEvent(event);
         if (code == KeyEvent.KEYCODE_ESCAPE) {
             if (down && event.getRepeatCount() == 0) onKeyDown(code, event);
             return true;
