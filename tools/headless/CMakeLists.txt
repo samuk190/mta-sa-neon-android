@@ -235,6 +235,13 @@ add_executable(neon_ped_query_tests "${HEADLESS_DIR}/ped_query_tests.cpp" $<TARG
 add_executable(neon_spatial_tests "${HEADLESS_DIR}/spatial_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_join_codec_tests "${HEADLESS_DIR}/../../tests/test_join_codec.cpp"
     $<FILTER:$<TARGET_OBJECTS:neon_core>,EXCLUDE,NeonJoinProtocol[.]cpp[.]o$>)
+# Only the join test executable searches this directory for the PC module.
+add_library(neon_pc_error_module SHARED EXCLUDE_FROM_ALL "${HEADLESS_DIR}/../../tests/pc_error_module.cpp")
+target_include_directories(neon_pc_error_module PRIVATE "${NATIVE_DIR}")
+set_target_properties(neon_pc_error_module PROPERTIES OUTPUT_NAME saonline_netemu
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pc-error-fixture")
+add_dependencies(neon_join_codec_tests neon_pc_error_module)
+set_property(TARGET neon_join_codec_tests APPEND PROPERTY BUILD_RPATH "$<TARGET_FILE_DIR:neon_pc_error_module>")
 target_link_options(neon_dx_conversion_tests PRIVATE
     "-Wl,--wrap=eglCreatePbufferSurface" "-Wl,--wrap=eglMakeCurrent")
 
