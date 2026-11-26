@@ -1,5 +1,6 @@
 #include "../shared/DebugFlags.h"
 #include "GameEngine.h"
+#include "GameImports.h"
 #include "WorldObjects.h"
 #include "GameTasks.h"
 #include "VehiclePaint.h"
@@ -69,16 +70,10 @@ using RequestModelFn = void (*)(int, int);
 static RequestModelFn g_requestModel = nullptr;
 using HasModelFn = bool (*)(int);
 static HasModelFn g_hasModel = nullptr;
-using CivilianCtorFn = void (*)(void*, int, unsigned);
-static CivilianCtorFn g_civilianCtor = nullptr;
-using AddPedFn = void* (*)(int, unsigned, const Vec3*, bool);
-static AddPedFn g_addPed = nullptr;
 using WorldAddFn = void (*)(void*);
 static WorldAddFn g_worldAdd = nullptr;
 using SetHeadingFn = void (*)(void*, float);
 static SetHeadingFn g_setHeading = nullptr;
-static float* g_pedDensity = nullptr;
-static void* g_managePopulation = nullptr;
 static std::atomic<float> g_poseX{1754.f};
 static std::atomic<float> g_poseY{-1894.f};
 static std::atomic<float> g_poseZ{14.f};
@@ -155,12 +150,8 @@ static void ResolvePlayerFns() {
     g_findCoors = reinterpret_cast<FindPlayerCoorsFn>(dlsym(handle, "_Z15FindPlayerCoorsi"));
     g_requestModel = reinterpret_cast<RequestModelFn>(dlsym(handle, "_ZN10CStreaming12RequestModelEii"));
     g_hasModel = reinterpret_cast<HasModelFn>(dlsym(handle, "_ZN10CStreaming14HasModelLoadedEi"));
-    g_civilianCtor = reinterpret_cast<CivilianCtorFn>(dlsym(handle, "_ZN12CCivilianPedC1E8ePedTypej"));
-    g_addPed = reinterpret_cast<AddPedFn>(dlsym(handle, "_ZN11CPopulation6AddPedE8ePedTypejRK7CVectorb"));
     g_worldAdd = reinterpret_cast<WorldAddFn>(dlsym(handle, "_ZN6CWorld3AddEP7CEntity"));
     g_setHeading = reinterpret_cast<SetHeadingFn>(dlsym(handle, "_ZN10CPlaceable10SetHeadingEf"));
-    g_pedDensity = reinterpret_cast<float*>(dlsym(handle, "_ZN11CPopulation20PedDensityMultiplierE"));
-    g_managePopulation = dlsym(handle, "_ZN11CPopulation16ManagePopulationEv");
     g_teleport = reinterpret_cast<TeleportFn>(dlsym(handle, "_ZN4CPed8TeleportE7CVectorh"));
     g_loadSceneCollision = reinterpret_cast<LoadSceneCollisionFn>(
         dlsym(handle, "_ZN10CStreaming18LoadSceneCollisionERK7CVector"));
@@ -4736,8 +4727,6 @@ static void ApplyRemotePeds() {
     WatchLocalVehicle();
 }
 
-extern "C" void WorldRPG_NoAmbientPeds() {}
-
 // Registration wardrobe preview. Lua runs on mta-net; the body, camera, clock and
 // clothes run here on the game thread. One new ped body per call (skill cap).
 namespace {
@@ -5632,7 +5621,6 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         ++depth;
         Projectiles::Pump(ResolveProjectileEntity);
         GameTasks::Service();
-        if (g_pedDensity) *g_pedDensity = 0.f;
         ApplyLocalPedRpcs();
         PlacePlayer();
         SampleLocalPose();
@@ -5913,6 +5901,38 @@ static void ServerSessionGameState() {
     }
 }
 
+// Written by the network pulse, sampled only at the GTA ambient generators.
+static std::atomic<bool> g_allowAmbientPeds{false};
+static std::atomic<bool> g_allowAmbientVehicles{false};
+static void (*g_updatePedPopulation)(bool) = nullptr;
+static void (*g_managePopulation)() = nullptr;
+static void (*g_generateRandomCars)() = nullptr;
+static void (*g_processCarGenerators)() = nullptr;
+
+void SetAmbientTrafficEnabled(bool pedestrians, bool vehicles) {
+    g_allowAmbientPeds.store(pedestrians, std::memory_order_relaxed);
+    g_allowAmbientVehicles.store(vehicles, std::memory_order_relaxed);
+}
+
+static void UpdatePedPopulation(bool generate) {
+    if (g_allowAmbientPeds.load(std::memory_order_relaxed)) {
+        g_updatePedPopulation(generate);
+    } else {
+        // Desktop CMultiplayerSA.cpp:1735 stops Update after ManagePopulation.
+        // Stock Update(false) still spawns the startup crowd. Run only management
+        // so existing random peds can despawn and streamed props retain collision.
+        g_managePopulation();
+    }
+}
+
+static void GenerateRandomCars() {
+    if (g_allowAmbientVehicles.load(std::memory_order_relaxed)) g_generateRandomCars();
+}
+
+static void ProcessCarGenerators() {
+    if (g_allowAmbientVehicles.load(std::memory_order_relaxed)) g_processCarGenerators();
+}
+
 bool InstallServerSessionHook() {
     if (g_originalDoGameState) return true;
     void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
@@ -5921,33 +5941,32 @@ bool InstallServerSessionHook() {
     // libGTASA 2.10 arm64 DoGameState at 0x70a208. Its fourth instruction
     // is PC-relative ADRP, so do not copy this prologue into a trampoline.
     constexpr std::array<uint32_t, 4> expected{0xa9be4ff4, 0xa9017bfd, 0x910043fd, 0xf0000a33};
-    Dl_info library{};
-    if (!fn || !dladdr(fn, &library) || std::memcmp(fn, expected.data(), sizeof(expected)) != 0) {
+    if (!fn || std::memcmp(fn, expected.data(), sizeof(expected)) != 0) {
         ENGINE_LOGE("DIAG server session: missing or unverified DoGameState; game-thread dispatch not installed");
         dlclose(handle);
         return false;
     }
-    // readelf -r: R_AARCH64_JUMP_SLOT at 0x847f80 names _Z11DoGameStatev.
-    // MainGameFunc calls it via PLT 0x22dda0 at 0x70ac9c. Replace the GOT
-    // pointer before any GTA thread exists, preserving the original function.
-    auto* slot = reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(library.dli_fbase) + 0x847f80);
-    const long pageSize = sysconf(_SC_PAGESIZE);
-    if (*slot != fn || pageSize <= 0) {
-        ENGINE_LOGE("DIAG server session: DoGameState GOT entry does not match its symbol");
+    // JUMP_SLOTs in libGTASA 2.10 arm64. CGame::Process enters the population,
+    // random traffic and parked car generators through these slots. The original
+    // entries remain callable, including GenerateRandomCars' PC-relative prologue.
+    std::array<Import, 4> imports{{
+        {"_Z11DoGameStatev", 0x847f80, reinterpret_cast<void*>(&ServerSessionGameState)},
+        {"_ZN11CPopulation6UpdateEb", 0x842228, reinterpret_cast<void*>(&UpdatePedPopulation)},
+        {"_ZN8CCarCtrl18GenerateRandomCarsEv", 0x83efd0, reinterpret_cast<void*>(&GenerateRandomCars)},
+        {"_ZN17CTheCarGenerators7ProcessEv", 0x83ff00, reinterpret_cast<void*>(&ProcessCarGenerators)},
+    }};
+    g_managePopulation = reinterpret_cast<decltype(g_managePopulation)>(
+        dlsym(handle, "_ZN11CPopulation16ManagePopulationEv"));
+    if (!g_managePopulation || !BindImports(handle, imports)) {
+        ENGINE_LOGE("DIAG server session: could not install the game state and ambient traffic hooks");
         dlclose(handle);
         return false;
     }
-    void* page = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(slot) & ~(static_cast<uintptr_t>(pageSize) - 1));
-    if (mprotect(page, pageSize, PROT_READ | PROT_WRITE) != 0) {
-        ENGINE_LOGE("DIAG server session: cannot write DoGameState GOT entry");
-        dlclose(handle);
-        return false;
-    }
+    g_originalDoGameState = reinterpret_cast<decltype(g_originalDoGameState)>(imports[0].original);
+    g_updatePedPopulation = reinterpret_cast<decltype(g_updatePedPopulation)>(imports[1].original);
+    g_generateRandomCars = reinterpret_cast<decltype(g_generateRandomCars)>(imports[2].original);
+    g_processCarGenerators = reinterpret_cast<decltype(g_processCarGenerators)>(imports[3].original);
     VehiclePaint::Install(handle);
-    g_originalDoGameState = reinterpret_cast<void (*)()>(fn);
-    __atomic_store_n(slot, reinterpret_cast<void*>(&ServerSessionGameState), __ATOMIC_RELEASE);
-    if (mprotect(page, pageSize, PROT_READ) != 0)
-        ENGINE_LOGE("DIAG server session: cannot restore DoGameState GOT protection");
     dlclose(handle);
     ENGINE_LOGI("Server session dispatcher installed before GTA threads (DoGameState)");
     return true;
@@ -6047,17 +6066,6 @@ static bool BeginServerSessionOnGameThread() {
         InstallWeaponAimHooks();
         if (!InstallLocalBulletFireHook())
             ENGINE_LOGE("Local bullet sync (PLAYER_BULLETSYNC) disabled: CWeapon::Fire hook missing");
-        ENGINE_LOGI("Ped symbols add=%p ctor=%p heading=%p density=%p manage=%p",
-            reinterpret_cast<void*>(g_addPed), reinterpret_cast<void*>(g_civilianCtor),
-            reinterpret_cast<void*>(g_setHeading), static_cast<void*>(g_pedDensity), g_managePopulation);
-        if (g_managePopulation) {
-            const auto population = patcher.installHook(reinterpret_cast<uintptr_t>(g_managePopulation),
-                reinterpret_cast<uintptr_t>(&WorldRPG_NoAmbientPeds));
-            if (population.success) ENGINE_LOGI("Stopped local ped population");
-            else ENGINE_LOGE("Could not stop local ped population: %s", population.errorMessage.c_str());
-        } else {
-            ENGINE_LOGE("CPopulation::ManagePopulation was not exported");
-        }
         DisableEntryExits();
         InstallGangRegionUpdateSkip();
         InstallRenderQueueFlush(base);
@@ -7017,6 +7025,7 @@ void FinishLocalShot(uint64_t serial) {
 #else
 bool InstallServerSessionHook() { return false; }
 bool BeginServerSession() { return false; }
+void SetAmbientTrafficEnabled(bool, bool) {}
 bool ServerSessionLive() { return false; }
 bool LocalPlacementPending() { return false; }
 void ApplyServerSpawn(float, float, float) {}

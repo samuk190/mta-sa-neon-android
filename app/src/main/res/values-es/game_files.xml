@@ -1,0 +1,22 @@
+<resources>
+    <string name="files_title">Archivos del juego</string>
+    <string name="files_transfer">Transferir</string>
+    <string name="files_search">Nombre o carpeta</string>
+    <string name="files_checking">Verificando los archivos del juego…</string>
+    <string name="files_verified">Descargado y verificado</string>
+    <string name="files_pending">Transferencia necesaria</string>
+    <string name="files_no_match">No se encontraron archivos ni carpetas coincidentes</string>
+    <string name="files_unavailable">No se pudieron verificar los archivos del juego. Actualiza la lista para volver a intentarlo.</string>
+    <string name="files_parent">Subir una carpeta</string>
+    <string name="files_bad_folder">Selecciona la carpeta que contiene los archivos extraídos de GTA Mobile 2.10.</string>
+    <string name="files_summary">%1$s · %2$s</string>
+    <string name="files_local_summary">Referencia local · %1$s</string>
+    <plurals name="files_missing">
+        <item quantity="one">%d archivo pendiente</item>
+        <item quantity="other">%d archivos pendientes</item>
+    </plurals>
+    <plurals name="files_items">
+        <item quantity="one">%d elemento</item>
+        <item quantity="other">%d elementos</item>
+    </plurals>
+</resources>

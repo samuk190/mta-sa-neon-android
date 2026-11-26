@@ -21,4 +21,5 @@
     <string name="browser_languages">Sprachen</string>
     <string name="browser_no_recent">Keine kürzlich gespielten Server</string>
     <string name="browser_no_match">Keine passenden Server</string>
+    <string name="browser_android_supported">Android-kompatibel</string>
 </resources>

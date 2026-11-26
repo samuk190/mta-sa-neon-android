@@ -12,7 +12,7 @@ internal object GameAssetManifest {
     const val MAX_BYTES = 1024 * 1024
     const val MAX_FILES = 4096
     val requiredFiles = setOf("data/default.dat", "data/gta.dat", "data/handling.cfg", "texdb/gta3.img", "texdb/menu/menu.pvr.dat")
-    private const val MAX_FILE_BYTES = 4L * 1024 * 1024 * 1024
+    const val MAX_FILE_BYTES = 4L * 1024 * 1024 * 1024
     private val pathPart = Regex("[A-Za-z0-9_ .()\\-]{1,255}")
     private val sha256 = Regex("[0-9a-f]{64}")
     private val revision = Regex("[0-9a-f]{40}")

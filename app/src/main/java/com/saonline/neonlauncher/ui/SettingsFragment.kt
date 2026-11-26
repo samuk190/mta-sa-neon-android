@@ -1,17 +1,20 @@
 package com.saonline.neonlauncher.ui
 
 import android.content.Intent
-import android.graphics.Rect
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.saonline.neonlauncher.BuildConfig
 import com.saonline.neonlauncher.R
@@ -22,7 +25,6 @@ import com.saonline.neonlauncher.game.InterfaceScale
 import com.saonline.neonlauncher.game.InterfaceScaleSettings
 import com.saonline.neonlauncher.utils.NativeAssetBridge
 import com.saonline.neonlauncher.utils.PreferencesManager
-import kotlinx.coroutines.launch
 import java.util.Locale
 
 class SettingsFragment : Fragment() {
@@ -32,7 +34,6 @@ class SettingsFragment : Fragment() {
 
     private lateinit var prefsManager: PreferencesManager
     private lateinit var nativeAssetBridge: NativeAssetBridge
-    private var syncingAssets = false
     private var identityUi: NeonIdentityUi? = null
     private var savedInterfaceScale = InterfaceScale.DEFAULT_PERCENT
 
@@ -55,6 +56,7 @@ class SettingsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        setupLayout()
 
         prefsManager = PreferencesManager(requireContext())
         nativeAssetBridge = NativeAssetBridge(requireContext())
@@ -62,7 +64,7 @@ class SettingsFragment : Fragment() {
         binding.btnNeonAccount.setOnClickListener {
             val identity = identityUi ?: return@setOnClickListener
             if (identity.isSignedIn()) {
-                MaterialAlertDialogBuilder(requireContext())
+                MaterialAlertDialogBuilder(binding.root.context)
                     .setTitle(R.string.neon_account_sign_out)
                     .setMessage(R.string.neon_account_sign_out_confirm)
                     .setPositiveButton(R.string.neon_account_sign_out) { _, _ ->
@@ -94,8 +96,33 @@ class SettingsFragment : Fragment() {
             binding.sliderInterfaceScale.value = InterfaceScale.DEFAULT_PERCENT.toFloat()
         }
         setupSaveButton()
-        setupAssetSyncButton()
+        binding.btnSyncAssets.setOnClickListener { (activity as? MainActivity)?.openGameFilesForTransfer() }
         setupEngineTestButton()
+    }
+
+    private fun setupLayout() {
+        val gutter = resources.getDimensionPixelSize(R.dimen.screen_padding)
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { content, insets ->
+            val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+            content.updatePadding(left = maxOf(gutter, cutout.left), right = maxOf(gutter, cutout.right))
+            insets
+        }
+        // Use the available width inside the cutout and make room for larger text.
+        binding.settingsScroll.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+            val widthDp = (right - left) / resources.displayMetrics.density
+            val wide = widthDp >= 600 && widthDp / resources.configuration.fontScale >= 540
+            val direction = if (wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            if (binding.settingsColumns.orientation != direction) {
+                binding.settingsColumns.orientation = direction
+                listOf(binding.gameColumn, binding.launcherColumn).forEach { column ->
+                    column.updateLayoutParams<LinearLayout.LayoutParams> {
+                        width = if (wide) 0 else ViewGroup.LayoutParams.MATCH_PARENT
+                        weight = if (wide) 1f else 0f
+                        marginStart = if (wide && column == binding.launcherColumn) gutter / 2 else 0
+                    }
+                }
+            }
+        }
     }
 
     private fun setupLanguagePicker() {
@@ -116,7 +143,7 @@ class SettingsFragment : Fragment() {
         val label = languages.getOrNull(selected)?.second ?: locale?.getDisplayName(locale).orEmpty()
         binding.btnLauncherLanguage.text = getString(R.string.language_selected, label)
         binding.btnLauncherLanguage.setOnClickListener {
-            MaterialAlertDialogBuilder(requireContext())
+            MaterialAlertDialogBuilder(binding.root.context)
                 .setTitle(R.string.language)
                 .setSingleChoiceItems(languages.map { it.second }.toTypedArray(), selected) { dialog, index ->
                     dialog.dismiss()
@@ -174,90 +201,10 @@ class SettingsFragment : Fragment() {
         }
     }
 
-    private fun setupAssetSyncButton() {
-        binding.btnSyncAssets.setOnClickListener { syncGameAssets() }
-    }
-
-    internal fun syncGameAssets() {
-        val viewBinding = _binding ?: return
-        val status = viewBinding.assetStatus
-        status.post {
-            status.requestRectangleOnScreen(Rect(0, 0, status.width, status.height + viewBinding.btnSyncAssets.height))
-        }
-        if (syncingAssets) return
-        viewBinding.btnSyncAssets.isEnabled = false
-        syncingAssets = true
-        updateEngineTestButton()
-        showAssetProgress(getString(R.string.downloading_assets), null)
-        viewLifecycleOwner.lifecycleScope.launch {
-            try {
-                nativeAssetBridge.syncAssets().collect { state ->
-                    when (state) {
-                        NativeAssetBridge.DownloadState.FetchingManifest ->
-                            showAssetProgress(getString(R.string.assets_fetching_manifest), null)
-                        is NativeAssetBridge.DownloadState.Verifying ->
-                            showAssetProgress(
-                                getString(R.string.assets_verifying, state.current, state.total),
-                                if (state.total > 0) state.current * 100 / state.total else null
-                            )
-                        is NativeAssetBridge.DownloadState.Syncing ->
-                            showAssetProgress(getString(R.string.assets_syncing, state.current, state.total), state.percent)
-                        is NativeAssetBridge.DownloadState.Complete -> {
-                            val message = resources.getQuantityString(R.plurals.assets_verified, state.fileCount, state.fileCount)
-                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                        }
-                        is NativeAssetBridge.DownloadState.Error ->
-                            Toast.makeText(context, assetSyncError(state), Toast.LENGTH_LONG).show()
-                    }
-                }
-            } finally {
-                _binding?.let { b ->
-                    b.assetStatus.visibility = View.GONE
-                    b.assetProgress.visibility = View.GONE
-                    b.btnSyncAssets.isEnabled = true
-                }
-                syncingAssets = false
-                updateEngineTestButton()
-            }
-        }
-    }
-
-    private fun assetSyncError(error: NativeAssetBridge.DownloadState.Error): String {
-        val message = when (error.reason) {
-            NativeAssetBridge.SyncFailure.ALREADY_RUNNING -> R.string.assets_already_syncing
-            NativeAssetBridge.SyncFailure.LOCAL_FILES_MISSING -> R.string.assets_local_missing
-            NativeAssetBridge.SyncFailure.INSUFFICIENT_SPACE -> R.string.assets_insufficient_space
-            NativeAssetBridge.SyncFailure.STORAGE_UNAVAILABLE -> R.string.assets_storage_unavailable
-            NativeAssetBridge.SyncFailure.INVALID_MANIFEST -> R.string.assets_invalid_manifest
-            NativeAssetBridge.SyncFailure.FILE_INVALID -> R.string.assets_file_invalid
-            NativeAssetBridge.SyncFailure.HTTP_ERROR -> R.string.assets_http_error
-            NativeAssetBridge.SyncFailure.IO_ERROR -> R.string.assets_sync_failed
-        }
-        return if (error.detail == null) getString(message) else getString(message, error.detail)
-    }
-
-    /** [percent] null shows an indeterminate bar. */
-    private fun showAssetProgress(status: String, percent: Int?) {
-        val b = _binding ?: return
-        b.assetStatus.visibility = View.VISIBLE
-        b.assetStatus.text = status
-        b.assetProgress.visibility = View.VISIBLE
-        if (percent == null) {
-            if (!b.assetProgress.isIndeterminate) {
-                b.assetProgress.visibility = View.INVISIBLE
-                b.assetProgress.isIndeterminate = true
-                b.assetProgress.visibility = View.VISIBLE
-            }
-        } else {
-            b.assetProgress.isIndeterminate = false
-            b.assetProgress.setProgressCompat(percent.coerceIn(0, 100), true)
-        }
-    }
-
     private fun setupEngineTestButton() {
         binding.btnTestGta.visibility = if (BuildConfig.DEBUG) View.VISIBLE else View.GONE
         binding.btnTestGta.setOnClickListener {
-            if (!BuildConfig.DEBUG || syncingAssets) return@setOnClickListener
+            if (!BuildConfig.DEBUG || (activity as? MainActivity)?.isTransferringGameFiles == true) return@setOnClickListener
             if (EngineHostActivity.findReadyGameDirectory(requireContext(), nativeAssetBridge) == null) {
                 (activity as? MainActivity)?.showGameAssetsSetup()
                 updateEngineTestButton()
@@ -272,9 +219,9 @@ class SettingsFragment : Fragment() {
         updateEngineTestButton()
     }
 
-    private fun updateEngineTestButton() {
+    internal fun updateEngineTestButton() {
         val viewBinding = _binding ?: return
-        viewBinding.btnTestGta.isEnabled = BuildConfig.DEBUG && !syncingAssets &&
+        viewBinding.btnTestGta.isEnabled = BuildConfig.DEBUG && (activity as? MainActivity)?.isTransferringGameFiles != true &&
             ::nativeAssetBridge.isInitialized &&
             EngineHostActivity.findReadyGameDirectory(requireContext(), nativeAssetBridge) != null
     }

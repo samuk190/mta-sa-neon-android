@@ -35,6 +35,7 @@ class ServerListAdapter(
             b.tvServerName.text = server.name
             b.tvGameMode.text = modeLine(server).ifEmpty { server.getKey() }
             b.ivLock.isVisible = server.passworded
+            b.androidBadge.isVisible = server.supportsAndroid
             ServerLogo.bind(b.ivLogo, server.name, server.logoUrl)
             val wide = ctx.resources.configuration.screenWidthDp >= 900
             b.countries.isVisible = wide && server.countries.isNotEmpty()

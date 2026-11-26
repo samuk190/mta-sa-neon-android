@@ -49,7 +49,8 @@ object ServerQuery {
         val buildNumber: Int,
         val httpPort: Int,
         val playerNames: List<String>,
-        val pingMs: Int
+        val pingMs: Int,
+        val supportsAndroid: Boolean = false
     )
 
     /** Null when the server did not answer or the reply was not a valid EYE2 packet. */
@@ -162,6 +163,9 @@ object ServerQuery {
         // parts[4] ping status is checked by the closed net module on desktop (UpdatePingStatus); not ported.
         val httpPort = parts.getOrNull(7)?.let(::ascii)?.toIntOrNull()?.takeIf { it in 0..0xFFFF } ?: 0
 
+        // Neon appends a capability after the HTTP port when the server advertises Android support.
+        val supportsAndroid = parts.getOrNull(8)?.let(::ascii) == "android=1"
+
         val names = ArrayList<String>()
         while (r.i < len) {
             val raw = r.readString() ?: continue
@@ -174,7 +178,7 @@ object ServerQuery {
             gameName = ascii(game), serverName = ascii(serverName), gameType = ascii(gameType),
             mapName = mapName, version = ascii(version), passworded = passworded, serials = serials,
             players = players, maxPlayers = maxPlayers, buildType = buildType, buildNumber = buildNumber,
-            httpPort = httpPort, playerNames = names, pingMs = ping
+            httpPort = httpPort, playerNames = names, pingMs = ping, supportsAndroid = supportsAndroid
         )
     }
 

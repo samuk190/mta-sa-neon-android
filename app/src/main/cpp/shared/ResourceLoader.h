@@ -110,6 +110,13 @@ bool CopyResourceByNet(uint16_t netId, ResourceView& out);
 bool CopyCallerResource(uint16_t netId, uint32_t generation, const std::string& name, ResourceView& out);
 bool CopyResourceByGeneration(uint32_t generation, ResourceView& out);
 
+// The ambient GTA generators have independent owners on the current server.
+struct AmbientTraffic {
+    bool pedestrians = false;
+    bool vehicles = false;
+};
+AmbientTraffic RunningAmbientTraffic(bool joined);
+
 // RESOURCE_STOP marks the running start with this net id. FinishStop drops that
 // generation only, so a newer start that reused the id stays.
 void FinishStop(uint16_t netId, uint32_t generation);

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:fillViewport="true">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:focusableInTouchMode="true">
+        <TextView
+            style="@style/BrowserText.Title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="@dimen/card_padding"
+            android:paddingTop="@dimen/card_padding"
+            android:drawableStart="@drawable/ic_dns"
+            android:drawableTint="@color/browser_amber"
+            android:drawablePadding="10dp"
+            android:gravity="center_vertical"
+            android:text="@string/browser_quick" />
+
+        <include
+            android:id="@+id/addressFields"
+            layout="@layout/dialog_add_favorite" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/browser_line" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="end|center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="@dimen/card_padding"
+            android:paddingVertical="4dp">
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cancel"
+                style="@style/BrowserButton.Secondary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/cancel" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/connect"
+                style="@style/BrowserButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/browser_connect"
+                app:icon="@drawable/ic_play"
+                app:iconGravity="textStart" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

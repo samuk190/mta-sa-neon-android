@@ -21,7 +21,7 @@ Por padrão, o launcher segue as preferências de idioma do Android e usa inglê
 ## Instalação e primeiros passos
 
 1. Baixe o APK na [página oficial de download](https://saonlinemobile.web.app/pt/download), instale e abra o launcher uma vez para criar a pasta do aplicativo.
-2. Se o APK foi compilado com `CDN_ROOT_URL`, abra **Configurações → Sincronizar arquivos do jogo**. O launcher verifica os downloads e instala os dados e as três bibliotecas ARM64 em armazenamento privado. Nas versões sem CDN, siga a instalação manual abaixo.
+2. Abra **Arquivos do jogo → Transferir**. Com `CDN_ROOT_URL` configurado, o launcher baixa e verifica os arquivos do servidor. Sem servidor de arquivos, escolha a pasta que contém os arquivos extraídos do GTA Mobile 2.10. A lista mostra quantos arquivos faltam ou precisam de reparo em cada pasta. A pasta fica verde quando todos os seus arquivos passam na verificação.
 3. Em **Servidores**, escolha um servidor, toque em **Entrar**, informe seu apelido e toque em **Jogar**. Conecte sua conta em **Configurações → Entrar com Discord** se o servidor exigir login no SA:O.
 
 O identificador do aplicativo é `com.saonline.neonlauncher`. A instalação usa uma pasta e uma chave próprias, inclusive em aparelhos com versões antigas do launcher World RPG.

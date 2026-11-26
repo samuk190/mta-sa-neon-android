@@ -59,8 +59,8 @@ android {
         applicationId = "com.saonline.neonlauncher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.0-alpha.2"
+        versionCode = 6
+        versionName = "1.0.0-alpha.6"
 
         resValue("string", "app_name", launcherTitle)
 

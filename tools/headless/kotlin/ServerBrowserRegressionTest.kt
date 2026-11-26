@@ -34,6 +34,38 @@ private fun invalid(bytes: ByteArray) {
 
 private fun List<ServerBrowserService.BrowserState>.lastServers() = filterIsInstance<ServerBrowserService.BrowserState.Success>().last().servers
 
+private fun queryPacket(map: String, gamePort: Int = 22003) = ByteArrayOutputStream().apply {
+    write("EYE2".toByteArray())
+    for (field in listOf("mta", gamePort.toString(), "Loopback", "Race", map, "1.7")) {
+        val encoded = field.toByteArray()
+        write(encoded.size + 1)
+        write(encoded)
+    }
+    write(byteArrayOf(0, 0, 1, 8))
+    write(4)
+    write("CJ1".toByteArray())
+}.toByteArray()
+
+private fun checkAndroidCapability() {
+    val legacyFields = listOf("Map", "1/8", "1", "7", "", "", "20", "22005")
+    fun parse(fields: List<String>): ServerQuery.Result {
+        val packet = queryPacket(fields.joinToString("\u0000"))
+        return checkNotNull(ServerQuery.parse(packet, packet.size, 10))
+    }
+    val supported = parse(legacyFields + "android=1")
+    check(supported.supportsAndroid && supported.mapName == "Map" && supported.httpPort == 22005)
+    check(supported.version == "1.7" && supported.players == 1 && supported.playerNames == listOf("CJ1"))
+    val favorite = checkNotNull(ServerInfo.fromFavoriteKey("127.0.0.1:22003"))
+    check(!favorite.supportsAndroid)
+    val online = favorite.withQuery(supported)
+    check(online.isFavorite && online.supportsAndroid)
+    check(!online.withQuery(null).supportsAndroid)
+    for (fields in listOf(listOf("android=1"), legacyFields, legacyFields + "android=0",
+            legacyFields + "android=10", legacyFields + listOf("", "android=1"))) {
+        check(!online.withQuery(parse(fields)).supportsAndroid)
+    }
+}
+
 private suspend fun checkLiveQuery() = coroutineScope {
     // Some development hosts forward 127.0.0.1 to another network namespace.
     val local = InetAddress.getByName(System.getenv("NEON_TEST_UDP_ADDRESS") ?: "127.0.0.1")
@@ -44,18 +76,12 @@ private suspend fun checkLiveQuery() = coroutineScope {
             val request = DatagramPacket(ByteArray(8), 8)
             server.receive(request)
             check(request.length == 1 && request.data[0] == 'r'.code.toByte())
-            val reply = ByteArrayOutputStream().apply {
-                write("EYE2".toByteArray())
-                for (field in listOf("mta", gamePort.toString(), "Loopback", "Race", "Map", "1.7")) {
-                    val encoded = field.toByteArray()
-                    write(encoded.size + 1)
-                    write(encoded)
-                }
-                write(byteArrayOf(0, 0, 1, 8))
-            }.toByteArray()
+            val map = listOf("Map", "1/8", "1", "7", "", "", "20", "22005", "android=1").joinToString("\u0000")
+            val reply = queryPacket(map, gamePort)
             server.send(DatagramPacket(reply, reply.size, request.socketAddress))
         }
-        check(withTimeout(4000) { ServerQuery.query(local.hostAddress, gamePort) }?.serverName == "Loopback")
+        val reply = checkNotNull(withTimeout(4000) { ServerQuery.query(local.hostAddress, gamePort) })
+        check(reply.serverName == "Loopback" && reply.supportsAndroid)
         responder.await()
 
         val pending = async { ServerQuery.query(local.hostAddress, gamePort) }
@@ -132,6 +158,7 @@ fun main(args: Array<String>) = runBlocking {
     ).toList().lastServers()
     check(favoriteFallback.size == 2)
     check(favoriteFallback.single { it.isFavorite }.getKey() == "192.0.2.5:22003")
+    checkAndroidCapability()
     checkLiveQuery()
 
     val active = AtomicInteger()

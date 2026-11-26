@@ -6,10 +6,24 @@
     android:orientation="vertical"
     android:background="@color/browser_canvas">
     <FrameLayout
-        android:id="@+id/fragmentContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
+        <ImageView
+            android:id="@+id/wallpaper"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:importantForAccessibility="no"
+            android:scaleType="centerCrop" />
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/browser_shade" />
+        <FrameLayout
+            android:id="@+id/fragmentContainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
 
     <View
         android:layout_width="match_parent"
@@ -38,6 +52,14 @@
                 android:id="@+id/nav_servers"
                 style="@style/BrowserText.Tab"
                 android:text="@string/browser_browse" />
+
+            <TextView
+                android:id="@+id/nav_files"
+                style="@style/BrowserText.Tab"
+                android:drawableStart="@drawable/ic_game_folder"
+                android:drawableTint="@color/browser_tab_text"
+                android:drawablePadding="4dp"
+                android:text="@string/files_title" />
 
             <TextView
                 android:id="@+id/nav_settings"

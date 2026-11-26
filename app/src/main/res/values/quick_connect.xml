@@ -1,0 +1,14 @@
+<resources>
+    <dimen name="quick_connect_max_width">520dp</dimen>
+    <style name="Theme.WorldRPGNeon.QuickConnect" parent="Theme.WorldRPGNeon.Join">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowBackground">@drawable/browser_dialog_panel</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.60</item>
+        <item name="android:windowSoftInputMode">adjustResize|stateAlwaysHidden</item>
+        <item name="colorOutline">@color/browser_muted</item>
+        <item name="textInputStyle">@style/Widget.Material3.TextInputLayout.OutlinedBox</item>
+        <item name="textAppearanceBodyLarge">@style/BrowserText</item>
+        <item name="textAppearanceBodySmall">@style/BrowserText.Small</item>
+    </style>
+</resources>

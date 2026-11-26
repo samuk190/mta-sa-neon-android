@@ -123,7 +123,7 @@ Entry* FindByNetId(uint16_t netId) {
     return nullptr;
 }
 
-Entry* FindByName(const std::string& name) {
+Entry* FindByName(std::string_view name) {
     for (auto it = g_entries.rbegin(); it != g_entries.rend(); ++it) {
         if (it->name == name) return &*it;
     }
@@ -415,6 +415,16 @@ bool CopyResource(const std::string& name, ResourceView& out) {
         return true;
     }
     return false;
+}
+
+AmbientTraffic RunningAmbientTraffic(bool joined) {
+    if (!joined) return {};
+    std::lock_guard lock(g_mutex);
+    const auto running = [](const char* name) {
+        const Entry* entry = FindByName(name);
+        return entry && entry->started && !entry->stopping && entry->failure.empty();
+    };
+    return {running("native-ped-traffic"), running("native-vehicle-traffic")};
 }
 
 bool CopyResourceByGeneration(uint32_t generation, ResourceView& out) {

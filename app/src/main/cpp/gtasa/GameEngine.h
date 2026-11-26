@@ -145,6 +145,7 @@ private:
 // Install before GTA starts its threads; the network pulse only requests entry.
 bool InstallServerSessionHook();
 bool BeginServerSession();
+void SetAmbientTrafficEnabled(bool pedestrians, bool vehicles);
 // True once BeginServerSession left the frontend and the game is playing (read-only).
 bool ServerSessionLive();
 void ApplyServerSpawn(float x, float y, float z);

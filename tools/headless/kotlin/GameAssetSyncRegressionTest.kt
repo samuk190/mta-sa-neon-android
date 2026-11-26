@@ -17,6 +17,7 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -37,6 +38,15 @@ private suspend fun verifyLocalImport(root: File) {
     BuildConfig.DEVICE_ASSETS_PATH = source.path
     val context = Context(File(root, "local"))
     val bridge = NativeAssetBridge(context)
+    val empty = bridge.gameFileInventory()
+    check(empty.localReference && empty.files.isNotEmpty() && empty.files.none { it.verified })
+    val name = "scache_small.txt"
+    val original = File(System.getProperty("test.mainSource"), "assets/$name").readBytes()
+    source.mkdirs()
+    File(source, name).writeBytes(original)
+    check(bridge.gameFileInventory().files.filter { it.verified }.single().path == name)
+    original[0] = original[0].inc()
+    File(source, name).writeBytes(original)
     for (path in GameAssetManifest.requiredFiles) write(source, path, "new")
     write(source, "data/tuning.dat", "")
     write(context.filesDir, "game_assets/staging-local/data/gta.dat", "old")
@@ -44,11 +54,27 @@ private suspend fun verifyLocalImport(root: File) {
 
     expectComplete(bridge)
     val generation = installed(bridge)
+    expectComplete(bridge)
+    check(installed(bridge) == generation) { "Repeating a local transfer created another copy." }
     check(File(generation, "data/gta.dat").readText() == "new")
     check(!File(generation, "data/removed.cfg").exists())
     check(File(generation, "data/tuning.dat").isFile)
+    // The document picker may return an empty tree or a different GTA release.
+    // Rejected imports must leave the active generation available.
+    val emptyPick = bridge.syncAssets { emptyList() }.last()
+    check(emptyPick == NativeAssetBridge.DownloadState.Error(NativeAssetBridge.SyncFailure.INVALID_LOCAL_FOLDER))
+    val invalidPick = bridge.syncAssets {
+        GameAssetManifest.requiredFiles.map { path ->
+            LocalGameFile(GameAssetManifest.Entry(path, 3, "")) { "bad".byteInputStream() }
+        }
+    }.last()
+    check(invalidPick is NativeAssetBridge.DownloadState.Error && invalidPick.reason == NativeAssetBridge.SyncFailure.FILE_INVALID)
+    check(installed(bridge) == generation)
     val entries = GameAssetManifest.parse(File(generation, GameAssetManifest.FILE_NAME).readText(), local = true)
     check(entries.all { it.sha256.length == 64 })
+    // The imported file has the expected length and matches the locally generated hash.
+    // Its bytes do not match the trusted reference.
+    check(!bridge.gameFileInventory().files.single { it.path == name }.verified)
     val legacy = GameAssetManifest.encode(entries.map { it.copy(sha256 = "") })
     write(generation, GameAssetManifest.FILE_NAME, legacy)
     check(installed(bridge) == generation)
@@ -67,6 +93,7 @@ private suspend fun verifyCdn(root: File) {
     val first = Update((GameAssetManifest.requiredFiles + "data/addon.dat").associateWith { "old".toByteArray() })
     val second = Update(first.files + mapOf("data/default.dat" to "new".toByteArray(), "data/addon.dat" to "new".toByteArray()))
     val update = AtomicReference(first)
+    val offline = AtomicBoolean(true)
     val requests = ConcurrentHashMap<String, Int>()
     val firstTransfers = CountDownLatch(4)
     val activeTransfers = AtomicInteger()
@@ -76,6 +103,7 @@ private suspend fun verifyCdn(root: File) {
         if (scheme != "http") null else object : URLStreamHandler() {
             override fun openConnection(url: URL): URLConnection {
                 check(url.host == "assets.test")
+                if (offline.get()) throw java.net.UnknownHostException(url.host)
                 val current = update.get()
                 val prefix = "/main/game_files_android_mta/"
                 val body = when {
@@ -120,8 +148,21 @@ private suspend fun verifyCdn(root: File) {
     BuildConfig.CDN_ROOT_URL = "http://assets.test"
     val context = Context(File(root, "cdn"))
     val bridge = NativeAssetBridge(context)
+    val bundled = bridge.gameFileInventory()
+    check(bundled.localReference && bundled.files.map { it.path } == bridge.referenceEntries().map { it.path })
+    check(bundled.files.none { it.verified })
+    offline.set(false)
+    val online = bridge.gameFileInventory()
+    check(!online.localReference && online.files.none { it.verified })
     val states = bridge.syncAssets().toList()
     check(states.last() is NativeAssetBridge.DownloadState.Complete)
+    val downloaded = bridge.gameFileInventory()
+    check(!downloaded.localReference && downloaded.files.all { it.verified })
+    offline.set(true)
+    val cached = bridge.gameFileInventory()
+    check(cached.localReference && cached.files == downloaded.files)
+    check(bridge.syncAssets().last() is NativeAssetBridge.DownloadState.Error)
+    offline.set(false)
     check(peakTransfers.get() == 4)
     val progress = states.filterIsInstance<NativeAssetBridge.DownloadState.Syncing>()
     check(progress.zipWithNext().all { (a, b) -> a.current <= b.current && a.percent <= b.percent })
@@ -137,6 +178,8 @@ private suspend fun verifyCdn(root: File) {
     check(bridge.syncAssets().last() is NativeAssetBridge.DownloadState.Error)
     check(installed(bridge) == before)
     check(File(context.filesDir, "game_assets").listFiles().orEmpty().none { it.name.endsWith(".part") })
+    val pending = bridge.gameFileInventory().files.filterNot { it.verified }
+    check(pending.single().path == "data/addon.dat") { "Only the corrupt file should still need transfer" }
     val copied = requests["data/default.dat"]
 
     update.set(second)
@@ -152,11 +195,13 @@ private suspend fun verifyCdn(root: File) {
 
     val missingHashes = second.json.replace(Regex("\"sha256\":\"[0-9a-f]{64}\""), "\"sha256\":\"\"")
     update.set(second.copy(json = missingHashes))
+    check(runCatching { bridge.gameFileInventory() }.isFailure) { "An invalid CDN manifest was hidden by the offline fallback" }
     check(bridge.syncAssets().last() is NativeAssetBridge.DownloadState.Error)
     check(installed(bridge) == after)
     update.set(second)
     val beforeRepair = requests.toMap()
     write(after, "data/addon.dat", "bad")
+    check(!bridge.gameFileInventory().files.single { it.path == "data/addon.dat" }.verified)
     expectComplete(bridge)
     val repaired = installed(bridge)
     check(repaired != after && File(repaired, "data/addon.dat").readText() == "new")

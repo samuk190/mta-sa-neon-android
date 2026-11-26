@@ -1,6 +1,7 @@
 package com.saonline.neonlauncher.ui
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -11,6 +12,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -35,6 +37,12 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private enum class Tab(val tag: String) { SERVERS("tab_servers"), FILES("tab_files"), SETTINGS("tab_settings") }
+    private var selectedTab = Tab.SERVERS
+    internal val launcherWallpaper get() = binding.wallpaper.drawable
+    internal val isTransferringGameFiles get() = gameFilesModel.isTransferring
+    private val gameFilesModel by lazy { ViewModelProvider(this)[GameFilesModel::class.java] }
+
     private var checkingGameAssets = false
     private val game = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.data?.getBooleanExtra(EngineHostActivity.EXTRA_GAME_ASSETS_REQUIRED, false) == true) {
@@ -110,17 +118,27 @@ class MainActivity : AppCompatActivity() {
 
         title = BuildConfig.LAUNCHER_TITLE
         applyWindowInsets()
+        lifecycleScope.launch {
+            val wallpaper = withContext(Dispatchers.IO) {
+                assets.open("MTA/cgui/images/loadscreens/loadsc4.jpg").use { BitmapFactory.decodeStream(it) }
+            }
+            binding.wallpaper.setImageBitmap(wallpaper)
+        }
         setupNavigation(state)
+        gameFilesModel.transferState.observe(this) {
+            val settings = supportFragmentManager.findFragmentByTag(Tab.SETTINGS.tag) as? SettingsFragment
+            if (selectedTab == Tab.SETTINGS && !isTransferringGameFiles) settings?.updateEngineTestButton()
+        }
         binding.quickConnect.setOnClickListener {
-            showSettings(false)
-            val browser = supportFragmentManager.findFragmentByTag("tab_servers") as ServerBrowserFragment
+            showTab(Tab.SERVERS)
+            val browser = supportFragmentManager.findFragmentByTag(Tab.SERVERS.tag) as ServerBrowserFragment
             browser.openAddressDialog(quick = true)
         }
         binding.quit.setOnClickListener { finish() }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean("settings_open", binding.navSettings.isSelected)
+        outState.putString("launcher_tab", selectedTab.tag)
         netcPickBuild?.let { outState.putString(STATE_NETC_PICK_BUILD, it) }
         super.onSaveInstanceState(outState)
     }
@@ -133,39 +151,44 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.rootLayout) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
             binding.rootLayout.updatePadding(top = bars.top, bottom = bars.bottom)
-            val settings = binding.navSettings.isSelected
-            binding.fragmentContainer.updatePadding(left = if (settings) bars.left else 0, right = if (settings) bars.right else 0)
             binding.dock.updatePadding(left = bars.left, right = bars.right)
             insets
         }
     }
 
     private fun setupNavigation(saved: Bundle?) {
-        val fm = supportFragmentManager
-        if (fm.findFragmentByTag("tab_servers") == null) {
-            fm.beginTransaction()
-                .add(R.id.fragmentContainer, ServerBrowserFragment(), "tab_servers")
-                .add(R.id.fragmentContainer, SettingsFragment(), "tab_settings")
-                .commitNow()
-        }
-        binding.navServers.setOnClickListener { showSettings(false) }
-        binding.navSettings.setOnClickListener { showSettings(true) }
-        showSettings(saved?.getBoolean("settings_open") == true)
+        binding.navServers.setOnClickListener { showTab(Tab.SERVERS) }
+        binding.navFiles.setOnClickListener { showTab(Tab.FILES) }
+        binding.navSettings.setOnClickListener { showTab(Tab.SETTINGS) }
+        val restored = Tab.values().firstOrNull { it.tag == saved?.getString("launcher_tab") }
+        showTab(restored ?: if (saved?.getBoolean("settings_open") == true) Tab.SETTINGS else Tab.SERVERS)
     }
 
-    private fun showSettings(settings: Boolean) {
-        binding.navServers.isSelected = !settings
-        binding.navSettings.isSelected = settings
-        ViewCompat.requestApplyInsets(binding.rootLayout)
+    private fun showTab(tab: Tab) {
+        if (tab != selectedTab) {
+            currentFocus?.clearFocus()
+            WindowCompat.getInsetsController(window, binding.root).hide(WindowInsetsCompat.Type.ime())
+        }
+        selectedTab = tab
+        binding.navServers.isSelected = tab == Tab.SERVERS
+        binding.navFiles.isSelected = tab == Tab.FILES
+        binding.navSettings.isSelected = tab == Tab.SETTINGS
         val fm = supportFragmentManager
-        val browser = fm.findFragmentByTag("tab_servers") ?: return
-        val options = fm.findFragmentByTag("tab_settings") ?: return
-        val visible = if (settings) options else browser
-        val hidden = if (settings) browser else options
-        fm.beginTransaction().setReorderingAllowed(true)
-            .hide(hidden).setMaxLifecycle(hidden, Lifecycle.State.STARTED)
-            .show(visible).setMaxLifecycle(visible, Lifecycle.State.RESUMED)
-            .commitNow()
+        val transaction = fm.beginTransaction().setReorderingAllowed(true)
+        for (other in Tab.values().filter { it != tab }) {
+            fm.findFragmentByTag(other.tag)?.let { transaction.hide(it).setMaxLifecycle(it, Lifecycle.State.STARTED) }
+        }
+        val screen = fm.findFragmentByTag(tab.tag) ?: when (tab) {
+            Tab.SERVERS -> ServerBrowserFragment()
+            Tab.FILES -> GameFilesFragment()
+            Tab.SETTINGS -> SettingsFragment()
+        }.also { transaction.add(R.id.fragmentContainer, it, tab.tag) }
+        transaction.show(screen).setMaxLifecycle(screen, Lifecycle.State.RESUMED).commitNow()
+    }
+
+    internal fun openGameFilesForTransfer() {
+        showTab(Tab.FILES)
+        (supportFragmentManager.findFragmentByTag(Tab.FILES.tag) as GameFilesFragment).requestTransfer()
     }
 
     /**
@@ -219,8 +242,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage(R.string.game_setup_message)
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.sync_assets) { _, _ ->
-                showSettings(true)
-                (supportFragmentManager.findFragmentByTag("tab_settings") as? SettingsFragment)?.syncGameAssets()
+                openGameFilesForTransfer()
             }
             .show()
     }

@@ -1,0 +1,42 @@
+<resources>
+    <style name="ThemeOverlay.BrowserSettings" parent="">
+        <item name="colorPrimary">@color/browser_amber</item>
+        <item name="colorOnPrimary">@color/browser_canvas</item>
+        <item name="colorSurface">@color/browser_card</item>
+        <item name="colorOnSurface">@color/browser_paper</item>
+        <item name="colorOnSurfaceVariant">@color/browser_muted</item>
+        <item name="colorSurfaceVariant">@color/browser_line</item>
+    </style>
+
+    <style name="SettingsPanel" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:padding">10dp</item>
+        <item name="android:background">@drawable/browser_panel</item>
+    </style>
+
+    <style name="BrowserText.SettingsHeading">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.04</item>
+    </style>
+
+    <style name="BrowserText.SettingsValue">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/browser_amber</item>
+    </style>
+
+    <style name="SettingsGraphicsOption" parent="BrowserButton.Secondary">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:paddingHorizontal">4dp</item>
+        <item name="android:textColor">@color/settings_graphics_text</item>
+        <item name="backgroundTint">@color/settings_graphics_fill</item>
+    </style>
+</resources>

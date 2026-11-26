@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.saonline.neonlauncher.BuildConfig
+import com.saonline.neonlauncher.R
 import com.saonline.neonlauncher.utils.GameAssetManifest.Entry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONException
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -31,6 +33,12 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+
+data class GameFileStatus(val path: String, val size: Long, val verified: Boolean)
+data class GameFileInventory(val files: List<GameFileStatus>, val localReference: Boolean)
+
+internal data class LocalGameFile(val entry: Entry, val open: () -> InputStream)
+internal class InvalidGameFolder(message: String) : IOException(message)
 
 /** Installs and verifies GTA data from a local folder or configured CDN before making it available to the engine. */
 class NativeAssetBridge(private val context: Context) {
@@ -51,25 +59,26 @@ class NativeAssetBridge(private val context: Context) {
 
     enum class SyncFailure {
         ALREADY_RUNNING, LOCAL_FILES_MISSING, INSUFFICIENT_SPACE, STORAGE_UNAVAILABLE,
-        INVALID_MANIFEST, FILE_INVALID, HTTP_ERROR, IO_ERROR
+        INVALID_MANIFEST, INVALID_LOCAL_FOLDER, FILE_INVALID, HTTP_ERROR, IO_ERROR
     }
+
+    private fun localFolderCandidates() = listOfNotNull(
+        BuildConfig.DEVICE_ASSETS_PATH.takeIf { it.isNotBlank() }?.let { File(it) },
+        context.getExternalFilesDir(null)?.let { File(it, "game_assets") },
+        context.getExternalFilesDir(null)?.let { File(it, "gta_assets") },
+        File(storage, "local_source"),
+        File("/sdcard/Android/data/${context.packageName}/files/game_assets"),
+        File("/sdcard/Download/WorldRPG_backup"),
+        File("/sdcard/worldrpg_gamefiles"),
+        File("/sdcard/mta_assets"),
+        File("/sdcard/GTASA")
+    )
 
     /** Local developer installs are available only when no CDN is configured. */
     fun findLocalAssetsFolder(): File? {
         // A leftover backup must never override the CDN, including library loading at boot.
         if (cdnRoot.isNotBlank()) return null
-        val candidates = listOfNotNull(
-            BuildConfig.DEVICE_ASSETS_PATH.takeIf { it.isNotBlank() }?.let { File(it) },
-            context.getExternalFilesDir(null)?.let { File(it, "game_assets") },
-            context.getExternalFilesDir(null)?.let { File(it, "gta_assets") },
-            File(storage, "local_source"),
-            File("/sdcard/Android/data/${context.packageName}/files/game_assets"),
-            File("/sdcard/Download/WorldRPG_backup"),
-            File("/sdcard/worldrpg_gamefiles"),
-            File("/sdcard/mta_assets"),
-            File("/sdcard/GTASA")
-        )
-        return candidates.firstOrNull { dir ->
+        return localFolderCandidates().firstOrNull { dir ->
             try {
                 dir.isDirectory && GameAssetManifest.requiredFiles.all { path ->
                     File(dir, path).let { it.isFile && it.length() > 0 }
@@ -78,6 +87,65 @@ class NativeAssetBridge(private val context: Context) {
                 false
             }
         }
+    }
+
+    // Metadata only, from the Android 2.10 reference revision linked in game_assets/README.md.
+    internal fun referenceEntries(): List<Entry> =
+        context.resources.openRawResource(R.raw.game_asset_reference).bufferedReader().use {
+            GameAssetManifest.parse(it.readText(), local = false)
+        }
+
+    /** Reports files whose bytes match the expected version, including reusable CDN staging files. */
+    suspend fun gameFileInventory(): GameFileInventory = withContext(Dispatchers.IO) {
+        val activeDir = activeGeneration()
+        val cdn = usesCdn()
+        val current = activeDir?.takeIf { cdn && !it.name.startsWith("local-") }
+        val manifest = try {
+            if (cdn) fetchManifest(cdnRoot) else null
+        } catch (error: IOException) {
+            if (error is SyncException && error.reason == SyncFailure.INVALID_MANIFEST) throw error
+            currentCoroutineContext().ensureActive()
+            null
+        }
+        val installed = current?.let(::installedEntries)
+        val entries = manifest?.entries ?: installed ?: referenceEntries()
+        val candidates = when {
+            manifest != null -> {
+                val previous = matchingGeneration(current, installed, entries) ?: current
+                val staging = assetFile(storage, "staging-${manifest.generationId}").takeIf { it.isDirectory }
+                listOfNotNull(staging, previous)
+            }
+            cdn -> listOfNotNull(current)
+            else -> {
+                // A pre-existing local installation can be used directly by the engine.
+                val local = activeDir ?: findLocalAssetsFolder() ?: localFolderCandidates().firstOrNull { it.isDirectory }
+                listOfNotNull(local)
+            }
+        }
+        val verified = BooleanArray(entries.size)
+        parallelFiles(entries.size, DISK_WORKERS) { _, index ->
+            val entry = entries[index]
+            verified[index] = candidates.any { directory ->
+                try {
+                    matches(assetFile(directory, entry.path), entry)
+                } catch (_: IOException) {
+                    false
+                } catch (_: SecurityException) {
+                    false
+                }
+            }
+        }
+        val files = entries.mapIndexed { index, entry -> GameFileStatus(entry.path, entry.size, verified[index]) }
+        GameFileInventory(files, localReference = manifest == null)
+    }
+
+    private fun matchingGeneration(current: File?, currentEntries: List<Entry>?, expected: List<Entry>): File? {
+        if (currentEntries == expected) return current
+        return generations.listFiles().orEmpty()
+            .asSequence()
+            .filter { it != current && it.isDirectory && GENERATION.matches(it.name) && !it.name.startsWith("local-") }
+            .sortedByDescending { it.lastModified() }
+            .firstOrNull { installedEntries(it) == expected }
     }
 
     /** Fast startup gate. CDN builds never fall back to an external folder or local import. */
@@ -98,18 +166,37 @@ class NativeAssetBridge(private val context: Context) {
         }
     }
 
-    fun syncAssets(): Flow<DownloadState> = channelFlow {
+    fun syncAssets(): Flow<DownloadState> = syncAssets(null)
+
+    internal fun syncAssets(pickedFolder: (suspend () -> List<LocalGameFile>)?): Flow<DownloadState> = channelFlow {
         if (!installationLock.tryLock()) {
             send(DownloadState.Error(SyncFailure.ALREADY_RUNNING))
             return@channelFlow
         }
 
         try {
+            if (!usesCdn() && pickedFolder != null) {
+                send(DownloadState.FetchingManifest)
+                val reference = referenceEntries().associateBy(Entry::path)
+                val files = pickedFolder().map { file ->
+                    val expected = reference[file.entry.path]
+                    if (expected != null && expected.size != file.entry.size) {
+                        throw AssetContentsException(file.entry.path, "Source size differs from the GTA 2.10 reference.")
+                    }
+                    if (expected == null) file else file.copy(entry = expected)
+                }
+                syncFromLocalFiles(files) { send(it) }
+                return@channelFlow
+            }
             // findLocalAssetsFolder is disabled when a CDN is configured.
             val localSource = findLocalAssetsFolder()
             if (localSource != null) {
                 send(DownloadState.FetchingManifest)
-                syncFromLocalFolder(localSource) { send(it) }
+                val root = localSource.canonicalFile
+                val files = localEntries(root).map { entry ->
+                    LocalGameFile(entry) { assetFile(root, entry.path).inputStream() }
+                }
+                syncFromLocalFiles(files) { send(it) }
                 return@channelFlow
             }
 
@@ -126,12 +213,7 @@ class NativeAssetBridge(private val context: Context) {
             // Reuse a fully installed generation if a previous sync stopped before switching the pointer.
             val current = activeGeneration()?.takeUnless { it.name.startsWith("local-") }
             val currentEntries = current?.let(::installedEntries)
-            val matching = if (currentEntries == manifest.entries) current else
-                generations.listFiles().orEmpty()
-                    .asSequence()
-                    .filter { it != current && it.isDirectory && GENERATION.matches(it.name) && !it.name.startsWith("local-") }
-                    .sortedByDescending { it.lastModified() }
-                    .firstOrNull { installedEntries(it) == manifest.entries }
+            val matching = matchingGeneration(current, currentEntries, manifest.entries)
             val previous = matching ?: current
             if (matching != null && verifyGeneration(matching, manifest.entries) { send(it) }) {
                 if (matching != current) activateGeneration(matching)
@@ -200,6 +282,7 @@ class NativeAssetBridge(private val context: Context) {
             Log.w(TAG, "Game asset sync failed", error)
             send(when (error) {
                 is SyncException -> DownloadState.Error(error.reason, error.detail)
+                is InvalidGameFolder -> DownloadState.Error(SyncFailure.INVALID_LOCAL_FOLDER)
                 is AssetContentsException -> DownloadState.Error(SyncFailure.FILE_INVALID, error.path)
                 else -> DownloadState.Error(SyncFailure.IO_ERROR)
             })
@@ -243,15 +326,34 @@ class NativeAssetBridge(private val context: Context) {
         }
     }
 
-    private suspend fun syncFromLocalFolder(
-        sourceDir: File,
+    private suspend fun syncFromLocalFiles(
+        sources: List<LocalGameFile>,
         emitState: suspend (DownloadState) -> Unit
     ) {
-        val sourceRoot = sourceDir.canonicalFile
-        val files = localEntries(sourceRoot)
+        val files = sources.map(LocalGameFile::entry)
+        try {
+            GameAssetManifest.validate(files, local = true)
+        } catch (error: IOException) {
+            throw InvalidGameFolder(error.message.orEmpty())
+        }
+        val current = activeGeneration()
+        val previous = current?.let(::installedEntries)
+        if (current != null && previous != null && sameLocalFiles(sources, previous) &&
+            verifyGeneration(current, previous, emitState)) {
+            emitState(DownloadState.Complete(files.size))
+            return
+        }
+
         ensureDirectory(generations)
         val installed = File(generations, "local-${UUID.randomUUID()}")
-        val staging = assetFile(storage, "staging-${installed.name}")
+        val staging = assetFile(storage, "staging-local-import")
+        // A process killed mid-import leaves this private staging folder behind.
+        if (staging.exists() && !staging.deleteRecursively()) {
+            throw SyncException(SyncFailure.STORAGE_UNAVAILABLE, "Cannot clear an unfinished game import.")
+        }
+        if (generations.usableSpace < files.sumOf(Entry::size)) {
+            throw SyncException(SyncFailure.INSUFFICIENT_SPACE, "Not enough free space for game assets.")
+        }
         ensureDirectory(staging)
         try {
             val progress = SyncProgress(files, emitState)
@@ -259,11 +361,10 @@ class NativeAssetBridge(private val context: Context) {
             progress.start()
             parallelFiles(files.size, DISK_WORKERS) { _, index ->
                 val entry = files[index]
-                val source = assetFile(sourceRoot, entry.path)
                 val target = assetFile(staging, entry.path)
                 ensureDirectory(target.parentFile ?: staging)
                 var reported = 0L
-                val sha = source.inputStream().use { input ->
+                val sha = sources[index].open().use { input ->
                     copyVerified(input, target, entry) { total ->
                         progress.advance(total - reported)
                         reported = total
@@ -280,6 +381,17 @@ class NativeAssetBridge(private val context: Context) {
             staging.deleteRecursively()
         }
         emitState(DownloadState.Complete(files.size))
+    }
+
+    private suspend fun sameLocalFiles(sources: List<LocalGameFile>, installed: List<Entry>): Boolean {
+        if (sources.size != installed.size) return false
+        val byPath = installed.associateBy(Entry::path)
+        return sources.all { source ->
+            val expected = source.entry
+            val old = byPath[expected.path]
+            old != null && old.sha256.isNotEmpty() && old.size == expected.size &&
+                (expected.sha256.ifEmpty { source.open().use { sha256(it) } } == old.sha256)
+        }
     }
 
     private suspend fun localEntries(sourceDir: File): List<Entry> {
@@ -302,7 +414,6 @@ class NativeAssetBridge(private val context: Context) {
         } catch (error: UncheckedIOException) {
             throw IOException("Cannot read local game assets.", error.cause)
         }
-        GameAssetManifest.validate(files, local = true)
         return files
     }
 
@@ -389,17 +500,19 @@ class NativeAssetBridge(private val context: Context) {
     private suspend fun matches(file: File, entry: Entry): Boolean {
         if (!file.isFile || file.length() != entry.size) return false
         if (entry.sha256.isEmpty()) return true
+        return file.inputStream().use { sha256(it) } == entry.sha256
+    }
+
+    private suspend fun sha256(input: InputStream): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(BUFFER_SIZE)
-        file.inputStream().use { input ->
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
         }
-        return digest.hexDigest() == entry.sha256
+        return digest.hexDigest()
     }
 
     private class SyncException(

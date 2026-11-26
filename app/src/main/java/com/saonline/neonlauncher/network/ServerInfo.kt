@@ -28,7 +28,8 @@ data class ServerInfo(
     val bannerUrl: String = "",
     val description: String = "",
     val countries: List<String> = emptyList(),
-    val languages: List<String> = emptyList()
+    val languages: List<String> = emptyList(),
+    val supportsAndroid: Boolean = false
 ) {
     enum class Status { QUERYING, ONLINE, OFFLINE, DIRECT }
 
@@ -36,7 +37,7 @@ data class ServerInfo(
     fun getKey(): String = "${ServerAddress.normalizeHost(ip) ?: ip}:$port"
 
     fun withQuery(result: ServerQuery.Result?): ServerInfo =
-        if (result == null) copy(status = Status.OFFLINE)
+        if (result == null) copy(status = Status.OFFLINE, supportsAndroid = false)
         else copy(
             // Desktop CServerListItem::ParseQuery takes the queried name when no master list restricts it.
             name = if (registryId.isNotEmpty()) name else result.serverName.ifBlank { name },
@@ -48,7 +49,8 @@ data class ServerInfo(
             mapName = result.mapName,
             version = result.version,
             passworded = result.passworded,
-            playerNames = result.playerNames
+            playerNames = result.playerNames,
+            supportsAndroid = result.supportsAndroid
         )
 
     companion object {

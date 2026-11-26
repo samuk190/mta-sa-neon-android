@@ -1,5 +1,6 @@
 #include "HardwareMouse.h"
 #include "GameEngine.h"
+#include "GameImports.h"
 
 #include <algorithm>
 #include <array>
@@ -9,10 +10,6 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
-
-#include <dlfcn.h>
-#include <sys/mman.h>
-#include <unistd.h>
 
 namespace WorldRPG::Game {
 
@@ -100,47 +97,6 @@ void UpdatePads() {
     std::memcpy(g_mouseState + 0xc, motion, sizeof(motion));
 }
 
-struct Import {
-    const char* symbol;
-    uintptr_t offset;
-    void* replacement;
-    void* original = nullptr;
-    void** slot = nullptr;
-};
-
-// libGTASA 2.10 ARM64 R_AARCH64_JUMP_SLOT entries. Compare every entry with
-// dlsym before changing the RELRO pages, as in the server-session dispatcher.
-bool BindImports(void* library, std::array<Import, 4>& imports) {
-    const long pageSize = sysconf(_SC_PAGESIZE);
-    if (pageSize <= 0) return false;
-    std::array<void*, 4> pages{};
-    size_t numPages = 0;
-    for (auto& import : imports) {
-        import.original = dlsym(library, import.symbol);
-        Dl_info info{};
-        if (!import.original || !dladdr(import.original, &info)) return false;
-        const auto addr = reinterpret_cast<uintptr_t>(info.dli_fbase) + import.offset;
-        import.slot = reinterpret_cast<void**>(addr);
-        if (*import.slot != import.original) return false;
-        auto* page = reinterpret_cast<void*>(addr & ~(static_cast<uintptr_t>(pageSize) - 1));
-        if (std::find(pages.begin(), pages.begin() + numPages, page) == pages.begin() + numPages)
-            pages[numPages++] = page;
-    }
-
-    size_t writable = 0;
-    for (; writable < numPages; ++writable) {
-        if (mprotect(pages[writable], pageSize, PROT_READ | PROT_WRITE) != 0) break;
-    }
-    const bool ok = writable == numPages;
-    if (ok) {
-        for (const auto& import : imports) __atomic_store_n(import.slot, import.replacement, __ATOMIC_RELEASE);
-    }
-    for (size_t i = 0; i < writable; ++i) {
-        if (mprotect(pages[i], pageSize, PROT_READ) != 0)
-            ENGINE_LOGE("Hardware mouse: could not restore GOT protection");
-    }
-    return ok;
-}
 
 }  // namespace
 

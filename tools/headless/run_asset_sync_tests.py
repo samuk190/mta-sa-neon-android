@@ -8,7 +8,13 @@ import subprocess
 STUBS = {
     "Context.kt": """package android.content
 import java.io.File
+class AssetTestResources {
+    @Suppress("UNUSED_PARAMETER")
+    fun openRawResource(id: Int) =
+        File(System.getProperty("test.mainSource"), "res/raw/game_asset_reference.json").inputStream()
+}
 class Context(val filesDir: File) {
+    val resources = AssetTestResources()
     val packageName = "com.saonline.neonlauncher"
     @Suppress("UNUSED_PARAMETER")
     fun getExternalFilesDir(type: String?): File? = null
@@ -24,6 +30,7 @@ object Log { fun w(tag: String, text: String, error: Throwable) = 0 }
 """,
     "BuildConfig.kt": """package com.saonline.neonlauncher
 object BuildConfig { var CDN_ROOT_URL = ""; var DEVICE_ASSETS_PATH = "" }
+object R { object raw { const val game_asset_reference = 1 } }
 """,
 }
 
@@ -60,7 +67,8 @@ def main():
              *(test_stubs / name for name in STUBS)]
     subprocess.run([args.java, "-cp", compiler_classpath, "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
                     "-jvm-target", "17", "-classpath", classpath, "-d", str(args.build_dir), *map(str, files)], check=True)
-    subprocess.run([args.java, "-cp", classpath, "com.saonline.neonlauncher.utils.GameAssetSyncRegressionTestKt"], check=True)
+    subprocess.run([args.java, f"-Dtest.mainSource={root / 'app/src/main'}", "-cp", classpath,
+                    "com.saonline.neonlauncher.utils.GameAssetSyncRegressionTestKt"], check=True)
 
 
 if __name__ == "__main__":

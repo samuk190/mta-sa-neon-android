@@ -1,0 +1,26 @@
+<resources>
+    <string name="files_title">Файлы игры</string>
+    <string name="files_transfer">Передать</string>
+    <string name="files_search">Имя или папка</string>
+    <string name="files_checking">Проверка файлов игры…</string>
+    <string name="files_verified">Загружено и проверено</string>
+    <string name="files_pending">Требуется передача</string>
+    <string name="files_no_match">Подходящие файлы и папки не найдены</string>
+    <string name="files_unavailable">Не удалось проверить файлы игры. Обновите список, чтобы повторить попытку.</string>
+    <string name="files_parent">На папку выше</string>
+    <string name="files_bad_folder">Выберите папку с распакованными файлами GTA Mobile 2.10.</string>
+    <string name="files_summary">%1$s · %2$s</string>
+    <string name="files_local_summary">Локальный каталог · %1$s</string>
+    <plurals name="files_missing">
+        <item quantity="one">Остался %d файл</item>
+        <item quantity="few">Осталось %d файла</item>
+        <item quantity="many">Осталось %d файлов</item>
+        <item quantity="other">Осталось %d файла</item>
+    </plurals>
+    <plurals name="files_items">
+        <item quantity="one">%d элемент</item>
+        <item quantity="few">%d элемента</item>
+        <item quantity="many">%d элементов</item>
+        <item quantity="other">%d элемента</item>
+    </plurals>
+</resources>

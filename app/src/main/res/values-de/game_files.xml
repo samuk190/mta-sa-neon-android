@@ -1,0 +1,22 @@
+<resources>
+    <string name="files_title">Spieldateien</string>
+    <string name="files_transfer">Übertragen</string>
+    <string name="files_search">Name oder Ordner</string>
+    <string name="files_checking">Spieldateien werden geprüft…</string>
+    <string name="files_verified">Heruntergeladen und geprüft</string>
+    <string name="files_pending">Übertragung erforderlich</string>
+    <string name="files_no_match">Keine passenden Dateien oder Ordner gefunden</string>
+    <string name="files_unavailable">Die Spieldateien konnten nicht geprüft werden. Aktualisiere die Liste, um es erneut zu versuchen.</string>
+    <string name="files_parent">Zum übergeordneten Ordner</string>
+    <string name="files_bad_folder">Wähle den Ordner mit den entpackten Dateien von GTA Mobile 2.10.</string>
+    <string name="files_summary">%1$s · %2$s</string>
+    <string name="files_local_summary">Lokale Referenz · %1$s</string>
+    <plurals name="files_missing">
+        <item quantity="one">%d Datei ausstehend</item>
+        <item quantity="other">%d Dateien ausstehend</item>
+    </plurals>
+    <plurals name="files_items">
+        <item quantity="one">%d Eintrag</item>
+        <item quantity="other">%d Einträge</item>
+    </plurals>
+</resources>

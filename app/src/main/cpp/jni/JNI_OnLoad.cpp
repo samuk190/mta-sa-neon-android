@@ -31,6 +31,7 @@
 #include "../shared/LuaKeyBindApi.h"
 #include "../shared/LuaWeaponApi.h"
 #include "../shared/ServerWorld.h"
+#include "../shared/ResourceLoader.h"
 #include "../shared/AssetManager.h"
 
 // Host the player connected to; the HTTP file service lives on the same host.
@@ -520,6 +521,7 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
     // logcat until the session is validated (Plano 22 acceptance rule).
     state->join->SetStateCallback([](WorldRPG::Net::JoinState state, const char* detail) {
         using WorldRPG::Net::JoinState;
+        if (state != JoinState::Complete) WorldRPG::Game::SetAmbientTrafficEnabled(false, false);
         if (state == JoinState::Complete) {
             PostConnectionState(true, "Neon join complete");
             // Desktop Packet_ServerJoined: client files come from the server's HTTP service.
@@ -631,6 +633,7 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeConnect(
 
     std::string normalizedNick = WorldRPG::Net::NormalizeAscii(nickStr);
     env->ReleaseStringUTFChars(nickname, nickStr);
+    WorldRPG::Game::SetAmbientTrafficEnabled(false, false);
     if (g_sessionOpened) {
         g_state->network->StopNetwork();
         // The element table goes first: ApplyRemotePeds copies its peds and cars back into the remote records
@@ -822,6 +825,9 @@ static void PulseClient(JNIEnv* env, jobject thiz, bool renderFrame) {
     // Initial resource scripts may load models synchronously through the
     // game's task queue. Run them once the game can service that queue.
     if (gameReady && renderFrame) WorldRPG::Script::ActiveVmPulseResources();
+    const auto traffic = WorldRPG::Script::ResourceLoader::RunningAmbientTraffic(
+        g_state->join->State() == WorldRPG::Net::JoinState::Complete);
+    WorldRPG::Game::SetAmbientTrafficEnabled(traffic.pedestrians, traffic.vehicles);
     // CClientWeaponManager::DoPulse for createWeapon and touched server weapons.
     WorldRPG::Script::WeaponsPulse();
     if (!g_onDxFrameMethod || !g_gameActivityRef) return;
@@ -905,6 +911,7 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobj
     const std::lock_guard lock(g_stateMutex);
     if (!isOwner(env, thiz)) return;
 
+    WorldRPG::Game::SetAmbientTrafficEnabled(false, false);
     // Detach callbacks holding raw pointers into this state before teardown.
     g_state->network->SetPacketHandler(nullptr);
     g_state->join->SetStateCallback({});

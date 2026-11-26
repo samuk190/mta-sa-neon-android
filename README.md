@@ -34,7 +34,7 @@ The standard connection uses Neon gameplay protocol `0x41E7` and the mobile bits
 
 ## Install the Release APK (players)
 
-When the build has `CDN_ROOT_URL` configured, use **Settings → Sync game assets** before playing or using **Test GTA**. The World RPG CDN manifest includes the game data and the three ARM64 engine libraries in `lib/`. The app verifies the downloads and installs them in private storage. The manual instructions below apply to builds without a configured CDN.
+Open **Game files → Transfer** before playing. With `CDN_ROOT_URL` configured, the launcher downloads and verifies the files listed by that server. With no file server configured, select the folder containing your extracted GTA Mobile 2.10 files. The list shows how many files in each folder still need transferring or repair. A green folder means all its listed files passed verification.
 
 The APK on the Releases page includes the launcher and the MTA loading images. For manual installation, copy the GTA San Andreas files from your own copy of the game into the game folder. [Releases](https://github.com/samuk190/mta-sa-neon-android/releases)
 

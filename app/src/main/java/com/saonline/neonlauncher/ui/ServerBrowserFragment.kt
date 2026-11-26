@@ -3,7 +3,6 @@ package com.saonline.neonlauncher.ui
 import android.content.ClipData
 import android.content.res.ColorStateList
 import android.content.ClipboardManager
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.View
 import android.widget.LinearLayout
@@ -28,10 +27,8 @@ import com.saonline.neonlauncher.network.ServerAddress
 import com.saonline.neonlauncher.network.ServerBrowserService
 import com.saonline.neonlauncher.network.ServerInfo
 import com.saonline.neonlauncher.utils.PreferencesManager
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
     private enum class Tab { ALL, FAVORITES, RECENT }
@@ -143,13 +140,6 @@ class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
                 render()
             }
         }
-        val assets = requireContext().assets
-        viewLifecycleOwner.lifecycleScope.launch {
-            val wallpaper = withContext(Dispatchers.IO) {
-                assets.open("MTA/cgui/images/loadscreens/loadsc4.jpg").use { BitmapFactory.decodeStream(it) }
-            }
-            binding.wallpaper.setImageBitmap(wallpaper)
-        }
         loadServers()
     }
 
@@ -178,7 +168,7 @@ class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
     }
 
     private fun openJoin(server: ServerInfo) {
-        JoinDialog.show(this, server, binding.wallpaper.drawable)
+        JoinDialog.show(this, server, (requireActivity() as MainActivity).launcherWallpaper)
     }
 
     private fun joinAddress(text: String): Boolean {
@@ -292,6 +282,7 @@ class ServerBrowserFragment : Fragment(R.layout.fragment_server_browser) {
             banner.doOnLayout { ServerLogo.bind(banner, server.name, artwork) }
         }
         name.text = server.name
+        androidBadge.isVisible = server.supportsAndroid
         description.text = server.description
         description.isVisible = server.description.isNotBlank()
         connect.setOnClickListener { openJoin(server) }

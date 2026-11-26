@@ -1,0 +1,20 @@
+<resources>
+    <string name="files_title">游戏文件</string>
+    <string name="files_transfer">传输</string>
+    <string name="files_search">名称或文件夹</string>
+    <string name="files_checking">正在校验游戏文件…</string>
+    <string name="files_verified">已下载并校验</string>
+    <string name="files_pending">需要传输</string>
+    <string name="files_no_match">未找到匹配的文件或文件夹</string>
+    <string name="files_unavailable">无法校验游戏文件，请刷新列表后重试。</string>
+    <string name="files_parent">返回上一级文件夹</string>
+    <string name="files_bad_folder">请选择存放已解压的 GTA Mobile 2.10 文件的文件夹。</string>
+    <string name="files_summary">%1$s · %2$s</string>
+    <string name="files_local_summary">本地参考清单 · %1$s</string>
+    <plurals name="files_missing">
+        <item quantity="other">%d 个文件待传输</item>
+    </plurals>
+    <plurals name="files_items">
+        <item quantity="other">%d 项</item>
+    </plurals>
+</resources>

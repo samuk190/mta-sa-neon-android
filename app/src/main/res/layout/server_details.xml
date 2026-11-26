@@ -37,6 +37,21 @@
             android:textSize="16sp" />
 
         <TextView
+            android:id="@+id/androidBadge"
+            style="@style/BrowserText.Small"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/browser_panel"
+            android:drawableStart="@drawable/ic_android"
+            android:drawablePadding="5dp"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:text="@string/browser_android_supported"
+            android:visibility="gone" />
+
+        <TextView
             android:id="@+id/description"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

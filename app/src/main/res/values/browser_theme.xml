@@ -1,5 +1,6 @@
 <resources>
     <!-- Server browser palette from the desktop shell in san-andreas-online PR 132. -->
+    <color name="game_file_missing">#FF726C</color>
     <color name="browser_online_dot">#22C55E</color>
     <color name="browser_amber">#FFBB4E</color>
     <color name="browser_canvas">#07090B</color>

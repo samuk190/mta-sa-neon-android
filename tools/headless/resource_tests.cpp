@@ -3189,6 +3189,47 @@ void CheckSvg(WorldRPG::Script::LuaVMStub& vm) {
     CHECK(Has(WorldRPG::Script::ActiveVmPump(), "D "));
 }
 
+void CheckAmbientTrafficLifecycle() {
+    using namespace WorldRPG::Script;
+    const auto check = [](bool pedestrians, bool vehicles, bool joined = true) {
+        const auto traffic = ResourceLoader::RunningAmbientTraffic(joined);
+        CHECK(traffic.pedestrians == pedestrians);
+        CHECK(traffic.vehicles == vehicles);
+    };
+    std::vector<ResourceLoader::FileDownloadEvent> downloads;
+    WorldRPG::Net::ResourceStartInfo resource;
+    auto announce = [&](const char* name, uint16_t id) {
+        resource.name = name;
+        resource.resourceId = id;
+        ActiveVmOnResourceStart(resource);
+    };
+    auto stop = [](uint8_t id) {
+        const uint8_t body[]{id, 0};
+        ActiveVmOnResourceStop(body, sizeof(body), 16);
+    };
+
+    ResourceLoader::Reset();
+    announce("neon", 1);
+    ResourceLoader::Pump(downloads);
+    check(false, false);
+    announce("native-ped-traffic", 2);
+    check(false, false); // Announced resources may still be loading.
+    ResourceLoader::Pump(downloads);
+    check(true, false);
+    announce("native-vehicle-traffic", 3);
+    ResourceLoader::Pump(downloads);
+    check(true, true);
+    check(false, false, false); // Disconnected while both resources were running.
+    stop(2);
+    check(false, true);
+    announce("native-ped-traffic", 2);
+    ResourceLoader::Pump(downloads);
+    stop(3);
+    check(true, false);
+    ResourceLoader::Reset();
+    check(false, false);
+}
+
 void CheckStopLifecycle(WorldRPG::Script::LuaVMStub& vm) {
     const std::string fileName = "lifecycle_asset.ogg";
     for (const std::string name : {"demo", "other"}) {
@@ -5362,6 +5403,7 @@ int main(int argc, char** argv) {
     // resources in the same VM; CheckTwoVms covers resources in Lua 5.1.
     WorldRPG::Script::ActiveVmSetResourceLua(1);
     CheckPacketLayouts();
+    CheckAmbientTrafficLifecycle();
     CheckDdsDecode();
     CheckVehiclePackets();
     CheckPedEntityBody();
