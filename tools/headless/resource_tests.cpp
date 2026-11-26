@@ -1896,6 +1896,8 @@ void CheckPedBodyState(WorldRPG::Script::LuaVMStub& vm) {
         assert(x == 0 and y == 0, 'position cleared')
         assert(resetPlayerHudComponentProperty('crosshair', 'position') == false, 'crosshair cannot reset')
         assert(setPlayerHudComponentProperty('money', 'textSize', 1, 2) == false and resetPlayerHudComponentProperty('money', 'textSize') == false, 'text size is read only')
+        assert(getMobileCrosshairPosition() == false, 'host has no mobile crosshair')
+        assert(setPlayerHudComponentVisible('crosshair', false) == true and isPlayerHudComponentVisible('crosshair') == true, 'host crosshair hud component')
         local ped = createPed(7, 4, 5, 6)
         assert(setPedGoTo(ped, 1, 2, 3) == false and setPedNavigateTo(ped, 1, 2, 3) == false, 'unstreamed task')
         assert(setPedStandStill(ped) == false and setPedHandsUp(ped, 1000) == false and setPedJump(ped) == false, 'unstreamed simple tasks')

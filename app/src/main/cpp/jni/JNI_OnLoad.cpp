@@ -13,6 +13,7 @@
 #include "../net/HttpDownloader.h"
 #include "../net/RemoteCalls.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
+#include "../gtasa/HardwareMouse.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
 #include "../gtasa/RemoteVehicle.h"
@@ -421,6 +422,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     WorldRPG::Game::InstallGameHeap();
     WorldRPG::Game::InstallStreamingCapacities();
     WorldRPG::Game::InstallServerSessionHook();
+    WorldRPG::Game::InstallHardwareMouse();
     return JNI_VERSION_1_6;
 }
 
@@ -1036,6 +1038,17 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeKeyEvent(JNIEnv* en
     if (!name) return;
     WorldRPG::Script::KeyBindsQueueKey(name, down == JNI_TRUE);
     env->ReleaseStringUTFChars(key, name);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeHardwareMouseReady(JNIEnv*, jobject) {
+    return WorldRPG::Game::HardwareMouseReady() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeHardwareMouse(
+    JNIEnv*, jobject, jfloat x, jfloat y, jint buttons, jfloat wheel, jboolean captured) {
+    WorldRPG::Game::QueueHardwareMouse(x, y, static_cast<unsigned>(buttons), wheel, captured == JNI_TRUE);
 }
 
 // GTA mobile options (gtasa/MobileSettings.h) for the in-game settings screen.

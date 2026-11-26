@@ -1365,7 +1365,13 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
     public boolean systemInit() {
         java.lang.System.out.println("ln systemInit");
         setContentView(com.saonline.neonlauncher.R.layout.game_screen);
-        android.view.SurfaceView surfaceView = new android.view.SurfaceView(this);
+        android.view.SurfaceView surfaceView = new android.view.SurfaceView(this) {
+            @Override
+            public void onPointerCaptureChange(boolean captured) {
+                super.onPointerCaptureChange(captured);
+                onGamePointerCaptureChanged(captured);
+            }
+        };
         ((android.widget.FrameLayout) findViewById(com.saonline.neonlauncher.R.id.game_layout)).addView(surfaceView, new android.view.ViewGroup.LayoutParams(-1, -1));
         surfaceView.setZ(1.0f);
         this.view = surfaceView;
@@ -1426,6 +1432,9 @@ public abstract class NvEventQueueActivity extends android.app.Activity implemen
     }
 
     /** Activity-specific observer; this does not replace GTA's registered JNI callbacks. */
+    protected void onGamePointerCaptureChanged(boolean captured) {
+    }
+
     protected void onEngineSurfaceReady(boolean ready) {
     }
 

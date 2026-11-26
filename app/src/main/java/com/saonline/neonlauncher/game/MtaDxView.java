@@ -135,23 +135,39 @@ public final class MtaDxView extends View {
     @Override
     public boolean onTouchEvent(android.view.MotionEvent event) {
         if (!cursorShown || cursorListener == null) return false;
-        float x = InterfaceScale.toLogical((event.getX() - keyboardOffsetX()) / keyboardScale, getWidth(), viewportWidth);
-        float y = InterfaceScale.toLogical(event.getY() / keyboardScale, getHeight(), viewportHeight);
+
         switch (event.getActionMasked()) {
             case android.view.MotionEvent.ACTION_DOWN:
-                cursorListener.onCursor(0, x, y);
+                forwardCursor(0, event);
                 break;
             case android.view.MotionEvent.ACTION_MOVE:
-                cursorListener.onCursor(2, x, y);
+                forwardCursor(2, event);
                 break;
             case android.view.MotionEvent.ACTION_UP:
             case android.view.MotionEvent.ACTION_CANCEL:
-                cursorListener.onCursor(1, x, y);
+                forwardCursor(1, event);
                 break;
             default:
                 break;
         }
         return true;
+    }
+
+    @Override
+    public boolean onHoverEvent(android.view.MotionEvent event) {
+        if (cursorShown && cursorListener != null
+                && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)
+                && event.getActionMasked() == android.view.MotionEvent.ACTION_HOVER_MOVE) {
+            forwardCursor(2, event);
+            return true;
+        }
+        return super.onHoverEvent(event);
+    }
+
+    private void forwardCursor(int action, android.view.MotionEvent event) {
+        float x = InterfaceScale.toLogical((event.getX() - keyboardOffsetX()) / keyboardScale, getWidth(), viewportWidth);
+        float y = InterfaceScale.toLogical(event.getY() / keyboardScale, getHeight(), viewportHeight);
+        cursorListener.onCursor(action, x, y);
     }
 
     public void setFrame(String commands) {

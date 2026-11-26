@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — physical mouse and keyboard support (2026-11-25)
+
+- Physical keyboards use GTA's control mappings and MTA keybinds. A gameplay mouse click captures relative camera input, buttons and scroll. Escape, chat and script interfaces release capture and held controls.
+- Lua HUD resources can read the Android crosshair position (`getMobileCrosshairPosition`) and hide or restore the native reticle (`crosshair` HUD component).
+
 ### Added — engineApplyShaderToWorldTexture matching, step 1 of world shaders (2026-11-25)
 
 - **`engineApplyShaderToWorldTexture`** and **`engineRemoveShaderFromWorldTexture`** (`shared/EngineAssets.cpp`) were stubs that rejected the shader element and returned false. GTA Rocket League's garage asserts on the result (`visual.lua:164: assertion failed!`, S25 2026-11-25 09:01:47). They now follow `CLuaEngineDefs` and `CRenderItemManager::ApplyShaderItemToWorldTexture` / `RemoveShaderItemFromWorldTexture` (CRenderItemManager.TextureReplace.cpp:95-116): a shader element, a texture name match, an optional element, `appendLayers`; an additive or subtractive match is recorded and the call returns true.
