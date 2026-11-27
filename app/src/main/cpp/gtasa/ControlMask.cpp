@@ -78,7 +78,13 @@ std::atomic<bool> g_ready{false};
 
 template <size_t I>
 int32_t Gate(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
-    const int32_t raw = g_original[I](a0, a1, a2, a3, a4, a5);
+    int32_t raw = 0;
+    if constexpr (kRows[I].getter == Getter::Weapon) {
+        ScopedWeaponGateCaller caller(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+        raw = g_original[I](a0, a1, a2, a3, a4, a5);
+    } else {
+        raw = g_original[I](a0, a1, a2, a3, a4, a5);
+    }
     // A remote player's body runs CPlayerPed::ProcessControl on a swapped pad (PlayerPedPort.cpp
     // RemotePlayerProcessControl). That pad belongs to the remote player, so the local toggles do not apply to it.
     if (InRemoteControlContext()) return raw;

@@ -66,6 +66,16 @@ void SetRemoteStick(void* ped, int stickX, int stickY, bool fire, float camera =
 // True when remote bodies get their own virtual touch (CTouchInterface hooks installed).
 bool RemoteTouchActive();
 bool InRemoteControlContext();
+// Preserves the libGTASA caller return address across ControlMask's GOT wrapper so RemoteWeaponHeld still
+// recognizes CTaskSimpleGangDriveBy::ProcessPed's CPad::GetWeapon call site.
+struct ScopedWeaponGateCaller {
+    explicit ScopedWeaponGateCaller(uintptr_t caller);
+    ~ScopedWeaponGateCaller();
+    ScopedWeaponGateCaller(const ScopedWeaponGateCaller&) = delete;
+    ScopedWeaponGateCaller& operator=(const ScopedWeaponGateCaller&) = delete;
+private:
+    uintptr_t previous = 0;
+};
 void ClearRemoteStick(void* ped);
 
 // Hooks CWeapon::Fire once (desktop CWeaponSA::Fire / CMultiplayerSA shotsync). For the local ped with a
