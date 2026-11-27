@@ -335,9 +335,12 @@ void TestVehicleResyncAndDamageSync() {
 
     ServerWorld::ActorSpawn v;
     Check(ServerWorld::CopyVisual(400, v) && Near(v.x, 50.5) && Near(v.y, -30.25) && Near(v.z, 12.5) &&
-              Near(v.heading, 90.0, 0.1) && Near(v.health, 850.5, 0.6),
+              Near(v.rotX, 10.0, 0.1) && Near(v.rotY, 20.0, 0.1) &&
+              Near(v.heading, 90.0 * (3.14159265 / 180.0), 0.01) && Near(v.health, 850.5, 0.6),
           "VEHICLE_RESYNC updated pose and health");
     f.Lua("local v = {id=400, element=true}\n"
+          "local rx, ry, rz = getElementRotation(v)\n"
+          "assert(math.abs(rx - 10) < 0.1 and math.abs(ry - 20) < 0.1 and math.abs(rz - 90) < 0.1)\n"
           "assert(getVehicleDoorState(v, 0) == 1 and getVehicleDoorState(v, 3) == 4)\n"
           "local fl, rl, fr, rr = getVehicleWheelStates(v)\n"
           "assert(fl == 0 and rl == 0 and fr == 0 and rr == 0)\n"
@@ -500,9 +503,12 @@ void TestVehicleSpawnAndTrailer() {
     f.Pump();
 
     ServerWorld::ActorSpawn tr;
-    Check(ServerWorld::CopyVisual(701, tr) && Near(tr.x, 20.0) && Near(tr.y, 30.0) && Near(tr.heading, 180.0, 0.1),
+    Check(ServerWorld::CopyVisual(701, tr) && Near(tr.x, 20.0) && Near(tr.y, 30.0) &&
+              Near(tr.heading, 180.0 * (3.14159265 / 180.0), 0.01),
           "trailer pose updated on attach");
     f.Lua("local t = {id=700, element=true}; local tr = {id=701, element=true}\n"
+          "local rx, ry, rz = getElementRotation(tr)\n"
+          "assert(math.abs(rz - 180) < 0.1)\n"
           "assert(getVehicleTowedByVehicle(t).id == 701)\n"
           "assert(getVehicleTowingVehicle(tr).id == 700)\n"
           "assert(#evLog == 1 and evLog[1][1] == 'attach' and evLog[1][2] == 701 and evLog[1][3] == 700)");
