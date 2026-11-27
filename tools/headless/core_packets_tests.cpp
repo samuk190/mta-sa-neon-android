@@ -17,7 +17,9 @@
 #include "shared/LuaApiExtra.h"
 #include "shared/LuaAudioApi.h"
 #include "shared/LuaBrowserApi.h"
+#include "shared/LuaFireApi.h"
 #include "shared/LuaGuiApi.h"
+#include "shared/LuaNativeUiApi.h"
 #include "shared/LuaVMStub.h"
 #include "shared/LuaWorldObjectApi.h"
 #include "shared/MtaIds.h"
@@ -1214,6 +1216,172 @@ void TestParityClientEvents() {
     Check(true, "all 18 newly wired parity client events fired and verified");
 }
 
+void TestAllRemainingParityClientEvents() {
+    Fixture f;
+    ServerWorld::SetLocalPlayer(549);
+    ServerWorld::NoteVehicle(560, 411);
+
+    f.Lua("ev2 = {}\n"
+          "local function hook(name)\n"
+          "  addEventHandler(name, root, function(...)\n"
+          "    ev2[name] = { ... }\n"
+          "  end)\n"
+          "end\n"
+          "local names = {\n"
+          "  'onClientPlayerTask','onClientVehicleNitroStateChange','onClientObjectGangTagProgress',\n"
+          "  'onClientFireDamage','onClientNativeUI','onClientWorldSound',\n"
+          "  'onClientWorldObjectDamage','onClientWorldObjectBreak',\n"
+          "  'onClientMouseEnter','onClientMouseLeave','onClientMouseMove','onClientDoubleClick',\n"
+          "  'onClientMouseWheel','onClientPaste','onClientCoreCommand',\n"
+          "  'onClientPlayerTarget','onClientPlayerStuntStart','onClientPlayerStuntFinish',\n"
+          "  'onClientPlayerNativeDamageAttempt','onClientPedNativeDamageAttempt',\n"
+          "  'onClientPlayerWeaponReload','onClientPedWeaponReload',\n"
+          "  'onClientPlayerChoke','onClientPedChoke','onClientPlayerStealthKill',\n"
+          "  'onClientPlayerHitByWaterCannon','onClientPedHitByWaterCannon',\n"
+          "  'onClientPlayerHeliKilled','onClientPedHeliKilled',\n"
+          "  'onClientPedNativeBikeJackAttempt','onClientPedCarryStateChange','onClientPedStep',\n"
+          "  'onClientVehicleCollision','onClientVehicleWeaponHit'\n"
+          "}\n"
+          "for _, n in ipairs(names) do hook(n) end\n"
+          "showCursor(true)\n"
+          "testWin2 = guiCreateWindow(10, 10, 200, 150, 'HoverMe', false)\n");
+
+    auto runRes = [&](uint16_t netId, const char* name, const std::string& source) {
+        Net::ResourceStartInfo info;
+        info.name = name;
+        info.resourceId = netId;
+        info.entityId = 0x5100 + netId;
+        info.dynamicEntityId = 0x5200 + netId;
+        info.noClientCacheScripts = 1;
+        info.startCounter = 1;
+        Script::ActiveVmOnResourceStart(info);
+        uLongf packedLen = compressBound(source.size());
+        std::vector<uint8_t> packed(packedLen);
+        compress2(packed.data(), &packedLen, reinterpret_cast<const Bytef*>(source.data()), source.size(),
+                  Z_DEFAULT_COMPRESSION);
+        packed.resize(packedLen);
+        const uint32_t orig = static_cast<uint32_t>(source.size());
+        std::vector<uint8_t> item = {static_cast<uint8_t>(orig >> 24), static_cast<uint8_t>(orig >> 16),
+                                     static_cast<uint8_t>(orig >> 8), static_cast<uint8_t>(orig)};
+        item.insert(item.end(), packed.begin(), packed.end());
+        std::vector<uint8_t> body = {static_cast<uint8_t>(netId & 0xFF), static_cast<uint8_t>(netId >> 8), 1, 0};
+        const uint32_t len = static_cast<uint32_t>(item.size());
+        for (int i = 0; i < 4; ++i) body.push_back(static_cast<uint8_t>((len >> (8 * i)) & 0xFF));
+        body.insert(body.end(), item.begin(), item.end());
+        Check(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8), "feed parity events resource");
+        Script::ActiveVmPulseResources();
+    };
+
+    runRes(42, "parity_events",
+           "local veh = getElementsByType('vehicle')[1]\n"
+           "setVehicleNitroActivated(veh, true)\n"
+           "local obj = createObject(1490, 1, 2, 3)\n"
+           "acquireObjectGangTag(obj, 0, true)\n"
+           "setObjectGangTagProgress(obj, 128)\n"
+           "local fire = createFire(5, 6, 3, { size = 1.5 })\n"
+           "playSFX('script', 1, 2, false)\n"
+           "setElementData(root, 'testObj2Id', obj.id)\n"
+           "setElementData(root, 'testFire2Id', fire.id)\n");
+
+    f.Lua("testObj2Id = getElementData(root, 'testObj2Id')\n"
+          "testFire2Id = getElementData(root, 'testFire2Id')\n");
+
+    lua_State* L = Script::ActiveVmState();
+    const uint32_t vehId = 560;
+    lua_getglobal(L, "testObj2Id");
+    const uint32_t objId = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    lua_getglobal(L, "testFire2Id");
+    const uint32_t fireId = static_cast<uint32_t>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+
+    const uint32_t localId = ServerWorld::LocalPlayer();
+    const uint32_t pedId = 550;
+    const uint32_t worldObjId = 551;
+
+    // onClientPlayerTask via PED_TASK (101)
+    {
+        Pkt p(PktId::PedTask);
+        p.Id(localId).U32(12).U8(2);
+        Check(f.Send(p), "PED_TASK local player");
+    }
+
+    Script::FireNoteDamage(fireId, localId, 14.5f);
+    Script::NativeUiNoteEvent(Script::ClientRootElement(), 700, "click", 3);
+    Script::AudioNoteWorldSound(localId, 5, 12, 1.0f, 2.0f, 3.0f);
+    Script::WorldObjectNoteDamage(worldObjId, 30.0f, localId);
+    Script::WorldObjectNoteBreak(worldObjId, localId);
+
+    // GUI hover / move / leave / double click / mouse wheel / paste / core command
+    Script::ActiveVmQueueCursor(2, 50.0f, 50.0f);   // enters testWin2 + mouseMove
+    f.vm.pumpDx(true);
+    Script::ActiveVmQueueCursor(2, 500.0f, 500.0f); // leaves testWin2
+    f.vm.pumpDx(true);
+    Script::ActiveVmQueueCursor(0, 50.0f, 50.0f);
+    Script::ActiveVmQueueCursor(1, 50.0f, 50.0f);
+    Script::ActiveVmQueueCursor(0, 50.0f, 50.0f);   // triggers onClientDoubleClick
+    Script::ActiveVmQueueCursor(1, 50.0f, 50.0f);
+    f.vm.pumpDx(true);
+
+    Script::ActiveVmOnMouseWheel(1, 50.0f, 50.0f);
+    Script::ActiveVmOnPaste("clipboard-text");
+    Script::ActiveVmOnCoreCommand("say", "hello");
+
+    // Ped / player / vehicle gameplay events
+    Script::ActiveVmOnPlayerTarget(pedId);
+    Script::ActiveVmOnPlayerStunt(true, "wheelie");
+    Script::ActiveVmOnPlayerStunt(false, "wheelie", 1500, 42.5f);
+    Script::ActiveVmOnNativeDamageAttempt(localId, true, pedId, 24, 3, 20.0f);
+    Script::ActiveVmOnNativeDamageAttempt(pedId, false, localId, 24, 9, 55.0f);
+    Script::ActiveVmOnWeaponReload(localId, true, 31, 50);
+    Script::ActiveVmOnWeaponReload(pedId, false, 24, 7);
+    Script::ActiveVmOnPedChoke(localId, true, 17, pedId);
+    Script::ActiveVmOnPedChoke(pedId, false, 41, localId);
+    Script::ActiveVmOnPlayerStealthKill(pedId);
+    Script::ActiveVmOnHitByWaterCannon(vehId, localId, true);
+    Script::ActiveVmOnHitByWaterCannon(vehId, pedId, false);
+    Script::ActiveVmOnHeliKilled(localId, true, vehId);
+    Script::ActiveVmOnHeliKilled(pedId, false, vehId);
+    Script::ActiveVmOnPedNativeBikeJackAttempt(pedId, vehId);
+    Script::ActiveVmOnPedCarryStateChange(pedId, true, objId);
+    Script::ActiveVmOnPedStep(pedId, true);
+    Script::ActiveVmOnVehicleCollision(vehId, objId, 120.0f, 0, 1, 2, 3, 0, 0, 1, 80.0f, 1337);
+    Script::ActiveVmOnVehicleWeaponHit(vehId, 1, pedId, 4, 5, 6, 0, 12);
+
+    f.Lua("local expected = {\n"
+          "  'onClientPlayerTask','onClientVehicleNitroStateChange','onClientObjectGangTagProgress',\n"
+          "  'onClientFireDamage','onClientNativeUI','onClientWorldSound',\n"
+          "  'onClientWorldObjectDamage','onClientWorldObjectBreak',\n"
+          "  'onClientMouseEnter','onClientMouseLeave','onClientMouseMove','onClientDoubleClick',\n"
+          "  'onClientMouseWheel','onClientPaste','onClientCoreCommand',\n"
+          "  'onClientPlayerTarget','onClientPlayerStuntStart','onClientPlayerStuntFinish',\n"
+          "  'onClientPlayerNativeDamageAttempt','onClientPedNativeDamageAttempt',\n"
+          "  'onClientPlayerWeaponReload','onClientPedWeaponReload',\n"
+          "  'onClientPlayerChoke','onClientPedChoke','onClientPlayerStealthKill',\n"
+          "  'onClientPlayerHitByWaterCannon','onClientPedHitByWaterCannon',\n"
+          "  'onClientPlayerHeliKilled','onClientPedHeliKilled',\n"
+          "  'onClientPedNativeBikeJackAttempt','onClientPedCarryStateChange','onClientPedStep',\n"
+          "  'onClientVehicleCollision','onClientVehicleWeaponHit'\n"
+          "}\n"
+          "for _, n in ipairs(expected) do\n"
+          "  assert(ev2[n] ~= nil, 'missing event: ' .. n)\n"
+          "end\n"
+          "assert(ev2.onClientVehicleNitroStateChange[1] == true, 'nitro state arg')\n"
+          "assert(ev2.onClientObjectGangTagProgress[1] == 128, 'gang tag arg')\n"
+          "assert(math.abs(ev2.onClientFireDamage[2] - 14.5) < 0.01, 'fire damage arg')\n"
+          "assert(ev2.onClientNativeUI[1] == 'click' and ev2.onClientNativeUI[2] == 700 and ev2.onClientNativeUI[3] == 3, 'nativeui args')\n"
+          "assert(ev2.onClientMouseWheel[1] == 1, 'mouse wheel arg')\n"
+          "assert(ev2.onClientPaste[1] == 'clipboard-text', 'paste arg')\n"
+          "assert(ev2.onClientCoreCommand[1] == 'say' and ev2.onClientCoreCommand[2] == 'hello', 'core cmd args')\n"
+          "assert(ev2.onClientPlayerStuntStart[1] == 'wheelie', 'stunt start arg')\n"
+          "assert(ev2.onClientPlayerStuntFinish[2] == 1500, 'stunt finish arg')\n"
+          "assert(ev2.onClientPlayerWeaponReload[1] == 31 and ev2.onClientPlayerWeaponReload[2] == 50, 'reload args')\n"
+          "assert(ev2.onClientPedStep[1] == true, 'ped step arg')\n"
+          "assert(math.abs(ev2.onClientVehicleCollision[2] - 120.0) < 0.01, 'veh col arg')\n"
+          "assert(ev2.onClientVehicleWeaponHit[1] == 1 and ev2.onClientVehicleWeaponHit[7] == 12, 'veh wep hit args')\n");
+    Check(true, "all remaining 34+ newly wired client events fired and verified (144/144)");
+}
+
 }  // namespace
 
 int main() {
@@ -1230,6 +1398,7 @@ int main() {
     TestRemainingPacketsAndTextItems();
     TestPostJoinInboundAndOutboundPackets();
     TestParityClientEvents();
+    TestAllRemainingParityClientEvents();
     std::printf("core_packets_tests: %u checks passed\n", checks);
     return 0;
 }

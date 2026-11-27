@@ -55,5 +55,8 @@ bool ServerSetObjectScale(uint32_t id, float x, float y, float z);
 bool ServerSyncObject(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rot[3]);
 // What a test reads back: position, rotation (radians), scale, move running.
 bool CopyObjectState(uint32_t id, float pos[3], float rot[3], float scale[3], bool& moving);
+// World-object damage/break events (CClientWorldObjectManager.cpp:252, 276).
+bool WorldObjectNoteDamage(uint32_t proxyId, float loss, uint32_t attackerId);
+bool WorldObjectNoteBreak(uint32_t proxyId, uint32_t attackerId);
 
 }  // namespace WorldRPG::Script

@@ -1033,6 +1033,15 @@ bool HandlePedTask(const uint8_t* body, size_t length, size_t bits) {
                      static_cast<unsigned>(weaponId));
         }
     }
+    if (sourceId == ServerWorld::LocalPlayer()) {
+        ServerRpc::Enqueue([sourceId, taskType] {
+            lua_State* L = Script::ActiveVmState();
+            if (!L) return;
+            lua_pushstring(L, taskType == kTaskSimpleBeHit ? "TASK_SIMPLE_BE_HIT" : "TASK_NETWORK");
+            lua_pushstring(L, "secondary");
+            Script::ActiveVmFireElementEvent(L, "onClientPlayerTask", sourceId, 2);
+        });
+    }
     return true;
 }
 

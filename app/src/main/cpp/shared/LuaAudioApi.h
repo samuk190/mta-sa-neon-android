@@ -32,6 +32,7 @@ void AudioNoteSoundStream(uint32_t id, bool success, double length, const char* 
 void AudioNoteSoundChangedMeta(uint32_t id, const char* streamTitle);
 void AudioNoteSoundFinishedDownload(uint32_t id, double length);
 void AudioNoteSoundBeat(uint32_t id, double bpm);
+bool AudioNoteWorldSound(uint32_t sourceId, int group, int index, float x, float y, float z);
 void AudioNoteSoundAnalysis(uint32_t id, int leftLevel, int rightLevel,
                             const float* fft, int fftCount,
                             const float* wave, int waveCount);

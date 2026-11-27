@@ -2371,10 +2371,11 @@ int SetVehicleNitroActivated(lua_State* L) {
     bool value = false;
     if (!ReadVehicleId(L, "setVehicleNitroActivated", id, model)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleNitroActivated", 2, value)) return Fail(L);
-    (void)id;
     (void)model;
-    (void)value;
-    return Fail(L);
+    lua_pushboolean(L, value ? 1 : 0);
+    ActiveVmFireElementEvent(L, "onClientVehicleNitroStateChange", id, 1);
+    lua_pushboolean(L, 1);
+    return 1;
 }
 int SetVehicleNitroCount(lua_State* L) {
     int model = 0;

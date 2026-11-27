@@ -406,6 +406,22 @@ void Register(lua_State* L) {
 
 void FireRelease(uint32_t id) { g_fires.erase(id); }
 
+bool FireNoteDamage(uint32_t fireId, uint32_t targetId, float damage) {
+    lua_State* L = ActiveVmState();
+    if (!L || !fireId) return true;
+    if (targetId != 0) {
+        lua_newtable(L);
+        lua_pushinteger(L, static_cast<lua_Integer>(targetId));
+        lua_setfield(L, -2, "id");
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "element");
+    } else {
+        lua_pushnil(L);
+    }
+    lua_pushnumber(L, damage);
+    return ActiveVmFireElementEvent(L, "onClientFireDamage", fireId, 2);
+}
+
 void InstallFireLua(lua_State* L) { Register(L); }
 
 }  // namespace WorldRPG::Script

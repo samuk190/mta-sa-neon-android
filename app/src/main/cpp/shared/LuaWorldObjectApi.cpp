@@ -944,6 +944,8 @@ int SetObjectGangTagProgress(lua_State* L) {
     if (!ReadBoundedUint(L, "setObjectGangTagProgress", 2, progress, 0, 100000)) return Fail(L);
     if (!HasResource() || !SameGangOwner(*object) || progress > 255) return Fail(L);
     object->gangProgress = static_cast<uint8_t>(progress);
+    lua_pushinteger(L, object->gangProgress);
+    ActiveVmFireElementEvent(L, "onClientObjectGangTagProgress", object->id, 1);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1236,6 +1238,37 @@ bool SetObjectFrozen(uint32_t id, bool frozen) {
     object->frozen = frozen;
     if (!object->clientCreated) object->localOverride = true;
     return true;
+}
+
+bool WorldObjectNoteDamage(uint32_t proxyId, float loss, uint32_t attackerId) {
+    lua_State* L = ActiveVmState();
+    if (!L || !proxyId) return true;
+    lua_pushnumber(L, loss);
+    if (attackerId != 0) {
+        lua_newtable(L);
+        lua_pushinteger(L, static_cast<lua_Integer>(attackerId));
+        lua_setfield(L, -2, "id");
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "element");
+    } else {
+        lua_pushnil(L);
+    }
+    return ActiveVmFireElementEvent(L, "onClientWorldObjectDamage", proxyId, 2);
+}
+
+bool WorldObjectNoteBreak(uint32_t proxyId, uint32_t attackerId) {
+    lua_State* L = ActiveVmState();
+    if (!L || !proxyId) return true;
+    if (attackerId != 0) {
+        lua_newtable(L);
+        lua_pushinteger(L, static_cast<lua_Integer>(attackerId));
+        lua_setfield(L, -2, "id");
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "element");
+    } else {
+        lua_pushnil(L);
+    }
+    return ActiveVmFireElementEvent(L, "onClientWorldObjectBreak", proxyId, 1);
 }
 
 }  // namespace WorldRPG::Script

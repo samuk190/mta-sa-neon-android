@@ -203,6 +203,27 @@ struct NativeWeaponFire {
 };
 void QueueNativeWeaponFire(NativeWeaponFire shot);
 bool ActiveVmFireBirdShot(uint32_t bird, uint32_t attacker, int weapon, float x, float y, float z);
+// Desktop CClientGame gameplay/GUI/input event dispatchers.
+void ActiveVmOnMouseWheel(int upOrDown, float x, float y);
+void ActiveVmOnPaste(const char* text);
+bool ActiveVmOnCoreCommand(const char* command, const char* args);
+void ActiveVmOnPlayerTarget(uint32_t targetId);
+void ActiveVmOnPlayerStunt(bool start, const char* stuntType, int timeMs = 0, float distance = 0.0f);
+bool ActiveVmOnNativeDamageAttempt(uint32_t pedId, bool isPlayer, uint32_t attackerId, int weapon, int bodypart,
+                                   float loss);
+bool ActiveVmOnWeaponReload(uint32_t pedId, bool isPlayer, int weapon, int ammoInClip);
+bool ActiveVmOnPedChoke(uint32_t pedId, bool isPlayer, int weapon, uint32_t responsiblePedId);
+bool ActiveVmOnPlayerStealthKill(uint32_t targetPedId);
+bool ActiveVmOnHitByWaterCannon(uint32_t cannonVehId, uint32_t pedId, bool isPlayer);
+bool ActiveVmOnHeliKilled(uint32_t pedId, bool isPlayer, uint32_t heliVehId);
+bool ActiveVmOnPedNativeBikeJackAttempt(uint32_t jackerId, uint32_t vehicleId);
+void ActiveVmOnPedCarryStateChange(uint32_t pedId, bool carrying, uint32_t objectId);
+void ActiveVmOnPedStep(uint32_t pedId, bool leftFoot);
+void ActiveVmOnVehicleCollision(uint32_t vehicleId, uint32_t hitElementId, float force, int bodyPart,
+                                float x, float y, float z, float nx, float ny, float nz,
+                                float hitForce, int model);
+void ActiveVmOnVehicleWeaponHit(uint32_t vehicleId, int weaponType, uint32_t hitElementId,
+                                float x, float y, float z, int model, int material);
 // The element an event is triggered on, then each parent while call propagation
 // is enabled. An element that is not in the tree still reaches the root.
 // CClientEntity::CallParentEvent (CClientEntity.cpp 811-823).

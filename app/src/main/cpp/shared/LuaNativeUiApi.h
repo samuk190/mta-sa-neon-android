@@ -8,4 +8,5 @@ void InstallNativeUiLua(lua_State* L);
 void NativeUiDropResource(const std::string& name, uint16_t netId, uint32_t generation);
 void NativeUiAppendDraws(std::string& out, int screenW, int screenH);
 void NativeUiSetTestClockMs(int64_t nowMs);
+void NativeUiNoteEvent(uint32_t resourceRoot, uint32_t elementId, const char* eventType, int itemIndex);
 }

@@ -802,6 +802,16 @@ void NativeUiDropResource(const std::string& name, uint16_t netId, uint32_t gene
     DropOwner(OwnerKey(name, netId, generation));
 }
 
+void NativeUiNoteEvent(uint32_t resourceRoot, uint32_t elementId, const char* eventType, int itemIndex) {
+    lua_State* L = ActiveVmState();
+    if (!L) return;
+    const uint32_t src = resourceRoot ? resourceRoot : ClientRootElement();
+    lua_pushstring(L, eventType ? eventType : "click");
+    lua_pushinteger(L, static_cast<lua_Integer>(elementId));
+    lua_pushinteger(L, itemIndex);
+    ActiveVmFireElementEvent(L, "onClientNativeUI", src, 3);
+}
+
 void InstallNativeUiLua(lua_State* L) { Register(L); }
 
 }  // namespace WorldRPG::Script

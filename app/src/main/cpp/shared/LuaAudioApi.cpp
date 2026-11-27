@@ -1472,6 +1472,9 @@ int PlaySfxCommon(lua_State* L, bool is3D) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    // Notify onClientWorldSound (CClientGame.cpp:7503) for SFX playback.
+    const uint32_t src = ServerWorld::LocalPlayer() ? ServerWorld::LocalPlayer() : ClientRootElement();
+    AudioNoteWorldSound(src, bankIndex, audioIndex, is3D ? x : 0.0f, is3D ? y : 0.0f, is3D ? z : 0.0f);
     PushElement(L, id);
     return 1;
 }
@@ -2207,6 +2210,18 @@ void InstallAudioLua(lua_State* L) {
     } else {
         lua_pop(L, 1);
     }
+}
+
+bool AudioNoteWorldSound(uint32_t sourceId, int group, int index, float x, float y, float z) {
+    lua_State* L = ActiveVmState();
+    if (!L) return true;
+    const uint32_t src = sourceId ? sourceId : ClientRootElement();
+    lua_pushinteger(L, group);
+    lua_pushinteger(L, index);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    lua_pushnumber(L, z);
+    return ActiveVmFireElementEvent(L, "onClientWorldSound", src, 5);
 }
 
 }  // namespace WorldRPG::Script

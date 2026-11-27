@@ -527,6 +527,9 @@ bool ActiveVmRunCommand(const char* name, const char* args) {
         }
         handled = true;
     }
+    if (!handled) {
+        ActiveVmOnCoreCommand(name, args ? args : "");
+    }
     return handled;
 }
 
@@ -2990,8 +2993,10 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
 static constexpr const char* kMinClientGuiClickDown = "1.7.0-7.26369";  // MIN_CLIENT_REQ_ON_MOUSE_BUTTON_DOWN
 static constexpr uint64_t kGuiDoubleClickMs = 330;                    // CEGUI System default double-click timeout
 static uint32_t g_guiPressed = 0;      // widget under the last press (CEGUI click tracker)
+static uint32_t g_guiHover = 0;        // widget currently hovered by cursor
 static uint32_t g_guiLastPress = 0;    // for double clicks
 static uint64_t g_guiLastPressMs = 0;
+static uint64_t g_rootLastClickMs = 0;
 
 static void FireGuiMouseEvent(const char* name, uint32_t widget, const char* state, double x, double y,
                               const char* minClient = nullptr) {
@@ -3055,6 +3060,30 @@ static void ApplyCursorEvent(const CursorEvent& ev) {
     }
     lua_State* L = g_dx.L;
     if (ev.action == 2) {
+        const uint32_t hit = GuiPick(ev.x, ev.y);
+        if (hit != g_guiHover) {
+            const uint32_t prev = g_guiHover;
+            g_guiHover = hit;
+            if (prev && KnownClientElement(prev)) {
+                lua_pushnumber(L, ev.x);
+                lua_pushnumber(L, ev.y);
+                if (hit && KnownClientElement(hit)) PushElement(L, hit);
+                else lua_pushnil(L);
+                ActiveVmFireElementEvent(L, "onClientMouseLeave", prev, 3);
+            }
+            if (hit && KnownClientElement(hit)) {
+                lua_pushnumber(L, ev.x);
+                lua_pushnumber(L, ev.y);
+                if (prev && KnownClientElement(prev)) PushElement(L, prev);
+                else lua_pushnil(L);
+                ActiveVmFireElementEvent(L, "onClientMouseEnter", hit, 3);
+            }
+        }
+        if (hit && KnownClientElement(hit)) {
+            lua_pushnumber(L, ev.x);
+            lua_pushnumber(L, ev.y);
+            ActiveVmFireElementEvent(L, "onClientMouseMove", hit, 2);
+        }
         if (g_dx.handlers.find("onClientCursorMove") == g_dx.handlers.end()) return;
         lua_pushnumber(L, g_dx.screenW > 0 ? ev.x / g_dx.screenW : 0.0);
         lua_pushnumber(L, g_dx.screenH > 0 ? ev.y / g_dx.screenH : 0.0);
@@ -3079,6 +3108,188 @@ static void ApplyCursorEvent(const CursorEvent& ev) {
     lua_pushnumber(L, pz);
     lua_pushboolean(L, 0);
     fireHandlers("onClientClick", 8, ClientRootElement());
+    if (ev.action == 0) {
+        const uint64_t now = DxNow();
+        const bool dbl = (g_rootLastClickMs != 0 && now - g_rootLastClickMs <= kGuiDoubleClickMs);
+        g_rootLastClickMs = dbl ? 0 : now;
+        if (dbl) {
+            lua_pushstring(L, "left");
+            lua_pushnumber(L, ev.x);
+            lua_pushnumber(L, ev.y);
+            lua_pushnumber(L, px);
+            lua_pushnumber(L, py);
+            lua_pushnumber(L, pz);
+            lua_pushboolean(L, 0);
+            fireHandlers("onClientDoubleClick", 7, ClientRootElement());
+        }
+    }
+}
+
+void ActiveVmOnMouseWheel(int upOrDown, float x, float y) {
+    lua_State* L = g_dx.L;
+    if (!L || !GuiCursorShown()) return;
+    uint32_t hit = GuiPick(x, y);
+    if (!hit) hit = g_guiHover;
+    if (!hit || !KnownClientElement(hit)) return;
+    lua_pushinteger(L, upOrDown >= 0 ? 1 : -1);
+    ActiveVmFireElementEvent(L, "onClientMouseWheel", hit, 1);
+}
+
+void ActiveVmOnPaste(const char* text) {
+    lua_State* L = g_dx.L;
+    if (!L) return;
+    lua_pushstring(L, text ? text : "");
+    ActiveVmFireElementEvent(L, "onClientPaste", ClientRootElement(), 1);
+}
+
+bool ActiveVmOnCoreCommand(const char* command, const char* args) {
+    lua_State* L = g_dx.L;
+    if (!L || !command) return true;
+    lua_pushstring(L, command);
+    lua_pushstring(L, args ? args : "");
+    return ActiveVmFireElementEvent(L, "onClientCoreCommand", ClientRootElement(), 2);
+}
+
+void ActiveVmOnPlayerTarget(uint32_t targetId) {
+    lua_State* L = g_dx.L;
+    if (!L) return;
+    const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
+    if (!local) return;
+    if (targetId) PushElement(L, targetId);
+    else lua_pushboolean(L, 0);
+    ActiveVmFireElementEvent(L, "onClientPlayerTarget", local, 1);
+}
+
+void ActiveVmOnPlayerStunt(bool start, const char* stuntType, int timeMs, float distance) {
+    lua_State* L = g_dx.L;
+    if (!L) return;
+    const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
+    if (!local) return;
+    lua_pushstring(L, stuntType ? stuntType : "");
+    if (start) {
+        ActiveVmFireElementEvent(L, "onClientPlayerStuntStart", local, 1);
+    } else {
+        lua_pushinteger(L, timeMs);
+        lua_pushnumber(L, distance);
+        ActiveVmFireElementEvent(L, "onClientPlayerStuntFinish", local, 3);
+    }
+}
+
+bool ActiveVmOnNativeDamageAttempt(uint32_t pedId, bool isPlayer, uint32_t attackerId, int weapon, int bodypart,
+                                   float loss) {
+    lua_State* L = g_dx.L;
+    if (!L || !pedId) return true;
+    if (attackerId) PushElement(L, attackerId);
+    else lua_pushnil(L);
+    lua_pushinteger(L, weapon);
+    lua_pushinteger(L, bodypart);
+    lua_pushnumber(L, loss);
+    if (isPlayer) return ActiveVmFireElementEvent(L, "onClientPlayerNativeDamageAttempt", pedId, 4);
+    return ActiveVmFireElementEvent(L, "onClientPedNativeDamageAttempt", pedId, 4);
+}
+
+bool ActiveVmOnWeaponReload(uint32_t pedId, bool isPlayer, int weapon, int ammoInClip) {
+    lua_State* L = g_dx.L;
+    if (!L || !pedId) return true;
+    lua_pushinteger(L, weapon);
+    lua_pushinteger(L, ammoInClip);
+    if (isPlayer) return ActiveVmFireElementEvent(L, "onClientPlayerWeaponReload", pedId, 2);
+    return ActiveVmFireElementEvent(L, "onClientPedWeaponReload", pedId, 2);
+}
+
+bool ActiveVmOnPedChoke(uint32_t pedId, bool isPlayer, int weapon, uint32_t responsiblePedId) {
+    lua_State* L = g_dx.L;
+    if (!L || !pedId) return true;
+    lua_pushinteger(L, weapon);
+    if (responsiblePedId) PushElement(L, responsiblePedId);
+    else lua_pushnil(L);
+    if (isPlayer) return ActiveVmFireElementEvent(L, "onClientPlayerChoke", pedId, 2);
+    return ActiveVmFireElementEvent(L, "onClientPedChoke", pedId, 2);
+}
+
+bool ActiveVmOnPlayerStealthKill(uint32_t targetPedId) {
+    lua_State* L = g_dx.L;
+    if (!L) return true;
+    const uint32_t local = WorldRPG::ServerWorld::LocalPlayer();
+    if (!local || !targetPedId) return true;
+    PushElement(L, targetPedId);
+    return ActiveVmFireElementEvent(L, "onClientPlayerStealthKill", local, 1);
+}
+
+bool ActiveVmOnHitByWaterCannon(uint32_t cannonVehId, uint32_t pedId, bool isPlayer) {
+    lua_State* L = g_dx.L;
+    if (!L || !cannonVehId || !pedId) return true;
+    PushElement(L, pedId);
+    if (isPlayer) return ActiveVmFireElementEvent(L, "onClientPlayerHitByWaterCannon", cannonVehId, 1);
+    return ActiveVmFireElementEvent(L, "onClientPedHitByWaterCannon", cannonVehId, 1);
+}
+
+bool ActiveVmOnHeliKilled(uint32_t pedId, bool isPlayer, uint32_t heliVehId) {
+    lua_State* L = g_dx.L;
+    if (!L || !pedId) return true;
+    if (heliVehId) PushElement(L, heliVehId);
+    else lua_pushnil(L);
+    if (isPlayer) return ActiveVmFireElementEvent(L, "onClientPlayerHeliKilled", pedId, 1);
+    return ActiveVmFireElementEvent(L, "onClientPedHeliKilled", pedId, 1);
+}
+
+bool ActiveVmOnPedNativeBikeJackAttempt(uint32_t jackerId, uint32_t vehicleId) {
+    lua_State* L = g_dx.L;
+    if (!L || !jackerId) return true;
+    if (vehicleId) PushElement(L, vehicleId);
+    else lua_pushnil(L);
+    return ActiveVmFireElementEvent(L, "onClientPedNativeBikeJackAttempt", jackerId, 1);
+}
+
+void ActiveVmOnPedCarryStateChange(uint32_t pedId, bool carrying, uint32_t objectId) {
+    lua_State* L = g_dx.L;
+    if (!L || !pedId) return;
+    lua_pushboolean(L, carrying ? 1 : 0);
+    if (objectId) PushElement(L, objectId);
+    else lua_pushnil(L);
+    ActiveVmFireElementEvent(L, "onClientPedCarryStateChange", pedId, 2);
+}
+
+void ActiveVmOnPedStep(uint32_t pedId, bool leftFoot) {
+    lua_State* L = g_dx.L;
+    if (!L || !pedId) return;
+    lua_pushboolean(L, leftFoot ? 1 : 0);
+    ActiveVmFireElementEvent(L, "onClientPedStep", pedId, 1);
+}
+
+void ActiveVmOnVehicleCollision(uint32_t vehicleId, uint32_t hitElementId, float force, int bodyPart,
+                                float x, float y, float z, float nx, float ny, float nz,
+                                float hitForce, int model) {
+    lua_State* L = g_dx.L;
+    if (!L || !vehicleId) return;
+    if (hitElementId) PushElement(L, hitElementId);
+    else lua_pushnil(L);
+    lua_pushnumber(L, force);
+    lua_pushinteger(L, bodyPart);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    lua_pushnumber(L, z);
+    lua_pushnumber(L, nx);
+    lua_pushnumber(L, ny);
+    lua_pushnumber(L, nz);
+    lua_pushnumber(L, hitForce);
+    lua_pushinteger(L, model);
+    ActiveVmFireElementEvent(L, "onClientVehicleCollision", vehicleId, 11);
+}
+
+void ActiveVmOnVehicleWeaponHit(uint32_t vehicleId, int weaponType, uint32_t hitElementId,
+                                float x, float y, float z, int model, int material) {
+    lua_State* L = g_dx.L;
+    if (!L || !vehicleId) return;
+    lua_pushinteger(L, weaponType);
+    if (hitElementId) PushElement(L, hitElementId);
+    else lua_pushnil(L);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    lua_pushnumber(L, z);
+    lua_pushinteger(L, model);
+    lua_pushinteger(L, material);
+    ActiveVmFireElementEvent(L, "onClientVehicleWeaponHit", vehicleId, 7);
 }
 
 std::string LuaVMStub::pumpDx(bool renderFrame) {

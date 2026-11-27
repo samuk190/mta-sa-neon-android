@@ -367,8 +367,11 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
                     lua_pushnil(L);  // weapon
                     lua_pushinteger(L, 3);  // torso bodypart
                     lua_pushnumber(L, loss);
-                    WorldRPG::Script::ActiveVmFireElementEvent(
-                        L, isPlayer ? "onClientPlayerDamage" : "onClientPedDamage", id, 4);
+                    if (isPlayer) {
+                        WorldRPG::Script::ActiveVmFireElementEvent(L, "onClientPlayerDamage", id, 4);
+                    } else {
+                        WorldRPG::Script::ActiveVmFireElementEvent(L, "onClientPedDamage", id, 4);
+                    }
                 });
             }
             return true;
@@ -651,6 +654,9 @@ bool HandleWasted(const uint8_t* body, size_t length, size_t bits, uint8_t packe
     // death, so the server's packet always does.
     const bool player = id == WorldRPG::ServerWorld::LocalPlayer() || WorldRPG::ServerWorld::IsKnownPlayer(id);
     auto fire = [&] {
+        if ((weapon & 0x3F) == 50) {
+            WorldRPG::Script::ActiveVmOnHeliKilled(id, player, killer);
+        }
         WorldRPG::Script::ActiveVmFireWasted(player, id, killer, weapon & 0x3F, (part & 0x7) + 3, stealth,
                                              static_cast<int>(group), static_cast<int>(anim));
     };
