@@ -127,13 +127,16 @@ void Masking() {
     C::SetControlEnabled("fire", true);
 
     // Axis: left is the negative half of the on-foot X axis, right the positive half.
+    // Also verify zero-extended int16_t values (0xFF80 == -128 as ldrh w0 on ARM64).
     C::SetControlEnabled("left", false);
     Check(C::MaskGetter(C::Getter::PedWalkLeftRight, -128) == 0, "left disabled clears a left stick");
+    Check(C::MaskGetter(C::Getter::PedWalkLeftRight, 0xFF80) == 0, "left disabled clears zero-extended -128");
     Check(C::MaskGetter(C::Getter::PedWalkLeftRight, 77) == 77, "left disabled keeps a right stick");
     C::SetControlEnabled("left", true);
     C::SetControlEnabled("right", false);
     Check(C::MaskGetter(C::Getter::PedWalkLeftRight, 77) == 0 && C::MaskGetter(C::Getter::PedWalkLeftRight, -77) == -77,
         "right disabled clears only the positive half");
+    Check(C::MaskGetter(C::Getter::PedWalkLeftRight, 0xFF80) == 0xFF80, "right disabled preserves zero-extended -128");
     C::SetControlEnabled("right", true);
     C::SetControlEnabled("forwards", false);
     Check(C::MaskGetter(C::Getter::PedWalkUpDown, -128) == 0 && C::MaskGetter(C::Getter::PedWalkUpDown, 128) == 128,

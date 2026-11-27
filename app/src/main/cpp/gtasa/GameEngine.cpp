@@ -909,7 +909,9 @@ static void SampleLocalPadAndCamera() {
             // getters return the touch joystick (CPad::GetPedWalkLeftRight 0x4dcd40 / GetPedWalkUpDown 0x4dcdd4,
             // IsTouched widget 0xa7), so they are called here. Desktop observers saw a released stick and no walk
             // cycle for the phone player (device 2026-11-14). The NewState shorts remain the fallback.
-            using WalkFn = int (*)(void*);
+            // CPad::GetPedWalkLeftRight / GetPedWalkUpDown return a short in w0 via ldrh on the non-touch path
+            // (zero-extended into w0); declaring int16_t ensures negative values are sign-extended before clamping.
+            using WalkFn = int16_t (*)(void*);
             static WalkFn walkLR = nullptr, walkUD = nullptr;
             static bool (*getSprint)(void*, int) = nullptr;
             static bool lookedWalk = false;
@@ -926,8 +928,8 @@ static void SampleLocalPadAndCamera() {
             }
             int16_t sx = 0, sy = 0;
             if (walkLR && walkUD) {
-                sx = static_cast<int16_t>(std::clamp(walkLR(pad), -128, 128));
-                sy = static_cast<int16_t>(std::clamp(walkUD(pad), -128, 128));
+                sx = static_cast<int16_t>(std::clamp(static_cast<int>(walkLR(pad)), -128, 128));
+                sy = static_cast<int16_t>(std::clamp(static_cast<int>(walkUD(pad)), -128, 128));
             } else {
                 std::memcpy(&sx, static_cast<unsigned char*>(pad) + 0, sizeof sx);
                 std::memcpy(&sy, static_cast<unsigned char*>(pad) + 2, sizeof sy);
