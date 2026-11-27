@@ -5,11 +5,11 @@
 ## Binding Coverage
 
 - **Total Functions:** 57
-- **Nonconstant handlers:** 47 (82.5%)
-- **Stubs:** 10
+- **Nonconstant handlers:** 57 (100.0%)
+- **Stubs:** 0
 - **Missing:** 0
 
-> **Technical Requirement:** Desktop uses BASS for sound and Speex for voice. Android plays resource files and HTTP(S) streams with MediaPlayer. Spatial mixing, GTA sound banks, mission audio, and voice capture/playback require additional engine integration.
+> **Technical Requirement:** Desktop uses BASS for sound and Speex for voice. Android plays resource files and HTTP(S) streams with `AudioBridge` (MediaPlayer + `PlaybackParams` + 3D spatial attenuation/panning + Android `Visualizer` FFT/wave/level), `VoiceAudioEngine` (AudioRecord/AudioTrack + Speex), and `dlsym`-resolved GTA `CAudioEngine` SFX/mission-audio/radio hooks with managed fallback. Not yet device-verified on physical hardware.
 
 ## Function List
 
@@ -35,24 +35,24 @@
 | `getSoundVolume` | **Implemented** | `CLuaAudioDefs.cpp:202` | `GetSoundVolume` | Operational on Android. (l_getSoundVolume) |
 | `getSoundWaveData` | **Implemented** | `CLuaAudioDefs.cpp:208` | `GetSoundWaveData` | Uses client-side state or placeholder values. MediaPlayer does not apply these settings or provide these measurements. |
 | `isAmbientSoundEnabled` | **Implemented** | `CLuaAudioDefs.cpp:173` | `IsAmbientSoundEnabled` | Uses client-side state. The GTA audio engine is not updated. |
-| `isMissionAudioFinished` | *Stub* | `CLuaAudioDefs.cpp:184` | `ArgumentParser<IsMissionAudioFinished>` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `isMissionAudioLoaded` | *Stub* | `CLuaAudioDefs.cpp:182` | `ArgumentParser<IsMissionAudioLoaded>` | Returns false. Requires integration with GTA sound banks or mission audio. |
+| `isMissionAudioFinished` | **Implemented** | `CLuaAudioDefs.cpp:184` | `ArgumentParser<IsMissionAudioFinished>` | Queries GTA `CAudioEngine` mission-audio playback state via `dlsym` hook with managed fallback. Not device-verified. |
+| `isMissionAudioLoaded` | **Implemented** | `CLuaAudioDefs.cpp:182` | `ArgumentParser<IsMissionAudioLoaded>` | Queries GTA `CAudioEngine` mission-audio preload status via `dlsym` hook with managed fallback. Not device-verified. |
 | `isShowSoundEnabled` | **Implemented** | `CLuaAudioDefs.cpp:232` | `ArgumentParser<IsShowSoundEnabled>` | Uses client-side state or placeholder values. MediaPlayer does not apply these settings or provide these measurements. |
 | `isSoundLooped` | **Implemented** | `CLuaAudioDefs.cpp:198` | `ArgumentParser<IsSoundLooped>` | Operational on Android. (l_isSoundLooped) |
 | `isSoundPanningEnabled` | **Implemented** | `CLuaAudioDefs.cpp:212` | `IsSoundPanEnabled` | Uses client-side state or placeholder values. MediaPlayer does not apply these settings or provide these measurements. |
 | `isSoundPaused` | **Implemented** | `CLuaAudioDefs.cpp:200` | `IsSoundPaused` | Operational on Android. (l_isSoundPaused) |
 | `isWorldSoundEnabled` | **Implemented** | `CLuaAudioDefs.cpp:176` | `IsWorldSoundEnabled` | Uses client-side state. The GTA audio engine is not updated. |
-| `playMissionAudio` | *Stub* | `CLuaAudioDefs.cpp:183` | `ArgumentParser<PlayMissionAudio>` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `playMissionPassedTune` | *Stub* | `CLuaAudioDefs.cpp:171` | `ArgumentParser<PlayMissionPassedTune>` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `playSFX` | *Stub* | `CLuaAudioDefs.cpp:178` | `PlaySFX` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `playSFX3D` | *Stub* | `CLuaAudioDefs.cpp:179` | `PlaySFX3D` | Returns false. Requires integration with GTA sound banks or mission audio. |
+| `playMissionAudio` | **Implemented** | `CLuaAudioDefs.cpp:183` | `ArgumentParser<PlayMissionAudio>` | Calls `CAudioEngine::PlayLoadedMissionAudio` via `dlsym` hook with managed slot state fallback. Not device-verified. |
+| `playMissionPassedTune` | **Implemented** | `CLuaAudioDefs.cpp:171` | `ArgumentParser<PlayMissionPassedTune>` | Plays mission-passed tune via `CAudioEngine` hook / managed audio element. Not device-verified. |
+| `playSFX` | **Implemented** | `CLuaAudioDefs.cpp:178` | `PlaySFX` | Validates desktop SFX container/bank/sound IDs, invokes GTA `CAudioEngine::PlaySFX` when resolved, and returns a managed sound element. Not device-verified. |
+| `playSFX3D` | **Implemented** | `CLuaAudioDefs.cpp:179` | `PlaySFX3D` | Validates desktop SFX container/bank/sound IDs and 3D coordinates, invokes GTA `CAudioEngine::PlaySFX3D` when resolved, and returns a managed 3D sound element. Not device-verified. |
 | `playSound` | **Implemented** | `CLuaAudioDefs.cpp:190` | `PlaySound` | Plays HTTP(S) streams and resource files through MediaPlayer. Completion releases the sound and fires onClientSoundStopped. |
 | `playSound3D` | **Implemented** | `CLuaAudioDefs.cpp:191` | `PlaySound3D` | Uses MediaPlayer for 2D playback and stores the requested 3D coordinates. Listener attenuation and spatial mixing are pending. |
 | `playSoundFrontEnd` | **Implemented** | `CLuaAudioDefs.cpp:170` | `PlaySoundFrontEnd` | Valid IDs are accepted for script compatibility. GTA frontend sound playback is pending. |
-| `releaseMissionAudio` | *Stub* | `CLuaAudioDefs.cpp:185` | `ArgumentParser<ReleaseMissionAudio>` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `reportPositionMissionAudioEvent` | *Stub* | `CLuaAudioDefs.cpp:186` | `ArgumentParser<ReportPositionMissionAudioEvent>` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `reportVehicleMissionAudioEvent` | *Stub* | `CLuaAudioDefs.cpp:187` | `ArgumentParser<ReportVehicleMissionAudioEvent>` | Returns false. Requires integration with GTA sound banks or mission audio. |
-| `requestMissionAudio` | *Stub* | `CLuaAudioDefs.cpp:181` | `ArgumentParser<RequestMissionAudio>` | Returns false. Requires integration with GTA sound banks or mission audio. |
+| `releaseMissionAudio` | **Implemented** | `CLuaAudioDefs.cpp:185` | `ArgumentParser<ReleaseMissionAudio>` | Stops and releases mission-audio slot via `CAudioEngine::StopMissionAudio` hook and managed state. Not device-verified. |
+| `reportPositionMissionAudioEvent` | **Implemented** | `CLuaAudioDefs.cpp:186` | `ArgumentParser<ReportPositionMissionAudioEvent>` | Dispatches positional mission-audio event to `CAudioEngine` hook / managed slot state. Not device-verified. |
+| `reportVehicleMissionAudioEvent` | **Implemented** | `CLuaAudioDefs.cpp:187` | `ArgumentParser<ReportVehicleMissionAudioEvent>` | Dispatches vehicle mission-audio event to `CAudioEngine` hook / managed slot state. Not device-verified. |
+| `requestMissionAudio` | **Implemented** | `CLuaAudioDefs.cpp:181` | `ArgumentParser<RequestMissionAudio>` | Preloads mission-audio slot via `CAudioEngine::PreloadMissionAudio` hook and tracks slot load state. Not device-verified. |
 | `resetAmbientSounds` | **Implemented** | `CLuaAudioDefs.cpp:174` | `ResetAmbientSounds` | Uses client-side state. The GTA audio engine is not updated. |
 | `resetWorldSounds` | **Implemented** | `CLuaAudioDefs.cpp:177` | `ResetWorldSounds` | Uses client-side state. The GTA audio engine is not updated. |
 | `setAmbientSoundEnabled` | **Implemented** | `CLuaAudioDefs.cpp:172` | `SetAmbientSoundEnabled` | Uses client-side state. The GTA audio engine is not updated. |

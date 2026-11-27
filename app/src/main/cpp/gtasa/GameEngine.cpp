@@ -101,6 +101,9 @@ static Vec3 g_localPlacement{1754.f, -1894.f, 14.f};
 static uint64_t g_requestedPlacement = 0;
 static uint64_t g_appliedPlacement = 0;
 static std::atomic<int> g_pendingLocalInterior{-1};
+static std::atomic<int> g_pendingLocalFrozen{-1};
+static std::atomic<bool> g_pendingLocalRotationPending{false};
+static std::atomic<float> g_pendingLocalRotation{0.f};
 // ButtonCross (sprint) held, and a ButtonSquare (jump) press waiting for the next on-foot packet.
 static std::atomic<bool> g_localSprint{false};
 static uint64_t g_controlPressSequence = 0;  // game-thread producer for on-foot input
@@ -3941,6 +3944,15 @@ static void ApplyLocalPedRpcs() {
         ApplyPedInterior(ped, localArea, static_cast<uint8_t>(interior));
         if (g_currentArea && *g_currentArea == previous) *g_currentArea = interior;
     }
+    if (const int frozen = g_pendingLocalFrozen.exchange(-1); frozen >= 0) {
+        // CElementRPCs::SetElementFrozen (CElementRPCs.cpp:697-728) -> CPhysicalSA::SetFrozen.
+        SetPhysicalFrozen(ped, frozen != 0);
+    }
+    if (g_pendingLocalRotationPending.exchange(false)) {
+        // CPedRPCs::SetPedRotation (CPedRPCs.cpp:62-90) -> CPed +0x6C4/+0x6C8 heading.
+        const float radians = g_pendingLocalRotation.load();
+        if (std::isfinite(radians)) SetRemotePedHeading(ped, radians);
+    }
     RunPedRpcOps(local, ped, true, nullptr);
     PendingLocalWasted localKill;
     {
@@ -6757,7 +6769,11 @@ void NoteRemoteSpawn(uint32_t id) {
 }
 
 void RpcSetFrozen(uint32_t id, bool frozen) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    if (id == ServerWorld::LocalPlayer()) {
+        g_pendingLocalFrozen = frozen ? 1 : 0;
+        return;
+    }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") == 0) {
         std::lock_guard lock(g_remoteMutex);
         g_remoteCars[id].frozen = frozen;
@@ -6770,7 +6786,12 @@ void RpcSetFrozen(uint32_t id, bool frozen) {
 }
 
 void RpcSetRotation(uint32_t id, float radians) {
-    if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer() || !std::isfinite(radians)) return;
+    if (id == 0 || id == 0xFFFFFFFFu || !std::isfinite(radians)) return;
+    if (id == ServerWorld::LocalPlayer()) {
+        g_pendingLocalRotation.store(radians);
+        g_pendingLocalRotationPending.store(true);
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     RemotePed& ped = g_remotePeds[id];
     ped.heading = radians;
@@ -6928,6 +6949,8 @@ void RequestRemoteReset() {
         std::lock_guard lock(g_localPlacementMutex);
         g_appliedPlacement = g_requestedPlacement;
         g_pendingLocalInterior = -1;
+        g_pendingLocalFrozen = -1;
+        g_pendingLocalRotationPending.store(false);
     }
     {
         std::lock_guard<std::mutex> lock(g_remoteMutex);

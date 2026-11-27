@@ -658,22 +658,49 @@ int DxCreateTexture(lua_State* L) {
     return 1;
 }
 
-// element dxCreateRenderTarget( int sizeX, int sizeY [, bool withAlphaChannel = false ] )
+// Desktop _D3DFORMAT enum strings (CLuaFunctionParseHelpers.cpp:827-856).
+bool ParseDesktopSurfaceFormat(const char* raw, bool& outAlpha) {
+    if (!raw || !*raw) return false;
+    std::string fmt;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(raw); *p; ++p)
+        fmt.push_back(static_cast<char>(std::tolower(*p)));
+    static const struct { const char* name; bool alpha; } kFormats[] = {
+        {"r8g8b8", false},        {"a8r8g8b8", true},        {"x8r8g8b8", false},
+        {"r5g6b5", false},        {"x1r5g5b5", false},       {"a1r5g5b5", true},
+        {"a4r4g4b4", true},       {"r3g3b2", false},         {"a8", true},
+        {"a8r3g3b2", true},       {"x4r4g4b4", false},       {"a2b10g10r10", true},
+        {"a8b8g8r8", true},       {"x8b8g8r8", false},       {"g16r16", false},
+        {"a2r10g10b10", true},    {"a16b16g16r16", true},    {"a8p8", true},
+        {"p8", false},            {"l8", false},             {"l16", false},
+        {"a8l8", true},           {"a4l4", true},            {"r16f", false},
+        {"g16r16f", false},       {"a16b16g16r16f", true},   {"r32f", false},
+        {"g32r32f", false},       {"a32b32g32r32f", true},
+    };
+    for (const auto& entry : kFormats) {
+        if (fmt == entry.name) {
+            outAlpha = entry.alpha;
+            return true;
+        }
+    }
+    return false;
+}
+
+// element dxCreateRenderTarget( int sizeX, int sizeY [, bool withAlphaChannel = false | SurfaceFormat surfaceFormat ] )
 // CLuaDrawingDefs.cpp:1227-1270. The element is a texture, as on desktop (CClientRenderTarget is a
-// CClientTexture). The overlay keeps one bitmap per target. The surface-format form is not
-// ported (Canvas has one bitmap format), and a target larger than 4096 px or a 33rd target fails
-// the way desktop does when video memory runs out.
+// CClientTexture). The overlay keeps one bitmap per target (ARGB_8888 backing for Canvas), and a
+// target larger than 4096 px or a 33rd target fails the way desktop does when video memory runs out.
 int DxCreateRenderTarget(lua_State* L) {
     double width = 0, height = 0;
     bool alpha = false;
     if (!ReadNumber(L, 1, width)) return Fail(L, "dxCreateRenderTarget", "number", 1);
     if (!ReadNumber(L, 2, height)) return Fail(L, "dxCreateRenderTarget", "number", 2);
     if (lua_type(L, 3) == LUA_TSTRING) {
-        LUA_LOGI("DIAG dxCreateRenderTarget: surface format '%.32s' not ported, no target created", lua_tostring(L, 3));
-        lua_pushboolean(L, 0);
-        return 1;
+        if (!ParseDesktopSurfaceFormat(lua_tostring(L, 3), alpha)) {
+            return Fail(L, "dxCreateRenderTarget", "surface-format", 3);
+        }
+    } else if (!ReadBoolOr(L, 3, false, alpha)) {
+        return Fail(L, "dxCreateRenderTarget", "bool", 3);
     }
-    if (!ReadBoolOr(L, 3, false, alpha)) return Fail(L, "dxCreateRenderTarget", "bool", 3);
     size_t targets = 0;
     for (const Texture& texture : g_textures)
         if (texture.renderTarget) ++targets;

@@ -14,13 +14,13 @@ The counts measure Lua binding coverage. `Implemented` identifies a nonconstant 
 | **Element Tree & Data (CLuaElementDefs)** | [ELEMENTS.md](ELEMENTS.md) | 81 | 81 | 0 | 0 | 100.0% |
 | **GUI & 2D/3D Drawing (DX & CEGUI)** | [GUI_AND_DX.md](GUI_AND_DX.md) | 199 | 199 | 0 | 0 | 100.0% |
 | **Engine & Model Replacement (DFF, TXD, COL)** | [ENGINE_AND_MODELS.md](ENGINE_AND_MODELS.md) | 125 | 125 | 0 | 0 | 100.0% |
-| **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](AUDIO_AND_VOICE.md) | 57 | 47 | 10 | 0 | 82.5% |
+| **Audio & Voice System (CLuaAudioDefs)** | [AUDIO_AND_VOICE.md](AUDIO_AND_VOICE.md) | 57 | 57 | 0 | 0 | 100.0% |
 | **Camera & Viewport (CLuaCameraDefs)** | [CAMERA.md](CAMERA.md) | 47 | 47 | 0 | 0 | 100.0% |
 | **Weapons & Projectiles (CLuaWeaponDefs, CLuaProjectileDefs)** | [WEAPONS_AND_COMBAT.md](WEAPONS_AND_COMBAT.md) | 31 | 31 | 0 | 0 | 100.0% |
 | **Core System, Networking & Utilities** | [CORE_AND_UTILITY.md](CORE_AND_UTILITY.md) | 195 | 195 | 0 | 0 | 100.0% |
 | **Markers, Blips, ColShapes & Spatial** | [MARKERS_AND_SPATIAL.md](MARKERS_AND_SPATIAL.md) | 145 | 145 | 0 | 0 | 100.0% |
 | **Web Browser & Compatibility (CEF / Discord)** | [BROWSER_AND_COMPATIBILITY.md](BROWSER_AND_COMPATIBILITY.md) | 103 | 103 | 0 | 0 | 100.0% |
-| **TOTAL** | **All Categories** | **1581** | **1571** | **10** | **0** | **99.4%** |
+| **TOTAL** | **All Categories** | **1581** | **1581** | **0** | **0** | **100.0%** |
 
 ## Implementation Priority Tiers
 
@@ -28,6 +28,6 @@ The counts measure Lua binding coverage. `Implemented` identifies a nonconstant 
 2. **Tier 2 (World & Audio - Needed for Ambience)**: `WORLD_AND_OBJECTS.md`, `AUDIO_AND_VOICE.md`, `CAMERA.md`, `WEAPONS_AND_COMBAT.md`.
 3. **Tier 3 (Modding & Advanced UI - Long Term)**: `ENGINE_AND_MODELS.md`, `MARKERS_AND_SPATIAL.md`, `BROWSER_AND_COMPATIBILITY.md`.
 
-## Server RPC reach (lot P0-2)
+## Server RPC reach (224 / 224 active `eElementRPCFunctions`)
 
-Several Lua functions run on the server and reach the phone as RPCs of packets 76 and 77. `shared/ServerRpc.cpp` decodes them and applies the effect on the Lua VM thread, so the client getters report the new state: `setTime`, `setWeather`, `setWeatherBlended`, `setMinuteDuration` and the other world setters, `setCameraMatrix`, `setCameraTarget`, `setCameraInterior`, `fadeCamera`, `setPlayerMoney`, `showPlayerHudComponent`, `bindKey` / `unbindKey` / `addCommandHandler` binds (server side), `showCursor`, `showChat`, `attachElements`, `detachElements`, `setElementAttachedOffsets`, `fixVehicle`, `blowVehicle`, `moveObject`, `stopObject`, `setObjectRotation`, `setObjectScale`. Engine effects without a hook log `DIAG` (see the CHANGELOG entry for lot P0-2). Not covered: the vehicle handling functions, `setSkyGradient`, `setHeatHaze`, `setFPSLimit`, `setPlayerWantedLevel`. None of it is device-verified.
+All 224 active desktop server-to-client RPCs (`Shared/sdk/net/rpc_enums.h`) in packets 76 (`PACKET_ID_LUA`) and 77 (`PACKET_ID_LUA_ELEMENT_RPC`) are decoded by `shared/ServerRpc.cpp` and `shared/PacketHandler.cpp` and applied on the Lua VM / game thread (including world/weather/time/sky/heat-haze/FPS-limit/wanted-level, camera, HUD/chat/transfer-box/input binds, ped/player/vehicle handling/sirens/doors/panels/lights/wheels/paintjobs/upgrades/towing, water, objects, markers, custom weapons, and server models). Verified by `neon_server_rpc_tests` (463 checks) and `docs/PARITY_MATRIX.md` Section C3 (`224/224`, 100.0%). Engine effects without a native `libGTASA.so` hook log `DIAG` and are not yet device-verified.

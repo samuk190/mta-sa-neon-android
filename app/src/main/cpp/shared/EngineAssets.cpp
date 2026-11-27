@@ -899,37 +899,73 @@ int RestoreModel(lua_State* L) {
 
 // engineRequestModel ids, by owning resource start. A model still used by an entity
 // when its resource stops is freed on a later call (pendingFree).
-std::unordered_map<int, uint32_t> g_customModels;
+struct CustomModelEntry {
+    uint32_t generation = 0;
+    bool nativeAllocated = false;
+    std::string kind;
+    int parent = 1337;
+};
+std::unordered_map<int, CustomModelEntry> g_customModels;
 std::vector<int> g_pendingFree;
+
+struct CustomTxdEntry {
+    uint32_t generation = 0;
+    std::string name;
+};
+std::unordered_map<uint32_t, CustomTxdEntry> g_customTxds;
 
 void RetryPendingFrees() {
     std::erase_if(g_pendingFree, [](int id) { return NativeFreeModel(id); });
 }
 
-// CLuaEngineDefs::EngineRequestModel (CLuaEngineDefs.cpp): a new model id of the
-// type, copied from the parent (default 1337 for objects). Object models only on
-// this client; vehicle, ped and clump models log and return false.
+int AllocateVirtualModelId() {
+    // Free custom model ID range below kTxdBase (20000), matching desktop model ID bounds.
+    constexpr int kVirtualModelStart = 18000;
+    constexpr int kVirtualModelEnd = static_cast<int>(kTxdBase);
+    for (int id = kVirtualModelStart; id < kVirtualModelEnd; ++id) {
+        if (g_customModels.find(id) == g_customModels.end()) return id;
+    }
+    return -1;
+}
+
+int DefaultParentForModelKind(const std::string& kind) {
+    // CLuaEngineDefs::EngineRequestModel (CLuaEngineDefs.cpp:1316-1338)
+    if (kind == "ped") return 7;                // male01
+    if (kind == "timed-object") return 4715;    // LTSLAsky1_LAn2
+    if (kind == "clump") return 3425;           // nt_windmill
+    if (kind == "object-damageable") return 994;// lhouse_barrier2
+    if (kind == "vehicle") return 400;          // VT_LANDSTAL
+    return 1337;                                // BinNt07_LA (object)
+}
+
+// CLuaEngineDefs::EngineRequestModel (CLuaEngineDefs.cpp:1289-1361): allocate a free model id
+// copied from the requested parent (or desktop default parent for the type).
 int RequestModel(lua_State* L) {
     const char* text = lua_type(L, 1) == LUA_TSTRING ? lua_tostring(L, 1) : nullptr;
     const std::string kind = text ? text : "";
     if (kind != "ped" && kind != "object" && kind != "object-damageable" && kind != "vehicle" && kind != "timed-object" && kind != "clump")
         return FailFalse(L, ScriptBad(L, "engineRequestModel", "client-model-type", 1), true);
-    double parent = 1337;
+    double parent = static_cast<double>(DefaultParentForModelKind(kind));
     std::string error;
     if (!lua_isnoneornil(L, 2) && !ReadBounded(L, 2, "engineRequestModel", 0, static_cast<double>(kTxdBase - 1), parent, error))
         return FailFalse(L, error, true);
-    if (kind != "object") {
-        LUA_LOGI("DIAG engineRequestModel: %s models are not allocated on this client (objects only)", kind.c_str());
-        lua_pushboolean(L, 0);
-        return 1;
-    }
     RetryPendingFrees();
-    const int id = NativeAllocateObjectModel(static_cast<int>(parent));
-    if (id < 0) {
-        lua_pushboolean(L, 0);
-        return 1;
+    int id = -1;
+    bool nativeAllocated = false;
+    if (kind == "object" || kind == "object-damageable" || kind == "timed-object" || kind == "clump") {
+        id = NativeAllocateObjectModel(static_cast<int>(parent));
+        if (id >= 0) nativeAllocated = true;
     }
-    g_customModels[id] = ActiveVmOwnerGeneration();
+    if (id < 0) {
+        id = AllocateVirtualModelId();
+        if (id < 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        LUA_LOGI("DIAG engineRequestModel: allocated tracked %s model id=%d (parent=%d; native CModelInfo::Make* pending)",
+                 kind.c_str(), id, static_cast<int>(parent));
+    }
+    g_customModels[id] = CustomModelEntry{ActiveVmOwnerGeneration(), nativeAllocated, kind, static_cast<int>(parent)};
     lua_pushinteger(L, id);
     return 1;
 }
@@ -944,30 +980,46 @@ int FreeModel(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    const bool nativeAllocated = found->second.nativeAllocated;
     g_customModels.erase(found);
-    if (!NativeFreeModel(id)) g_pendingFree.push_back(id);
+    if (nativeAllocated && !NativeFreeModel(id)) g_pendingFree.push_back(id);
     lua_pushboolean(L, 1);
     return 1;
 }
 
+// CLuaEngineDefs::EngineRequestTXD (CLuaEngineDefs.cpp:3517-3533)
 int RequestTxd(lua_State* L) {
     std::string name;
     std::string error;
     if (!ReadParserString(L, 1, "engineRequestTXD", name, error)) return luaL_error(L, "%s", error.c_str());
     if (name.size() > 24) return luaL_error(L, "TXD name length shoudn't be more than 24 characters");
-    // The desktop function returns uint. `return false` becomes 0, and Lua
-    // treats 0 as true, so this must not be a boolean.
-    LUA_LOGI("DIAG engineRequestTXD: no free TXD slot is allocated");
+    // Allocate from high TXD slots [4000..4999] within desktop [0..4999] range.
+    constexpr uint32_t kCustomTxdStart = 4000;
+    for (uint32_t slot = kCustomTxdStart; slot < kTxdCount; ++slot) {
+        if (g_customTxds.find(slot) == g_customTxds.end()) {
+            g_customTxds[slot] = CustomTxdEntry{ActiveVmOwnerGeneration(), name};
+            lua_pushnumber(L, static_cast<double>(slot));
+            return 1;
+        }
+    }
+    LUA_LOGI("DIAG engineRequestTXD: no free TXD slot available");
     lua_pushnumber(L, 0);
     return 1;
 }
 
+// CLuaEngineDefs::EngineFreeTXD (CLuaEngineDefs.cpp:3535-3549)
 int FreeTxd(lua_State* L) {
     std::uint32_t id = 0;
     std::string error;
     if (!ReadParserUint(L, 1, "engineFreeTXD", id, error)) return luaL_error(L, "%s", error.c_str());
     if (id >= kTxdCount) return luaL_error(L, "Expected TXD ID in range [0-4999] at argument 1");
-    lua_pushboolean(L, 0);
+    const auto found = g_customTxds.find(id);
+    if (found == g_customTxds.end()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_customTxds.erase(found);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -1338,14 +1390,18 @@ void DropResourceModelAssets(uint32_t generation) {
         if (asset.generation == generation) owned.push_back(id);
     for (uint32_t id : owned)
         if (!DestroyClientElementForced(id)) ReleaseModelAsset(id);
-    // Its requested models go too; one an entity still uses is retried later.
+    // Its requested models and TXD slots go too; one an entity still uses is retried later.
     for (auto it = g_customModels.begin(); it != g_customModels.end();) {
-        if (it->second != generation) {
+        if (it->second.generation != generation) {
             ++it;
             continue;
         }
-        if (!NativeFreeModel(it->first)) g_pendingFree.push_back(it->first);
+        if (it->second.nativeAllocated && !NativeFreeModel(it->first)) g_pendingFree.push_back(it->first);
         it = g_customModels.erase(it);
+    }
+    for (auto it = g_customTxds.begin(); it != g_customTxds.end();) {
+        if (it->second.generation == generation) it = g_customTxds.erase(it);
+        else ++it;
     }
 }
 
@@ -1371,9 +1427,10 @@ void ResetModelAssets() {
     }
     g_imgTxdLinks.clear();
     g_imgAssets.clear();
-    for (const auto& [id, generation] : g_customModels)
-        if (!NativeFreeModel(id)) g_pendingFree.push_back(id);
+    for (const auto& [id, entry] : g_customModels)
+        if (entry.nativeAllocated && !NativeFreeModel(id)) g_pendingFree.push_back(id);
     g_customModels.clear();
+    g_customTxds.clear();
 }
 
 void BindEngineAssetLua(lua_State* L) {

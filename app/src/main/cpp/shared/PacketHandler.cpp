@@ -299,7 +299,6 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             bool frozen = false;
             if (!ReadFlag(reader, frozen)) return false;
             if (!pedLike && !vehicleLike) { logUnported("native frozen state is unavailable for this element"); return true; }
-            if (id == WorldRPG::ServerWorld::LocalPlayer()) logUnported("local SetFrozen not ported");
             WorldRPG::Game::RpcSetFrozen(id, frozen);
             return true;
         }
@@ -393,7 +392,6 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             if (!WorldRPG::Entity::PedWire::ReadAngle16(reader, heading) || !reader.Read(context)) return false;
             WorldRPG::Game::RpcSetRotation(id, heading);
             if (pedLike) WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
-            if (id == WorldRPG::ServerWorld::LocalPlayer()) logUnported("local SetCurrentRotation not ported");
             return true;
         }
         case Rpc::SetPedDoingGangDriveby: {
