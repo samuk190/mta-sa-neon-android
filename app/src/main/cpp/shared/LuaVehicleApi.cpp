@@ -3266,26 +3266,33 @@ void VehicleApplyBlownState(uint32_t id, bool blown) {
 }
 
 void VehicleApplyTrailerLink(uint32_t vehicleId, uint32_t trailerId, bool attached) {
-    if (vehicleId == 0 || trailerId == 0 || vehicleId == trailerId) return;
+    if (vehicleId == 0 || vehicleId == 0xFFFFFFFFu || trailerId == 0 || trailerId == 0xFFFFFFFFu ||
+        vehicleId == trailerId) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
-    VehicleFlags& tower = g_vehicleFlags[vehicleId];
     if (attached) {
-        if (tower.towed != 0 && tower.towed != trailerId) {
-            auto oldIt = g_vehicleFlags.find(tower.towed);
+        if (auto towerIt = g_vehicleFlags.find(vehicleId);
+            towerIt != g_vehicleFlags.end() && towerIt->second.towed != 0 && towerIt->second.towed != trailerId) {
+            auto oldIt = g_vehicleFlags.find(towerIt->second.towed);
             if (oldIt != g_vehicleFlags.end() && oldIt->second.towedBy == vehicleId) oldIt->second.towedBy = 0;
         }
-        VehicleFlags& trailer = g_vehicleFlags[trailerId];
-        if (trailer.towedBy != 0 && trailer.towedBy != vehicleId) {
-            auto oldTower = g_vehicleFlags.find(trailer.towedBy);
+        if (auto trailerIt = g_vehicleFlags.find(trailerId);
+            trailerIt != g_vehicleFlags.end() && trailerIt->second.towedBy != 0 &&
+            trailerIt->second.towedBy != vehicleId) {
+            auto oldTower = g_vehicleFlags.find(trailerIt->second.towedBy);
             if (oldTower != g_vehicleFlags.end() && oldTower->second.towed == trailerId) oldTower->second.towed = 0;
         }
-        tower.towed = trailerId;
-        trailer.towedBy = vehicleId;
+        // Separate map lookups so a rehash from the second operator[] cannot invalidate a reference from the first.
+        g_vehicleFlags[vehicleId].towed = trailerId;
+        g_vehicleFlags[trailerId].towedBy = vehicleId;
     } else {
-        if (tower.towed != 0) {
-            auto prev = g_vehicleFlags.find(tower.towed);
-            if (prev != g_vehicleFlags.end() && prev->second.towedBy == vehicleId) prev->second.towedBy = 0;
-            tower.towed = 0;
+        if (auto towerIt = g_vehicleFlags.find(vehicleId); towerIt != g_vehicleFlags.end()) {
+            if (towerIt->second.towed != 0) {
+                auto prev = g_vehicleFlags.find(towerIt->second.towed);
+                if (prev != g_vehicleFlags.end() && prev->second.towedBy == vehicleId) prev->second.towedBy = 0;
+                towerIt->second.towed = 0;
+            }
         }
         auto trailerIt = g_vehicleFlags.find(trailerId);
         if (trailerIt != g_vehicleFlags.end() && trailerIt->second.towedBy == vehicleId) trailerIt->second.towedBy = 0;

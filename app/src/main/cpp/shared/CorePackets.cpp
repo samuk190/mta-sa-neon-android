@@ -641,7 +641,7 @@ bool HandleVehicleTrailer(const uint8_t* body, size_t length, size_t bits) {
         if (!ReadVelocity(reader, turn)) return false;
     }
 
-    if (!IsVehicle(vehicleId) || !IsVehicle(trailerId)) return true;
+    if (!IsVehicle(vehicleId) || !IsVehicle(trailerId) || vehicleId == trailerId) return true;
 
     if (attached) {
         ServerWorld::NoteVehiclePose(trailerId, true, pos, true, rotDeg, false, 0.f);

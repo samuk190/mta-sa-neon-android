@@ -529,6 +529,8 @@ void TestVehicleSpawnAndTrailer() {
               tr.vehicleColors->rgb[1][2] == 60,
           "VEHICLE_SPAWN updated pose, health and colors");
     f.Lua("local t = {id=700, element=true}; local tr = {id=701, element=true}\n"
+          "local rx, ry, rz = getElementRotation(tr)\n"
+          "assert(math.abs(rx - 1) < 0.1 and math.abs(ry - 2) < 0.1 and math.abs(rz - 90) < 0.1)\n"
           "assert(isVehicleBlown(tr) == false)\n"
           "assert(getVehicleTowingVehicle(tr) == false and getVehicleTowedByVehicle(t) == false)\n"
           "assert(#evLog == 2 and evLog[2][1] == 'respawn' and evLog[2][2] == 701)");
@@ -542,6 +544,25 @@ void TestVehicleSpawnAndTrailer() {
     f.Lua("local t = {id=700, element=true}; local tr = {id=701, element=true}\n"
           "assert(getVehicleTowedByVehicle(t) == false and getVehicleTowingVehicle(tr) == false)\n"
           "assert(#evLog == 4 and evLog[4][1] == 'detach' and evLog[4][2] == 701 and evLog[4][3] == 700)");
+
+    // Self-attach packet is ignored cleanly and many distinct trailer attaches survive bucket rehashes.
+    Pkt selfAtt(PktId::VehicleTrailer);
+    selfAtt.Id(700).Id(700).Bit(true).Pos(0.f, 0.f, 0.f).RotDeg(0.f, 0.f, 0.f).ZeroVel();
+    Check(f.Send(selfAtt), "VEHICLE_TRAILER self-attach accepted as no-op");
+    f.Pump();
+    f.Lua("local t = {id=700, element=true}\n"
+          "assert(getVehicleTowedByVehicle(t) == false and #evLog == 4)");
+    for (uint32_t i = 0; i < 64; ++i) {
+        const uint32_t a = 710u + i * 2u;
+        const uint32_t b = 711u + i * 2u;
+        ServerWorld::NoteVehicle(a, 515);
+        ServerWorld::NoteVehicle(b, 435);
+        Pkt pair(PktId::VehicleTrailer);
+        pair.Id(a).Id(b).Bit(true).Pos(1.f, 2.f, 3.f).RotDeg(0.f, 0.f, 0.f).ZeroVel();
+        Check(f.Send(pair), "VEHICLE_TRAILER rehash pair attach");
+    }
+    f.Lua("assert(getVehicleTowedByVehicle({id=710, element=true}).id == 711)\n"
+          "assert(getVehicleTowingVehicle({id=837, element=true}).id == 836)");
 }
 
 void TestObjectSync() {
