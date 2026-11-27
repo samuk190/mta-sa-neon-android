@@ -1024,15 +1024,16 @@ void NoteVehiclePose(uint32_t id, bool hasPos, const float pos[3], bool hasRot, 
     std::lock_guard<std::mutex> lock(g_lock);
     auto found = g_visuals.find(id);
     if (found == g_visuals.end() || found->second.kind != 2) return;
-    if (hasPos && pos) {
+    if (hasPos && pos && std::isfinite(pos[0]) && std::isfinite(pos[1]) && std::isfinite(pos[2])) {
         found->second.x = pos[0];
         found->second.y = pos[1];
         found->second.z = pos[2];
     }
-    if (hasRot && rotDeg) {
+    if (hasRot && rotDeg && std::isfinite(rotDeg[0]) && std::isfinite(rotDeg[1]) && std::isfinite(rotDeg[2])) {
+        constexpr float kDegToRad = 3.14159265f / 180.f;
         found->second.rotX = rotDeg[0];
         found->second.rotY = rotDeg[1];
-        found->second.heading = rotDeg[2];
+        found->second.heading = rotDeg[2] * kDegToRad;
     }
     if (hasHealth && std::isfinite(health)) found->second.health = health;
 }

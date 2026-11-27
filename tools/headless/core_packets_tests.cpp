@@ -335,9 +335,12 @@ void TestVehicleResyncAndDamageSync() {
 
     ServerWorld::ActorSpawn v;
     Check(ServerWorld::CopyVisual(400, v) && Near(v.x, 50.5) && Near(v.y, -30.25) && Near(v.z, 12.5) &&
-              Near(v.heading, 90.0, 0.1) && Near(v.health, 850.5, 0.6),
+              Near(v.rotX, 10.0, 0.1) && Near(v.rotY, 20.0, 0.1) &&
+              Near(v.heading, 90.0 * (3.14159265 / 180.0), 0.01) && Near(v.health, 850.5, 0.6),
           "VEHICLE_RESYNC updated pose and health");
     f.Lua("local v = {id=400, element=true}\n"
+          "local rx, ry, rz = getElementRotation(v)\n"
+          "assert(math.abs(rx - 10) < 0.1 and math.abs(ry - 20) < 0.1 and math.abs(rz - 90) < 0.1)\n"
           "assert(getVehicleDoorState(v, 0) == 1 and getVehicleDoorState(v, 3) == 4)\n"
           "local fl, rl, fr, rr = getVehicleWheelStates(v)\n"
           "assert(fl == 0 and rl == 0 and fr == 0 and rr == 0)\n"
@@ -418,7 +421,8 @@ void TestExplosionFireProjectile() {
     f.Lua("assert(#expLog == 2, 'dim-mismatch suppressed third explosion')\n"
           "assert(expLog[1][1] == 20 and math.abs(expLog[1][2] - 15) < 0.1 and math.abs(expLog[1][3] - 25) < 0.1)\n"
           "assert(#vehExpLog == 1 and vehExpLog[1][1] == 500 and vehExpLog[1][2] == false)\n"
-          "assert(isVehicleBlown({id=500, element=true}) == true)");
+          "assert(isVehicleBlown({id=500, element=true}) == true)\n"
+          "assert(getElementHealth({id=500, element=true}) == 0)");
 
     // FIRE (38): valid and malformed.
     Pkt fire(PktId::Fire);
@@ -500,9 +504,12 @@ void TestVehicleSpawnAndTrailer() {
     f.Pump();
 
     ServerWorld::ActorSpawn tr;
-    Check(ServerWorld::CopyVisual(701, tr) && Near(tr.x, 20.0) && Near(tr.y, 30.0) && Near(tr.heading, 180.0, 0.1),
+    Check(ServerWorld::CopyVisual(701, tr) && Near(tr.x, 20.0) && Near(tr.y, 30.0) &&
+              Near(tr.heading, 180.0 * (3.14159265 / 180.0), 0.01),
           "trailer pose updated on attach");
     f.Lua("local t = {id=700, element=true}; local tr = {id=701, element=true}\n"
+          "local rx, ry, rz = getElementRotation(tr)\n"
+          "assert(math.abs(rz - 180) < 0.1)\n"
           "assert(getVehicleTowedByVehicle(t).id == 701)\n"
           "assert(getVehicleTowingVehicle(tr).id == 700)\n"
           "assert(#evLog == 1 and evLog[1][1] == 'attach' and evLog[1][2] == 701 and evLog[1][3] == 700)");
@@ -523,6 +530,8 @@ void TestVehicleSpawnAndTrailer() {
               tr.vehicleColors->rgb[1][2] == 60,
           "VEHICLE_SPAWN updated pose, health and colors");
     f.Lua("local t = {id=700, element=true}; local tr = {id=701, element=true}\n"
+          "local rx, ry, rz = getElementRotation(tr)\n"
+          "assert(math.abs(rx - 1) < 0.1 and math.abs(ry - 2) < 0.1 and math.abs(rz - 90) < 0.1)\n"
           "assert(isVehicleBlown(tr) == false)\n"
           "assert(getVehicleTowingVehicle(tr) == false and getVehicleTowedByVehicle(t) == false)\n"
           "assert(#evLog == 2 and evLog[2][1] == 'respawn' and evLog[2][2] == 701)");
@@ -536,6 +545,25 @@ void TestVehicleSpawnAndTrailer() {
     f.Lua("local t = {id=700, element=true}; local tr = {id=701, element=true}\n"
           "assert(getVehicleTowedByVehicle(t) == false and getVehicleTowingVehicle(tr) == false)\n"
           "assert(#evLog == 4 and evLog[4][1] == 'detach' and evLog[4][2] == 701 and evLog[4][3] == 700)");
+
+    // Self-attach packet is ignored cleanly and many distinct trailer attaches survive bucket rehashes.
+    Pkt selfAtt(PktId::VehicleTrailer);
+    selfAtt.Id(700).Id(700).Bit(true).Pos(0.f, 0.f, 0.f).RotDeg(0.f, 0.f, 0.f).ZeroVel();
+    Check(f.Send(selfAtt), "VEHICLE_TRAILER self-attach accepted as no-op");
+    f.Pump();
+    f.Lua("local t = {id=700, element=true}\n"
+          "assert(getVehicleTowedByVehicle(t) == false and #evLog == 4)");
+    for (uint32_t i = 0; i < 64; ++i) {
+        const uint32_t a = 710u + i * 2u;
+        const uint32_t b = 711u + i * 2u;
+        ServerWorld::NoteVehicle(a, 515);
+        ServerWorld::NoteVehicle(b, 435);
+        Pkt pair(PktId::VehicleTrailer);
+        pair.Id(a).Id(b).Bit(true).Pos(1.f, 2.f, 3.f).RotDeg(0.f, 0.f, 0.f).ZeroVel();
+        Check(f.Send(pair), "VEHICLE_TRAILER rehash pair attach");
+    }
+    f.Lua("assert(getVehicleTowedByVehicle({id=710, element=true}).id == 711)\n"
+          "assert(getVehicleTowingVehicle({id=837, element=true}).id == 836)");
 }
 
 void TestObjectSync() {
@@ -635,6 +663,50 @@ void TestLatentTransferAndPedTask() {
     Pkt huge(PktId::LatentTransfer);
     huge.Bits(78, 15).Bit(true).U8(0).U16(1).U32(200u * 1024u * 1024u).U32(5000).U16(0xFFFFu).AlignByte().U16(0);
     Check(!f.Send(huge), "LATENT_TRANSFER rejects >100MB finalSize");
+
+    // Nested LATENT_TRANSFER inside LATENT_TRANSFER is rejected cleanly.
+    Pkt innerLatent;
+    innerLatent.Bits(99, 15).Bit(true).U8(0).U16(1).U32(10).U32(5000).U16(0xFFFFu).AlignByte().U16(0);
+    const uint32_t nestedBits = static_cast<uint32_t>(innerLatent.w.GetBitLength());
+    std::vector<uint8_t> nestedPayload;
+    nestedPayload.push_back(PktId::LatentTransfer);
+    nestedPayload.resize(5);
+    std::memcpy(nestedPayload.data() + 1, &nestedBits, 4);
+    nestedPayload.insert(nestedPayload.end(), innerLatent.w.GetData(),
+                         innerLatent.w.GetData() + innerLatent.w.GetByteLength());
+    Pkt nestHead(PktId::LatentTransfer);
+    nestHead.Bits(79, 15).Bit(true).U8(0).U16(1)
+        .U32(static_cast<uint32_t>(nestedPayload.size())).U32(5000).U16(0xFFFFu)
+        .AlignByte().U16(0);
+    Check(f.Send(nestHead), "LATENT_TRANSFER nested outer HEAD");
+    Pkt nestTail(PktId::LatentTransfer);
+    nestTail.Bits(79, 15).Bit(true).U8(1).AlignByte()
+        .U16(static_cast<uint16_t>(nestedPayload.size()))
+        .Bytes(nestedPayload.data(), nestedPayload.size());
+    Check(!f.Send(nestTail), "LATENT_TRANSFER rejects nested inner LATENT_TRANSFER");
+
+    // Mismatched id and bitSize mismatch are rejected cleanly.
+    Pkt badBits;
+    badBits.Id(900).Bit(true).Bit(false);
+    const uint32_t wrongBitLen = static_cast<uint32_t>(badBits.w.GetBitLength()) + 16u;
+    std::vector<uint8_t> badPayload;
+    badPayload.push_back(PktId::PickupHitConfirm);
+    badPayload.resize(5);
+    std::memcpy(badPayload.data() + 1, &wrongBitLen, 4);
+    badPayload.insert(badPayload.end(), badBits.w.GetData(), badBits.w.GetData() + badBits.w.GetByteLength());
+    Pkt badHead(PktId::LatentTransfer);
+    badHead.Bits(80, 15).Bit(true).U8(0).U16(1)
+        .U32(static_cast<uint32_t>(badPayload.size())).U32(5000).U16(0xFFFFu)
+        .AlignByte().U16(0);
+    Check(f.Send(badHead), "LATENT_TRANSFER bad-bits HEAD");
+    Pkt wrongIdMid(PktId::LatentTransfer);
+    wrongIdMid.Bits(81, 15).Bit(false).AlignByte().U16(0);
+    Check(!f.Send(wrongIdMid), "LATENT_TRANSFER rejects wrong transfer id");
+    Pkt badTail(PktId::LatentTransfer);
+    badTail.Bits(80, 15).Bit(true).U8(1).AlignByte()
+        .U16(static_cast<uint16_t>(badPayload.size()))
+        .Bytes(badPayload.data(), badPayload.size());
+    Check(!f.Send(badTail), "LATENT_TRANSFER rejects bitsUsed/buffer mismatch");
 
     // PED_TASK (101): TASK_SIMPLE_BE_HIT (1008) valid and truncated.
     Pkt task(PktId::PedTask);
