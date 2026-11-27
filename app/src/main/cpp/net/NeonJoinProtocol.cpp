@@ -7,6 +7,7 @@
 #include "../shared/PlayerWeaponSync.h"
 #include "../shared/ServerWorld.h"
 #include "../shared/VehicleSync.h"
+#include "../shared/VoiceRuntime.h"
 #include "../shared/entity/EntityVehicleModels.h"
 
 #include <algorithm>
@@ -1268,6 +1269,7 @@ struct NeonJoinClient::Impl {
         info.voiceSampleRate = sampleRate;
         info.voiceQuality = quality;
         info.voiceBitrate = bitrate;
+        WorldRPG::Audio::VoiceRuntime::Configure(voice, sampleRate, quality, bitrate);
         info.fakeLagCommand = fakelag;
         info.httpDownloadType = httpType;
         // This join id is the local ped for the whole session. PacketHandler accepts a PLAYER_SPAWN only for it.
@@ -1737,6 +1739,7 @@ void NeonJoinClient::Reset() {
     g_inOutPending = VehicleInOutPending::None;
     g_inOutVehicle = 0xFFFFFFFFu;
 
+    WorldRPG::Audio::VoiceRuntime::Reset();
     WorldRPG::ServerWorld::SetLocalPlayer(0);
     pImpl_->net = nullptr;
     pImpl_->state = JoinState::Idle;

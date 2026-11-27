@@ -1,5 +1,6 @@
 #include "../shared/ControlToggles.h"
 #include "../shared/ConnectionLoading.h"
+#include "../shared/VoiceRuntime.h"
 #include <jni.h>
 #include <cstring>
 #include <string>
@@ -85,6 +86,8 @@ static jmethodID g_encodePixelsMethod = nullptr;
 static jmethodID g_storePixelsMethod = nullptr;
 static jmethodID g_renderSvgMethod = nullptr;
 static jmethodID g_copyScreenMethod = nullptr;
+static jmethodID g_onVoiceConfigMethod = nullptr;
+static jmethodID g_onVoicePlaybackMethod = nullptr;
 
 namespace WorldRPG::JniBridge {
 void PostGameLine(int kind, const char* text) {
@@ -344,6 +347,35 @@ int RenderSvg(const std::string& name, const std::string& xml, unsigned width, u
     if (jname) env->DeleteLocalRef(jname);
     return result;
 }
+
+void VoiceConfigChanged(bool enabled, uint32_t sampleRate) {
+    if (!g_gameActivityRef || !g_onVoiceConfigMethod) return;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return;
+    env->CallVoidMethod(g_gameActivityRef, g_onVoiceConfigMethod,
+                        static_cast<jboolean>(enabled ? JNI_TRUE : JNI_FALSE),
+                        static_cast<jint>(sampleRate));
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+void VoicePlaybackPcm(uint32_t playerId, const int16_t* samples, size_t sampleCount, uint32_t sampleRate) {
+    if (!g_gameActivityRef || !g_onVoicePlaybackMethod || !samples || sampleCount == 0) return;
+    EnvScope scope;
+    JNIEnv* env = scope.env;
+    if (!env) return;
+    const jsize count = static_cast<jsize>(sampleCount);
+    jshortArray arr = env->NewShortArray(count);
+    if (!arr) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return;
+    }
+    env->SetShortArrayRegion(arr, 0, count, reinterpret_cast<const jshort*>(samples));
+    env->CallVoidMethod(g_gameActivityRef, g_onVoicePlaybackMethod,
+                        static_cast<jint>(playerId), arr, static_cast<jint>(sampleRate));
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(arr);
+}
 } // namespace WorldRPG::JniBridge
 
 /// Posts a connection-state event to the owning GameActivity. Safe to call
@@ -481,6 +513,10 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
     if (!g_renderSvgMethod && env->ExceptionCheck()) env->ExceptionClear();
     g_copyScreenMethod = env->GetMethodID(activityClass, "onNativeCopyScreen", "(Ljava/lang/String;II)V");
     if (!g_copyScreenMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_onVoiceConfigMethod = env->GetMethodID(activityClass, "onNativeVoiceConfig", "(ZI)V");
+    if (!g_onVoiceConfigMethod && env->ExceptionCheck()) env->ExceptionClear();
+    g_onVoicePlaybackMethod = env->GetMethodID(activityClass, "onNativeVoicePlayback", "(I[SI)V");
+    if (!g_onVoicePlaybackMethod && env->ExceptionCheck()) env->ExceptionClear();
     env->DeleteLocalRef(activityClass);
     if (!callback) {
         if (env->ExceptionCheck()) env->ExceptionClear();
@@ -1071,6 +1107,24 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeGamepadState(
     state.axes[4] = lt;
     state.axes[5] = rt;
     WorldRPG::Script::RocketSoccerSetGamepad(state);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeVoiceSetTransmit(
+    JNIEnv*, jobject, jboolean active) {
+    WorldRPG::Audio::VoiceRuntime::SetTransmitActive(active == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeVoiceMicPcm(
+    JNIEnv* env, jobject, jshortArray samples, jint count) {
+    if (!samples || count <= 0) return;
+    const jsize arrLen = env->GetArrayLength(samples);
+    const jsize toCopy = count < arrLen ? count : arrLen;
+    if (toCopy <= 0) return;
+    std::vector<int16_t> pcm(static_cast<size_t>(toCopy));
+    env->GetShortArrayRegion(samples, 0, toCopy, reinterpret_cast<jshort*>(pcm.data()));
+    WorldRPG::Audio::VoiceRuntime::OnMicPcm(pcm.data(), pcm.size());
 }
 
 JNIEXPORT jboolean JNICALL

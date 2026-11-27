@@ -6,6 +6,8 @@
 #include "LuaApiExtra.h"
 #include "LuaFileApi.h"
 #include "LuaVMStub.h"
+#include "ServerWorld.h"
+#include "VoiceRuntime.h"
 
 #include "lua.hpp"
 
@@ -203,6 +205,13 @@ int l_playSound(lua_State* L) {
     return 1;
 }
 
+bool IsVoicePlayerTarget(uint32_t id) {
+    if (id == 0 || id == 0xFFFFFFFFu) return false;
+    const uint32_t localId = WorldRPG::ServerWorld::LocalPlayer();
+    if (localId != 0 && localId != 0xFFFFFFFFu && id == localId) return true;
+    return WorldRPG::ServerWorld::IsKnownPlayer(id);
+}
+
 int l_stopSound(lua_State* L) {
     lua_pushboolean(L, AudioStopSound(ElementIdOf(L, 1)));
     return 1;
@@ -210,7 +219,7 @@ int l_stopSound(lua_State* L) {
 
 int l_setSoundVolume(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
-    if (!AudioSoundAlive(id) || !lua_isnumber(L, 2)) {
+    if (!lua_isnumber(L, 2)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -221,6 +230,14 @@ int l_setSoundVolume(lua_State* L) {
     }
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;
+    if (!AudioSoundAlive(id)) {
+        if (IsVoicePlayerTarget(id) && WorldRPG::Audio::VoiceRuntime::SetPlayerVolume(id, volume)) {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     {
         std::lock_guard<std::mutex> lock(g_soundMu);
         for (auto& slot : g_sounds) {
@@ -236,12 +253,19 @@ int l_setSoundVolume(lua_State* L) {
 
 int l_getSoundVolume(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    for (const auto& slot : g_sounds) {
-        if (slot.alive && slot.id == id) {
-            lua_pushnumber(L, slot.volume);
-            return 1;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        for (const auto& slot : g_sounds) {
+            if (slot.alive && slot.id == id) {
+                lua_pushnumber(L, slot.volume);
+                return 1;
+            }
         }
+    }
+    float voiceVol = 0.0f;
+    if (IsVoicePlayerTarget(id) && WorldRPG::Audio::VoiceRuntime::GetPlayerVolume(id, voiceVol)) {
+        lua_pushnumber(L, voiceVol);
+        return 1;
     }
     lua_pushboolean(L, 0);
     return 1;
@@ -285,35 +309,48 @@ int l_setSoundPaused(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    SoundSlot* slot = FindSound(id);
-    if (!slot) {
-        lua_pushboolean(L, 0);
+    const bool pause = lua_toboolean(L, 2) != 0;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        SoundSlot* slot = FindSound(id);
+        if (slot) {
+            const auto now = DxNow();
+            if (pause && !slot->paused)
+                slot->position += static_cast<double>(now - slot->positionAt) / 1000.0;
+            else if (!pause && slot->paused)
+                slot->positionAt = now;
+            slot->paused = pause;
+            char line[32];
+            std::snprintf(line, sizeof(line), "%u|%d", id, slot->paused ? 1 : 0);
+            ::WorldRPG::JniBridge::PostGameLine(15, line);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+    if (IsVoicePlayerTarget(id) && WorldRPG::Audio::VoiceRuntime::SetPlayerPaused(id, pause)) {
+        lua_pushboolean(L, 1);
         return 1;
     }
-    const bool pause = lua_toboolean(L, 2) != 0;
-    const auto now = DxNow();
-    if (pause && !slot->paused)
-        slot->position += static_cast<double>(now - slot->positionAt) / 1000.0;
-    else if (!pause && slot->paused)
-        slot->positionAt = now;
-    slot->paused = pause;
-    char line[32];
-    std::snprintf(line, sizeof(line), "%u|%d", id, slot->paused ? 1 : 0);
-    ::WorldRPG::JniBridge::PostGameLine(15, line);
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, 0);
     return 1;
 }
 
 int l_isSoundPaused(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    const SoundSlot* slot = FindSound(id);
-    if (!slot) {
-        lua_pushboolean(L, 0);
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        const SoundSlot* slot = FindSound(id);
+        if (slot) {
+            lua_pushboolean(L, slot->paused ? 1 : 0);
+            return 1;
+        }
+    }
+    bool voicePaused = false;
+    if (IsVoicePlayerTarget(id) && WorldRPG::Audio::VoiceRuntime::GetPlayerPaused(id, voicePaused)) {
+        lua_pushboolean(L, voicePaused ? 1 : 0);
         return 1;
     }
-    lua_pushboolean(L, slot->paused ? 1 : 0);
+    lua_pushboolean(L, 0);
     return 1;
 }
 
@@ -374,17 +411,41 @@ int l_setSoundPan(lua_State* L) {
     {
         std::lock_guard<std::mutex> lock(g_soundMu);
         SoundSlot* slot = FindSound(id);
-        if (!slot) { lua_pushboolean(L, 0); return 1; }
-        slot->pan = pan;
+        if (slot) {
+            slot->pan = pan;
+            char line[64];
+            std::snprintf(line, sizeof(line), "%u|%.6f", id, pan);
+            ::WorldRPG::JniBridge::PostGameLine(18, line);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
     }
-    char line[64];
-    std::snprintf(line, sizeof(line), "%u|%.6f", id, pan);
-    ::WorldRPG::JniBridge::PostGameLine(18, line);
-    lua_pushboolean(L, 1);
+    if (IsVoicePlayerTarget(id) && WorldRPG::Audio::VoiceRuntime::SetPlayerPan(id, pan)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
     return 1;
 }
 
-int l_getSoundPan(lua_State* L) { return GetSoundNumber(L, &SoundSlot::pan); }
+int l_getSoundPan(lua_State* L) {
+    const uint32_t id = ElementIdOf(L, 1);
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        const SoundSlot* slot = FindSound(id);
+        if (slot) {
+            lua_pushnumber(L, slot->pan);
+            return 1;
+        }
+    }
+    float voicePan = 0.0f;
+    if (IsVoicePlayerTarget(id) && WorldRPG::Audio::VoiceRuntime::GetPlayerPan(id, voicePan)) {
+        lua_pushnumber(L, voicePan);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
 
 int l_setSoundMaxDistance(lua_State* L) { return SetSoundNumber(L, &SoundSlot::maxDistance, 0.0f, 1.0e6f); }
 int l_getSoundMaxDistance(lua_State* L) { return GetSoundNumber(L, &SoundSlot::maxDistance); }

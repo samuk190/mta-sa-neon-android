@@ -15,6 +15,7 @@
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
 #include "VehicleSync.h"
+#include "VoiceRuntime.h"
 #include "ServerWorld.h"
 #include "ServerRpc.h"
 #include "PedQueries.h"
@@ -1687,6 +1688,19 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         if (gameId == 50) { WorldRPG::ServerWorld::OnEntityAdd(body, bodyLength, bodyBits); return true; }
         if (gameId == 51) { WorldRPG::ServerWorld::OnEntityRemove(body, bodyLength, bodyBits); return true; }
         if (gameId == 84) { WorldRPG::ServerWorld::OnCustomData(body, bodyLength, bodyBits); return true; }
+        if (gameId == 71) {
+            // PACKET_ID_VOICE_DATA (CPacketHandler::Packet_VoiceData, CPacketHandler.cpp:5798-5822):
+            // [ElementID playerId][uint16_t voiceBufferLength (<= 2048)][uint8_t voiceBuffer[len]].
+            WorldRPG::Net::BitStreamReader reader(body, bodyLength, bodyBits);
+            uint32_t playerId = 0;
+            uint16_t voiceLen = 0;
+            if (!ReadElementId(reader, playerId) || !reader.Read(voiceLen)) return false;
+            if (voiceLen == 0 || voiceLen > WorldRPG::Audio::VoiceRuntime::kMaxVoiceBufferLength) return false;
+            uint8_t voiceBuf[WorldRPG::Audio::VoiceRuntime::kMaxVoiceBufferLength];
+            if (!reader.ReadBytes(voiceBuf, voiceLen)) return false;
+            WorldRPG::Audio::VoiceRuntime::OnVoicePacket(playerId, voiceBuf, voiceLen);
+            return true;
+        }
         if (gameId == WorldRPG::MtaIds::Packet::Lua) return HandleLuaRPC(body, bodyLength, bodyBits);
         if (gameId == WorldRPG::MtaIds::Packet::LuaElementRpc) return HandleLuaElementRPC(body, bodyLength, bodyBits);
         if (gameId == 82) return HandleResourceStart(body, bodyLength, bodyBits);

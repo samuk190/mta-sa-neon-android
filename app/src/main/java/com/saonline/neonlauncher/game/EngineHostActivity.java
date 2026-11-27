@@ -186,6 +186,9 @@ public final class EngineHostActivity extends GTASA {
     private native void nativeKeyEvent(String key, boolean down);
     private native void nativeGamepadState(boolean connected, int index, int buttons,
                                            float lx, float ly, float rx, float ry, float lt, float rt);
+    private native void nativeVoiceSetTransmit(boolean active);
+    private native void nativeVoiceMicPcm(short[] samples, int count);
+    private VoiceAudioEngine voiceAudioEngine;
     private native boolean nativeHardwareMouseReady();
     private native void nativeHardwareMouse(float x, float y, int buttons, float wheel, boolean captured);
     private static final class PhysicalKey {
@@ -1416,6 +1419,36 @@ public final class EngineHostActivity extends GTASA {
         runOnUiThread(() -> MtaDxView.copyScreen(view, name, width, height));
     }
 
+    @SuppressWarnings("unused")
+    public void onNativeVoiceConfig(boolean enabled, int sampleRate) {
+        if (voiceAudioEngine == null) {
+            voiceAudioEngine = new VoiceAudioEngine(this, (samples, count) -> {
+                if (clientReady) nativeVoiceMicPcm(samples, count);
+            });
+        }
+        voiceAudioEngine.configure(enabled, sampleRate);
+    }
+
+    @SuppressWarnings("unused")
+    public void onNativeVoicePlayback(int playerId, short[] pcm, int sampleRate) {
+        if (voiceAudioEngine != null) {
+            voiceAudioEngine.writePlaybackPcm(playerId, pcm, sampleRate);
+        }
+    }
+
+    /** Push-to-talk control for voice chat (also respects RECORD_AUDIO permission). */
+    @SuppressWarnings("unused")
+    public void setVoiceTransmitActive(boolean active) {
+        if (voiceAudioEngine == null) {
+            voiceAudioEngine = new VoiceAudioEngine(this, (samples, count) -> {
+                if (clientReady) nativeVoiceMicPcm(samples, count);
+            });
+        }
+        final boolean started = active && voiceAudioEngine.setCaptureActive(true);
+        if (!active) voiceAudioEngine.setCaptureActive(false);
+        if (clientReady) nativeVoiceSetTransmit(started);
+    }
+
     /** Draws an SVG document into a script bitmap. See MtaDxView.renderSvg for the result codes. */
     @SuppressWarnings("unused")
     public int onNativeRenderSvg(String name, byte[] xml, int width, int height) {
@@ -1861,6 +1894,10 @@ public final class EngineHostActivity extends GTASA {
     @Override
     public void onDestroy() {
         releaseHardwareInput();
+        if (voiceAudioEngine != null) {
+            voiceAudioEngine.release();
+            voiceAudioEngine = null;
+        }
         if (disconnectDialog != null) {
             disconnectDialog.dismiss();
             disconnectDialog = null;

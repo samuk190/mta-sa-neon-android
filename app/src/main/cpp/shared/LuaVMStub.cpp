@@ -21,6 +21,7 @@ extern "C" {
 #include "LuaCryptApi.h"
 #include "LuaResourceApi.h"
 #include "LuaAudioApi.h"
+#include "VoiceRuntime.h"
 #include "LuaMtaWindowApi.h"
 #include "LuaEventRegistry.h"
 #include "LuaKeyBindApi.h"
@@ -3039,6 +3040,14 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     if (!pImpl_->L) return {};
     PublishClientObjects();  // the game thread streams CObjects from this (WorldObjectFeed)
     ServerRpc::Pump();       // server RPCs that write Lua-owned state (camera, world, binds, objects)
+    WorldRPG::Audio::VoiceRuntime::Pump([L = pImpl_->L](const char* eventName, uint32_t playerId) {
+        lua_getglobal(L, "source");
+        PushElement(L, playerId);
+        lua_setglobal(L, "source");
+        const bool allowed = fireHandlers(eventName, 0, playerId, L);
+        lua_setglobal(L, "source");
+        return allowed;
+    });
     // CClientGame::OnWindowFocusChange (CClientGame.cpp:8069-8078). One report per pump.
     bool windowFocused = false;
     if (MtaWindowTakeFocusChange(windowFocused)) {
@@ -3680,6 +3689,7 @@ bool ActiveVmPulseResources() {
 void ActiveVmResetSession() {
     WorldRPG::Script::ResourceLoader::Reset();
     WorldRPG::Script::MtaWindowResetSession();
+    WorldRPG::Audio::VoiceRuntime::Reset();
     if (!g_active) return;
     // A new session starts from a clean VM: no handlers, timers or globals from the old one.
     const int width = g_dx.screenW, height = g_dx.screenH;

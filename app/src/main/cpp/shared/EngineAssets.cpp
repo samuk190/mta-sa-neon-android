@@ -21,11 +21,14 @@ extern "C" {
 #include "lua.h"
 }
 
+#include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -51,8 +54,167 @@ struct ModelAsset {
     bool txdFiltering = true;
 };
 
+struct ColAsset {
+    uint32_t generation = 0;
+    std::vector<std::uint8_t> bytes;
+};
+
+struct IfpAsset {
+    uint32_t generation = 0;
+    std::string blockName;
+    std::string blockKey;
+    std::vector<std::uint8_t> bytes;
+    std::vector<std::string> animNames;
+};
+
+struct AnimOverride {
+    uint32_t pedId = 0;
+    uint32_t ifpId = 0;
+    std::string internalBlock;
+    std::string internalAnim;
+    std::string customBlock;
+    std::string customAnim;
+};
+
+struct ImgEntry {
+    std::uint32_t offsetBlocks = 0;
+    std::uint16_t sizeBlocks = 0;
+    std::string name;
+};
+
+struct ImgAsset {
+    uint32_t generation = 0;
+    std::filesystem::path filePath;
+    std::vector<ImgEntry> entries;
+    bool streamed = false;
+};
+
+struct ImgDffLink {
+    uint32_t imgId = 0;
+    std::uint64_t serial = 0;
+};
+
+struct ImgTxdLink {
+    uint32_t imgId = 0;
+    std::uint64_t serial = 0;
+    void* txd = nullptr;
+};
+
 std::unordered_map<uint32_t, ModelAsset> g_assets;
+std::unordered_map<uint32_t, ColAsset> g_colAssets;
+std::unordered_map<std::uint32_t, uint32_t> g_colModelLinks;
+std::unordered_map<uint32_t, IfpAsset> g_ifpAssets;
+std::unordered_map<std::string, uint32_t> g_ifpByBlock;
+std::vector<AnimOverride> g_animOverrides;
+std::unordered_map<uint32_t, ImgAsset> g_imgAssets;
+std::unordered_map<std::uint32_t, ImgDffLink> g_imgDffLinks;
+std::unordered_map<std::uint32_t, ImgTxdLink> g_imgTxdLinks;
 std::uint64_t g_nextAssetSerial = 1;
+bool g_diagColHookLogged = false;
+bool g_diagIfpHookLogged = false;
+
+std::string LowerAscii(std::string_view text) {
+    std::string out(text);
+    for (char& ch : out) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return out;
+}
+
+bool ReadBinaryFile(const std::filesystem::path& path, std::vector<std::uint8_t>& out, size_t maxBytes = 64u * 1024u * 1024u) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size == 0 || size > maxBytes) return false;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    out.resize(static_cast<size_t>(size));
+    in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
+    return in.good() || in.gcount() == static_cast<std::streamsize>(size);
+}
+
+std::uint32_t ReadLeU32(const std::uint8_t* p) {
+    return static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+           (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+}
+
+std::uint16_t ReadLeU16(const std::uint8_t* p) {
+    return static_cast<std::uint16_t>(p[0]) | static_cast<std::uint16_t>(static_cast<std::uint16_t>(p[1]) << 8u);
+}
+
+std::string ReadFixedCString(const std::uint8_t* p, size_t cap) {
+    size_t len = 0;
+    while (len < cap && p[len] != 0) ++len;
+    return std::string(reinterpret_cast<const char*>(p), len);
+}
+
+void ParseIfpAnimNames(const std::vector<std::uint8_t>& data, std::vector<std::string>& outNames) {
+    outNames.clear();
+    if (data.size() < 36) return;
+    if (std::memcmp(data.data(), "ANP3", 4) == 0) {
+        // GTA:SA IFP v3 (ANP3): [4B magic][4B size][24B internalName][4B numAnims]
+        // Each animation starts with [24B animName][4B numObjects][4B frameDataSize][4B unknown].
+        const std::uint32_t numAnims = ReadLeU32(data.data() + 32);
+        if (numAnims == 0 || numAnims > 4096) return;
+        size_t pos = 36;
+        for (std::uint32_t a = 0; a < numAnims && pos + 36 <= data.size(); ++a) {
+            std::string name = ReadFixedCString(data.data() + pos, 24);
+            const std::uint32_t numObjects = ReadLeU32(data.data() + pos + 24);
+            const std::uint32_t frameDataSize = ReadLeU32(data.data() + pos + 28);
+            if (!name.empty()) outNames.push_back(std::move(name));
+            pos += 36;
+            // Walk objects to reach the next animation header when frame data is present.
+            size_t objPos = pos;
+            bool ok = true;
+            for (std::uint32_t o = 0; o < numObjects; ++o) {
+                if (objPos + 44 > data.size()) { ok = false; break; }
+                const std::uint32_t frameType = ReadLeU32(data.data() + objPos + 24);
+                const std::uint32_t numFrames = ReadLeU32(data.data() + objPos + 28);
+                objPos += 44;
+                const size_t stride = (frameType == 3) ? 10u : (frameType == 4 ? 16u : 20u);
+                const size_t bytes = static_cast<size_t>(numFrames) * stride;
+                if (bytes > data.size() - objPos) { ok = false; break; }
+                objPos += bytes;
+            }
+            if (ok) {
+                pos = objPos;
+            } else if (frameDataSize <= data.size() - pos) {
+                pos += frameDataSize;
+            } else {
+                break;
+            }
+        }
+    } else if (std::memcmp(data.data(), "ANPK", 4) == 0) {
+        // GTA3/VC IFP v1 (ANPK): scan chunk headers for NAME chunks.
+        size_t pos = 8;
+        while (pos + 8 <= data.size()) {
+            const std::uint32_t chunkSize = ReadLeU32(data.data() + pos + 4);
+            const size_t aligned = (static_cast<size_t>(chunkSize) + 3u) & ~size_t{3u};
+            if (aligned > data.size() - (pos + 8)) break;
+            if (std::memcmp(data.data() + pos, "NAME", 4) == 0 && chunkSize > 0) {
+                std::string name = ReadFixedCString(data.data() + pos + 8, chunkSize);
+                if (!name.empty()) outNames.push_back(std::move(name));
+            }
+            pos += 8 + aligned;
+        }
+    }
+}
+
+void UnlinkImageModels(uint32_t imgId) {
+    for (auto it = g_imgDffLinks.begin(); it != g_imgDffLinks.end();) {
+        if (it->second.imgId == imgId) {
+            NativeRestoreDFF(static_cast<std::uint16_t>(it->first));
+            it = g_imgDffLinks.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = g_imgTxdLinks.begin(); it != g_imgTxdLinks.end();) {
+        if (it->second.imgId == imgId) {
+            if (it->second.txd) NativeReleaseModelAsset(it->second.serial, it->second.txd);
+            it = g_imgTxdLinks.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
 
 const char* LuaTypeName(int type) {
     switch (type) {
@@ -256,26 +418,51 @@ bool ResolveText(const std::string& text, std::uint32_t& runtime) {
     return ResolveRuntime(WorldRPG::Models::ModelIdFromName(text), runtime);
 }
 
-bool LooksCol(const std::string& data) {
-    return data.size() >= 32 && std::memcmp(data.data(), "COL", 3) == 0 && (data[3] == 'L' || data[3] == '2' || data[3] == '3' || data[3] == '4');
+bool LooksColBytes(std::span<const std::uint8_t> data) {
+    return data.size() >= 32 && std::memcmp(data.data(), "COL", 3) == 0 &&
+           (data[3] == 'L' || data[3] == '2' || data[3] == '3' || data[3] == '4');
 }
 
-bool LooksIfp(const std::string& data) { return data.size() > 32 && std::memcmp(data.data(), "ANP", 3) == 0; }
+bool LooksCol(const std::string& data) {
+    return LooksColBytes(std::span(reinterpret_cast<const std::uint8_t*>(data.data()), data.size()));
+}
 
-int LoadAsset(lua_State* L, const char* function, const char* kind, bool (*raw)(const std::string&)) {
+bool LooksIfpBytes(std::span<const std::uint8_t> data) {
+    return data.size() >= 32 && std::memcmp(data.data(), "ANP", 3) == 0 && (data[3] == 'K' || data[3] == '3');
+}
+
+bool LooksIfp(const std::string& data) {
+    return LooksIfpBytes(std::span(reinterpret_cast<const std::uint8_t*>(data.data()), data.size()));
+}
+
+// CLuaEngineDefs::EngineLoadCOL (CLuaEngineDefs.cpp:457-535).
+int LoadCOL(lua_State* L) {
     std::string input;
     std::string error;
-    if (!ReadScriptString(L, 1, function, input, error, false, "")) return FailFalse(L, error, true);
+    if (!ReadScriptString(L, 1, "engineLoadCOL", input, error, false, "")) return FailFalse(L, error, true);
     if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
-    const bool isRaw = raw && raw(input);
-    if (!isRaw && input.size() > 32767)
-        return FailFalse(L, Usage(function, (std::string("Error loading ") + kind).c_str(), std::string("Corrupt ") + kind + " file data or file path too long"), true);
-    if (isRaw) return FailFalse(L, Usage(function, (std::string("Error loading ") + kind).c_str(), "raw data"), true);
-    LUA_LOGI("DIAG %s: resource file loading is not hooked", function);
-    return FailFalse(L, Usage(function, "Bad file path", input), true);
-}
 
-int LoadCOL(lua_State* L) { return LoadAsset(L, "engineLoadCOL", "COL", LooksCol); }
+    std::vector<std::uint8_t> bytes;
+    const bool isRaw = LooksCol(input);
+    if (isRaw) {
+        bytes.assign(reinterpret_cast<const std::uint8_t*>(input.data()),
+                     reinterpret_cast<const std::uint8_t*>(input.data()) + input.size());
+    } else {
+        if (input.size() > 32767)
+            return FailFalse(L, Usage("engineLoadCOL", "Error loading COL", "Corrupt COL file data or file path too long"), true);
+        std::filesystem::path path;
+        if (input.find('\0') != std::string::npos || !ResolveFilePath(input, path))
+            return FailFalse(L, Usage("engineLoadCOL", "Bad file path", input), true);
+        if (!ReadBinaryFile(path, bytes) || !LooksColBytes(bytes))
+            return FailFalse(L, Usage("engineLoadCOL", "Error loading COL", input), true);
+    }
+
+    const uint32_t id = CreateResourceElement("col");
+    if (!id) return FailFalse(L, Usage("engineLoadCOL", "Error loading COL", "resource element unavailable"), true);
+    g_colAssets.emplace(id, ColAsset{ActiveVmOwnerGeneration(), std::move(bytes)});
+    PushElement(L, id);
+    return 1;
+}
 
 int LoadRenderWareAsset(lua_State* L, bool dff, bool filtering = true) {
     const char* function = dff ? "engineLoadDFF" : "engineLoadTXD";
@@ -333,45 +520,277 @@ int LoadTXD(lua_State* L) {
     return LoadRenderWareAsset(L, false, filtering);
 }
 
+// CLuaEngineDefs::EngineLoadIFP (CLuaEngineDefs.cpp:950-1048).
 int LoadIFP(lua_State* L) {
     std::string input;
     std::string block;
     std::string error;
     if (!ReadScriptString(L, 1, "engineLoadIFP", input, error, false, "")) return FailFalse(L, error, true);
     if (!ReadScriptString(L, 2, "engineLoadIFP", block, error, false, "")) return FailFalse(L, error, true);
-    (void)block;
+    if (block.empty()) return FailFalse(L, Usage("engineLoadIFP", "Error loading IFP", "Empty custom block name"), true);
     if (ActiveVmOwnerNet() == 0) return FailFalse(L, "", false);
-    if (!LooksIfp(input) && input.size() > 32767)
-        return FailFalse(L, Usage("engineLoadIFP", "Error loading IFP", "Corrupt IFP file data or file path too long"), true);
-    if (LooksIfp(input)) return FailFalse(L, Usage("engineLoadIFP", "Error loading IFP", "raw data"), true);
-    LUA_LOGI("DIAG engineLoadIFP: the IFP engine is not hooked");
-    return FailFalse(L, Usage("engineLoadIFP", "Bad file path", input), true);
+
+    std::vector<std::uint8_t> bytes;
+    const bool isRaw = LooksIfp(input);
+    if (isRaw) {
+        bytes.assign(reinterpret_cast<const std::uint8_t*>(input.data()),
+                     reinterpret_cast<const std::uint8_t*>(input.data()) + input.size());
+    } else {
+        if (input.size() > 32767)
+            return FailFalse(L, Usage("engineLoadIFP", "Error loading IFP", "Corrupt IFP file data or file path too long"), true);
+        std::filesystem::path path;
+        if (input.find('\0') != std::string::npos || !ResolveFilePath(input, path))
+            return FailFalse(L, Usage("engineLoadIFP", "Bad file path", input), true);
+        if (!ReadBinaryFile(path, bytes) || !LooksIfpBytes(bytes))
+            return FailFalse(L, Usage("engineLoadIFP", "Error loading IFP", input), true);
+    }
+
+    const std::string blockKey = LowerAscii(block);
+    const uint32_t id = CreateResourceElement("ifp");
+    if (!id) return FailFalse(L, Usage("engineLoadIFP", "Error loading IFP", "resource element unavailable"), true);
+    IfpAsset asset;
+    asset.generation = ActiveVmOwnerGeneration();
+    asset.blockName = block;
+    asset.blockKey = blockKey;
+    ParseIfpAnimNames(bytes, asset.animNames);
+    asset.bytes = std::move(bytes);
+    g_ifpAssets.emplace(id, std::move(asset));
+    g_ifpByBlock[blockKey] = id;
+    PushElement(L, id);
+    return 1;
 }
 
+bool ParseImgArchive(const std::filesystem::path& path, std::vector<ImgEntry>& outEntries) {
+    // Desktop CClientIMG::Load (CClientIMG.cpp:54-92): GTA:SA IMG v2 ("VER2").
+    std::error_code ec;
+    const auto fileSize = std::filesystem::file_size(path, ec);
+    if (ec || fileSize < 8) return false;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+
+    std::uint8_t header[8] = {};
+    in.read(reinterpret_cast<char*>(header), sizeof(header));
+    if (!in || std::memcmp(header, "VER2", 4) != 0) return false;
+
+    const std::uint32_t count = ReadLeU32(header + 4);
+    if (count > 65536u) return false;
+    const std::uint64_t dirBytes = 8ull + static_cast<std::uint64_t>(count) * 32ull;
+    if (dirBytes > fileSize) return false;
+
+    outEntries.clear();
+    outEntries.reserve(count);
+    std::uint8_t rec[32] = {};
+    for (std::uint32_t i = 0; i < count; ++i) {
+        in.read(reinterpret_cast<char*>(rec), sizeof(rec));
+        if (!in) return false;
+        ImgEntry entry;
+        entry.offsetBlocks = ReadLeU32(rec);
+        const std::uint16_t streamingSize = ReadLeU16(rec + 4);
+        const std::uint16_t archiveSize = ReadLeU16(rec + 6);
+        entry.sizeBlocks = streamingSize != 0 ? streamingSize : archiveSize;
+        entry.name = ReadFixedCString(rec + 8, 24);
+        outEntries.push_back(std::move(entry));
+    }
+    return true;
+}
+
+bool ReadImgEntryBytes(const ImgAsset& img, size_t fileId, std::vector<std::uint8_t>& out) {
+    if (fileId >= img.entries.size()) return false;
+    const ImgEntry& entry = img.entries[fileId];
+    const std::uint64_t offsetBytes = static_cast<std::uint64_t>(entry.offsetBlocks) * 2048ull;
+    const std::uint64_t readBytes = static_cast<std::uint64_t>(entry.sizeBlocks) * 2048ull;
+    if (readBytes == 0 || readBytes > 64ull * 1024ull * 1024ull) return false;
+    std::error_code ec;
+    const auto fileSize = std::filesystem::file_size(img.filePath, ec);
+    if (ec || offsetBytes > fileSize || readBytes > fileSize - offsetBytes) return false;
+    std::ifstream in(img.filePath, std::ios::binary);
+    if (!in) return false;
+    in.seekg(static_cast<std::streamoff>(offsetBytes), std::ios::beg);
+    out.resize(static_cast<size_t>(readBytes));
+    in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(readBytes));
+    return !in.fail() && !in.eof();
+}
+
+ImgAsset* RequireImgArg(lua_State* L, const char* function, uint32_t& outId) {
+    outId = ElementIdOf(L, 1);
+    auto it = g_imgAssets.find(outId);
+    if (it == g_imgAssets.end()) {
+        luaL_error(L, "%s", ParserBad(function, "img", 1, ParserGot(L, 1)).c_str());
+        return nullptr;
+    }
+    return &it->second;
+}
+
+size_t ResolveImgFileIdArg(lua_State* L, const ImgAsset& img, int index, const char* function) {
+    const int t = lua_type(L, index);
+    if (t == LUA_TNUMBER) {
+        std::uint32_t idx = 0;
+        std::string error;
+        if (!ReadParserUint(L, index, function, idx, error)) luaL_error(L, "%s", error.c_str());
+        return static_cast<size_t>(idx);
+    }
+    if (t == LUA_TSTRING) {
+        size_t len = 0;
+        const char* raw = lua_tolstring(L, index, &len);
+        const std::string_view name(raw ? raw : "", len);
+        for (size_t i = 0; i < img.entries.size(); ++i) {
+            if (img.entries[i].name == name) return i;
+        }
+        const std::string lower = LowerAscii(name);
+        for (size_t i = 0; i < img.entries.size(); ++i) {
+            if (LowerAscii(img.entries[i].name) == lower) return i;
+        }
+        luaL_error(L, "Invalid file name specified (%s)", std::string(name).c_str());
+        return 0;
+    }
+    luaL_error(L, "%s", ParserBad(function, "string or number", index, ParserGot(L, index)).c_str());
+    return 0;
+}
+
+// CLuaEngineDefs::EngineLoadIMG (CLuaEngineDefs.cpp:1051-1088).
 int LoadIMG(lua_State* L) {
-    std::string path;
+    std::string relPath;
     std::string error;
-    if (!ReadParserString(L, 1, "engineLoadIMG", path, error)) return luaL_error(L, "%s", error.c_str());
-    (void)path;
+    if (!ReadParserString(L, 1, "engineLoadIMG", relPath, error)) return luaL_error(L, "%s", error.c_str());
     if (ActiveVmOwnerNet() == 0) {
         lua_pushnil(L);
         return 1;
     }
-    LUA_LOGI("DIAG engineLoadIMG: IMG archives are not loaded");
-    return luaL_error(L, "Bad file path");
+    std::filesystem::path fullPath;
+    if (relPath.find('\0') != std::string::npos || !ResolveFilePath(relPath, fullPath))
+        return luaL_error(L, "Bad file path");
+
+    ImgAsset img;
+    img.generation = ActiveVmOwnerGeneration();
+    img.filePath = std::move(fullPath);
+    if (!ParseImgArchive(img.filePath, img.entries))
+        return luaL_error(L, "Error loading IMG");
+
+    const uint32_t id = CreateResourceElement("img");
+    if (!id) return luaL_error(L, "Error loading IMG");
+    g_imgAssets.emplace(id, std::move(img));
+    PushElement(L, id);
+    return 1;
 }
 
-int NeedImg(lua_State* L, const char* function) {
-    return luaL_error(L, "%s", ParserBad(function, "img", 1, ParserGot(L, 1)).c_str());
+int AddImage(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineAddImage", imgId);
+    if (!img || img->entries.empty() || img->streamed) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    img->streamed = true;
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
-int AddImage(lua_State* L) { return NeedImg(L, "engineAddImage"); }
-int RemoveImage(lua_State* L) { return NeedImg(L, "engineRemoveImage"); }
-int ImageCount(lua_State* L) { return NeedImg(L, "engineImageGetFilesCount"); }
-int ImageFiles(lua_State* L) { return NeedImg(L, "engineImageGetFiles"); }
-int ImageFile(lua_State* L) { return NeedImg(L, "engineImageGetFile"); }
-int LinkDff(lua_State* L) { return NeedImg(L, "engineImageLinkDFF"); }
-int LinkTxd(lua_State* L) { return NeedImg(L, "engineImageLinkTXD"); }
+int RemoveImage(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineRemoveImage", imgId);
+    if (!img || !img->streamed) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    UnlinkImageModels(imgId);
+    img->streamed = false;
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int ImageCount(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineImageGetFilesCount", imgId);
+    lua_pushinteger(L, static_cast<lua_Integer>(img->entries.size()));
+    return 1;
+}
+
+int ImageFiles(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineImageGetFiles", imgId);
+    lua_createtable(L, static_cast<int>(img->entries.size()), 0);
+    for (size_t i = 0; i < img->entries.size(); ++i) {
+        lua_pushlstring(L, img->entries[i].name.data(), img->entries[i].name.size());
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+
+int ImageFile(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineImageGetFile", imgId);
+    const size_t fileId = ResolveImgFileIdArg(L, *img, 2, "engineImageGetFile");
+    std::vector<std::uint8_t> bytes;
+    if (!ReadImgEntryBytes(*img, fileId, bytes))
+        return luaL_error(L, "Failed to read file. Probably EOF reached, make sure the archieve isn't corrupted.");
+    lua_pushlstring(L, reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return 1;
+}
+
+int LinkDff(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineImageLinkDFF", imgId);
+    const size_t fileId = ResolveImgFileIdArg(L, *img, 2, "engineImageLinkDFF");
+    std::uint32_t supplied = 0;
+    std::string error;
+    if (!ReadParserUint(L, 3, "engineImageLinkDFF", supplied, error)) return luaL_error(L, "%s", error.c_str());
+    std::uint32_t modelId = 0;
+    if (!ResolveRuntime(supplied, modelId))
+        return luaL_error(L, "Expected a valid model ID, got %u", supplied);
+    if (modelId >= kTxdBase)
+        return luaL_error(L, "Expected modelid in range 0 - %u, got %u", kTxdBase - 1, modelId);
+
+    std::vector<std::uint8_t> bytes;
+    if (!ReadImgEntryBytes(*img, fileId, bytes))
+        return luaL_error(L, "Failed to read file. Probably EOF reached, make sure the archieve isn't corrupted.");
+    const auto clump = FindDffClump(bytes);
+    if (clump.empty())
+        return luaL_error(L, "Failed to link file. Make sure the archieve isn't corrupted.");
+    if (!img->streamed) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    DffSource src;
+    src.bytes.assign(clump.begin(), clump.end());
+    const std::uint64_t serial = g_nextAssetSerial++;
+    (void)NativeReplaceDFF(static_cast<std::uint16_t>(modelId), serial, src, false);
+    g_imgDffLinks[modelId] = ImgDffLink{imgId, serial};
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int LinkTxd(lua_State* L) {
+    uint32_t imgId = 0;
+    ImgAsset* img = RequireImgArg(L, "engineImageLinkTXD", imgId);
+    const size_t fileId = ResolveImgFileIdArg(L, *img, 2, "engineImageLinkTXD");
+    std::uint32_t txdId = 0;
+    std::string error;
+    if (!ReadParserUint(L, 3, "engineImageLinkTXD", txdId, error)) return luaL_error(L, "%s", error.c_str());
+    if (txdId >= kTxdCount)
+        return luaL_error(L, "Expected txdid in range 0 - %u, got %u", kTxdCount - 1, txdId);
+
+    std::vector<std::uint8_t> bytes;
+    if (!ReadImgEntryBytes(*img, fileId, bytes))
+        return luaL_error(L, "Failed to read file. Probably EOF reached, make sure the archieve isn't corrupted.");
+    const auto dict = FindTxdDictionary(bytes);
+    if (dict.empty())
+        return luaL_error(L, "Failed to link file. Make sure the archieve isn't corrupted.");
+    if (!img->streamed) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    auto prev = g_imgTxdLinks.find(txdId);
+    if (prev != g_imgTxdLinks.end() && prev->second.txd) {
+        NativeReleaseModelAsset(prev->second.serial, prev->second.txd);
+    }
+    const std::uint64_t serial = g_nextAssetSerial++;
+    void* nativeTxd = NativeLoadTXD(dict, true);
+    g_imgTxdLinks[txdId] = ImgTxdLink{imgId, serial, nativeTxd};
+    lua_pushboolean(L, 1);
+    return 1;
+}
 
 int RestoreDffImage(lua_State* L) {
     std::uint32_t supplied = 0;
@@ -380,7 +799,14 @@ int RestoreDffImage(lua_State* L) {
     std::uint32_t id = 0;
     if (!ResolveRuntime(supplied, id)) return luaL_error(L, "Expected a valid model ID at argument 1");
     if (id >= kTxdBase) return luaL_error(L, "Expected model ID in range [0-19999] at argument 1");
-    lua_pushboolean(L, 0);
+    auto it = g_imgDffLinks.find(id);
+    if (it == g_imgDffLinks.end()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    NativeRestoreDFF(static_cast<std::uint16_t>(id));
+    g_imgDffLinks.erase(it);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -390,18 +816,33 @@ int RestoreTxdImage(lua_State* L) {
     if (!ReadParserUint(L, 1, "engineRestoreTXDImage", id, error)) return luaL_error(L, "%s", error.c_str());
     if (id >= kTxdCount) return luaL_error(L, "Expected TXD ID in range [0-4999] at argument 1");
     (void)kFileIdCount;
-    lua_pushboolean(L, 0);
+    auto it = g_imgTxdLinks.find(id);
+    if (it == g_imgTxdLinks.end()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (it->second.txd) NativeReleaseModelAsset(it->second.serial, it->second.txd);
+    g_imgTxdLinks.erase(it);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
 int ReplaceCol(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineReplaceCOL", "col-model", 1), true);
-    double model = 0;
+    const uint32_t colId = ElementIdOf(L, 1);
+    if (g_colAssets.find(colId) == g_colAssets.end())
+        return FailFalse(L, ScriptBad(L, "engineReplaceCOL", "col-model", 1), true);
+    std::string modelText;
     std::string error;
-    if (!ReadBounded(L, 2, "engineReplaceCOL", 0, 65534, model, error)) return FailFalse(L, error, true);
-    (void)model;
-    LUA_LOGE("Bad 'number' pointer @ 'engineReplaceCOL'(2)");
-    lua_pushboolean(L, 0);
+    if (!ReadParserString(L, 2, "engineReplaceCOL", modelText, error)) return FailFalse(L, error, true);
+    std::uint32_t id = 0;
+    if (!ResolveText(modelText, id) || id >= kTxdBase)
+        return FailFalse(L, Usage("engineReplaceCOL", "Could not replace COL for model", modelText), true);
+    if (!g_diagColHookLogged) {
+        g_diagColHookLogged = true;
+        LUA_LOGI("DIAG engineReplaceCOL: CColModel GTA replacement hook pending (stored in asset registry)");
+    }
+    g_colModelLinks[id] = colId;
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -410,8 +851,11 @@ int RestoreCol(lua_State* L) {
     std::string error;
     if (!ReadScriptString(L, 1, "engineRestoreCOL", text, error, false, "")) return FailFalse(L, error, true);
     std::uint32_t id = 0;
-    (void)ResolveText(text, id);
-    lua_pushboolean(L, 0);
+    if (!ResolveText(text, id) || id >= kTxdBase) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushboolean(L, g_colModelLinks.erase(id) > 0 ? 1 : 0);
     return 1;
 }
 
@@ -565,7 +1009,8 @@ int ReplaceEncrypted(lua_State* L) {
 }
 
 int ReplaceAnim(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineReplaceAnimation", "element", 1), true);
+    const uint32_t pedId = ElementIdOf(L, 1);
+    if (pedId == 0) return FailFalse(L, ScriptBad(L, "engineReplaceAnimation", "element", 1), true);
     std::string internalBlock;
     std::string internalAnim;
     std::string customBlock;
@@ -575,23 +1020,70 @@ int ReplaceAnim(lua_State* L) {
     if (!ReadScriptString(L, 3, "engineReplaceAnimation", internalAnim, error, false, "")) return FailFalse(L, error, true);
     if (!ReadScriptString(L, 4, "engineReplaceAnimation", customBlock, error, false, "")) return FailFalse(L, error, true);
     if (!ReadScriptString(L, 5, "engineReplaceAnimation", customAnim, error, false, "")) return FailFalse(L, error, true);
-    LUA_LOGI("DIAG engineReplaceAnimation: the IFP engine is not hooked");
-    lua_pushboolean(L, 0);
+
+    const auto blockIt = g_ifpByBlock.find(LowerAscii(customBlock));
+    if (blockIt == g_ifpByBlock.end()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const auto ifpIt = g_ifpAssets.find(blockIt->second);
+    if (ifpIt == g_ifpAssets.end()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!ifpIt->second.animNames.empty()) {
+        const std::string wantAnim = LowerAscii(customAnim);
+        const bool found = std::any_of(ifpIt->second.animNames.begin(), ifpIt->second.animNames.end(),
+                                       [&](const std::string& n) { return LowerAscii(n) == wantAnim; });
+        if (!found) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+    }
+    if (!g_diagIfpHookLogged) {
+        g_diagIfpHookLogged = true;
+        LUA_LOGI("DIAG engineReplaceAnimation: CAnimManager GTA override hook pending (stored in IFP registry)");
+    }
+    const std::string ibKey = LowerAscii(internalBlock);
+    const std::string iaKey = LowerAscii(internalAnim);
+    for (auto& existing : g_animOverrides) {
+        if (existing.pedId == pedId && existing.internalBlock == ibKey && existing.internalAnim == iaKey) {
+            existing.ifpId = ifpIt->first;
+            existing.customBlock = ifpIt->second.blockKey;
+            existing.customAnim = LowerAscii(customAnim);
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+    }
+    g_animOverrides.push_back(AnimOverride{pedId, ifpIt->first, ibKey, iaKey, ifpIt->second.blockKey, LowerAscii(customAnim)});
+    lua_pushboolean(L, 1);
     return 1;
 }
 
 int RestoreAnim(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TUSERDATA) return FailFalse(L, ScriptBad(L, "engineRestoreAnimation", "element", 1), true);
+    const uint32_t pedId = ElementIdOf(L, 1);
+    if (pedId == 0) return FailFalse(L, ScriptBad(L, "engineRestoreAnimation", "element", 1), true);
+    std::string internalBlock;
+    std::string internalAnim;
+    std::string error;
     const int second = lua_type(L, 2);
-    if (second != LUA_TNONE && second != LUA_TNIL && second != LUA_TSTRING && second != LUA_TNUMBER)
-        return FailFalse(L, ScriptBad(L, "engineRestoreAnimation", "string", 2), true);
-    if (second == LUA_TSTRING || second == LUA_TNUMBER) {
+    if (second != LUA_TNONE && second != LUA_TNIL) {
+        if (!ReadScriptString(L, 2, "engineRestoreAnimation", internalBlock, error, false, "")) return FailFalse(L, error, true);
         const int third = lua_type(L, 3);
-        if (third != LUA_TNONE && third != LUA_TNIL && third != LUA_TSTRING && third != LUA_TNUMBER)
-            return FailFalse(L, ScriptBad(L, "engineRestoreAnimation", "string", 3), true);
+        if (third != LUA_TNONE && third != LUA_TNIL) {
+            if (!ReadScriptString(L, 3, "engineRestoreAnimation", internalAnim, error, false, "")) return FailFalse(L, error, true);
+        }
     }
-    LUA_LOGI("DIAG engineRestoreAnimation: the IFP engine is not hooked");
-    lua_pushboolean(L, 0);
+    const std::string ibKey = LowerAscii(internalBlock);
+    const std::string iaKey = LowerAscii(internalAnim);
+    const size_t before = g_animOverrides.size();
+    std::erase_if(g_animOverrides, [&](const AnimOverride& ov) {
+        if (ov.pedId != pedId) return false;
+        if (!ibKey.empty() && ov.internalBlock != ibKey) return false;
+        if (!iaKey.empty() && ov.internalAnim != iaKey) return false;
+        return true;
+    });
+    lua_pushboolean(L, g_animOverrides.size() < before ? 1 : 0);
     return 1;
 }
 
@@ -814,16 +1306,35 @@ bool CopyTxdDataForRadar(uint32_t id, uint32_t expectedGeneration, std::vector<u
 
 void ReleaseModelAsset(uint32_t id) {
     RemoveRadarMapTilesForSource(id);
-    const auto it = g_assets.find(id);
-    if (it == g_assets.end()) return;
-    NativeReleaseModelAsset(it->second.serial, it->second.txd);
-    g_assets.erase(it);
+    if (const auto it = g_assets.find(id); it != g_assets.end()) {
+        NativeReleaseModelAsset(it->second.serial, it->second.txd);
+        g_assets.erase(it);
+    }
+    if (g_colAssets.erase(id) > 0) {
+        for (auto it = g_colModelLinks.begin(); it != g_colModelLinks.end();)
+            it = (it->second == id) ? g_colModelLinks.erase(it) : std::next(it);
+    }
+    if (const auto it = g_ifpAssets.find(id); it != g_ifpAssets.end()) {
+        auto byBlock = g_ifpByBlock.find(it->second.blockKey);
+        if (byBlock != g_ifpByBlock.end() && byBlock->second == id) g_ifpByBlock.erase(byBlock);
+        std::erase_if(g_animOverrides, [id](const AnimOverride& ov) { return ov.ifpId == id; });
+        g_ifpAssets.erase(it);
+    }
+    if (g_imgAssets.erase(id) > 0) {
+        UnlinkImageModels(id);
+    }
 }
 
 void DropResourceModelAssets(uint32_t generation) {
     RemoveRadarMapTilesForOwner(generation);
     std::vector<uint32_t> owned;
     for (const auto& [id, asset] : g_assets)
+        if (asset.generation == generation) owned.push_back(id);
+    for (const auto& [id, asset] : g_colAssets)
+        if (asset.generation == generation) owned.push_back(id);
+    for (const auto& [id, asset] : g_ifpAssets)
+        if (asset.generation == generation) owned.push_back(id);
+    for (const auto& [id, asset] : g_imgAssets)
         if (asset.generation == generation) owned.push_back(id);
     for (uint32_t id : owned)
         if (!DestroyClientElementForced(id)) ReleaseModelAsset(id);
@@ -844,6 +1355,22 @@ void ResetModelAssets() {
     ResetRadarMapTiles();
     for (const auto& [id, asset] : g_assets) NativeReleaseModelAsset(asset.serial, asset.txd);
     g_assets.clear();
+    g_colAssets.clear();
+    g_colModelLinks.clear();
+    g_ifpAssets.clear();
+    g_ifpByBlock.clear();
+    g_animOverrides.clear();
+    for (const auto& [modelId, link] : g_imgDffLinks) {
+        (void)link;
+        NativeRestoreDFF(static_cast<std::uint16_t>(modelId));
+    }
+    g_imgDffLinks.clear();
+    for (const auto& [txdId, link] : g_imgTxdLinks) {
+        (void)txdId;
+        if (link.txd) NativeReleaseModelAsset(link.serial, link.txd);
+    }
+    g_imgTxdLinks.clear();
+    g_imgAssets.clear();
     for (const auto& [id, generation] : g_customModels)
         if (!NativeFreeModel(id)) g_pendingFree.push_back(id);
     g_customModels.clear();

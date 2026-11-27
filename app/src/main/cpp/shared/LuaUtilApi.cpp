@@ -4,6 +4,7 @@
 #include "LuaMtaWindowApi.h"
 
 #include "LuaVMStub.h"
+#include "VoiceRuntime.h"
 #include "Checksums.h"
 #include "ResourceLoader.h"
 #ifdef __ANDROID__
@@ -1096,7 +1097,11 @@ int l_setTransferBoxVisible(lua_State* L) {
 
 int l_isTransferBoxVisible(lua_State* L) { (void)L; lua_pushboolean(L, g_transferVisible); return 1; }
 int l_isTransferBoxAlwaysVisible(lua_State* L) { (void)L; lua_pushboolean(L, g_transferAlways); return 1; }
-int l_isVoiceEnabled(lua_State* L) { (void)L; lua_pushboolean(L, g_voice); return 1; }
+int l_isVoiceEnabled(lua_State* L) {
+    (void)L;
+    lua_pushboolean(L, (g_voice || WorldRPG::Audio::VoiceRuntime::IsEnabled()) ? 1 : 0);
+    return 1;
+}
 int l_isTrayNotificationEnabled(lua_State* L) { (void)L; lua_pushboolean(L, g_tray); return 1; }
 int l_isChatInputBlocked(lua_State* L) { (void)L; lua_pushboolean(L, g_chatBlocked); return 1; }
 int l_isCapsLockEnabled(lua_State* L) { (void)L; lua_pushboolean(L, g_caps); return 1; }

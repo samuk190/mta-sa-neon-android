@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — end-to-end voice chat (P2-1) and IMG v2 / COL / IFP asset loaders (P1-6) (2026-11-27)
+
+- **End-to-end voice chat runtime & Android audio backend** (`CPacketHandler.cpp:5798-5822`, `CClientPlayerVoice.cpp:25-175, 462-472`, `CVoiceRecorder.cpp:250-370`, `shared/VoiceRuntime.h`, `shared/VoiceRuntime.cpp`, `shared/PacketHandler.cpp`, `net/NeonJoinProtocol.cpp`, `shared/LuaVMStub.cpp`, `shared/LuaUtilApi.cpp`, `shared/LuaAudioApi.cpp`, `shared/ServerWorld.cpp`, `jni/JNI_OnLoad.cpp`, `game/VoiceAudioEngine.java`, `game/EngineHostActivity.java`, `tools/headless/CMakeLists.txt`):
+  - Configured voice from `SERVER_JOINEDGAME` (`Configure(enabled, rateCode, quality, bitrate)`) and wired `isVoiceEnabled()` to `VoiceRuntime::IsEnabled()`.
+  - Decoded inbound `PACKET_ID_VOICE_DATA` (71: 17-bit `ElementID`, `uint16_t len <= 2048`, Speex bytes) into per-player `VoiceCodecStub` Speex decoders with local player muted (`0.0f`) and remote players at `1.0f` by default.
+  - Pumped desktop voice lifecycle events in `LuaVMStub::pumpDx`: cancelable `onClientPlayerVoiceStart`, idle-stall `onClientPlayerVoiceStop`, `onClientPlayerVoicePause`, and `onClientPlayerVoiceResumed`.
+  - Routed `setSoundVolume`/`getSoundVolume`/`setSoundPaused`/`isSoundPaused`/`setSoundPan`/`getSoundPan` to `VoiceRuntime` when targeting a local or remote player element.
+  - Added outbound Speex encoding (`SetTransmitActive` + `OnMicPcm` -> `PACKET_ID_VOICE_DATA` 71 `[uint16_t len][bytes]` and empty `PACKET_ID_VOICE_END` 72) and Android `AudioTrack`/`AudioRecord` backend in `VoiceAudioEngine.java` (`RECORD_AUDIO` permission guarded) with JNI bridge (`onNativeVoiceConfig`, `onNativeVoicePlayback`, `nativeVoiceSetTransmit`, `nativeVoiceMicPcm`).
+- **IMG v2 (`VER2`), COL (`COLL`/`COL2`/`COL3`/`COL4`), and IFP (`ANPK`/`ANP3`) asset loaders** (`CClientIMG.cpp:1-254`, `CLuaEngineDefs.cpp:457-535, 1051-1208`, `shared/EngineAssets.cpp`):
+  - Implemented `engineLoadIMG`, `engineAddImage`, `engineRemoveImage`, `engineImageGetFilesCount`, `engineImageGetFiles`, `engineImageGetFile`, `engineImageLinkDFF`, `engineImageLinkTXD`, `engineRestoreDFFImage`, `engineRestoreTXDImage` with RenderWare DFF/TXD validation and automatic unlinking on `engineRemoveImage`, `destroyElement`, resource stop, and session reset.
+  - Implemented `engineLoadCOL`, `engineReplaceCOL`, `engineRestoreCOL` and `engineLoadIFP` (parsing `ANP3`/`ANPK` animation names), `engineReplaceAnimation`, `engineRestoreAnimation` with raw-data & resource-file loading, OOP class compatibility (`EngineIMG`/`EngineCOL`/`EngineIFP`), automatic cleanup, and `DIAG` markers for pending `CColModel`/`CAnimManager` native GTA hooks.
+- Tests: expanded `neon_resource_tests` to 680 checks (`ALL PASSED: cipher offline reliability join headless`) covering voice config/events/cancelEvent/player controls/Speex encode+decode round-trip (`PACKET_ID_VOICE_DATA` 71 & `PACKET_ID_VOICE_END` 72) and IMG/COL/IFP procedural + OOP workflows; verified Android `assembleRelease` APK and 16 KB ELF alignment (`0x4000`).
+
 ### Added — Lua OOP class layer, gui-gridlist sorting, extended radar map tiles, rocketSimGamepad JNI, high-frequency client events (2026-11-27)
 
 - **Lua OOP class layer & per-resource `isOOPEnabled()`** (`CLuaClassDefs.cpp`, `CLuaVector2Defs.cpp`, `CLuaVector3Defs.cpp`, `CLuaVector4Defs.cpp`, `CLuaMatrixDefs.cpp`, `CLuaElementDefs.cpp`, `CLuaGUIDefs.cpp`, `CLuaResourceDefs.cpp`, `shared/LuaOopApi.h`, `shared/LuaOopApi.cpp`, `shared/LuaVMStub.cpp`, `shared/LuaApiExtra.cpp`, `shared/LuaResourceApi.cpp`, `shared/ResourceLoader.h`, `shared/ResourceLoader.cpp`, `shared/LuaUtilApi.cpp`):

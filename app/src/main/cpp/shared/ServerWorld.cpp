@@ -6,6 +6,7 @@
 #include "WorldObjectFeed.h"
 #include "PedQueries.h"
 #include "CombatSync.h"
+#include "VoiceRuntime.h"
 #include "ResourceFiles.h"
 #include "ConnectionLoading.h"
 #include "../gtasa/GameEngine.h"
@@ -1150,6 +1151,7 @@ bool IsKnownPlayer(uint32_t id) {
 
 void OnPlayerQuit(uint32_t id, const char* reason) {
     Combat::ForgetShooter(id);
+    WorldRPG::Audio::VoiceRuntime::OnPlayerRemoved(id);
     if (id == 0 || id == 0xFFFFFFFFu || id == g_local) return;
     // CClientGame::QuitPlayer calls onClientPlayerQuit before deleting the player.
     if (g_hooks.playerQuit) g_hooks.playerQuit(id, reason ? reason : "Unknown");

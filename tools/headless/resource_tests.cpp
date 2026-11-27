@@ -22,6 +22,8 @@
 #include "LuaMtaWindowApi.h"
 #include "LuaRocketSoccerApi.h"
 #include "LuaVMStub.h"
+#include "VoiceCodecStub.h"
+#include "VoiceRuntime.h"
 #include "WorldShaderMatches.h"
 #include "DesktopLuaString.h"
 #include "LuaVmSet.h"
@@ -6019,6 +6021,350 @@ int main(int argc, char** argv) {
                 stop.Write(rid);
                 Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
             }
+        }
+
+        // P2-1: End-to-end voice chat (SERVER_JOINEDGAME config, PACKET_ID_VOICE_DATA 71,
+        // Speex decode/encode, onClientPlayerVoiceStart/Stop/Pause/Resumed, player sound controls,
+        // and outbound PACKET_ID_VOICE_DATA 71 + PACKET_ID_VOICE_END 72).
+        {
+            using namespace WorldRPG;
+            const uint32_t localId = 7001;
+            const uint32_t remoteId = 7002;
+            ServerWorld::SetLocalPlayer(localId);
+            ServerWorld::NotePlayerSeen(localId);
+            ServerWorld::NotePlayerSeen(remoteId);
+            ServerWorld::NotePlayerNick(localId, "LocalVoice");
+            ServerWorld::NotePlayerNick(remoteId, "RemoteSpeaker");
+
+            // Voice disabled before server configures it.
+            Audio::VoiceRuntime::Reset();
+            RunLua(vm, "voice-disabled-default", "assert(isVoiceEnabled() == false, 'voice disabled initially')");
+
+            // Server enables voice: 16 kHz wideband (rateCode=1), quality=6, bitrate=0.
+            Audio::VoiceRuntime::Configure(true, 1, 6, 0);
+            Audio::VoiceRuntime::SetIdleTimeoutMsForTests(200);
+            RunLua(vm, "voice-enabled-after-config", "assert(isVoiceEnabled() == true, 'voice enabled after configure')");
+
+            // Prepare a real Speex-encoded 20 ms 16 kHz sine frame.
+            Audio::VoiceCodecStub senderCodec;
+            CHECK(senderCodec.initialize(Audio::DesktopVoiceConfig(1, 6, 0)));
+            std::vector<int16_t> sineFrame(320, 0);
+            for (size_t i = 0; i < sineFrame.size(); ++i) {
+                sineFrame[i] = static_cast<int16_t>(12000.0 * std::sin(2.0 * 3.14159265 * 440.0 * static_cast<double>(i) / 16000.0));
+            }
+            const std::vector<uint8_t> encoded = senderCodec.encode(sineFrame.data(), sineFrame.size());
+            CHECK(!encoded.empty() && encoded.size() <= Audio::VoiceRuntime::kMaxVoiceBufferLength);
+
+            // Capture decoded PCM playback frames.
+            size_t decodedFrames = 0;
+            size_t decodedSamples = 0;
+            uint32_t decodedRate = 0;
+            uint32_t decodedPlayer = 0;
+            Audio::VoiceRuntime::SetPlaybackSinkForTests(
+                [&](uint32_t pid, const int16_t*, size_t count, uint32_t rate) {
+                    ++decodedFrames;
+                    decodedSamples += count;
+                    decodedRate = rate;
+                    decodedPlayer = pid;
+                });
+
+            // Start a resource that hooks all four desktop voice events.
+            Net::ResourceStartInfo voiceRes;
+            voiceRes.name = "p2_voice_test";
+            voiceRes.resourceId = 206;
+            voiceRes.entityId = 0x3CF0;
+            voiceRes.dynamicEntityId = 0x3CF1;
+            voiceRes.noClientCacheScripts = 1;
+            voiceRes.startCounter = 1;
+            Script::ActiveVmOnResourceStart(voiceRes);
+            const std::vector<uint8_t> voiceBody = NoCacheScriptBody(206, R"LUA(
+                _G._voiceLog = {}
+                _G._voiceCancelNext = false
+                addEventHandler("onClientPlayerVoiceStart", root, function()
+                    table.insert(_G._voiceLog, "start:" .. tostring(getPlayerName(source)))
+                    if _G._voiceCancelNext then
+                        _G._voiceCancelNext = false
+                        cancelEvent()
+                    end
+                end)
+                addEventHandler("onClientPlayerVoiceStop", root, function()
+                    table.insert(_G._voiceLog, "stop:" .. tostring(getPlayerName(source)))
+                end)
+                addEventHandler("onClientPlayerVoicePause", root, function()
+                    table.insert(_G._voiceLog, "pause:" .. tostring(getPlayerName(source)))
+                end)
+                addEventHandler("onClientPlayerVoiceResumed", root, function()
+                    table.insert(_G._voiceLog, "resumed:" .. tostring(getPlayerName(source)))
+                end)
+            )LUA");
+            CHECK(Script::ActiveVmFeedScripts(voiceBody.data(), voiceBody.size(), voiceBody.size() * 8));
+            Script::ActiveVmPulseResources();
+
+            // Build wire UPE + PACKET_ID_VOICE_DATA (71): [uint8_t 71][17-bit ElementID][uint16_t len][bytes].
+            auto feedVoicePacket = [&](Sync::PacketHandler& h, uint32_t pid, const std::vector<uint8_t>& payload) {
+                Net::BitStreamWriter bs;
+                bs.Write(static_cast<uint8_t>(71));
+                bs.WriteBits(reinterpret_cast<const uint8_t*>(&pid), 17);
+                bs.Write(static_cast<uint16_t>(payload.size()));
+                bs.WriteBytes(payload.data(), payload.size());
+                return h.handlePacket(Sync::USER_PACKET_ENUM_ID, bs.GetData(), bs.GetByteLength(), bs.GetBitLength());
+            };
+            Sync::PacketHandler handler;
+            CHECK(feedVoicePacket(handler, remoteId, encoded));
+            Script::ActiveVmPump();
+            CHECK(decodedFrames == 1 && decodedSamples == 320 && decodedRate == 16000 && decodedPlayer == remoteId);
+            CHECK(Audio::VoiceRuntime::IsPlayerActive(remoteId));
+
+            // Player voice volume / pan / pause controls via standard MTA sound functions.
+            RunLua(vm, "voice-player-controls", R"LUA(
+                local target = getPlayerFromName("RemoteSpeaker")
+                assert(isElement(target), "remote speaker element")
+                assert(getSoundVolume(target) == 1.0, "default remote voice volume 1.0")
+                assert(setSoundVolume(target, 0.5) == true and math.abs(getSoundVolume(target) - 0.5) < 0.001)
+                assert(setSoundPan(target, -0.5) == true and math.abs(getSoundPan(target) + 0.5) < 0.001)
+                assert(isSoundPaused(target) == false)
+                assert(setSoundPaused(target, true) == true and isSoundPaused(target) == true)
+                assert(setSoundPaused(target, false) == true and isSoundPaused(target) == false)
+                local me = getPlayerFromName("LocalVoice")
+                assert(isElement(me) and getSoundVolume(me) == 0.0, "local voice muted by default")
+            )LUA");
+            Script::ActiveVmPump();
+            RunLua(vm, "voice-pause-resume-events", R"LUA(
+                assert(_G._voiceLog[1] == "start:RemoteSpeaker", "voice start event")
+                assert(_G._voiceLog[2] == "pause:RemoteSpeaker", "voice pause event")
+                assert(_G._voiceLog[3] == "resumed:RemoteSpeaker", "voice resumed event")
+            )LUA");
+
+            // Force stall timeout -> onClientPlayerVoiceStop.
+            std::vector<std::string> stopEvents;
+            Audio::VoiceRuntime::Pump(
+                [&](const char* ev, uint32_t pid) {
+                    stopEvents.push_back(std::string(ev) + ":" + std::to_string(pid));
+                    return true;
+                },
+                std::numeric_limits<uint64_t>::max() / 2);
+            CHECK(!Audio::VoiceRuntime::IsPlayerActive(remoteId));
+            CHECK(stopEvents.size() == 1 && stopEvents[0] == "onClientPlayerVoiceStop:7002");
+
+            // Cancelable onClientPlayerVoiceStart suppresses activation and audio playback.
+            const size_t framesBeforeCancel = decodedFrames;
+            RunLua(vm, "voice-arm-cancel", "_G._voiceCancelNext = true");
+            CHECK(feedVoicePacket(handler, remoteId, encoded));
+            Script::ActiveVmPump();
+            CHECK(decodedFrames == framesBeforeCancel);
+            CHECK(!Audio::VoiceRuntime::IsPlayerActive(remoteId));
+
+            // Outbound mic capture -> PACKET_ID_VOICE_DATA (71) and PACKET_ID_VOICE_END (72).
+            std::vector<std::pair<uint8_t, std::vector<uint8_t>>> sentPackets;
+            Audio::VoiceRuntime::SetPacketSinkForTests(
+                [&](uint8_t gameId, const uint8_t* body, size_t len) {
+                    sentPackets.emplace_back(gameId, std::vector<uint8_t>(body, body + len));
+                    return true;
+                });
+            Audio::VoiceRuntime::SetTransmitActive(true);
+            CHECK(Audio::VoiceRuntime::IsTransmitActive());
+            Audio::VoiceRuntime::OnMicPcm(sineFrame.data(), sineFrame.size());
+            Audio::VoiceRuntime::SetTransmitActive(false);
+            CHECK(!Audio::VoiceRuntime::IsTransmitActive());
+            CHECK(sentPackets.size() == 2);
+            if (sentPackets.size() == 2) {
+                CHECK(sentPackets[0].first == 71 && sentPackets[0].second.size() > 2);
+                const uint16_t wireLen = static_cast<uint16_t>(sentPackets[0].second[0]) |
+                                         static_cast<uint16_t>(static_cast<uint16_t>(sentPackets[0].second[1]) << 8u);
+                CHECK(wireLen + 2u == sentPackets[0].second.size());
+                // Verify outbound Speex bytes decode back to 320 PCM samples.
+                Audio::VoiceCodecStub rxCodec;
+                CHECK(rxCodec.initialize(Audio::DesktopVoiceConfig(1, 6, 0)));
+                const auto roundtrip = rxCodec.decode(sentPackets[0].second.data() + 2, wireLen);
+                CHECK(roundtrip.size() == 320);
+                // PACKET_ID_VOICE_END (72) has empty body.
+                CHECK(sentPackets[1].first == 72 && sentPackets[1].second.empty());
+            }
+
+            Audio::VoiceRuntime::SetPlaybackSinkForTests(nullptr);
+            Audio::VoiceRuntime::SetPacketSinkForTests(nullptr);
+            Audio::VoiceRuntime::SetIdleTimeoutMsForTests(Audio::VoiceRuntime::kDefaultIdleTimeoutMs);
+            Audio::VoiceRuntime::Reset();
+            Net::BitStreamWriter stopVoice;
+            stopVoice.Write(static_cast<uint16_t>(206));
+            Script::ActiveVmOnResourceStop(stopVoice.GetData(), stopVoice.GetByteLength(), stopVoice.GetBitLength());
+        }
+
+        // P1-6: IMG v2 (VER2) archive, COL (COL3) collision models, and IFP (ANP3) animation blocks.
+        {
+            using namespace WorldRPG;
+            auto appendLe32 = [](std::string& dst, uint32_t v) {
+                dst.push_back(static_cast<char>(v & 0xFFu));
+                dst.push_back(static_cast<char>((v >> 8u) & 0xFFu));
+                dst.push_back(static_cast<char>((v >> 16u) & 0xFFu));
+                dst.push_back(static_cast<char>((v >> 24u) & 0xFFu));
+            };
+            auto appendLe16 = [](std::string& dst, uint16_t v) {
+                dst.push_back(static_cast<char>(v & 0xFFu));
+                dst.push_back(static_cast<char>((v >> 8u) & 0xFFu));
+            };
+
+            // Minimal valid RenderWare DFF clump (type 0x10 -> child 0x01 struct)
+            // and TXD dictionary (type 0x16 -> 0x01 struct [count=1] + 0x15 native texture -> 0x01 struct).
+            std::string validDff;
+            appendLe32(validDff, 0x10u);
+            appendLe32(validDff, 16u);
+            appendLe32(validDff, 0x1803FFFFu);
+            appendLe32(validDff, 0x01u);
+            appendLe32(validDff, 4u);
+            appendLe32(validDff, 0x1803FFFFu);
+            appendLe32(validDff, 0u);
+
+            std::string validTxd;
+            appendLe32(validTxd, 0x16u);
+            appendLe32(validTxd, 44u);
+            appendLe32(validTxd, 0x1803FFFFu);
+            // Dict struct (1 texture, device 2)
+            appendLe32(validTxd, 0x01u);
+            appendLe32(validTxd, 4u);
+            appendLe32(validTxd, 0x1803FFFFu);
+            appendLe16(validTxd, 1u);
+            appendLe16(validTxd, 2u);
+            // NativeTexture (0x15) containing minimal non-D3D9 struct (platform = 8)
+            appendLe32(validTxd, 0x15u);
+            appendLe32(validTxd, 16u);
+            appendLe32(validTxd, 0x1803FFFFu);
+            appendLe32(validTxd, 0x01u);
+            appendLe32(validTxd, 4u);
+            appendLe32(validTxd, 0x1803FFFFu);
+            appendLe32(validTxd, 8u);
+
+            // Build a 3-sector (6144-byte) GTA:SA IMG v2 ("VER2") archive:
+            // sector 0 = header + 2 dir entries; sector 1 = car.dff; sector 2 = car.txd.
+            std::string imgBytes;
+            imgBytes.append("VER2", 4);
+            appendLe32(imgBytes, 2u);
+            // Entry 0: car.dff at block 1, size 1 block
+            appendLe32(imgBytes, 1u);
+            appendLe16(imgBytes, 1u);
+            appendLe16(imgBytes, 0u);
+            std::string n0 = "car.dff";
+            n0.resize(24, '\0');
+            imgBytes.append(n0);
+            // Entry 1: car.txd at block 2, size 1 block
+            appendLe32(imgBytes, 2u);
+            appendLe16(imgBytes, 1u);
+            appendLe16(imgBytes, 0u);
+            std::string n1 = "car.txd";
+            n1.resize(24, '\0');
+            imgBytes.append(n1);
+            imgBytes.resize(2048, '\0');
+            std::string sec1 = validDff;
+            sec1.resize(2048, '\0');
+            imgBytes.append(sec1);
+            std::string sec2 = validTxd;
+            sec2.resize(2048, '\0');
+            imgBytes.append(sec2);
+
+            // Minimal valid COL3 payload (32 bytes).
+            std::string colBytes("COL3", 4);
+            appendLe32(colBytes, 24u);
+            colBytes.resize(32, '\0');
+
+            // Minimal valid ANP3 IFP payload with 2 animations ("wave", "dance").
+            std::string ifpBytes("ANP3", 4);
+            appendLe32(ifpBytes, 100u);
+            std::string ifpBlock = "customblk";
+            ifpBlock.resize(24, '\0');
+            ifpBytes.append(ifpBlock);
+            appendLe32(ifpBytes, 2u);  // numAnims = 2
+            for (const char* animName : {"wave", "dance"}) {
+                std::string an(animName);
+                an.resize(24, '\0');
+                ifpBytes.append(an);
+                appendLe32(ifpBytes, 0u);  // numObjects = 0
+                appendLe32(ifpBytes, 0u);  // frameDataSize = 0
+                appendLe32(ifpBytes, 0u);  // unk = 0
+            }
+
+            lua_State* L = Script::ActiveVmState();
+            lua_pushlstring(L, colBytes.data(), colBytes.size());
+            lua_setglobal(L, "_p1TestColBytes");
+            lua_pushlstring(L, ifpBytes.data(), ifpBytes.size());
+            lua_setglobal(L, "_p1TestIfpBytes");
+
+            // Place synthetic downloaded resource assets in the resource cache directory.
+            Net::HttpDownloader::SetResourceCacheRoot("/tmp/neon-dx-cache");
+            const std::filesystem::path assetDir = "/tmp/neon-dx-cache/p1_assets_test";
+            std::filesystem::create_directories(assetDir);
+            auto writeFile = [&](const char* name, const std::string& data) {
+                std::ofstream out(assetDir / name, std::ios::binary | std::ios::trunc);
+                out.write(data.data(), static_cast<std::streamsize>(data.size()));
+            };
+            writeFile("pack.img", imgBytes);
+            writeFile("test.col", colBytes);
+            writeFile("anims.ifp", ifpBytes);
+
+            Net::ResourceStartInfo assetRes;
+            assetRes.name = "p1_assets_test";
+            assetRes.resourceId = 207;
+            assetRes.entityId = 0x3D00;
+            assetRes.dynamicEntityId = 0x3D01;
+            assetRes.noClientCacheScripts = 1;
+            assetRes.startCounter = 1;
+            assetRes.oopEnabled = true;
+            Script::ActiveVmOnResourceStart(assetRes);
+            const std::vector<uint8_t> assetBody = NoCacheScriptBody(207, R"LUA(
+                -- 1) IMG v2 archive (procedural + OOP)
+                local img = engineLoadIMG("pack.img")
+                assert(isElement(img) and getElementType(img) == "img", "engineLoadIMG element")
+                assert(engineImageGetFilesCount(img) == 2, "IMG files count")
+                local files = engineImageGetFiles(img)
+                assert(#files == 2 and files[1] == "car.dff" and files[2] == "car.txd", "IMG file list")
+                local dffData = engineImageGetFile(img, 0)
+                local txdData = engineImageGetFile(img, "car.txd")
+                assert(#dffData == 2048 and #txdData == 2048, "IMG file extraction")
+                -- Linking fails while archive is not added to streaming.
+                assert(engineImageLinkDFF(img, "car.dff", 411) == false, "link before add returns false")
+                assert(engineAddImage(img) == true and engineAddImage(img) == false, "engineAddImage toggle")
+                assert(engineImageLinkDFF(img, "car.dff", 411) == true, "engineImageLinkDFF")
+                assert(engineImageLinkTXD(img, 1, 10) == true, "engineImageLinkTXD by index")
+                assert(engineRestoreDFFImage(411) == true and engineRestoreDFFImage(411) == false, "restore DFF image")
+                assert(engineRestoreTXDImage(10) == true and engineRestoreTXDImage(10) == false, "restore TXD image")
+                -- Re-link and verify engineRemoveImage unlinks both.
+                assert(img:linkDFF(0, 411) == true and img:linkTXD("car.txd", 10) == true, "OOP link")
+                assert(img:remove() == true and img:remove() == false, "OOP remove unlinks")
+                assert(engineRestoreDFFImage(411) == false and engineRestoreTXDImage(10) == false, "unlinked by remove")
+                assert(destroyElement(img) == true, "destroy img")
+
+                -- 2) COL models (raw + file + replace/restore + destroyElement cleanup)
+                local colRaw = engineLoadCOL(_G._p1TestColBytes)
+                assert(isElement(colRaw) and getElementType(colRaw) == "col", "raw COL loaded")
+                local colFile = EngineCOL("test.col")
+                assert(isElement(colFile) and colFile:getType() == "col", "OOP file COL loaded")
+                assert(colFile:replace(411) == true, "OOP replace COL")
+                assert(engineRestoreCOL("Infernus") == true and engineRestoreCOL(411) == false, "restore COL by name")
+                assert(engineReplaceCOL(colRaw, 411) == true, "replace COL raw")
+                assert(destroyElement(colRaw) == true, "destroy COL unlinks model")
+                assert(engineRestoreCOL(411) == false, "COL unlinked on destroy")
+
+                -- 3) IFP animation blocks (raw + file + replace/restore + destroyElement cleanup)
+                local ifpFile = engineLoadIFP("anims.ifp", "myCustomBlock")
+                assert(isElement(ifpFile) and getElementType(ifpFile) == "ifp", "file IFP loaded")
+                local ped = createPed(0, 0, 0, 3)
+                assert(isElement(ped), "ped for anim replace")
+                assert(engineReplaceAnimation(ped, "ped", "idle_stance", "myCustomBlock", "wave") == true, "replace anim")
+                assert(engineReplaceAnimation(ped, "ped", "idle_stance", "myCustomBlock", "nonexistent") == false, "missing anim rejected")
+                assert(engineRestoreAnimation(ped, "ped", "idle_stance") == true, "restore anim")
+                assert(engineRestoreAnimation(ped, "ped", "idle_stance") == false, "restore anim twice false")
+                assert(engineReplaceAnimation(ped, "ped", "walk_player", "myCustomBlock", "dance") == true, "replace dance")
+                assert(destroyElement(ifpFile) == true, "destroy IFP clears overrides")
+                assert(engineRestoreAnimation(ped, "ped", "walk_player") == false, "override cleared on IFP destroy")
+
+                _G._p1AssetsTestOk = true
+            )LUA");
+            CHECK(Script::ActiveVmFeedScripts(assetBody.data(), assetBody.size(), assetBody.size() * 8));
+            Script::ActiveVmPulseResources();
+            RunLua(vm, "p1-assets-verify", "assert(_G._p1AssetsTestOk == true, 'IMG/COL/IFP tests')");
+
+            Net::BitStreamWriter stopAssets;
+            stopAssets.Write(static_cast<uint16_t>(207));
+            Script::ActiveVmOnResourceStop(stopAssets.GetData(), stopAssets.GetByteLength(), stopAssets.GetBitLength());
         }
     }
 

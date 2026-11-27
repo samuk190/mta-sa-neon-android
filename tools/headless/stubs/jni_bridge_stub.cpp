@@ -61,4 +61,7 @@ bool StorePixels(const std::string& name, const std::vector<uint32_t>& pixels, u
 void CopyScreen(const std::string&, unsigned, unsigned) {}
 // No SVG renderer on the host: the document is kept without a picture.
 int RenderSvg(const std::string&, const std::string&, unsigned, unsigned) { return -1; }
+// Host builds use VoiceRuntime::SetPlaybackSinkForTests for PCM verification.
+void VoiceConfigChanged(bool, uint32_t) {}
+void VoicePlaybackPcm(uint32_t, const int16_t*, size_t, uint32_t) {}
 } // namespace WorldRPG::JniBridge

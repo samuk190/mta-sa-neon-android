@@ -101,6 +101,8 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/gtasa/ProjectileEngine.cpp"
     "${NATIVE_DIR}/shared/LuaResourceApi.cpp"
     "${NATIVE_DIR}/shared/LuaAudioApi.cpp"
+    "${NATIVE_DIR}/shared/VoiceCodecStub.cpp"
+    "${NATIVE_DIR}/shared/VoiceRuntime.cpp"
     "${NATIVE_DIR}/shared/LuaRocketSoccerApi.cpp"
     "${NATIVE_DIR}/shared/RocketSoccerSimulation.cpp"
     "${NATIVE_DIR}/shared/LuaMtaWindowApi.cpp"
@@ -193,6 +195,9 @@ add_subdirectory("${NATIVE_DIR}/third_party/bcrypt" "${CMAKE_CURRENT_BINARY_DIR}
 
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HOST_OPUS REQUIRED IMPORTED_TARGET opus)
+add_subdirectory("${NATIVE_DIR}/speex" "${CMAKE_CURRENT_BINARY_DIR}/speex")
 
 # Pure Java checks for the DX text payload/placement; no Android runtime needed.
 find_package(Java 1.8 COMPONENTS Runtime Development QUIET)
@@ -236,7 +241,7 @@ if(Java_FOUND)
     endif()
 endif()
 # Usage requirements only (Lua and zlib headers): the objects are linked by the executables below.
-target_link_libraries(neon_core PRIVATE luaapi rocketweb ZLIB::ZLIB neon_cryptopp neon_bcrypt ${CMAKE_DL_LIBS})
+target_link_libraries(neon_core PRIVATE luaapi rocketweb ZLIB::ZLIB neon_cryptopp neon_bcrypt neon_speex PkgConfig::HOST_OPUS ${CMAKE_DL_LIBS})
 # Link-time wrap of the one RakNetWrapper send entry point (see send_tap.cpp). The
 # symbol is RakNetWrapper::SendPacket(uint8_t, BitStreamWriter const&, PacketPriority,
 # PacketReliability, PacketOrdering); the calls come from NeonJoinProtocol.cpp.
@@ -263,6 +268,8 @@ foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tes
         neon_hlsl
         neon_cryptopp
         neon_bcrypt
+        neon_speex
+        PkgConfig::HOST_OPUS
         EGL
         GLESv2
         ZLIB::ZLIB
@@ -272,9 +279,6 @@ foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tes
 endforeach()
 
 # Codec compatibility checks use the production wrapper and vendored Speex.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(HOST_OPUS REQUIRED IMPORTED_TARGET opus)
-add_subdirectory("${NATIVE_DIR}/speex" "${CMAKE_CURRENT_BINARY_DIR}/speex")
 add_executable(neon_voice_tests voice_tests.cpp "${NATIVE_DIR}/shared/VoiceCodecStub.cpp")
 target_include_directories(neon_voice_tests PRIVATE "${NATIVE_DIR}/shared")
 target_link_libraries(neon_voice_tests PRIVATE neon_speex PkgConfig::HOST_OPUS)
