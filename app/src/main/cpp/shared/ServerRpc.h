@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 namespace WorldRPG::Net {
 class BitStreamReader;
@@ -30,6 +31,9 @@ enum class Result {
 Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader);
 // PACKET_ID_LUA_ELEMENT_RPC after the function id and ElementID have been read.
 Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader);
+
+// Queues one VM-thread operation onto the same FIFO queue drained by Pump().
+void Enqueue(std::function<void()> op);
 
 // VM thread. Runs every queued operation in arrival order.
 void Pump();

@@ -32,4 +32,16 @@ long long ScriptPlayerMoney();
 // CInputRPCs::ShowChat (CInputRPCs.cpp:293-304): the state isChatVisible reports and the chat view. VM thread only.
 void RpcSetChatVisible(bool visible, bool inputBlocked);
 
+// Thread-safe vehicle flag updates from server sync packets (VEHICLE_RESYNC, VEHICLE_SPAWN,
+// VEHICLE_DAMAGE_SYNC, VEHICLE_TRAILER, EXPLOSION). Backed by LuaVehicleApi.cpp's locked g_vehicleFlags.
+void VehicleApplyDamageSync(uint32_t id, const bool doorChanged[6], const uint8_t doors[6],
+                            const bool wheelChanged[4], const uint8_t wheels[4],
+                            const bool panelChanged[7], const uint8_t panels[7],
+                            const bool lightChanged[4], const uint8_t lights[4]);
+void VehicleApplyFixState(uint32_t id, bool resetSpawnDefaults);
+void VehicleApplyBlownState(uint32_t id, bool blown);
+void VehicleApplyTrailerLink(uint32_t vehicleId, uint32_t trailerId, bool attached);
+void VehicleDetachTowedBy(uint32_t vehicleId);
+void VehicleFlagsResetSession();
+
 } // namespace WorldRPG::Script

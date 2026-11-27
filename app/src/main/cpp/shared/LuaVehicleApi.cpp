@@ -3222,6 +3222,92 @@ void BindVehicleLua(lua_State* L) { Register(L); }
 
 bool VehicleBodyFrozen(uint32_t id) { return VehicleFrozenOf(id); }
 
+void VehicleApplyDamageSync(uint32_t id, const bool doorChanged[6], const uint8_t doors[6],
+                            const bool wheelChanged[4], const uint8_t wheels[4],
+                            const bool panelChanged[7], const uint8_t panels[7],
+                            const bool lightChanged[4], const uint8_t lights[4]) {
+    const int model = ServerWorld::ModelOf(id);
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& flags = g_vehicleFlags[id];
+    PrepareDamage(flags, model);
+    for (int i = 0; i < 6; ++i)
+        if (doorChanged[i]) flags.doors[i] = doors[i];
+    for (int i = 0; i < 4; ++i)
+        if (wheelChanged[i]) flags.wheels[i] = wheels[i];
+    for (int i = 0; i < 7; ++i)
+        if (panelChanged[i]) flags.panels[i] = panels[i];
+    for (int i = 0; i < 4; ++i)
+        if (lightChanged[i]) flags.lights[i] = lights[i];
+}
+
+void VehicleApplyFixState(uint32_t id, bool resetSpawnDefaults) {
+    const int model = ServerWorld::ModelOf(id);
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& flags = g_vehicleFlags[id];
+    flags.damageReady = false;
+    for (unsigned char& door : flags.doors) door = 0;
+    PrepareDamage(flags, model);
+    for (unsigned char& wheel : flags.wheels) wheel = 0;
+    for (unsigned char& panel : flags.panels) panel = 0;
+    for (unsigned char& light : flags.lights) light = 0;
+    flags.blown = false;
+    if (resetSpawnDefaults) {
+        flags.landingGearDown = true;
+        flags.sirensOn = false;
+        flags.adjustable = 0;
+        flags.turretH = 0.f;
+        flags.turretV = 0.f;
+    }
+}
+
+void VehicleApplyBlownState(uint32_t id, bool blown) {
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].blown = blown;
+}
+
+void VehicleApplyTrailerLink(uint32_t vehicleId, uint32_t trailerId, bool attached) {
+    if (vehicleId == 0 || trailerId == 0 || vehicleId == trailerId) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& tower = g_vehicleFlags[vehicleId];
+    if (attached) {
+        if (tower.towed != 0 && tower.towed != trailerId) {
+            auto oldIt = g_vehicleFlags.find(tower.towed);
+            if (oldIt != g_vehicleFlags.end() && oldIt->second.towedBy == vehicleId) oldIt->second.towedBy = 0;
+        }
+        VehicleFlags& trailer = g_vehicleFlags[trailerId];
+        if (trailer.towedBy != 0 && trailer.towedBy != vehicleId) {
+            auto oldTower = g_vehicleFlags.find(trailer.towedBy);
+            if (oldTower != g_vehicleFlags.end() && oldTower->second.towed == trailerId) oldTower->second.towed = 0;
+        }
+        tower.towed = trailerId;
+        trailer.towedBy = vehicleId;
+    } else {
+        if (tower.towed != 0) {
+            auto prev = g_vehicleFlags.find(tower.towed);
+            if (prev != g_vehicleFlags.end() && prev->second.towedBy == vehicleId) prev->second.towedBy = 0;
+            tower.towed = 0;
+        }
+        auto trailerIt = g_vehicleFlags.find(trailerId);
+        if (trailerIt != g_vehicleFlags.end() && trailerIt->second.towedBy == vehicleId) trailerIt->second.towedBy = 0;
+    }
+}
+
+void VehicleDetachTowedBy(uint32_t vehicleId) {
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    auto it = g_vehicleFlags.find(vehicleId);
+    if (it == g_vehicleFlags.end()) return;
+    if (it->second.towedBy != 0) {
+        auto towerIt = g_vehicleFlags.find(it->second.towedBy);
+        if (towerIt != g_vehicleFlags.end() && towerIt->second.towed == vehicleId) towerIt->second.towed = 0;
+        it->second.towedBy = 0;
+    }
+}
+
+void VehicleFlagsResetSession() {
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags.clear();
+}
+
 }  // namespace WorldRPG::Script
 
 // Strong definition. A weak InstallVehicleLua in another translation unit resolves to this one.

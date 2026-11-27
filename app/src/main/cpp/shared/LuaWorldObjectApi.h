@@ -51,6 +51,8 @@ bool ServerStopObject(uint32_t id, const float position[3], const float rotation
 bool ServerSetObjectRotation(uint32_t id, float rx, float ry, float rz);
 // SET_OBJECT_SCALE: CClientObject::SetScale.
 bool ServerSetObjectScale(uint32_t id, float x, float y, float z);
+// OBJECT_SYNC (88): updates an adopted server object's position/rotation (radians) so Lua getters see it.
+bool ServerSyncObject(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rot[3]);
 // What a test reads back: position, rotation (radians), scale, move running.
 bool CopyObjectState(uint32_t id, float pos[3], float rot[3], float scale[3], bool& moving);
 

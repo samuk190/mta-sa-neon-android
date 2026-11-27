@@ -42,15 +42,6 @@ std::deque<std::function<void()>> g_queue;
 std::atomic<uint8_t> g_cameraContext{0};
 std::atomic<unsigned> g_dropped{0};
 
-void Enqueue(std::function<void()> op) {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (g_queue.size() >= kMaxQueued) {
-        if (g_dropped.fetch_add(1) < 4) LUA_LOGE("DIAG server RPC queue full (%zu); dropping an RPC", g_queue.size());
-        return;
-    }
-    g_queue.push_back(std::move(op));
-}
-
 bool Finite(float value) { return std::isfinite(value); }
 
 bool ReadFloat(BitStreamReader& reader, float& out) { return reader.Read(out); }
@@ -657,6 +648,15 @@ Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
         case Rpc::SetObjectScale: return HandleObject(func, id, reader);
         default: return Result::NotHandled;
     }
+}
+
+void Enqueue(std::function<void()> op) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_queue.size() >= kMaxQueued) {
+        if (g_dropped.fetch_add(1) < 4) LUA_LOGE("DIAG server RPC queue full (%zu); dropping an RPC", g_queue.size());
+        return;
+    }
+    g_queue.push_back(std::move(op));
 }
 
 void Pump() {

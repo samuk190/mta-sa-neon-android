@@ -17,14 +17,28 @@ namespace WorldRPG::MtaIds {
 
 namespace Packet {
 constexpr uint8_t PlayerWasted = 27;
+constexpr uint8_t Lightsync = 34;
+constexpr uint8_t VehicleResync = 35;
+constexpr uint8_t Explosion = 37;
+constexpr uint8_t Fire = 38;
+constexpr uint8_t Projectile = 39;
 constexpr uint8_t EntityAdd = 50;
 constexpr uint8_t EntityRemove = 51;
+constexpr uint8_t PickupHideShow = 52;
+constexpr uint8_t PickupHitConfirm = 53;
+constexpr uint8_t VehicleSpawn = 57;
+constexpr uint8_t VehicleDamageSync = 59;
+constexpr uint8_t VehicleTrailer = 60;
 constexpr uint8_t PedStartSync = 61;
 constexpr uint8_t PedStopSync = 62;
 constexpr uint8_t PedSync = 63;
 constexpr uint8_t PedWasted = 64;
 constexpr uint8_t Lua = 76;
 constexpr uint8_t LuaElementRpc = 77;
+constexpr uint8_t ObjectStartSync = 86;
+constexpr uint8_t ObjectStopSync = 87;
+constexpr uint8_t ObjectSync = 88;
+constexpr uint8_t LatentTransfer = 96;
 constexpr uint8_t PedTask = 101;
 constexpr uint8_t PlayerNetworkStatus = 103;
 }  // namespace Packet
