@@ -1,0 +1,689 @@
+#include "ServerRpc.h"
+
+#include "LuaApiExtra.h"
+#include "LuaWorldObjectApi.h"
+#include "LuaCameraApi.h"
+#include "LuaFieldApi.h"
+#include "LuaGuiApi.h"
+#include "LuaKeyBindApi.h"
+#include "LuaVMStub.h"
+#include "MtaIds.h"
+#include "ResourceLoader.h"
+#include "ServerWorld.h"
+#include "entity/EntityAddTypes.h"
+#include "../gtasa/GameEngine.h"
+#include "../gtasa/HudComponents.h"
+#include "../net/raknet/RakNetWrapper.h"
+
+#include "lua.hpp"
+
+#include <atomic>
+#include <cstring>
+#include <cmath>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace WorldRPG::ServerRpc {
+namespace {
+
+using Net::BitStreamReader;
+namespace Rpc = MtaIds::Rpc;
+
+// A stalled VM must not grow the queue without bound. 512 RPCs is far more than a server sends in the seconds
+// before the VM exists (a join sends well under a hundred).
+constexpr size_t kMaxQueued = 512;
+
+std::mutex g_mutex;
+std::deque<std::function<void()>> g_queue;
+std::atomic<uint8_t> g_cameraContext{0};
+std::atomic<unsigned> g_dropped{0};
+
+void Enqueue(std::function<void()> op) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_queue.size() >= kMaxQueued) {
+        if (g_dropped.fetch_add(1) < 4) LUA_LOGE("DIAG server RPC queue full (%zu); dropping an RPC", g_queue.size());
+        return;
+    }
+    g_queue.push_back(std::move(op));
+}
+
+bool Finite(float value) { return std::isfinite(value); }
+
+bool ReadFloat(BitStreamReader& reader, float& out) { return reader.Read(out); }
+
+// Desktop reads these with no range check. A NaN or infinity would reach the engine setters and the Lua getters, so
+// the phone rejects them: the packet is dropped as a whole, which is also what a failed Read does on desktop.
+bool ReadFiniteFloat(BitStreamReader& reader, float& out) { return reader.Read(out) && Finite(out); }
+
+// NetBitStream::ReadBit.
+bool ReadBit(BitStreamReader& reader, bool& out) { return Entity::ReadFlag(reader, out); }
+
+// CWorldRPCs.cpp single float setter: one float, then the Lua-side state.
+template <typename Apply>
+Result FloatRpc(BitStreamReader& reader, Apply apply) {
+    float value = 0.f;
+    if (!ReadFiniteFloat(reader, value)) return Result::Malformed;
+    Enqueue([apply, value] { apply(value); });
+    return Result::Handled;
+}
+
+template <typename Apply>
+Result ResetRpc(Apply apply) {
+    Enqueue([apply] { apply(); });
+    return Result::Handled;
+}
+
+// CWorldRPCs.cpp:72-345 and 564-621.
+Result HandleWorld(uint8_t func, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::SetTime: {
+            // CWorldRPCs::SetTime (CWorldRPCs.cpp:95-107): hour < 24 and minute < 60, else ignored.
+            uint8_t hour = 0, minute = 0;
+            if (!reader.Read(hour) || !reader.Read(minute)) return Result::Malformed;
+            if (hour < 24 && minute < 60) Enqueue([hour, minute] { Game::NoteScriptTime(hour, minute); });
+            return Result::Handled;
+        }
+        case Rpc::SetWeather: {
+            // CWorldRPCs::SetWeather (109-120): uchar, <= MAX_VALID_WEATHER (255, Config.h:93).
+            uint8_t weather = 0;
+            if (!reader.Read(weather)) return Result::Malformed;
+            Enqueue([weather] { Script::RpcSetWeather(weather); });
+            return Result::Handled;
+        }
+        case Rpc::SetWeatherBlended: {
+            // CWorldRPCs::SetWeatherBlended (122-134): uchar weather, uchar hour.
+            uint8_t weather = 0, hour = 0;
+            if (!reader.Read(weather) || !reader.Read(hour)) return Result::Malformed;
+            Enqueue([weather, hour] { Script::RpcSetWeatherBlended(weather, hour); });
+            return Result::Handled;
+        }
+        case Rpc::SetMinuteDuration: {
+            // CWorldRPCs::SetMinuteDuration (136-143): unsigned long, four bytes on the wire.
+            uint32_t duration = 0;
+            if (!reader.Read(duration)) return Result::Malformed;
+            Enqueue([duration] { Script::RpcSetMinuteDuration(duration); });
+            return Result::Handled;
+        }
+        case Rpc::SetGravity:
+            return FloatRpc(reader, [](float v) { Script::RpcSetGravity(v); });
+        case Rpc::SetGameSpeed:
+            return FloatRpc(reader, [](float v) { Script::RpcSetGameSpeed(v); });
+        case Rpc::SetWaveHeight:
+            return FloatRpc(reader, [](float v) { Script::RpcSetWaveHeight(v); });
+        case Rpc::SetBlurLevel: {
+            uint8_t level = 0;
+            if (!reader.Read(level)) return Result::Malformed;
+            Enqueue([level] { Script::RpcSetBlurLevel(level); });
+            return Result::Handled;
+        }
+        case Rpc::SetCloudsEnabled: {
+            // CWorldRPCs::SetCloudsEnabled (151-160): a uchar, enabled when it is exactly 1.
+            uint8_t enabled = 0;
+            if (!reader.Read(enabled)) return Result::Malformed;
+            Enqueue([enabled] { Script::RpcSetCloudsEnabled(enabled == 1); });
+            return Result::Handled;
+        }
+        case Rpc::SetJetpackMaxHeight:
+            return FloatRpc(reader, [](float v) { Script::RpcSetJetpackMaxHeight(v); });
+        case Rpc::SetInteriorSoundsEnabled: {
+            bool enabled = false;
+            if (!ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([enabled] { Script::RpcSetInteriorSoundsEnabled(enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetRainLevel:
+            return FloatRpc(reader, [](float v) { Script::RpcSetRainLevel(v); });
+        case Rpc::SetSunSize:
+            return FloatRpc(reader, [](float v) { Script::RpcSetSunSize(v); });
+        case Rpc::SetSunColor: {
+            uint8_t c[6] = {};
+            for (uint8_t& value : c)
+                if (!reader.Read(value)) return Result::Malformed;
+            Enqueue([c] { Script::RpcSetSunColor(c[0], c[1], c[2], c[3], c[4], c[5]); });
+            return Result::Handled;
+        }
+        case Rpc::SetWindVelocity: {
+            float x = 0, y = 0, z = 0;
+            if (!ReadFiniteFloat(reader, x) || !ReadFiniteFloat(reader, y) || !ReadFiniteFloat(reader, z))
+                return Result::Malformed;
+            Enqueue([x, y, z] { Script::RpcSetWindVelocity(x, y, z); });
+            return Result::Handled;
+        }
+        case Rpc::SetFarClipDistance:
+            return FloatRpc(reader, [](float v) { Script::RpcSetFarClipDistance(v); });
+        case Rpc::SetFogDistance:
+            return FloatRpc(reader, [](float v) { Script::RpcSetFogDistance(v); });
+        case Rpc::SetAircraftMaxHeight:
+            return FloatRpc(reader, [](float v) { Script::RpcSetAircraftMaxHeight(v); });
+        case Rpc::SetAircraftMaxVelocity:
+            return FloatRpc(reader, [](float v) { Script::RpcSetAircraftMaxVelocity(v); });
+        case Rpc::SetOcclusionsEnabled: {
+            bool enabled = false;
+            if (!ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([enabled] { Script::RpcSetOcclusionsEnabled(enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetMoonSize: {
+            // CWorldRPCs::SetMoonSize (608-617): a four byte int.
+            int32_t size = 0;
+            if (!reader.Read(size)) return Result::Malformed;
+            Enqueue([size] { Script::RpcSetMoonSize(size); });
+            return Result::Handled;
+        }
+        case Rpc::ResetRainLevel: return ResetRpc([] { Script::RpcResetRainLevel(); });
+        case Rpc::ResetSunSize: return ResetRpc([] { Script::RpcResetSunSize(); });
+        case Rpc::ResetSunColor: return ResetRpc([] { Script::RpcResetSunColor(); });
+        case Rpc::ResetWindVelocity: return ResetRpc([] { Script::RpcResetWindVelocity(); });
+        case Rpc::ResetFarClipDistance: return ResetRpc([] { Script::RpcResetFarClipDistance(); });
+        case Rpc::ResetFogDistance: return ResetRpc([] { Script::RpcResetFogDistance(); });
+        case Rpc::ResetMoonSize: return ResetRpc([] { Script::RpcResetMoonSize(); });
+        default:
+            return Result::NotHandled;
+    }
+}
+
+// CCameraRPCs.cpp:21-196.
+Result HandleCamera(uint8_t func, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::SetCameraMatrix: {
+            uint8_t context = 0;
+            if (!reader.Read(context)) return Result::Malformed;
+            g_cameraContext = context;
+            float v[6] = {};
+            for (float& value : v)
+                if (!ReadFloat(reader, value)) return Result::Malformed;
+            float roll = 0.f, fov = 70.f;
+            // Optional tail: roll and FOV (at least 64 unread bits), or roll alone (at least 32).
+            const size_t unread = reader.GetRemainingBits();
+            if (unread >= 64) {
+                if (!ReadFloat(reader, roll) || !ReadFloat(reader, fov)) return Result::Malformed;
+            } else if (unread >= 32) {
+                if (!ReadFloat(reader, roll)) return Result::Malformed;
+            }
+            for (float value : v)
+                if (!Finite(value)) return Result::Handled;  // desktop returns, nothing is applied
+            if (!Finite(roll) || !Finite(fov)) return Result::Handled;
+            if (fov <= 0.f) fov = 70.f;
+            else if (fov >= 180.f) fov = 179.f;
+            roll = std::remainder(roll, 360.f);
+            if (roll < 0.f) roll += 360.f;
+            Enqueue([v, roll, fov] { Script::RpcSetCameraMatrix(v[0], v[1], v[2], v[3], v[4], v[5], roll, fov); });
+            return Result::Handled;
+        }
+        case Rpc::SetCameraTarget: {
+            uint8_t context = 0;
+            uint32_t id = 0;
+            if (!reader.Read(context)) return Result::Malformed;
+            g_cameraContext = context;
+            if (!Entity::ReadElementId(reader, id)) return Result::Malformed;
+            Enqueue([id] { Script::RpcSetCameraTarget(id); });
+            return Result::Handled;
+        }
+        case Rpc::SetCameraInterior: {
+            uint8_t interior = 0;
+            if (!reader.Read(interior)) return Result::Malformed;
+            Enqueue([interior] { Script::RpcSetCameraInterior(interior); });
+            return Result::Handled;
+        }
+        case Rpc::FadeCamera: {
+            uint8_t fadeIn = 0;
+            float seconds = 1.f;
+            if (!reader.Read(fadeIn) || !reader.Read(seconds)) return Result::Malformed;
+            uint8_t color[3] = {};
+            if (!fadeIn) {
+                for (uint8_t& value : color)
+                    if (!reader.Read(value)) return Result::Malformed;
+            }
+            // Desktop passes any float to FadeIn/FadeOut. A NaN would stall the fade timer forever.
+            if (!Finite(seconds)) return Result::Handled;
+            Enqueue([fadeIn, seconds, color] {
+                Script::RpcFadeCamera(fadeIn != 0, seconds, color[0], color[1], color[2]);
+            });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
+// CHud.h eHudComponent, in wire order, with the names CLuaFunctionParseHelpers.cpp:97-114 gives them. A null name
+// has no Lua spelling and no Android hook.
+constexpr const char* kHudNames[] = {
+    "ammo", "weapon", "health", "breath", "armour", "money", "vehicle_name", "area_name", "radar", "clock", "radio",
+    "wanted", "crosshair", "all", nullptr /* vital stats */, nullptr /* help text */, "radar_map", "radar_blips",
+    "radar_altimeter",
+};
+
+Result HandlePlayer(uint8_t func, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::SetPlayerMoney: {
+            // CPlayerRPCs::SetPlayerMoney (29-42): a long (four bytes), then one bit "instant" when bits remain.
+            int32_t money = 0;
+            if (!reader.Read(money)) return Result::Malformed;
+            bool instant = false;
+            if (reader.GetRemainingBits() > 0 && !ReadBit(reader, instant)) return Result::Malformed;
+            Enqueue([money, instant] { Script::RpcSetPlayerMoney(money, instant); });
+            return Result::Handled;
+        }
+        case Rpc::ShowPlayerHudComponent: {
+            // CPlayerRPCs::ShowPlayerHudComponent (44-55): uchar component, uchar show (!= 0).
+            uint8_t component = 0, show = 0;
+            if (!reader.Read(component) || !reader.Read(show)) return Result::Malformed;
+            constexpr size_t kCount = sizeof(kHudNames) / sizeof(kHudNames[0]);
+            if (component >= kCount) return Result::Handled;  // desktop casts the byte to eHudComponent unchecked
+            Enqueue([component, show] {
+                const char* name = kHudNames[component];
+                const bool visible = show != 0;
+                if (!name || !Game::SetHudComponentVisible(name, visible))
+                    LUA_LOGI("DIAG SHOW_PLAYER_HUD_COMPONENT %u (%s): no HUD hook for this component", component,
+                             name ? name : "unnamed");
+                // CClientGame::SetHudAreaNameDisabled has no Android state or HUD hook.
+                if (component == 7 || component == 13)
+                    LUA_LOGI("DIAG SHOW_PLAYER_HUD_COMPONENT: SetHudAreaNameDisabled(%d) is not tracked", visible ? 0 : 1);
+            });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
+Result HandleAudio(uint8_t func, BitStreamReader& reader) {
+    if (func != Rpc::PlaySound) return Result::NotHandled;
+    // CAudioRPCs::PlaySound (CAudioRPCs.cpp:20-27): SIntegerSync<uchar, 7>, then PlayFrontEndSound. The other sound
+    // types in that function are commented out on desktop.
+    uint8_t sound = 0;
+    if (!reader.ReadBits(&sound, 7)) return Result::Malformed;
+    // DIAG: CAudioEngine::PlayFrontEndSound is not hooked (see playSoundFrontEnd in LuaAudioApi.cpp).
+    LUA_LOGI("DIAG PLAY_SOUND %u: CAudioEngine::PlayFrontEndSound is not hooked", sound);
+    return Result::Handled;
+}
+
+Result HandleChat(uint8_t func, BitStreamReader& reader) {
+    if (func != Rpc::ShowChat) return Result::NotHandled;
+    // CInputRPCs::ShowChat (CInputRPCs.cpp:293-304): uchar show, optional uchar inputBlocked. Without the second
+    // byte inputBlocked is show != 1.
+    uint8_t show = 0, inputBlocked = 0;
+    if (!reader.Read(show)) return Result::Malformed;
+    const bool hasInputBlocked = reader.Read(inputBlocked);
+    const bool visible = show == 1;
+    const bool blocked = hasInputBlocked ? inputBlocked == 1 : show != 1;
+    Enqueue([visible, blocked] { Script::RpcSetChatVisible(visible, blocked); });
+    return Result::Handled;
+}
+
+// A u8 length followed by that many bytes (CInputRPCs.cpp reads these into a new char[len + 1]).
+bool ReadLengthString(BitStreamReader& reader, std::string& out) {
+    uint8_t length = 0;
+    out.clear();
+    if (!reader.Read(length)) return false;
+    if (static_cast<size_t>(length) * 8 > reader.GetRemainingBits()) return false;
+    std::vector<uint8_t> bytes(length);
+    if (length && !reader.ReadBits(bytes.data(), static_cast<size_t>(length) * 8)) return false;
+    out.assign(bytes.begin(), bytes.end());
+    return true;
+}
+
+// CInputRPCs.cpp:127-130 and 225-228: 0 down, 1 up, 3 both, anything else down.
+const char* HitStateName(int8_t hitState) { return hitState == 0 ? "down" : (hitState == 1 ? "up" : (hitState == 3 ? "both" : "down")); }
+
+// CInputRPCs.cpp:30-295.
+Result HandleInput(uint8_t func, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::BindKey:
+        case Rpc::UnbindKey: {
+            // BindKey (CInputRPCs.cpp:30-67) and UnbindKey (CInputRPCs.cpp:114-151): key length, key, state byte
+            // (down when == 1). The same bit state is used to find the server function.
+            std::string key;
+            uint8_t state = 0;
+            if (!ReadLengthString(reader, key) || !reader.Read(state)) return Result::Malformed;
+            const bool down = state == 1;
+            const bool bind = func == Rpc::BindKey;
+            Enqueue([key, down, bind] {
+                const bool ok = bind ? Script::KeyBindsServerBindFunction(key, down) : Script::KeyBindsServerUnbindFunction(key, down);
+                if (bind && ok) {
+                    static bool seen = false;
+                    if (!seen) {
+                        seen = true;
+                        LUA_LOGI("DIAG BIND_KEY: hardware keyboards and the on-screen key list fire server key binds; "
+                                 "GTA control names (no keyboard mapping) never do");
+                    }
+                }
+            });
+            return Result::Handled;
+        }
+        case Rpc::BindCommand: {
+            // CInputRPCs.cpp:69-112: key, hit state char, command, arguments, resource (u8 length strings).
+            std::string key, command, arguments, resource;
+            uint8_t hitState = 0;
+            if (!ReadLengthString(reader, key) || !reader.Read(hitState) || !ReadLengthString(reader, command) ||
+                !ReadLengthString(reader, arguments) || !ReadLengthString(reader, resource))
+                return Result::Malformed;
+            const std::string state = HitStateName(static_cast<int8_t>(hitState));
+            Enqueue([=] { Script::KeyBindsServerBindCommand(key, state, command, arguments, resource); });
+            return Result::Handled;
+        }
+        case Rpc::UnbindCommand: {
+            // CInputRPCs.cpp:153-198: key, hit state char, command, resource.
+            std::string key, command, resource;
+            uint8_t hitState = 0;
+            if (!ReadLengthString(reader, key) || !reader.Read(hitState) || !ReadLengthString(reader, command) ||
+                !ReadLengthString(reader, resource))
+                return Result::Malformed;
+            const std::string state = HitStateName(static_cast<int8_t>(hitState));
+            Enqueue([=] { Script::KeyBindsServerUnbindCommand(key, state, command, resource); });
+            return Result::Handled;
+        }
+        case Rpc::SetControlState: {
+            // CInputRPCs.cpp:220-239: control name, state byte (true when == 1); an empty name is ignored.
+            std::string control;
+            uint8_t state = 0;
+            if (!ReadLengthString(reader, control) || !reader.Read(state)) return Result::Malformed;
+            if (control.empty()) return Result::Handled;
+            // DIAG: CStaticFunctionDefinitions::SetControlState (CStaticFunctionDefinitions.cpp:7470-7520) writes
+            // CClientPad analog state or SBindableGTAControl::bState; the phone has no CPad injection (see
+            // setPedAnalogControlState in LuaPedApi.cpp).
+            LUA_LOGI("DIAG SET_CONTROL_STATE %s=%u: CClientPad::SetAnalogControlState is not hooked", control.c_str(),
+                     static_cast<unsigned>(state == 1));
+            return Result::Handled;
+        }
+        case Rpc::ShowCursor: {
+            // CInputRPCs.cpp:268-281: show, resource net id (u16), toggle controls. An unknown resource is ignored.
+            uint8_t show = 0, toggle = 0;
+            uint16_t netId = 0;
+            if (!reader.Read(show) || !reader.Read(netId) || !reader.Read(toggle)) return Result::Malformed;
+            Enqueue([show, netId, toggle] {
+                Script::ResourceLoader::ResourceView resource;
+                if (!Script::ResourceLoader::CopyResourceByNet(netId, resource)) return;
+                Script::GuiServerShowCursor(resource.name, resource.generation, show == 1, toggle == 1);
+            });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
+constexpr float kPositionLimit = 100000.f;  // SYNC_POSITION_LIMIT (SyncStructures.h:28)
+constexpr float kRadiansToDegrees = 57.295779513082320876798154814105f;
+
+bool WithinLimit(float v) { return v > -kPositionLimit && v < kPositionLimit; }
+
+// SPositionSync(true) (SyncStructures.h:262-275): three floats, each inside +-SYNC_POSITION_LIMIT.
+bool ReadFloatPosition(BitStreamReader& reader, float out[3]) {
+    return reader.Read(out[0]) && reader.Read(out[1]) && reader.Read(out[2]) && WithinLimit(out[0]) && WithinLimit(out[1]) &&
+           WithinLimit(out[2]);
+}
+
+// SRotationRadiansSync(true) (SyncStructures.h:496-505): three floats. Rejects NaN/Inf.
+bool ReadFloatRotation(BitStreamReader& reader, float out[3]) {
+    return ReadFiniteFloat(reader, out[0]) && ReadFiniteFloat(reader, out[1]) && ReadFiniteFloat(reader, out[2]);
+}
+
+// SPositionSync with the default 24-bit components (SyncStructures.h:276-291).
+bool ReadPackedPosition(BitStreamReader& reader, float out[3]) {
+    return Entity::ReadPosition(reader, out[0], out[1], out[2]) && WithinLimit(out[0]) && WithinLimit(out[1]) && WithinLimit(out[2]);
+}
+
+bool ReadDouble(BitStreamReader& reader, double& out) {
+    uint8_t bytes[8] = {};
+    if (!reader.ReadBits(bytes, 64)) return false;
+    std::memcpy(&out, bytes, sizeof(out));
+    return std::isfinite(out);
+}
+
+// CElementIDs::GetElement for the elements this port tracks.
+bool ElementExists(uint32_t id) {
+    return id != 0 && id != 0xFFFFFFFFu &&
+           (id == ServerWorld::LocalPlayer() || ServerWorld::IsKnownPlayer(id) || ServerWorld::ModelOf(id) >= 0 ||
+            Script::KnownClientElement(id));
+}
+
+bool IsKind(uint32_t id, const char* kind) {
+    const char* found = ServerWorld::ElementKindName(id);
+    return found && std::strcmp(found, kind) == 0;
+}
+
+// CPositionRotationAnimation::FromBitStream (CPositionRotationAnimation.cpp:111-178).
+bool ReadMoveAnimation(BitStreamReader& reader, Script::ServerObjectMove& move) {
+    bool resume = false;
+    if (!ReadBit(reader, resume)) return false;
+    uint32_t elapsed = 0, left = 0, duration = 0;
+    if (resume) {
+        if (!Entity::ReadCompressed(reader, 4, elapsed) || !Entity::ReadCompressed(reader, 4, left)) return false;
+        move.elapsedMs = elapsed;
+        move.totalMs = elapsed + left < elapsed ? 0xFFFFFFFFu : elapsed + left;
+    } else {
+        if (!Entity::ReadCompressed(reader, 4, duration)) return false;
+        move.elapsedMs = 0;
+        move.totalMs = duration;
+    }
+    if (!ReadPackedPosition(reader, move.sourcePos) || !ReadFloatRotation(reader, move.sourceRot)) return false;
+    if (!ReadPackedPosition(reader, move.targetPos) || !ReadBit(reader, move.deltaRotation) || !ReadFloatRotation(reader, move.targetRot))
+        return false;
+    // NetBitStream::ReadString: a u16 length, then the characters.
+    uint16_t length = 0;
+    if (!reader.Read(length)) return false;
+    if (static_cast<size_t>(length) * 8 > reader.GetRemainingBits()) return false;
+    std::vector<uint8_t> name(length);
+    if (length && !reader.ReadBits(name.data(), static_cast<size_t>(length) * 8)) return false;
+    double period = 0, amplitude = 0, overshoot = 0;
+    if (!ReadDouble(reader, period) || !ReadDouble(reader, amplitude) || !ReadDouble(reader, overshoot)) return false;
+    // An unknown easing name becomes Linear (CPositionRotationAnimation.cpp:166-171). The curve types are not
+    // sampled on Android yet (the stored move stays linear), so only "Linear" is kept linear here.
+    const std::string easing(name.begin(), name.end());
+    move.linear = easing.empty() || easing == "Linear" || !Script::IsKnownEasingName(easing.c_str());
+    return true;
+}
+
+void PushElementOrNil(lua_State* L, uint32_t id) {
+    if (ElementExists(id)) Script::PushElement(L, id);
+    else lua_pushnil(L);
+}
+
+// CElementRPCs::AttachElements (CElementRPCs.cpp:319-360).
+Result HandleAttach(uint32_t id, BitStreamReader& reader) {
+    uint32_t parent = 0;
+    float position[3] = {}, rotation[3] = {};
+    if (!Entity::ReadElementId(reader, parent) || !ReadFloatRotation(reader, position) ||
+        !ReadFloatRotation(reader, rotation))
+        return Result::Malformed;
+    Enqueue([id, parent, position, rotation]() mutable {
+        if (!ElementExists(parent)) return;
+        for (float& value : rotation) value *= kRadiansToDegrees;
+        lua_State* L = Script::ActiveVmState();
+        if (L) {
+            Script::PushElement(L, parent);
+            for (float value : position) lua_pushnumber(L, value);
+            for (float value : rotation) lua_pushnumber(L, value);
+            if (!Script::ActiveVmFireElementEvent(L, "onClientElementAttach", id, 7)) return;
+        }
+        ServerWorld::NoteAttachedOffsets(id, position[0], position[1], position[2], rotation[0], rotation[1], rotation[2]);
+        ServerWorld::NoteAttachTo(id, parent);
+        // DIAG: CClientEntity::InternalAttachTo (CClientEntity.cpp:667-727), the CPhysical::AttachEntityToEntity
+        // call, is not hooked. The link is visible to Lua only (getElementAttachedTo, getAttachedElements).
+        LUA_LOGI("DIAG ATTACH_ELEMENTS %u -> %u: CPhysical::AttachEntityToEntity is not hooked", id, parent);
+    });
+    return Result::Handled;
+}
+
+// CElementRPCs::DetachElements (CElementRPCs.cpp:362-422). Desktop never reads the attached-to id: it passes an
+// uninitialised ElementID to GetElement, so the event's first argument is whatever the stack held. Android passes nil.
+Result HandleDetach(uint32_t id, BitStreamReader& reader) {
+    uint8_t context = 0;
+    if (!reader.Read(context)) return Result::Malformed;
+    float position[3] = {}, rotation[3] = {};
+    for (float& value : position) reader.Read(value);
+    for (float& value : rotation) reader.Read(value);
+    for (float value : position)
+        if (!Finite(value)) return Result::Malformed;
+    for (float value : rotation)
+        if (!Finite(value)) return Result::Malformed;
+    Enqueue([id, context, position, rotation] {
+        lua_State* L = Script::ActiveVmState();
+        if (L) {
+            lua_pushnil(L);
+            for (float value : position) lua_pushnumber(L, value);
+            for (float value : rotation) lua_pushnumber(L, value);
+            if (!Script::ActiveVmFireElementEvent(L, "onClientElementDetach", id, 7)) return;
+        }
+        ServerWorld::SetSyncTimeContext(id, context);
+        ServerWorld::NoteAttachTo(id, 0xFFFFFFFFu);
+        const bool hasPosition = position[0] != 0.f || position[1] != 0.f || position[2] != 0.f;
+        if (hasPosition && std::isfinite(position[0]) && std::isfinite(position[1]) && std::isfinite(position[2])) {
+            ServerWorld::NoteElementPosition(id, position[0], position[1], position[2]);
+            const char* kind = ServerWorld::ElementKindName(id);
+            if (kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0))
+                Game::RpcSetPosition(id, position[0], position[1], position[2]);
+            else if (kind && std::strcmp(kind, "vehicle") == 0)
+                Game::RpcSetVehiclePosition(id, position[0], position[1], position[2]);
+        }
+        const bool hasRotation = rotation[0] != 0.f || rotation[1] != 0.f || rotation[2] != 0.f;
+        if (hasRotation)
+            LUA_LOGI("DIAG DETACH_ELEMENTS %u: SetRotationDegrees is not hooked for this element", id);
+        LUA_LOGI("DIAG DETACH_ELEMENTS %u: CClientEntity::InternalAttachTo(NULL) is not hooked", id);
+    });
+    return Result::Handled;
+}
+
+// CElementRPCs::SetElementAttachedOffsets (CElementRPCs.cpp:648-656). The radians go in as degrees, the unit
+// ServerWorld keeps (see NoteAttachedOffsets).
+Result HandleAttachedOffsets(uint32_t id, BitStreamReader& reader) {
+    float position[3] = {}, rotation[3] = {};
+    if (!ReadFloatPosition(reader, position) || !ReadFloatRotation(reader, rotation)) return Result::Malformed;
+    Enqueue([id, position, rotation] {
+        ServerWorld::NoteAttachedOffsets(id, position[0], position[1], position[2], rotation[0] * kRadiansToDegrees,
+                                         rotation[1] * kRadiansToDegrees, rotation[2] * kRadiansToDegrees);
+    });
+    return Result::Handled;
+}
+
+// CVehicleRPCs::FixVehicle (CVehicleRPCs.cpp:64-79) and BlowVehicle (81-104). Both run on the net thread, like the
+// vehicle health and position RPCs, so they keep their order against them.
+Result HandleVehicleState(uint8_t func, uint32_t id, BitStreamReader& reader) {
+    uint8_t context = 0;
+    if (!reader.Read(context)) return Result::Malformed;
+    bool withExplosion = true;
+    if (func == Rpc::BlowVehicle && !ReadBit(reader, withExplosion)) return Result::Malformed;
+    if (!IsKind(id, "vehicle")) return Result::Handled;
+    if (func == Rpc::FixVehicle) {
+        // CClientVehicle::Fix (CClientVehicle.cpp:911-1006): SetHealth(1000) is the only step with a hook.
+        Game::RpcSetVehicleHealth(id, 1000.f);
+        LUA_LOGI("DIAG FIX_VEHICLE %u: CVehicle::Fix, door, panel, light and wheel resets are not hooked", id);
+    } else {
+        // CClientVehicle::Blow (CClientVehicle.cpp:1008-): m_fHealth = 0 and SetHealth(0).
+        Game::RpcSetVehicleHealth(id, 0.f);
+        LUA_LOGI("DIAG BLOW_VEHICLE %u (explosion=%d): CVehicle::BlowUp and the burst wheels are not hooked", id,
+                 withExplosion ? 1 : 0);
+    }
+    ServerWorld::SetSyncTimeContext(id, context);
+    return Result::Handled;
+}
+
+// CObjectRPCs.cpp:30-109. Each handler acts on the object only.
+Result HandleObject(uint8_t func, uint32_t id, BitStreamReader& reader) {
+    if (!IsKind(id, "object")) return Result::Handled;
+    switch (func) {
+        case Rpc::SetObjectRotation: {
+            float rotation[3] = {};
+            if (!ReadFloatRotation(reader, rotation)) return Result::Malformed;
+            Enqueue([id, rotation] { Script::ServerSetObjectRotation(id, rotation[0], rotation[1], rotation[2]); });
+            return Result::Handled;
+        }
+        case Rpc::MoveObject: {
+            Script::ServerObjectMove move;
+            if (!ReadMoveAnimation(reader, move)) return Result::Malformed;
+            Enqueue([id, move] { Script::ServerMoveObject(id, move); });
+            return Result::Handled;
+        }
+        case Rpc::StopObject: {
+            float position[3] = {}, rotation[3] = {};
+            if (!ReadFloatRotation(reader, position) || !ReadFloatRotation(reader, rotation)) return Result::Malformed;
+            Enqueue([id, position, rotation] { Script::ServerStopObject(id, position, rotation); });
+            return Result::Handled;
+        }
+        case Rpc::SetObjectScale: {
+            // The reads are unchecked on desktop: y and z fall back to x when the packet ends early.
+            float scale[3] = {};
+            if (!ReadFiniteFloat(reader, scale[0])) return Result::Malformed;
+            scale[1] = scale[2] = scale[0];
+            float y = scale[0], z = scale[0];
+            if (reader.Read(y)) {
+                if (!Finite(y)) return Result::Malformed;
+                scale[1] = y;
+            }
+            if (reader.Read(z)) {
+                if (!Finite(z)) return Result::Malformed;
+                scale[2] = z;
+            }
+            Enqueue([id, scale] { Script::ServerSetObjectScale(id, scale[0], scale[1], scale[2]); });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
+}  // namespace
+
+Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
+    Result result = HandleWorld(func, reader);
+    if (result != Result::NotHandled) return result;
+    result = HandleCamera(func, reader);
+    if (result != Result::NotHandled) return result;
+    result = HandlePlayer(func, reader);
+    if (result != Result::NotHandled) return result;
+    result = HandleAudio(func, reader);
+    if (result != Result::NotHandled) return result;
+    result = HandleChat(func, reader);
+    if (result != Result::NotHandled) return result;
+    return HandleInput(func, reader);
+}
+
+Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::AttachElements: return HandleAttach(id, reader);
+        case Rpc::DetachElements: return HandleDetach(id, reader);
+        case Rpc::SetElementAttachedOffsets: return HandleAttachedOffsets(id, reader);
+        case Rpc::FixVehicle:
+        case Rpc::BlowVehicle: return HandleVehicleState(func, id, reader);
+        case Rpc::SetObjectRotation:
+        case Rpc::MoveObject:
+        case Rpc::StopObject:
+        case Rpc::SetObjectScale: return HandleObject(func, id, reader);
+        default: return Result::NotHandled;
+    }
+}
+
+void Pump() {
+    Script::KeyBindsSyncServerReset();
+    std::deque<std::function<void()>> work;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        work.swap(g_queue);
+    }
+    for (auto& op : work) op();
+}
+
+size_t Pending() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_queue.size();
+}
+
+void ResetSession() {
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_queue.clear();
+    }
+    g_cameraContext.store(0);
+    g_dropped.store(0);
+    Script::KeyBindsServerReset();
+}
+
+uint8_t CameraSyncTimeContext() { return g_cameraContext; }
+
+}  // namespace WorldRPG::ServerRpc

@@ -64,6 +64,7 @@ enum class NeonServerRPC : uint8_t {
     PLAYER_INGAME_NOTICE = 0,
     INITIAL_DATA_STREAM = 1,
     PLAYER_WEAPON = 3,
+    KEY_BIND = 4,
 };
 
 // version.h: MTA_DM_VERSION = (1 << 8) | (7 << 4) | 0
@@ -200,5 +201,9 @@ bool SendGamePacket(BitStreamWriter& body, bool reliable);
 
 /// Same as SendGamePacket, at high priority and reliable ordered (desktop PLAYER_RESOURCE_START).
 bool SendGamePacketHighPriority(BitStreamWriter& body);
+
+/// CClientGame::ProcessServerKeyBind / ProcessServerControlBind (CClientGame.cpp:2409-2434): the KEY_BIND RPC for a key
+/// the server bound. [RPC][4][bit isControl][bit down][name bytes, no length]. Any thread; false when not connected.
+bool SendKeyBind(bool control, bool down, const std::string& name);
 
 } // namespace WorldRPG::Net

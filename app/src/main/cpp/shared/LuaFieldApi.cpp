@@ -1673,4 +1673,160 @@ void ClientElementWorldState(uint32_t id, uint8_t& interior, uint16_t& dimension
     if (found->second.alphaSet) alpha = found->second.alpha;
 }
 
+// CWorldRPCs.cpp:72-345 and 564-621. The values arrive without the range checks the Lua setters make, as on
+// desktop; the decoder in ServerRpc.cpp rejects non-finite floats before they get here.
+namespace {
+uint8_t g_sunCoronaR = 0, g_sunCoronaG = 0, g_sunCoronaB = 0;
+}  // namespace
+
+void RpcSetWeather(int weather) {
+    g_weather = weather;
+    g_weatherSet = true;
+    g_blendSet = false;
+    Game::NoteScriptWeather(weather);
+}
+
+void RpcSetWeatherBlended(int weather, int hour) {
+    (void)hour;
+    g_weatherBlend = weather;
+    g_blendSet = true;
+    Diag(g_diagWorld, "DIAG SET_WEATHER_BLENDED: CBlendedWeather blend is not hooked; the target is stored");
+}
+
+void RpcSetMinuteDuration(uint32_t milliseconds) {
+    g_minuteMs = milliseconds;
+    Diag(g_diagMinute, "DIAG SET_MINUTE_DURATION: CGame::SetMinuteDuration is not hooked; the value is stored");
+}
+
+void RpcSetGravity(float gravity) {
+    g_gravity = gravity;
+    Diag(g_diagGravity, "DIAG SET_GRAVITY: CMultiplayer::SetGlobalGravity is not hooked; the value is stored");
+}
+
+void RpcSetGameSpeed(float speed) {
+    g_gameSpeed = speed;
+    Diag(g_diagSpeed, "DIAG SET_GAME_SPEED: CGame::SetGameSpeed is not hooked; the value is stored");
+}
+
+void RpcSetWaveHeight(float height) {
+    g_wave = height;
+    Diag(g_diagWorld, "DIAG SET_WAVE_HEIGHT: CWaterManager::SetWaveLevel is not hooked; the value is stored");
+}
+
+void RpcSetBlurLevel(uint8_t level) {
+    g_blur = level;
+    Diag(g_diagWorld, "DIAG SET_BLUR_LEVEL: CGame::SetBlurLevel is not hooked; the value is stored");
+}
+
+void RpcSetCloudsEnabled(bool enabled) {
+    g_clouds = enabled;
+    Diag(g_diagWorld, "DIAG SET_CLOUDS_ENABLED: CMultiplayer::SetCloudsEnabled is not hooked; the flag is stored");
+}
+
+void RpcSetRainLevel(float level) {
+    g_rain = level;
+    Diag(g_diagWorld, "DIAG SET_RAIN_LEVEL: CWeather::SetAmountOfRain is not hooked; the value is stored");
+}
+
+void RpcResetRainLevel() { g_rain = 0.f; }
+
+void RpcSetSunSize(float size) {
+    g_sunSize = size;
+    Diag(g_diagWorld, "DIAG SET_SUN_SIZE: CMultiplayer::SetSunSize is not hooked; the value is stored");
+}
+
+void RpcResetSunSize() { g_sunSize = 1.f; }
+
+void RpcSetSunColor(uint8_t coreR, uint8_t coreG, uint8_t coreB, uint8_t coronaR, uint8_t coronaG, uint8_t coronaB) {
+    g_sunR = coreR;
+    g_sunG = coreG;
+    g_sunB = coreB;
+    g_sunA = 255;
+    g_sunCoronaR = coronaR;
+    g_sunCoronaG = coronaG;
+    g_sunCoronaB = coronaB;
+    g_sunColorSet = true;
+    Diag(g_diagWorld, "DIAG SET_SUN_COLOR: CMultiplayer::SetSunColor is not hooked; the colours are stored");
+}
+
+void RpcResetSunColor() {
+    g_sunR = g_sunG = g_sunB = 0;
+    g_sunA = 255;
+    g_sunCoronaR = g_sunCoronaG = g_sunCoronaB = 0;
+    g_sunColorSet = false;
+}
+
+void RpcCopySunCorona(uint8_t& r, uint8_t& g, uint8_t& b) {
+    r = g_sunCoronaR;
+    g = g_sunCoronaG;
+    b = g_sunCoronaB;
+}
+
+void RpcSetWindVelocity(float x, float y, float z) {
+    g_windX = x;
+    g_windY = y;
+    g_windZ = z;
+    g_windSet = true;
+    Diag(g_diagWorld, "DIAG SET_WIND_VELOCITY: CMultiplayer::SetWindVelocity is not hooked; the value is stored");
+}
+
+void RpcResetWindVelocity() {
+    g_windX = g_windY = g_windZ = 0.f;
+    g_windSet = false;
+}
+
+void RpcSetFarClipDistance(float distance) {
+    g_far = distance;
+    g_farSet = true;
+    Diag(g_diagFar, "DIAG SET_FAR_CLIP_DISTANCE: CMultiplayer::SetFarClipDistance is not hooked; the value is stored");
+}
+
+void RpcResetFarClipDistance() {
+    g_far = 800.f;
+    g_farSet = false;
+}
+
+void RpcSetFogDistance(float distance) {
+    g_fog = distance;
+    g_fogSet = true;
+    Diag(g_diagFog, "DIAG SET_FOG_DISTANCE: CMultiplayer::SetFogDistance is not hooked; the value is stored");
+}
+
+void RpcResetFogDistance() {
+    g_fog = 150.f;
+    g_fogSet = false;
+}
+
+void RpcSetMoonSize(int size) {
+    g_moon = size;
+    Diag(g_diagWorld, "DIAG SET_MOON_SIZE: CMultiplayer::SetMoonSize is not hooked; the value is stored");
+}
+
+void RpcResetMoonSize() { g_moon = 3; }
+
+void RpcSetInteriorSoundsEnabled(bool enabled) {
+    g_interiorSounds = enabled;
+    Diag(g_diagWorld, "DIAG SET_INTERIOR_SOUNDS_ENABLED: CMultiplayer::SetInteriorSoundsEnabled is not hooked; the flag is stored");
+}
+
+void RpcSetOcclusionsEnabled(bool enabled) {
+    g_occlusions = enabled;
+    Diag(g_diagWorld, "DIAG SET_OCCLUSIONS_ENABLED: CWorld::SetOcclusionsEnabled is not hooked; the flag is stored");
+}
+
+void RpcSetAircraftMaxHeight(float height) {
+    g_aircraft = height;
+    Diag(g_diagWorld, "DIAG SET_AIRCRAFT_MAXHEIGHT: CWorld::SetAircraftMaxHeight is not hooked; the value is stored");
+}
+
+void RpcSetAircraftMaxVelocity(float velocity) {
+    g_aircraftVelocity = velocity;
+    Diag(g_diagWorld, "DIAG SET_AIRCRAFT_MAXVELOCITY: CWorld::SetAircraftMaxVelocity is not hooked; the value is stored");
+}
+
+void RpcSetJetpackMaxHeight(float height) {
+    g_jetpack = height;
+    Diag(g_diagWorld, "DIAG SET_JETPACK_MAXHEIGHT: CWorld::SetJetpackMaxHeight is not hooked; the value is stored");
+}
+
 }  // namespace WorldRPG::Script

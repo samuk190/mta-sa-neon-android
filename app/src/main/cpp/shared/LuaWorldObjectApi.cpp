@@ -1139,6 +1139,76 @@ void PublishClientObjects() {
 
 bool IsWorldObject(uint32_t id) { return Live(id) != nullptr; }
 
+bool IsKnownEasingName(const char* name) { return EasingFromName(name) >= 0; }
+
+bool ServerMoveObject(uint32_t id, const ServerObjectMove& move) {
+    Object* object = Live(id);
+    if (!object) return false;
+    NoteMoveGap();
+    if (!move.linear) NoteCurveGap();
+    object->localOverride = true;
+    const Vec3 sourcePos{move.sourcePos[0], move.sourcePos[1], move.sourcePos[2]};
+    const Vec3 sourceRot{move.sourceRot[0], move.sourceRot[1], move.sourceRot[2]};
+    const Vec3 targetPos{move.targetPos[0], move.targetPos[1], move.targetPos[2]};
+    const Vec3 targetRot = move.deltaRotation
+        ? Vec3{sourceRot.x + move.targetRot[0], sourceRot.y + move.targetRot[1], sourceRot.z + move.targetRot[2]}
+        : Vec3{move.targetRot[0], move.targetRot[1], move.targetRot[2]};
+    const uint32_t left = move.totalMs > move.elapsedMs ? move.totalMs - move.elapsedMs : 0;
+    object->move.active = false;
+    if (left == 0) {
+        // IsRunning() is false: SetOrientation(final value) (CDeathmatchObject.cpp:60-71).
+        object->pos = targetPos;
+        object->rot = targetRot;
+        return true;
+    }
+    object->move.active = true;
+    object->move.start = std::chrono::steady_clock::now() - std::chrono::milliseconds(move.elapsedMs);
+    object->move.durationMs = move.totalMs;
+    object->move.sourcePos = sourcePos;
+    object->move.sourceRot = sourceRot;
+    object->move.targetPos = targetPos;
+    object->move.targetRot = targetRot;
+    object->move.linear = move.linear;
+    return true;
+}
+
+bool ServerStopObject(uint32_t id, const float position[3], const float rotation[3]) {
+    Object* object = Live(id);
+    if (!object) return false;
+    NoteMoveGap();
+    object->move.active = false;
+    object->pos = {position[0], position[1], position[2]};
+    object->rot = {rotation[0], rotation[1], rotation[2]};
+    object->localOverride = true;
+    return true;
+}
+
+bool ServerSetObjectRotation(uint32_t id, float rx, float ry, float rz) {
+    Object* object = Live(id);
+    if (!object) return false;
+    object->rot = {rx, ry, rz};
+    object->localOverride = true;
+    return true;
+}
+
+bool ServerSetObjectScale(uint32_t id, float x, float y, float z) {
+    Object* object = Live(id);
+    if (!object) return false;
+    object->scale = {x, y, z};
+    return true;
+}
+
+bool CopyObjectState(uint32_t id, float pos[3], float rot[3], float scale[3], bool& moving) {
+    Object* object = Live(id);
+    if (!object) return false;
+    Sample(*object);
+    pos[0] = object->pos.x; pos[1] = object->pos.y; pos[2] = object->pos.z;
+    rot[0] = object->rot.x; rot[1] = object->rot.y; rot[2] = object->rot.z;
+    scale[0] = object->scale.x; scale[1] = object->scale.y; scale[2] = object->scale.z;
+    moving = object->move.active;
+    return true;
+}
+
 bool SetObjectRotation(uint32_t id, float rx, float ry, float rz) {
     Object* object = Live(id);
     if (!object) return false;

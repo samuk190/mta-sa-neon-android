@@ -956,4 +956,45 @@ void InstallCameraLua(lua_State* L) {
     }
 }
 
+void RpcSetCameraMatrix(float x, float y, float z, float lookX, float lookY, float lookZ, float roll, float fov) {
+    g_cam.fixed = true;
+    g_cam.position = {x, y, z};
+    g_cam.look = {lookX, lookY, lookZ};
+    g_cam.roll = roll;
+    g_cam.fov = fov;
+    ApplyFixed(g_cam.position, g_cam.look);
+}
+
+bool RpcSetCameraTarget(uint32_t id) {
+    if (!KnownClientElement(id)) return false;
+    const char* kind = ServerWorld::ElementKindName(id);
+    const bool player = id == ServerWorld::LocalPlayer() || (kind && std::strcmp(kind, "player") == 0);
+    const bool ped = Game::ScriptPedAlive(id) || (kind && std::strcmp(kind, "ped") == 0);
+    const bool vehicle = kind && std::strcmp(kind, "vehicle") == 0;
+    if (!player && !ped && !vehicle) return false;
+    g_cam.fixed = false;
+    Game::ClearScriptCamera();
+    if (id != ServerWorld::LocalPlayer())
+        Diag(g_diagFocus, "DIAG SET_CAMERA_TARGET: CClientCamera::SetFocus is not hooked for a remote element");
+    return true;
+}
+
+void RpcSetCameraInterior(uint8_t interior) {
+    g_cam.interior = interior;
+    Diag(g_diagInterior, "DIAG SET_CAMERA_INTERIOR: CWorld::SetCurrentArea is not hooked");
+}
+
+void RpcFadeCamera(bool fadeIn, float seconds, uint8_t red, uint8_t green, uint8_t blue) {
+    g_cam.fading = seconds > 0.f;
+    g_cam.fadeIn = fadeIn;
+    g_cam.fadeSeconds = seconds;
+    if (!fadeIn) {
+        g_cam.fadeR = red;
+        g_cam.fadeG = green;
+        g_cam.fadeB = blue;
+    }
+    g_cam.fadeStart = std::chrono::steady_clock::now();
+    Diag(g_diagFade, "DIAG FADE_CAMERA: CCamera fade and the HUD_AREA_NAME toggle are not hooked; the timer still reports IsFading");
+}
+
 }  // namespace WorldRPG::Script

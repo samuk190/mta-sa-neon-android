@@ -11,6 +11,10 @@ namespace WorldRPG::Game {
 bool SetHudComponentVisible(const char* component, bool visible);
 bool IsHudComponentVisible(const char* component);
 bool GetMobileCrosshairPosition(float& x, float& y);
+#ifndef __ANDROID__
+// Host builds only: the visibility last passed to SetHudComponentVisible (true when never set).
+bool HostHudComponentVisible(const char* component);
+#endif
 // Shows every component again (new session).
 void ResetHudComponents();
 

@@ -15,6 +15,7 @@
 #include "../gtasa/RemoteVehicle.h"
 #include "VehicleSync.h"
 #include "ServerWorld.h"
+#include "ServerRpc.h"
 #include "PedQueries.h"
 #include "PlayerWeaponSync.h"
 #include "CombatSync.h"
@@ -560,9 +561,12 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             WorldRPG::ServerWorld::NoteElementDimension(id, dimension);
             return true;
         }
-        default:
-            logUnported("function not ported");
+        default: {
+            const auto result = WorldRPG::ServerRpc::HandleElement(func, id, reader);
+            if (result == WorldRPG::ServerRpc::Result::Malformed) return false;
+            if (result == WorldRPG::ServerRpc::Result::NotHandled) logUnported("function not ported");
             return true;
+        }
     }
 }
 
@@ -606,7 +610,9 @@ bool HandleWasted(const uint8_t* body, size_t length, size_t bits, uint8_t packe
 }
 
 bool HandleLuaRPC(const uint8_t* body, size_t length, size_t bits) {
-    if (length < 2) return false;
+    // CRPCFunctions::ProcessPacket (CRPCFunctions.cpp:125-148): the function id alone is a full packet for an RPC with
+    // no payload (the reset RPCs).
+    if (length < 1) return false;
     WorldRPG::Net::BitStreamReader reader(body, length, bits);
     uint8_t funcId = 0;
     if (!reader.Read(funcId)) return false;
@@ -632,14 +638,16 @@ bool HandleLuaRPC(const uint8_t* body, size_t length, size_t bits) {
         WorldRPG::Controls::SetAllControlsEnabled(gta == 1, mta == 1, enabled == 1);
         return true;
     }
-    if (funcId == WorldRPG::MtaIds::Rpc::ShowChat) {
-        uint8_t show = 1;
-        if (reader.Read(show)) {
-            WorldRPG::JniBridge::PostGameLine(10, show ? "1" : "0");
-            return true;
+    // Every other server RPC of packet 76 (ServerRpc.cpp): world, camera, money, HUD, sound, chat, input binds.
+    const auto result = WorldRPG::ServerRpc::HandleGlobal(funcId, reader);
+    if (result == WorldRPG::ServerRpc::Result::NotHandled && funcId < WorldRPG::MtaIds::Rpc::NumRpcFuncs) {
+        static bool seen[256] = {};
+        if (!seen[funcId]) {
+            seen[funcId] = true;
+            PKT_LOGI("DIAG LUA RPC %u: not ported (bits=%zu)", static_cast<unsigned>(funcId), bits);
         }
     }
-    return false;
+    return result == WorldRPG::ServerRpc::Result::Handled;
 }
 
 // PLAYER_CLOTHES (30). Desktop CPacketHandler::Packet_PlayerClothes (CPacketHandler.cpp 5160-5195): ElementID,

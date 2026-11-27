@@ -1,5 +1,6 @@
 #include "ControlToggles.h"
 #include "ServerWorld.h"
+#include "ServerRpc.h"
 #include "WorldObjectFeed.h"
 #include "PedQueries.h"
 #include "CombatSync.h"
@@ -310,6 +311,7 @@ void ResetSession() {
     Combat::ResetBulletSync();
     // CClientGame.cpp:586 (shutdown) and ResetMapInfo (6429) enable every control again.
     Controls::ResetAll();
+    ServerRpc::ResetSession();
     std::vector<uint32_t> peds;
     {
         std::lock_guard<std::mutex> lock(g_lock);
@@ -559,6 +561,14 @@ void NoteAttachedOffsets(uint32_t id, float x, float y, float z, float rx, float
     attachment.rotation[0] = rx;
     attachment.rotation[1] = ry;
     attachment.rotation[2] = rz;
+}
+
+void NoteAttachTo(uint32_t id, uint32_t parent) {
+    if (id == 0 || id == 0xFFFFFFFFu || id == parent) return;
+    std::lock_guard lock(g_lock);
+    g_attachments[id].parent = parent;
+    g_attachmentOrder.erase(std::remove(g_attachmentOrder.begin(), g_attachmentOrder.end(), id), g_attachmentOrder.end());
+    if (parent != 0xFFFFFFFFu) g_attachmentOrder.push_back(id);
 }
 
 std::vector<uint32_t> CopyAttachedElements(uint32_t parent) {

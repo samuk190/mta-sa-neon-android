@@ -840,6 +840,10 @@ static void PulseClient(JNIEnv* env, jobject thiz, bool renderFrame) {
     for (const std::string& line : WorldRPG::Script::ActiveVmTakeServerCommands()) {
         if (g_state->join) g_state->join->SendChat(line);
     }
+    // Keys the server bound (BIND_KEY): CClientGame::ProcessServerKeyBind.
+    for (const auto& event : WorldRPG::Script::KeyBindsTakeServerEvents()) {
+        WorldRPG::Net::SendKeyBind(event.control, event.down, event.name);
+    }
     if (!renderFrame) return;
     // An empty frame is sent once, so the overlay clears what the scripts stopped drawing.
     static bool lastFrameEmpty = true;

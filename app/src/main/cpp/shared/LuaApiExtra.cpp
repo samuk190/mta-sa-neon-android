@@ -114,6 +114,20 @@ int ShowChat(lua_State* L) {
     return 1;
 }
 
+}  // namespace
+
+void RpcSetChatVisible(bool visible, bool inputBlocked) {
+    g_chatVisible = visible;
+    WorldRPG::JniBridge::PostGameLine(10, visible ? "1" : "0");
+    static bool once = false;
+    if (!once && inputBlocked != !visible) {
+        once = true;
+        LUA_LOGI("DIAG SHOW_CHAT: the chat input block flag (%d) is not applied; the chat input is a Java view", inputBlocked ? 1 : 0);
+    }
+}
+
+namespace {
+
 int IsChatVisible(lua_State* L) {
     lua_pushboolean(L, g_chatVisible ? 1 : 0);
     return 1;

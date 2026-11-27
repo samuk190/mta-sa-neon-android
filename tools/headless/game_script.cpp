@@ -320,6 +320,12 @@ bool CopyPedQueryNative(uint32_t id, PedQueries::Snapshot& snapshot) {
     return true;
 }
 
+ScriptProbe& Probe() {
+    static ScriptProbe probe;
+    return probe;
+}
+void ResetProbe() { Probe() = ScriptProbe{}; }
+
 void SetMode(Mode mode) { g_mode = mode; }
 
 void MarkJoined() {
@@ -466,11 +472,34 @@ bool CopyScriptClothes(uint32_t id, int type, char* texture, int textureBytes, c
 }
 void NoteScriptRotation(uint32_t, float) {}
 void NoteScriptFrozen(uint32_t, bool) {}
-void NoteScriptCamera(float, float, float, float, float, float) {}
-void ClearScriptCamera() {}
-bool NoteScriptTime(int, int) { return false; }
-bool NoteScriptWeather(int) { return false; }
-bool CopyScriptWeather(int&) { return false; }
+void NoteScriptCamera(float x, float y, float z, float lx, float ly, float lz) {
+    auto& probe = WorldRPG::Headless::Probe();
+    ++probe.cameraNotes;
+    const float values[6] = {x, y, z, lx, ly, lz};
+    for (int i = 0; i < 6; ++i) probe.camera[i] = values[i];
+}
+void ClearScriptCamera() { ++WorldRPG::Headless::Probe().cameraClears; }
+bool NoteScriptTime(int hour, int minute) {
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 60) return false;
+    auto& probe = WorldRPG::Headless::Probe();
+    probe.timeSet = true;
+    probe.hour = hour;
+    probe.minute = minute;
+    return true;
+}
+bool NoteScriptWeather(int weather) {
+    if (weather < 0 || weather > 255) return false;
+    auto& probe = WorldRPG::Headless::Probe();
+    probe.weatherSet = true;
+    probe.weather = weather;
+    return true;
+}
+bool CopyScriptWeather(int& weather) {
+    const auto& probe = WorldRPG::Headless::Probe();
+    if (!probe.weatherSet) return false;
+    weather = probe.weather;
+    return true;
+}
 bool CopyScriptPedFacts(uint32_t id, int& model, float&, bool&) {
     for (const auto& slot : g_hostPeds) {
         if (!slot.used || slot.id != id) continue;
@@ -568,7 +597,12 @@ void NoteRemoteUnseat(uint32_t) {}
 void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float) {}
 void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate& update) { Headless::unoccupiedUpdate = update; }
 void RpcSetVehiclePosition(uint32_t, float, float, float) {}
-void RpcSetVehicleHealth(uint32_t, float) {}
+void RpcSetVehicleHealth(uint32_t id, float health) {
+    auto& probe = WorldRPG::Headless::Probe();
+    ++probe.vehicleHealthCalls;
+    probe.vehicleHealthId = id;
+    probe.vehicleHealth = health;
+}
 void RpcSetVehicleRotation(uint32_t, float, float, float) {}
 void RpcSetVehicleVelocity(uint32_t, float, float, float, bool) {}
 bool SetOwnedPedControl(uint32_t, const char*, bool) { return false; }
