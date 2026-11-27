@@ -289,13 +289,13 @@ void PlayerHudChat() {
     // SHOW_PLAYER_HUD_COMPONENT: uchar component, uchar show. Index 5 is money, 13 is all.
     Check(f.Send(Pkt(Rpc::ShowPlayerHudComponent).U8(5).U8(0).w), "hide money");
     f.Pump();
-    Check(!Game::IsHudComponentVisible("money"), "money is hidden");
+    Check(!Game::HostHudComponentVisible("money"), "money is hidden");
     Check(f.Send(Pkt(Rpc::ShowPlayerHudComponent).U8(5).U8(7).w), "show is any non-zero byte");
     f.Pump();
-    Check(Game::IsHudComponentVisible("money"), "money is shown again");
+    Check(Game::HostHudComponentVisible("money"), "money is shown again");
     Check(f.Send(Pkt(Rpc::ShowPlayerHudComponent).U8(9).U8(0).w), "hide clock");
     f.Pump();
-    Check(!Game::IsHudComponentVisible("clock"), "clock is hidden");
+    Check(!Game::HostHudComponentVisible("clock"), "clock is hidden");
     Check(f.Send(Pkt(Rpc::ShowPlayerHudComponent).U8(77).U8(0).w), "an unknown component is consumed");
     Check(!f.Send(Pkt(Rpc::ShowPlayerHudComponent).U8(5).w), "SHOW_PLAYER_HUD_COMPONENT needs the flag");
     f.Pump();
