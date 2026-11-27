@@ -55,7 +55,10 @@ enum ElementType : uint8_t {
     kTypeTeam = 13,
     kTypePed = 14,
     kTypeColshape = 15,
+    kTypeScriptFile = 16,
     kTypeWater = 17,
+    kTypeWeapon = 18,
+    kTypeBuilding = 23,
 };
 
 struct TeamSpawn {
@@ -94,6 +97,10 @@ struct Visual {
     float rotX = 0, rotY = 0;
     // Objects (kind 3): CObject flags from the ENTITY_ADD body.
     bool objectLowLod = false, objectAllDimensions = false, objectFrozen = false;
+    // Buildings (kind 23): LowLodObjectID from CPacketHandler::Packet_EntityAdd (CPacketHandler.cpp:4383).
+    uint32_t lowLodId = 0xFFFFFFFFu;
+    // Pickups (kind 6): visibility from ENTITY_ADD / PICKUP_HIDESHOW / PICKUP_HIT_CONFIRM.
+    bool pickupVisible = true;
     float health = -1.f;
     int vehicleDoorLock = 1;
     bool vehicleFrozen = false;

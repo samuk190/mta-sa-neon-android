@@ -1,4 +1,6 @@
 #include "ControlToggles.h"
+#include "CorePackets.h"
+#include "LuaApiExtra.h"
 #include "ServerWorld.h"
 #include "ServerRpc.h"
 #include "WorldObjectFeed.h"
@@ -312,6 +314,8 @@ void ResetSession() {
     // CClientGame.cpp:586 (shutdown) and ResetMapInfo (6429) enable every control again.
     Controls::ResetAll();
     ServerRpc::ResetSession();
+    CorePackets::ResetSession();
+    Script::VehicleFlagsResetSession();
     std::vector<uint32_t> peds;
     {
         std::lock_guard<std::mutex> lock(g_lock);
@@ -684,9 +688,12 @@ const char* ElementKindName(uint32_t id) {
         case 7: return "radararea";
         case 15: return "colshape";
         case 14: return "ped";
+        case 16: return "scriptfile";
+        case 17: return "water";
         case 18: return "weapon";
         case 4: return "marker";
         case 13: return "team";
+        case 23: return "building";
         default: return "element";
     }
 }
@@ -986,6 +993,87 @@ void NoteElementModel(uint32_t id, int model) {
     std::lock_guard<std::mutex> lock(g_lock);
     auto found = g_visuals.find(id);
     if (found != g_visuals.end() && model >= 0) found->second.model = model;
+}
+
+void NotePickupHideShow(uint32_t id, bool visible, uint16_t model) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 6) return;
+    found->second.model = static_cast<int>(model);
+    found->second.pickupVisible = visible;
+}
+
+void NotePickupVisible(uint32_t id, bool visible) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 6) return;
+    found->second.pickupVisible = visible;
+}
+
+bool CopyPickupState(uint32_t id, bool& visible, int& model) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 6) return false;
+    visible = found->second.pickupVisible;
+    model = found->second.model;
+    return true;
+}
+
+void NoteVehiclePose(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rotDeg[3],
+                     bool hasHealth, float health) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 2) return;
+    if (hasPos && pos) {
+        found->second.x = pos[0];
+        found->second.y = pos[1];
+        found->second.z = pos[2];
+    }
+    if (hasRot && rotDeg) {
+        found->second.rotX = rotDeg[0];
+        found->second.rotY = rotDeg[1];
+        found->second.heading = rotDeg[2];
+    }
+    if (hasHealth && std::isfinite(health)) found->second.health = health;
+}
+
+void NoteObjectSync(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rotRad[3],
+                    bool hasHealth, float health) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 3) return;
+    if (hasPos && pos) {
+        found->second.x = pos[0];
+        found->second.y = pos[1];
+        found->second.z = pos[2];
+    }
+    if (hasRot && rotRad) {
+        found->second.rotX = rotRad[0];
+        found->second.rotY = rotRad[1];
+        found->second.heading = rotRad[2];
+    }
+    if (hasHealth && std::isfinite(health)) found->second.health = health;
+}
+
+void SetObjectSyncHosted(uint32_t id, bool hosted) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 3) return;
+    found->second.hosted = hosted;
+}
+
+bool ObjectSyncHosted(uint32_t id) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    return found != g_visuals.end() && found->second.kind == 3 && found->second.hosted;
+}
+
+bool CopyBuildingLowLod(uint32_t id, uint32_t& outLowLod) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 23) return false;
+    outLowLod = found->second.lowLodId;
+    return true;
 }
 
 void NoteVehicle(uint32_t id, int model) {

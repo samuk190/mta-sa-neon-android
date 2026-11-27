@@ -3,6 +3,8 @@
 
 #include "EntityAddTypes.h"
 
+#include <cmath>
+
 namespace WorldRPG::Entity {
 namespace {
 
@@ -260,11 +262,13 @@ bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Vi
         case kTypeSpawnpointDeprecated:  // reference has no case: reads nothing
         case kTypeRemoteClient:          // reference has no case: reads nothing
         case kTypeConsole:               // reference has no case: reads nothing
+        case kTypeWorldMesh:             // CPacketHandler.cpp:3949: reads nothing
+        case kTypeScriptFile:            // CPacketHandler.cpp:4323-4326: reads nothing
             return true;
         case kTypeVehicle:
             return ReadEntityBodyVehicle(reader, common, visual);
         case kTypeObject:
-        case 18:  // WEAPON: the reference routes it through the object case
+        case kTypeWeapon:  // WEAPON (18): the reference routes it through the object case
             return ReadEntityBodyObject(reader, common, visual, resolveKind);
         case kTypeMarker:
             return ReadEntityBodyMarker(reader, common, visual);
@@ -272,12 +276,43 @@ bool ReadEntityBody(Net::BitStreamReader& reader, const EntityCommon& common, Vi
         case kTypePickup:
         case kTypeRadarArea:
         case kTypePathNode:
-        case kTypeWorldMesh:  // reference case reads nothing
         case kTypeTeam:
         case kTypeColshape:
             return ReadEntityBodyOther(reader, common, visual);
         case kTypePed:
             return ReadEntityBodyPed(reader, common, visual);
+        case kTypeBuilding: {
+            // CPacketHandler::Packet_EntityAdd case CClientGame::BUILDING (CPacketHandler.cpp:4374-4400):
+            // SPositionSync(false), SRotationRadiansSync(false), ReadCompressed(ushort modelId), ElementID LowLodObjectID.
+            float x = 0.f, y = 0.f, z = 0.f;
+            float rx = 0.f, ry = 0.f, rz = 0.f;
+            uint32_t model = 0;
+            uint32_t lowLodId = 0xFFFFFFFFu;
+            if (!ReadPosition(reader, x, y, z) || !std::isfinite(z)) ENTITY_BODY_FAIL();
+            uint16_t urx = 0, ury = 0, urz = 0;
+            if (!reader.Read(urx) || !reader.Read(ury) || !reader.Read(urz)) ENTITY_BODY_FAIL();
+            constexpr float kRadStep = 6.283185307f / 65536.f;
+            rx = static_cast<float>(urx) * kRadStep;
+            ry = static_cast<float>(ury) * kRadStep;
+            rz = static_cast<float>(urz) * kRadStep;
+            if (!ReadCompressed(reader, 2, model)) ENTITY_BODY_FAIL();
+            if (!ReadElementId(reader, lowLodId)) ENTITY_BODY_FAIL();
+            visual.x = x;
+            visual.y = y;
+            visual.z = z;
+            visual.rotX = rx;
+            visual.rotY = ry;
+            visual.heading = rz;
+            visual.model = static_cast<int>(model);
+            visual.lowLodId = lowLodId;
+            static int buildingDiag = 0;
+            if (buildingDiag < 4) {
+                ++buildingDiag;
+                DIAG("ENTITY_ADD BUILDING id=%u model=%u: CClientBuilding creation and ResolveModelID are not hooked",
+                     common.id, static_cast<unsigned>(model));
+            }
+            return true;
+        }
         default:
             DIAG("ENTITY_ADD unhandled type id=%u type=%u bit=%zu", common.id, static_cast<unsigned>(common.type), reader.GetReadOffsetBits());
             ENTITY_BODY_FAIL();

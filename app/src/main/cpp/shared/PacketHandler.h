@@ -4,9 +4,7 @@
 #include "../net/raknet/RakNetWrapper.h"
 
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <unordered_map>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -21,31 +19,9 @@
 
 namespace WorldRPG::Sync {
 
-/// Game packet type bytes carried inside the RID_USER_PACKET_ENUM (99)
-/// envelope: wire format is [99][gameId][body...].
-/// NOTE: this local numbering is provisional. P2 replaces it with the real
-/// ePacketTypes from mta_neon_source/Shared/sdk/net/Packets.h.
-enum class MTAPacketID : uint8_t {
-    ELEMENT_CREATE      = 0,
-    ELEMENT_DESTROY     = 1,
-    PLAYER_SYNC         = 2,
-    VEHICLE_SYNC        = 3,
-    OBJECT_SYNC         = 4,
-    PED_SYNC            = 5,
-    CHAT_MESSAGE        = 6,
-    SERVER_MESSAGE      = 7,
-    SPAWN_PLAYER        = 8,
-    PICKUP_SYNC         = 9,
-    BLIP_SYNC           = 10,
-    RADAR_AREA_SYNC     = 11,
-};
-
 constexpr uint8_t USER_PACKET_ENUM_ID = 99; // RID_USER_PACKET_ENUM
 
-using PacketHandlerFn = std::function<bool(const uint8_t* data, size_t length)>;
-
-/// Maps MTA user packet IDs to handler functions.
-/// Extensible registration pattern for adding new packet types.
+/// Dispatches incoming MTA game packets (real ePacketID values from Shared/sdk/net/Packets.h).
 class PacketHandler {
 public:
     PacketHandler();
@@ -57,11 +33,8 @@ public:
     /// Initialize with references to sync and network systems
     bool initialize(SyncManager& syncManager);
 
-    /// Register all built-in MTA packet handlers with the network layer
+    /// Attach this handler to the network layer
     void registerAll(Net::RakNetWrapper& network);
-
-    /// Register a custom handler for a specific packet ID
-    void registerHandler(MTAPacketID id, PacketHandlerFn handler);
 
     /// Process an incoming packet (called from network callback).
     /// bitLength counts every bit of data, including the leading game-id byte
@@ -69,6 +42,8 @@ public:
     bool handlePacket(uint8_t packetId, const uint8_t* data, size_t length, size_t bitLength = 0);
 
 private:
+    bool handleGamePacket(uint8_t gameId, const uint8_t* body, size_t bodyLength, size_t bodyBits);
+
     struct Impl;
     std::unique_ptr<Impl> pImpl_;
 };

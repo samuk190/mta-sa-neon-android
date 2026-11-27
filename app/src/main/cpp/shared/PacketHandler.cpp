@@ -1,4 +1,5 @@
 #include "PacketHandler.h"
+#include "CorePackets.h"
 #include "SyncTypes.h"
 #include "NativeTaskSync.h"
 #include "MtaIds.h"
@@ -1553,7 +1554,6 @@ namespace WorldRPG::Sync {
 
 struct PacketHandler::Impl {
     SyncManager* syncManager = nullptr;
-    std::unordered_map<uint8_t, PacketHandlerFn> handlers;
 };
 
 PacketHandler::PacketHandler() : pImpl_(std::make_unique<Impl>()) {}
@@ -1565,12 +1565,6 @@ bool PacketHandler::initialize(SyncManager& syncManager) {
     return true;
 }
 
-void PacketHandler::registerHandler(MTAPacketID id, PacketHandlerFn handler) {
-    const uint8_t gameId = static_cast<uint8_t>(id);
-    pImpl_->handlers[gameId] = std::move(handler);
-    PKT_LOGI("PacketHandler: registered handler for game packet ID %u", gameId);
-}
-
 void PacketHandler::registerAll(Net::RakNetWrapper& network) {
     if (!pImpl_->syncManager) {
         PKT_LOGE("PacketHandler::registerAll: not initialized");
@@ -1578,104 +1572,16 @@ void PacketHandler::registerAll(Net::RakNetWrapper& network) {
     }
     g_packetNetwork = &network;
 
-    // Register built-in handlers
-    registerHandler(MTAPacketID::ELEMENT_CREATE, [this](const uint8_t* data, size_t len) -> bool {
-        if (len < 3) return false;
-        Net::BitStreamReader reader(data, len);
-        uint8_t elemType = 0;
-        uint16_t elemId = 0;
-        if (!reader.Read(elemType) || !reader.Read(elemId)) return false;
-        auto type = static_cast<ElementType>(elemType);
-        pImpl_->syncManager->getElementManager().createElement(type, static_cast<ElementID>(elemId));
-        return true;
-    });
-
-    registerHandler(MTAPacketID::ELEMENT_DESTROY, [this](const uint8_t* data, size_t len) -> bool {
-        if (len < 3) return false;
-        Net::BitStreamReader reader(data, len);
-        uint8_t elemType = 0;
-        uint16_t elemId = 0;
-        if (!reader.Read(elemType) || !reader.Read(elemId)) return false;
-        pImpl_->syncManager->getElementManager().destroyElement(
-            static_cast<ElementType>(elemType), static_cast<ElementID>(elemId));
-        return true;
-    });
-
-    registerHandler(MTAPacketID::PLAYER_SYNC, [this](const uint8_t* data, size_t len) -> bool {
-        Net::BitStreamReader reader(data, len);
-        PlayerSyncData sync;
-        if (!sync.readFromBitStream(reader)) return false;
-        pImpl_->syncManager->getElementManager().updatePlayerSync(sync);
-        return true;
-    });
-
-    registerHandler(MTAPacketID::VEHICLE_SYNC, [this](const uint8_t* data, size_t len) -> bool {
-        Net::BitStreamReader reader(data, len);
-        VehicleSyncData sync;
-        if (!sync.readFromBitStream(reader)) return false;
-        pImpl_->syncManager->getElementManager().updateVehicleSync(sync);
-        return true;
-    });
-
-    registerHandler(MTAPacketID::OBJECT_SYNC, [this](const uint8_t* data, size_t len) -> bool {
-        Net::BitStreamReader reader(data, len);
-        ObjectSyncData sync;
-        if (!sync.readFromBitStream(reader)) return false;
-        pImpl_->syncManager->getElementManager().updateObjectSync(sync);
-        return true;
-    });
-
-    registerHandler(MTAPacketID::PED_SYNC, [this](const uint8_t* data, size_t len) -> bool {
-        Net::BitStreamReader reader(data, len);
-        PedSyncData sync;
-        if (!sync.readFromBitStream(reader)) return false;
-        pImpl_->syncManager->getElementManager().updatePedSync(sync);
-        return true;
-    });
-
-    registerHandler(MTAPacketID::CHAT_MESSAGE, [this](const uint8_t* data, size_t len) -> bool {
-        if (len < 2) return false;
-        Net::BitStreamReader reader(data, len);
-        uint8_t color = 0;
-        if (!reader.Read(color)) return false;
-        std::string msg;
-        if (!reader.ReadString(msg, 512)) return false;
-        // Chat messages are already ASCII-normalized by server
-        PKT_LOGI("ChatMessage: [%u] %s", color, msg.c_str());
-        return true;
-    });
-
-    registerHandler(MTAPacketID::SERVER_MESSAGE, [this](const uint8_t* data, size_t len) -> bool {
-        Net::BitStreamReader reader(data, len);
-        std::string msg;
-        if (!reader.ReadString(msg, 512)) return false;
-        PKT_LOGI("ServerMessage: %s", msg.c_str());
-        return true;
-    });
-
-    // Set the network packet handler callback to route user packets through us
+    // Set the network packet handler callback to route user packets through us.
+    // All game packets are dispatched by their real ePacketID in handleGamePacket.
     network.SetPacketHandler([this](uint8_t packetId, const uint8_t* data, size_t length, size_t bitLength) -> bool {
         return handlePacket(packetId, data, length, bitLength);
     });
 
-    PKT_LOGI("PacketHandler: all handlers registered with network layer");
+    PKT_LOGI("PacketHandler: network packet callback registered");
 }
 
-bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t length, size_t bitLength) {
-    PROFILE_SCOPE("PacketHandler::handlePacket");
-
-    // Wire envelope: RID_USER_PACKET_ENUM (99) followed by the game packet
-    // type byte. Strip the UPE prefix before dispatching so handlers see the
-    // game ID and body only.
-    if (packetId == USER_PACKET_ENUM_ID) {
-        if (length < 1) {
-            PKT_LOGE("PacketHandler: truncated UPE packet (no game ID byte)");
-            return false;
-        }
-        const uint8_t gameId = data[0];
-        const uint8_t* body = data + 1;
-        const size_t bodyLength = length - 1;
-        const size_t bodyBits = bitLength >= 8 ? bitLength - 8 : bodyLength * 8;
+bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t bodyLength, size_t bodyBits) {
         // ROADMAP_PEDS_SYNC 0.1: which ped-relevant packets reach the 0x0030 peer, and with which RPC function ids.
         // Counting ePacketID (Packets.h) gives PED_WASTED 64, LUA 76, LUA_ELEMENT_RPC 77, PED_TASK 101; the phone
         // routes Lua RPCs on 68. Log only, no dispatch change.
@@ -1687,11 +1593,31 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
                          bodyLength > 0 ? static_cast<unsigned>(body[0]) : 0u);
             }
         }
-        // Real ePacketID values from Shared/sdk/net/Packets.h. The map below
-        // still uses the provisional 0..7 numbering and does not match these.
+        // Real ePacketID values from Shared/sdk/net/Packets.h.
         if (gameId == 43) return HandleChatEcho(body, bodyLength, bodyBits);
         if (gameId == 31) return HandleKeySync(body, bodyLength, bodyBits);
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::Lightsync) return CorePackets::HandleLightSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::VehicleResync) return CorePackets::HandleVehicleResync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::Explosion) return CorePackets::HandleExplosion(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::Fire) return CorePackets::HandleFire(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::Projectile) return CorePackets::HandleProjectile(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::PickupHideShow) return CorePackets::HandlePickupHideShow(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::PickupHitConfirm) return CorePackets::HandlePickupHitConfirm(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::VehicleSpawn) return CorePackets::HandleVehicleSpawn(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::VehicleDamageSync) return CorePackets::HandleVehicleDamageSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::VehicleTrailer) return CorePackets::HandleVehicleTrailer(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ObjectStartSync) return CorePackets::HandleObjectStartSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ObjectStopSync) return CorePackets::HandleObjectStopSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ObjectSync) return CorePackets::HandleObjectSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::LatentTransfer) {
+            return CorePackets::HandleLatentTransfer(
+                body, bodyLength, bodyBits,
+                [this](uint8_t innerId, const uint8_t* innerBody, size_t innerLen, size_t innerBits) {
+                    return handleGamePacket(innerId, innerBody, innerLen, innerBits);
+                });
+        }
+        if (gameId == MtaIds::Packet::PedTask) return CorePackets::HandlePedTask(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PlayerNetworkStatus) {
             Net::BitStreamReader reader(body, bodyLength, bodyBits);
             uint8_t type = 0;
@@ -1717,9 +1643,7 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
         if (gameId == 81) return WorldRPG::Script::ActiveVmOnServerEvent(body, bodyLength, bodyBits);
         if (gameId == 26) return HandlePlayerSpawn(body, bodyLength, bodyBits);
         if (gameId == 5) {
-            // PACKET_ID_PLAYER_QUIT. Desktop Packet_PlayerQuit: ElementID, SQuitReasonSync, then QuitPlayer. This id
-            // used to fall through to the provisional handler map below, where 5 is PED_SYNC, so a player who left
-            // stayed on the phone.
+            // PACKET_ID_PLAYER_QUIT. Desktop Packet_PlayerQuit: ElementID, SQuitReasonSync, then QuitPlayer.
             // CPlayerQuitPacket::Write is ElementID + SQuitReasonSync, but on the mobile peer the first 17 bits decoded
             // to id 2 while the players were 677 and 2630 (device 2026-11-14), like PLAYER_LIST, which carries an
             // extra prefix there. The bytes are logged, and the first byte offset whose id is a known player is used.
@@ -1769,13 +1693,27 @@ bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t l
             WorldRPG::Script::ActiveVmFeedScripts(body, bodyLength, bodyBits);
             return true;
         }
-        auto it = pImpl_->handlers.find(gameId);
-        if (it != pImpl_->handlers.end()) {
-            return it->second(body, bodyLength);
-        }
         if (gameId != 32 && gameId != 33 && gameId != 56 && gameId != 63 && gameId != 77)
             PKT_LOGI("PacketHandler: unhandled game packet ID %u (%zu bytes)", gameId, bodyLength);
         return false;
+}
+
+bool PacketHandler::handlePacket(uint8_t packetId, const uint8_t* data, size_t length, size_t bitLength) {
+    PROFILE_SCOPE("PacketHandler::handlePacket");
+
+    // Wire envelope: RID_USER_PACKET_ENUM (99) followed by the game packet
+    // type byte. Strip the UPE prefix before dispatching so handlers see the
+    // game ID and body only.
+    if (packetId == USER_PACKET_ENUM_ID) {
+        if (length < 1) {
+            PKT_LOGE("PacketHandler: truncated UPE packet (no game ID byte)");
+            return false;
+        }
+        const uint8_t gameId = data[0];
+        const uint8_t* body = data + 1;
+        const size_t bodyLength = length - 1;
+        const size_t bodyBits = bitLength >= 8 ? bitLength - 8 : bodyLength * 8;
+        return handleGamePacket(gameId, body, bodyLength, bodyBits);
     }
 
     return false;

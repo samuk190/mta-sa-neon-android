@@ -184,6 +184,20 @@ void SetSyncTimeContext(uint32_t id, uint8_t context);
 void NoteElementPosition(uint32_t id, float x, float y, float z);
 void NoteElementInterior(uint32_t id, uint8_t interior);
 void NoteElementModel(uint32_t id, int model);
+// Pickup visibility/model updates from PICKUP_HIDESHOW (52) and PICKUP_HIT_CONFIRM (53).
+void NotePickupHideShow(uint32_t id, bool visible, uint16_t model);
+void NotePickupVisible(uint32_t id, bool visible);
+bool CopyPickupState(uint32_t id, bool& visible, int& model);
+// Vehicle pose/health updates from LIGHTSYNC (34), VEHICLE_RESYNC (35), VEHICLE_SPAWN (57), VEHICLE_TRAILER (60).
+void NoteVehiclePose(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rotDeg[3],
+                     bool hasHealth, float health);
+// Object sync updates from OBJECT_STARTSYNC (86), OBJECT_STOPSYNC (87), OBJECT_SYNC (88).
+void NoteObjectSync(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rotRad[3],
+                    bool hasHealth, float health);
+void SetObjectSyncHosted(uint32_t id, bool hosted);
+bool ObjectSyncHosted(uint32_t id);
+// Building LowLodObjectID from ENTITY_ADD (23). False when id is not a building.
+bool CopyBuildingLowLod(uint32_t id, uint32_t& outLowLod);
 // A vehicle element for script state. Does not replace a player, ped, or other live kind.
 void NoteVehicle(uint32_t id, int model);
 bool SetVehicleColors(uint32_t id, const VehicleColors& colors);

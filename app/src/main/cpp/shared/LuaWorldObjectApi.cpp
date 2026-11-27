@@ -1198,6 +1198,15 @@ bool ServerSetObjectScale(uint32_t id, float x, float y, float z) {
     return true;
 }
 
+bool ServerSyncObject(uint32_t id, bool hasPos, const float pos[3], bool hasRot, const float rot[3]) {
+    Object* object = Live(id);
+    if (!object) return false;
+    if (hasPos) object->pos = {pos[0], pos[1], pos[2]};
+    if (hasRot) object->rot = {rot[0], rot[1], rot[2]};
+    object->localOverride = true;
+    return true;
+}
+
 bool CopyObjectState(uint32_t id, float pos[3], float rot[3], float scale[3], bool& moving) {
     Object* object = Live(id);
     if (!object) return false;

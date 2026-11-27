@@ -98,7 +98,7 @@ bool ReadPickup(Net::BitStreamReader& reader, const EntityCommon& common, Visual
         default:  // CUSTOM and unknown: reference reads nothing.
             break;
     }
-    (void)visible;
+    visual.pickupVisible = visible;
     return true;
 }
 
@@ -242,7 +242,6 @@ bool ReadEntityBodyOther(Net::BitStreamReader& reader, const EntityCommon& commo
         case kTypePickup: return ReadPickup(reader, common, visual);
         case kTypeRadarArea: return ReadRadarArea(reader, common, visual);
         case kTypePathNode: return ReadPathNode(reader, common, visual);
-        case kTypeWorldMesh: return true;  // reference case has no reads
         case kTypeTeam: return ReadTeam(reader, common, visual);
         case kTypeColshape: return ReadColshape(reader, common, visual);
         default:
