@@ -89,6 +89,89 @@ bool HandleChatClear(const uint8_t* body, size_t length, size_t bits);
 // PACKET_ID_SERVER_INFO_SYNC (106): CPacketHandler::Packet_ServerInfoSync (CPacketHandler.cpp:5937-5956).
 bool HandleServerInfoSync(const uint8_t* body, size_t length, size_t bits);
 
+// PACKET_ID_PACKET_PROGRESS (8): CPacketHandler::Packet_PartialPacketInfo (CPacketHandler.cpp:2819-2839).
+bool HandlePartialPacketInfo(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_SERVER_DISCONNECTED (23): CPacketHandler::Packet_ServerDisconnected (CPacketHandler.cpp:545-685).
+bool HandleServerDisconnected(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_RETURN_SYNC (36): CNetAPI::ProcessPacket case PACKET_ID_RETURN_SYNC (CNetAPI.cpp:161-221).
+bool HandleReturnSync(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_MAP_INFO (46): CPacketHandler::Packet_MapInfo (CPacketHandler.cpp:2377-2715, bitstream 0x0030).
+bool HandleMapInfo(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_UPDATE_INFO (89): CPacketHandler::Packet_UpdateInfo (CPacketHandler.cpp:5824-5832).
+bool HandleUpdateInfo(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_DEBUG_EVENT (110): CPacketHandler::Packet_DebugEvent (CPacketHandler.cpp:1643-1675, SDebugEvent.h:1-155).
+bool HandleDebugEvent(const uint8_t* body, size_t length, size_t bits);
+
+struct PartialPacketProgress {
+    uint32_t partCount = 0;
+    uint32_t partTotal = 0;
+    uint32_t partLength = 0;
+};
+struct DisconnectRecord {
+    bool received = false;
+    uint8_t type = 0;
+    uint32_t durationSeconds = 0;
+    std::string reason;
+};
+struct ReturnSyncRecord {
+    bool valid = false;
+    bool inVehicle = false;
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    float rotX = 0.0f, rotY = 0.0f, rotZ = 0.0f;
+};
+struct UpdateInfoRecord {
+    bool received = false;
+    std::string type;
+    std::string data;
+};
+struct DebugEventRecord {
+    bool received = false;
+    uint32_t eventId = 0;
+    uint32_t elementId = 0;
+    uint32_t timeMs = 0;
+    std::string message;
+};
+
+PartialPacketProgress LastPartialPacketProgress();
+DisconnectRecord LastDisconnectRecord();
+ReturnSyncRecord LastReturnSyncRecord();
+UpdateInfoRecord LastUpdateInfoRecord();
+DebugEventRecord LastDebugEventRecord();
+
+// Outbound packet sink override for host testing (when unset, packets send via Net::SendGamePacket*).
+using OutboundPacketSink = std::function<bool(uint8_t gamePacketId, const uint8_t* bytes, size_t len, size_t bitLen,
+                                              bool reliable, bool highPriority)>;
+void SetOutboundPacketSink(OutboundPacketSink sink);
+
+// Outbound gameplay packet encoders matching desktop client wire format (bitstream 0x0030):
+// PACKET_ID_EXPLOSION (37): CClientGame::SendExplosionSync (CClientGame.cpp:6288-6317).
+bool SendExplosionSync(float x, float y, float z, uint8_t explosionType, uint32_t originId = 0x1FFFFu);
+// PACKET_ID_DETONATE_SATCHELS (40): CClientGame::SendDetonateSatchels (CClientGame.cpp:2040-2046).
+bool SendDetonateSatchels();
+// PACKET_ID_DESTROY_SATCHELS (41): CClientGame::SendDestroySatchels (CClientGame.cpp:6512-6517).
+bool SendDestroySatchels();
+// PACKET_ID_VEHICLE_DAMAGE_SYNC (59): CDeathmatchVehicle::SyncDamageModel (CDeathmatchVehicle.cpp:118-129).
+bool SendVehicleDamageSync(uint32_t vehicleId, const uint8_t doorStates[6], const uint8_t wheelStates[4],
+                           const uint8_t panelStates[7], const uint8_t lightStates[4]);
+// PACKET_ID_CUSTOM_DATA (84): CStaticFunctionDefinitions::SetElementData (CStaticFunctionDefinitions.cpp:1035-1047).
+bool SendCustomData(uint32_t elementId, const std::string& key, const uint8_t* encodedValue, size_t encodedLen,
+                    size_t encodedBits);
+// PACKET_ID_CAMERA_SYNC (85): CNetAPI::WriteCameraSync (CNetAPI.cpp:2036-2073).
+bool SendCameraSync(bool fixedMode, float x, float y, float z, float lookX, float lookY, float lookZ,
+                    uint32_t targetId = 0x1FFFFu);
+// PACKET_ID_OBJECT_SYNC (88): CObjectSync::WriteObjectInformation (CObjectSync.cpp:203-270).
+bool SendObjectSync(uint32_t objectId, uint8_t timeContext, bool hasPos, float x, float y, float z,
+                    bool hasRot, float rx, float ry, float rz, bool hasHealth, float health);
+// PACKET_ID_VEHICLE_PUSH_SYNC (97): CClientGame::SendVehiclePushSync (CClientGame.cpp:4955-4962).
+bool SendVehiclePushSync(uint32_t vehicleId);
+// PACKET_ID_PLAYER_WORLD_SPECIAL_PROPERTY (109): CLuaWorldDefs::SetWorldSpecialPropertyEnabled (CLuaWorldDefs.cpp:2002-2015).
+bool SendWorldSpecialProperty(const std::string& propertyName, bool enabled);
+
 // Appends active server text display items (PACKET_ID_TEXT_ITEM) as DX draw lines for the current frame.
 void AppendServerTextItems(std::string& frame, int screenW, int screenH);
 size_t ServerTextItemCount();

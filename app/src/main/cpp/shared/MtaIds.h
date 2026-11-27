@@ -16,11 +16,14 @@
 namespace WorldRPG::MtaIds {
 
 namespace Packet {
+constexpr uint8_t PacketProgress = 8;
+constexpr uint8_t ServerDisconnected = 23;
 constexpr uint8_t PlayerWasted = 27;
 constexpr uint8_t PlayerChangeNick = 28;
 constexpr uint8_t PlayerStats = 29;
 constexpr uint8_t Lightsync = 34;
 constexpr uint8_t VehicleResync = 35;
+constexpr uint8_t ReturnSync = 36;
 constexpr uint8_t Explosion = 37;
 constexpr uint8_t Fire = 38;
 constexpr uint8_t Projectile = 39;
@@ -28,6 +31,7 @@ constexpr uint8_t DetonateSatchels = 40;
 constexpr uint8_t DestroySatchels = 41;
 constexpr uint8_t ConsoleEcho = 44;
 constexpr uint8_t DebugEcho = 45;
+constexpr uint8_t MapInfo = 46;
 constexpr uint8_t EntityAdd = 50;
 constexpr uint8_t EntityRemove = 51;
 constexpr uint8_t PickupHideShow = 52;
@@ -44,14 +48,22 @@ constexpr uint8_t VoiceEnd = 72;
 constexpr uint8_t Lua = 76;
 constexpr uint8_t LuaElementRpc = 77;
 constexpr uint8_t TextItem = 78;
+constexpr uint8_t CustomData = 84;
+constexpr uint8_t CameraSync = 85;
 constexpr uint8_t ObjectStartSync = 86;
 constexpr uint8_t ObjectStopSync = 87;
 constexpr uint8_t ObjectSync = 88;
+constexpr uint8_t UpdateInfo = 89;
 constexpr uint8_t LatentTransfer = 96;
+constexpr uint8_t VehiclePushSync = 97;
+constexpr uint8_t WeaponBulletSync = 100;
 constexpr uint8_t PedTask = 101;
 constexpr uint8_t PlayerNetworkStatus = 103;
 constexpr uint8_t ChatClear = 105;
 constexpr uint8_t ServerInfoSync = 106;
+constexpr uint8_t PlayerResourceStart = 108;
+constexpr uint8_t PlayerWorldSpecialProperty = 109;
+constexpr uint8_t DebugEvent = 110;
 }  // namespace Packet
 
 // eElementRPCFunctions (rpc_enums.h). NUM_RPC_FUNCS is 225.

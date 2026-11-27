@@ -3,7 +3,9 @@
 
 #include "LuaApiExtra.h"
 #include "LuaAudioApi.h"
+#include "LuaFieldApi.h"
 #include "LuaVMStub.h"
+#include "LuaWaterApi.h"
 #include "LuaWorldObjectApi.h"
 #include "MtaIds.h"
 #include "ServerRpc.h"
@@ -15,6 +17,7 @@
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/ProjectileEngine.h"
 #include "../gtasa/RemoteVehicle.h"
+#include "../net/NeonJoinProtocol.h"
 #include "../net/raknet/RakNetWrapper.h"
 
 #include "lua.hpp"
@@ -35,9 +38,97 @@ namespace WorldRPG::CorePackets {
 namespace {
 
 using Net::BitStreamReader;
+using Net::BitStreamWriter;
 using Entity::ReadCompressed;
 using Entity::ReadElementId;
 using Entity::ReadFlag;
+
+std::mutex g_extraStateMutex;
+PartialPacketProgress g_lastPartialPacket{};
+DisconnectRecord g_lastDisconnect{};
+ReturnSyncRecord g_lastReturnSync{};
+UpdateInfoRecord g_lastUpdateInfo{};
+DebugEventRecord g_lastDebugEvent{};
+OutboundPacketSink g_outboundSink;
+
+void WriteFlag(BitStreamWriter& w, bool on) {
+    uint8_t bit = on ? 1u : 0u;
+    w.WriteBits(&bit, 1);
+}
+
+void WriteBitsValue(BitStreamWriter& w, uint32_t value, unsigned bits) {
+    uint8_t bytes[4] = {};
+    for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (8 * i)) & 0xFFu);
+    w.WriteBits(bytes, bits);
+}
+
+void WriteElementId(BitStreamWriter& w, uint32_t id) {
+    constexpr uint32_t kMask = (1u << 17) - 1u;
+    WriteBitsValue(w, id == 0xFFFFFFFFu ? kMask : (id & kMask), 17);
+}
+
+void WriteFixed24(BitStreamWriter& w, float value) {
+    const double scaled = std::isfinite(value) ? static_cast<double>(value) * 1024.0 : 0.0;
+    const long fixed = std::lround(std::clamp(scaled, -8388608.0, 8388607.0));
+    WriteBitsValue(w, static_cast<uint32_t>(fixed) & 0xFFFFFFu, 24);
+}
+
+void WritePosition(BitStreamWriter& w, float x, float y, float z) {
+    WriteFixed24(w, x);
+    WriteFixed24(w, y);
+    w.Write(z);
+}
+
+void WriteFloatAsBits(BitStreamWriter& w, unsigned bits, float minValue, float maxValue, float value,
+                      bool preserveAboveMin = false) {
+    const double maxRaw = static_cast<double>((1ull << bits) - 1ull);
+    double alpha = 0.0;
+    if (maxValue != minValue) alpha = (static_cast<double>(value) - minValue) / (static_cast<double>(maxValue) - minValue);
+    if (!std::isfinite(alpha)) alpha = 0.0;
+    alpha = std::clamp(alpha, 0.0, 1.0);
+    uint32_t raw = static_cast<uint32_t>(std::lround(alpha * maxRaw));
+    if (preserveAboveMin && raw == 0 && alpha > 0.0) raw = 1;
+    WriteBitsValue(w, raw, bits);
+}
+
+bool DispatchOutboundPacket(uint8_t gamePacketId, BitStreamWriter& packet, bool reliable, bool highPriority) {
+    OutboundPacketSink sink;
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        sink = g_outboundSink;
+    }
+    if (sink) {
+        return sink(gamePacketId, packet.GetData(), packet.GetByteLength(), packet.GetBitLength(),
+                    reliable, highPriority);
+    }
+    if (highPriority) return Net::SendGamePacketHighPriority(packet);
+    return Net::SendGamePacket(packet, reliable);
+}
+
+bool ReadUsString(BitStreamReader& reader, std::string& out, size_t maxBytes = 4096) {
+    uint16_t len = 0;
+    if (!reader.Read(len) || len > maxBytes) return false;
+    out.resize(len);
+    if (len > 0 && !reader.ReadBytes(reinterpret_cast<uint8_t*>(out.data()), len)) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+template <unsigned Bits, typename T>
+bool ReadRangeBits(BitStreamReader& reader, T& out, T low, T high) {
+    uint8_t raw[4] = {};
+    if (!reader.ReadBits(raw, Bits)) return false;
+    uint32_t v = 0;
+    for (unsigned i = 0; i < 4; ++i) v |= static_cast<uint32_t>(raw[i]) << (8u * i);
+    const uint32_t mask = (Bits >= 32) ? 0xFFFFFFFFu : ((1u << Bits) - 1u);
+    const int64_t val = static_cast<int64_t>(v & mask) + static_cast<int64_t>(low);
+    if (val < static_cast<int64_t>(low)) out = low;
+    else if (val > static_cast<int64_t>(high)) out = high;
+    else out = static_cast<T>(val);
+    return true;
+}
 using Entity::ReadFloatAsBits;
 using Entity::ReadObjectHealth;
 using Entity::ReadPosition;
@@ -1192,6 +1283,528 @@ size_t ServerTextItemCount() {
     return g_textItems.size();
 }
 
+// =========================================================================
+// PACKET_ID_PACKET_PROGRESS (8)
+// Desktop: CPacketHandler::Packet_PartialPacketInfo (CPacketHandler.cpp:2819-2839)
+// =========================================================================
+bool HandlePartialPacketInfo(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t partCount = 0, partTotal = 0, partLength = 0;
+    uint8_t mtaPacketId = 0;
+    if (!reader.Read(partCount) || !reader.Read(partTotal) || !reader.Read(partLength) || !reader.Read(mtaPacketId)) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        g_lastPartialPacket = PartialPacketProgress{partCount, partTotal, partLength};
+    }
+    return true;
+}
+
+// =========================================================================
+// PACKET_ID_SERVER_DISCONNECTED (23)
+// Desktop: CPacketHandler::Packet_ServerDisconnected (CPacketHandler.cpp:545-685)
+// =========================================================================
+bool HandleServerDisconnected(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint8_t rawType = 0;
+    if (!reader.ReadBits(&rawType, 5)) return false;
+    const uint8_t type = static_cast<uint8_t>(rawType & 0x1Fu);
+
+    std::string durationStr;
+    // BANNED_SERIAL (2), BANNED_IP (3), BAN (18) read a duration string before message + trouble link.
+    if (type == 2 || type == 3 || type == 18) {
+        (void)ReadUsString(reader, durationStr, 512);
+    }
+
+    std::string message;
+    std::string troubleLink;
+    if (type != 16) {  // INVALID_PASSWORD (16) skips message box strings on desktop.
+        (void)ReadUsString(reader, message, 2048);
+        (void)ReadUsString(reader, troubleLink, 512);
+    }
+
+    uint32_t durationSec = 0;
+    if (!durationStr.empty()) {
+        durationSec = static_cast<uint32_t>(std::strtoul(durationStr.c_str(), nullptr, 10));
+    }
+
+    std::string displayReason = message;
+    if (displayReason.empty()) {
+        switch (type) {
+            case 0: displayReason = "Disconnected: Invalid nickname"; break;
+            case 1: displayReason = "Disconnected from server"; break;
+            case 5: displayReason = "Disconnected: Version mismatch"; break;
+            case 6: displayReason = "Disconnected: Join flood"; break;
+            case 11: displayReason = "Disconnected: Nick already in use"; break;
+            case 12: displayReason = "Disconnected: Player element could not be created"; break;
+            case 14: displayReason = "Disconnected: Serial verification failed"; break;
+            case 15: displayReason = "Disconnected: Connection desync"; break;
+            case 16: displayReason = "Disconnected: Invalid password"; break;
+            case 20: displayReason = "Disconnected: Server shutdown or restarting"; break;
+            default: displayReason = "Disconnected by server"; break;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        g_lastDisconnect = DisconnectRecord{true, type, durationSec, displayReason};
+    }
+    JniBridge::PostGameLine(0, displayReason.c_str());
+    return true;
+}
+
+// =========================================================================
+// PACKET_ID_RETURN_SYNC (36)
+// Desktop: CNetAPI::ProcessPacket case PACKET_ID_RETURN_SYNC (CNetAPI.cpp:161-221)
+// =========================================================================
+bool HandleReturnSync(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    bool inVehicle = false;
+    if (!ReadFlag(reader, inVehicle)) return false;
+
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+    if (!Entity::ReadPosition(reader, x, y, z)) return false;
+    if (inVehicle) {
+        if (!Entity::ReadRotationDegrees(reader, rx, ry, rz)) return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        g_lastReturnSync = ReturnSyncRecord{true, inVehicle, x, y, z, rx, ry, rz};
+    }
+    return true;
+}
+
+// =========================================================================
+// PACKET_ID_MAP_INFO (46)
+// Desktop: CPacketHandler::Packet_MapInfo (CPacketHandler.cpp:2377-2715)
+// Pinned to bitstream 0x0030 (SFunBugsStateSync reads 10 bits; Glitch_FastWeaponStrafe is >= 0x0032).
+// =========================================================================
+bool HandleMapInfo(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint8_t weather = 0, weatherBlendingTo = 0, blendedHour = 0xFF;
+    if (!reader.Read(weather) || !reader.Read(weatherBlendingTo) || !reader.Read(blendedHour)) return false;
+
+    bool hasSky = false;
+    uint8_t skyTR = 0, skyTG = 0, skyTB = 0, skyBR = 0, skyBG = 0, skyBB = 0;
+    if (!ReadFlag(reader, hasSky)) return false;
+    if (hasSky) {
+        if (!reader.Read(skyTR) || !reader.Read(skyTG) || !reader.Read(skyTB) ||
+            !reader.Read(skyBR) || !reader.Read(skyBG) || !reader.Read(skyBB)) return false;
+    }
+
+    bool hasHeat = false;
+    uint8_t heatInt = 0, heatShift = 0;
+    uint16_t heatSpeedMin = 0, heatSpeedMax = 0, heatRenderX = 0, heatRenderY = 0;
+    int16_t heatScanX = 0, heatScanY = 0;
+    bool heatInside = false;
+    if (!ReadFlag(reader, hasHeat)) return false;
+    if (hasHeat) {
+        if (!reader.Read(heatInt) || !reader.Read(heatShift) ||
+            !ReadRangeBits<10, uint16_t>(reader, heatSpeedMin, 0, 1000) ||
+            !ReadRangeBits<10, uint16_t>(reader, heatSpeedMax, 0, 1000) ||
+            !ReadRangeBits<11, int16_t>(reader, heatScanX, -1000, 1000) ||
+            !ReadRangeBits<11, int16_t>(reader, heatScanY, -1000, 1000) ||
+            !ReadRangeBits<10, uint16_t>(reader, heatRenderX, 0, 1000) ||
+            !ReadRangeBits<10, uint16_t>(reader, heatRenderY, 0, 1000) ||
+            !ReadFlag(reader, heatInside)) return false;
+    }
+
+    uint8_t clockHour = 0, clockMin = 0;
+    if (!reader.Read(clockHour) || !reader.Read(clockMin)) return false;
+
+    uint32_t minuteDuration = 1000;
+    if (!ReadCompressed(reader, 4, minuteDuration)) return false;
+
+    uint8_t mapFlagsRaw = 0;
+    if (!reader.ReadBits(&mapFlagsRaw, 3)) return false;
+    const bool cloudsEnabled = (mapFlagsRaw & 0x04u) != 0;
+
+    float gravity = 0.008f;
+    if (!reader.Read(gravity)) return false;
+
+    bool defaultGameSpeed = true;
+    float gameSpeed = 1.0f;
+    if (!ReadFlag(reader, defaultGameSpeed)) return false;
+    if (!defaultGameSpeed && !reader.Read(gameSpeed)) return false;
+
+    float waveHeight = 0.0f;
+    if (!reader.Read(waveHeight)) return false;
+
+    float seaLevel = 0.0f, nonSeaLevel = 0.0f, outsideLevel = 0.0f;
+    bool hasNonSea = false, hasOutside = false;
+    if (!reader.Read(seaLevel) || !ReadFlag(reader, hasNonSea)) return false;
+    if (hasNonSea && !reader.Read(nonSeaLevel)) return false;
+    if (!ReadFlag(reader, hasOutside)) return false;
+    if (hasOutside && !reader.Read(outsideLevel)) return false;
+
+    uint32_t fpsLimit32 = 36;
+    if (!ReadCompressed(reader, 2, fpsLimit32)) return false;
+    const uint16_t fpsLimit = static_cast<uint16_t>(fpsLimit32);
+
+    std::array<bool, 50> garages{};
+    for (size_t i = 0; i < garages.size(); ++i) {
+        if (!ReadFlag(reader, garages[i])) return false;
+    }
+
+    // SFunBugsStateSync: 10 bits at bitstream 0x0030 (SyncStructures.h:2264-2285).
+    uint8_t funBugsRaw[2] = {};
+    if (!reader.ReadBits(funBugsRaw, 10)) return false;
+    const uint16_t funBugs = static_cast<uint16_t>(funBugsRaw[0]) | (static_cast<uint16_t>(funBugsRaw[1] & 0x03u) << 8);
+
+    // SWorldSpecialPropertiesStateSync: 20 bits (SyncStructures.h:2333-2351).
+    uint8_t wsRaw[3] = {};
+    if (!reader.ReadBits(wsRaw, 20)) return false;
+    const uint32_t wsBits = static_cast<uint32_t>(wsRaw[0]) | (static_cast<uint32_t>(wsRaw[1]) << 8) |
+                            (static_cast<uint32_t>(wsRaw[2] & 0x0Fu) << 16);
+
+    float jetpackMaxHeight = 100.0f;
+    if (!reader.Read(jetpackMaxHeight)) return false;
+
+    bool overrideWaterColor = false;
+    uint8_t wcR = 0, wcG = 0, wcB = 0, wcA = 0;
+    if (!ReadFlag(reader, overrideWaterColor)) return false;
+    if (overrideWaterColor) {
+        if (!reader.Read(wcR) || !reader.Read(wcG) || !reader.Read(wcB) || !reader.Read(wcA)) return false;
+    }
+
+    bool interiorSounds = true;
+    if (!ReadFlag(reader, interiorSounds)) return false;
+
+    bool overrideRain = false;
+    float rainLevel = 0.0f;
+    if (!ReadFlag(reader, overrideRain)) return false;
+    if (overrideRain && !reader.Read(rainLevel)) return false;
+
+    bool overrideMoon = false;
+    int32_t moonSize = 3;
+    if (!ReadFlag(reader, overrideMoon)) return false;
+    if (overrideMoon && !reader.Read(moonSize)) return false;
+
+    bool overrideSunSize = false;
+    float sunSize = 1.0f;
+    if (!ReadFlag(reader, overrideSunSize)) return false;
+    if (overrideSunSize && !reader.Read(sunSize)) return false;
+
+    bool overrideSunColor = false;
+    uint8_t scR = 0, scG = 0, scB = 0, soR = 0, soG = 0, soB = 0;
+    if (!ReadFlag(reader, overrideSunColor)) return false;
+    if (overrideSunColor) {
+        if (!reader.Read(scR) || !reader.Read(scG) || !reader.Read(scB) ||
+            !reader.Read(soR) || !reader.Read(soG) || !reader.Read(soB)) return false;
+    }
+
+    bool overrideWind = false;
+    float windX = 0.0f, windY = 0.0f, windZ = 0.0f;
+    if (!ReadFlag(reader, overrideWind)) return false;
+    if (overrideWind && (!reader.Read(windX) || !reader.Read(windY) || !reader.Read(windZ))) return false;
+
+    bool overrideFarClip = false;
+    float farClip = 0.0f;
+    if (!ReadFlag(reader, overrideFarClip)) return false;
+    if (overrideFarClip && !reader.Read(farClip)) return false;
+
+    bool overrideFog = false;
+    float fogDist = 0.0f;
+    if (!ReadFlag(reader, overrideFog)) return false;
+    if (overrideFog && !reader.Read(fogDist)) return false;
+
+    float aircraftMaxHeight = 800.0f;
+    float aircraftMaxVelocity = 1.5f;
+    if (!reader.Read(aircraftMaxHeight) || !reader.Read(aircraftMaxVelocity)) return false;
+
+    ServerRpc::Enqueue([=]() {
+        if (blendedHour != 0xFF) {
+            const uint8_t startHour = (blendedHour == 0) ? 23 : static_cast<uint8_t>(blendedHour - 1);
+            Script::RpcSetWeather(weather);
+            Script::RpcSetWeatherBlended(weatherBlendingTo, startHour);
+        } else {
+            Script::RpcSetWeather(weather);
+        }
+        if (hasSky) Script::RpcSetSkyGradient(skyTR, skyTG, skyTB, skyBR, skyBG, skyBB);
+        else Script::RpcResetSkyGradient();
+
+        if (hasHeat) Script::RpcSetHeatHaze(heatInt, heatShift, heatSpeedMin, heatSpeedMax, heatScanX, heatScanY,
+                                            heatRenderX, heatRenderY, heatInside);
+        else Script::RpcResetHeatHaze();
+
+        if (clockHour < 24 && clockMin < 60) Game::NoteScriptTime(clockHour, clockMin);
+        Script::RpcSetMinuteDuration(minuteDuration);
+        Script::RpcSetCloudsEnabled(cloudsEnabled);
+        Script::RpcSetGravity(gravity);
+        Script::RpcSetGameSpeed(gameSpeed);
+        Script::RpcSetWaveHeight(waveHeight);
+
+        Script::RpcResetWorldWaterLevel();
+        if (hasNonSea) Script::RpcSetWorldWaterLevel(nonSeaLevel, true, false, false, false);
+        if (hasOutside) Script::RpcSetWorldWaterLevel(outsideLevel, false, false, false, true);
+        Script::RpcSetWorldWaterLevel(seaLevel, false, false, true, false);
+
+        Script::RpcSetFpsLimit(fpsLimit);
+        for (uint8_t i = 0; i < 50; ++i) Script::RpcSetGarageOpen(i, garages[i]);
+        for (uint8_t g = 0; g < 10; ++g) Script::RpcSetGlitchEnabled(g, ((funBugs >> g) & 1u) != 0);
+        for (int p = 0; p < 20; ++p) Script::RpcSetWorldSpecialProperty(p, ((wsBits >> p) & 1u) != 0);
+
+        Script::RpcSetJetpackMaxHeight(jetpackMaxHeight);
+        if (overrideWaterColor) Script::RpcSetWaterColor(wcR, wcG, wcB, wcA);
+        Script::RpcSetInteriorSoundsEnabled(interiorSounds);
+        if (overrideRain) Script::RpcSetRainLevel(rainLevel);
+        if (overrideMoon) Script::RpcSetMoonSize(moonSize);
+        if (overrideSunSize) Script::RpcSetSunSize(sunSize);
+        if (overrideSunColor) Script::RpcSetSunColor(scR, scG, scB, soR, soG, soB);
+        if (overrideWind) Script::RpcSetWindVelocity(windX, windY, windZ);
+        if (overrideFarClip) Script::RpcSetFarClipDistance(farClip);
+        if (overrideFog) Script::RpcSetFogDistance(fogDist);
+        Script::RpcSetAircraftMaxHeight(aircraftMaxHeight);
+        Script::RpcSetAircraftMaxVelocity(aircraftMaxVelocity);
+    });
+    return true;
+}
+
+// =========================================================================
+// PACKET_ID_UPDATE_INFO (89)
+// Desktop: CPacketHandler::Packet_UpdateInfo (CPacketHandler.cpp:5824-5832)
+// =========================================================================
+bool HandleUpdateInfo(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    std::string type, data;
+    if (!ReadUsString(reader, type, 512) || !ReadUsString(reader, data, 4096)) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        g_lastUpdateInfo = UpdateInfoRecord{true, type, data};
+    }
+    return true;
+}
+
+// =========================================================================
+// PACKET_ID_DEBUG_EVENT (110)
+// Desktop: CPacketHandler::Packet_DebugEvent (CPacketHandler.cpp:1643-1675, SDebugEvent.h:124-154)
+// =========================================================================
+bool HandleDebugEvent(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint8_t wireVersion = 0, side = 0, severity = 0, r = 255, g = 255, b = 255;
+    uint32_t sequence = 0, timestamp = 0, line = 0, repeatCount = 0;
+    if (!reader.Read(wireVersion) || wireVersion != 2 ||
+        !reader.Read(sequence) || !reader.Read(timestamp) ||
+        !reader.Read(side) || !reader.Read(severity) ||
+        !reader.Read(line) || !reader.Read(repeatCount) ||
+        !reader.Read(r) || !reader.Read(g) || !reader.Read(b)) {
+        return false;
+    }
+    if (side > 1 || severity > 4 || repeatCount == 0) return false;
+
+    std::string category, context, resource, file, message, correlationId;
+    if (!ReadUsString(reader, category, 64) ||
+        !ReadUsString(reader, context, 192) ||
+        !ReadUsString(reader, resource, 128) ||
+        !ReadUsString(reader, file, 512) ||
+        !ReadUsString(reader, message, 2048) ||
+        !ReadUsString(reader, correlationId, 96)) {
+        return false;
+    }
+
+    auto sanitize = [](std::string& s) {
+        for (char& ch : s) {
+            const unsigned char u = static_cast<unsigned char>(ch);
+            if (u < 0x20 && ch != '\n' && ch != '\t') ch = ' ';
+        }
+    };
+    sanitize(message);
+    sanitize(file);
+
+    std::string legacyText = (!file.empty() && line != 0)
+                                 ? (file + ":" + std::to_string(line) + ": " + message)
+                                 : message;
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        g_lastDebugEvent = DebugEventRecord{true, sequence, line, timestamp, legacyText};
+    }
+    JniBridge::PostGameLine(2, legacyText.c_str());
+    return true;
+}
+
+PartialPacketProgress LastPartialPacketProgress() {
+    std::lock_guard<std::mutex> lock(g_extraStateMutex);
+    return g_lastPartialPacket;
+}
+
+DisconnectRecord LastDisconnectRecord() {
+    std::lock_guard<std::mutex> lock(g_extraStateMutex);
+    return g_lastDisconnect;
+}
+
+ReturnSyncRecord LastReturnSyncRecord() {
+    std::lock_guard<std::mutex> lock(g_extraStateMutex);
+    return g_lastReturnSync;
+}
+
+UpdateInfoRecord LastUpdateInfoRecord() {
+    std::lock_guard<std::mutex> lock(g_extraStateMutex);
+    return g_lastUpdateInfo;
+}
+
+DebugEventRecord LastDebugEventRecord() {
+    std::lock_guard<std::mutex> lock(g_extraStateMutex);
+    return g_lastDebugEvent;
+}
+
+void SetOutboundPacketSink(OutboundPacketSink sink) {
+    std::lock_guard<std::mutex> lock(g_extraStateMutex);
+    g_outboundSink = std::move(sink);
+}
+
+// =========================================================================
+// Outbound gameplay packets (bitstream 0x0030)
+// =========================================================================
+bool SendExplosionSync(float x, float y, float z, uint8_t explosionType, uint32_t originId) {
+    // CClientGame::SendExplosionSync (CClientGame.cpp:6280-6317):
+    // [bit hasOrigin] (if true: [ElementID origin][bit isVehicle][opt bit isBlown])
+    // [SPositionSync(false)] [SExplosionTypeSync (4 bits)]
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::Explosion);
+    const bool hasOrigin = (originId != 0x1FFFFu && originId != 0xFFFFFFFFu);
+    WriteFlag(w, hasOrigin);
+    if (hasOrigin) {
+        WriteElementId(w, originId);
+        WriteFlag(w, false);  // non-vehicle origin
+    }
+    WritePosition(w, x, y, z);
+    WriteBitsValue(w, explosionType & 0x0Fu, 4);
+    return DispatchOutboundPacket(MtaIds::Packet::Explosion, w, true, true);
+}
+
+bool SendDetonateSatchels() {
+    // CClientGame::SendDetonateSatchels (CClientGame.cpp:2040-2046): empty body.
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::DetonateSatchels);
+    return DispatchOutboundPacket(MtaIds::Packet::DetonateSatchels, w, true, true);
+}
+
+bool SendDestroySatchels() {
+    // CClientGame::SendDestroySatchels (CClientGame.cpp:6512-6517): empty body.
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::DestroySatchels);
+    return DispatchOutboundPacket(MtaIds::Packet::DestroySatchels, w, true, true);
+}
+
+bool SendVehicleDamageSync(uint32_t vehicleId, const uint8_t doorStates[6], const uint8_t wheelStates[4],
+                           const uint8_t panelStates[7], const uint8_t lightStates[4]) {
+    // CDeathmatchVehicle::SyncDamageModel (CDeathmatchVehicle.cpp:118-129):
+    // [ElementID vehicleId] [SVehicleDamageSync(true, true, true, true, true)]
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::VehicleDamageSync);
+    WriteElementId(w, vehicleId);
+    auto writePartStates = [&](const uint8_t* states, size_t count, unsigned bitsPerPart) {
+        // SVehiclePartStateSync::Write (SyncStructures.h:1709-1727): interleaved per part.
+        for (size_t i = 0; i < count; ++i) {
+            if (states) {
+                WriteFlag(w, true);
+                WriteBitsValue(w, states[i], bitsPerPart);
+            } else {
+                WriteFlag(w, false);
+            }
+        }
+    };
+    writePartStates(doorStates, 6, 3);
+    writePartStates(wheelStates, 4, 2);
+    writePartStates(panelStates, 7, 2);
+    writePartStates(lightStates, 4, 2);
+    return DispatchOutboundPacket(MtaIds::Packet::VehicleDamageSync, w, true, true);
+}
+
+bool SendCustomData(uint32_t elementId, const std::string& key, const uint8_t* encodedValue, size_t encodedLen,
+                    size_t encodedBits) {
+    // CStaticFunctionDefinitions::SetElementData (CStaticFunctionDefinitions.cpp:1035-1047):
+    // [ElementID] [WriteCompressed(ushort nameLen)] [name bytes] [CLuaArgument bitstream]
+    if (key.size() > 65535) return false;
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::CustomData);
+    WriteElementId(w, elementId);
+    w.WriteCompressed(static_cast<uint32_t>(key.size()), 2);
+    if (!key.empty()) w.WriteBytes(reinterpret_cast<const uint8_t*>(key.data()), key.size());
+    if (encodedValue && encodedBits > 0) {
+        w.WriteBits(encodedValue, encodedBits);
+    } else if (encodedValue && encodedLen > 0) {
+        w.WriteBytes(encodedValue, encodedLen);
+    }
+    return DispatchOutboundPacket(MtaIds::Packet::CustomData, w, true, true);
+}
+
+bool SendCameraSync(bool fixedMode, float x, float y, float z, float lookX, float lookY, float lookZ,
+                    uint32_t targetId) {
+    // CNetAPI::WriteCameraSync (CNetAPI.cpp:2036-2073):
+    // [uint8 timeContext] [bit bFixed]
+    //   if fixed: [SPositionSync(false) pos] [SPositionSync(false) lookAt]
+    //   else:     [ElementID targetId]
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::CameraSync);
+    w.Write(ServerRpc::CameraSyncTimeContext());
+    WriteFlag(w, fixedMode);
+    if (fixedMode) {
+        WritePosition(w, x, y, z);
+        WritePosition(w, lookX, lookY, lookZ);
+    } else {
+        WriteElementId(w, targetId);
+    }
+    return DispatchOutboundPacket(MtaIds::Packet::CameraSync, w, false, false);
+}
+
+bool SendObjectSync(uint32_t objectId, uint8_t timeContext, bool hasPos, float x, float y, float z,
+                    bool hasRot, float rx, float ry, float rz, bool hasHealth, float health) {
+    // CObjectSync::WriteObjectInformation (CObjectSync.cpp:215-275):
+    // [ElementID] [uint8 timeContext] [5-bit flags] [opt SPositionSync(false)]
+    // [opt SRotationRadiansSync(false)] [opt SObjectHealthSync (11 bits 0..1023.5)]
+    uint8_t flags = 0;
+    if (hasPos) flags |= 0x01u;
+    if (hasRot) flags |= 0x02u;
+    if (hasHealth) flags |= 0x04u;
+    if (flags == 0) return false;
+
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::ObjectSync);
+    WriteElementId(w, objectId);
+    w.Write(timeContext);
+    WriteBitsValue(w, flags, 5);
+    if (hasPos) WritePosition(w, x, y, z);
+    if (hasRot) {
+        constexpr float kTwoPi = 6.283185307f;
+        auto packRad = [](float rad) -> uint16_t {
+            float m = std::fmod(rad, kTwoPi);
+            if (m < 0.0f) m += kTwoPi;
+            return static_cast<uint16_t>(std::lround(m * (65536.0f / kTwoPi)) & 0xFFFF);
+        };
+        w.Write(packRad(rx));
+        w.Write(packRad(ry));
+        w.Write(packRad(rz));
+    }
+    if (hasHealth) WriteFloatAsBits(w, 11, 0.0f, 1023.5f, health, true);
+    return DispatchOutboundPacket(MtaIds::Packet::ObjectSync, w, false, false);
+}
+
+bool SendVehiclePushSync(uint32_t vehicleId) {
+    // CClientGame::SendVehiclePushSync (CClientGame.cpp:4955-4962): [ElementID vehicleId].
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::VehiclePushSync);
+    WriteElementId(w, vehicleId);
+    return DispatchOutboundPacket(MtaIds::Packet::VehiclePushSync, w, false, false);
+}
+
+bool SendWorldSpecialProperty(const std::string& propertyName, bool enabled) {
+    // CLuaWorldDefs::SetWorldSpecialPropertyEnabled (CLuaWorldDefs.cpp:2002-2015):
+    // [WriteString(name)] [WriteBit(enabled)].
+    if (propertyName.size() > 65535) return false;
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::PlayerWorldSpecialProperty);
+    w.Write(static_cast<uint16_t>(propertyName.size()));
+    if (!propertyName.empty()) {
+        w.WriteBytes(reinterpret_cast<const uint8_t*>(propertyName.data()), propertyName.size());
+    }
+    WriteFlag(w, enabled);
+    return DispatchOutboundPacket(MtaIds::Packet::PlayerWorldSpecialProperty, w, true, true);
+}
+
 void ResetSession() {
     {
         std::lock_guard<std::mutex> lock(g_latentMutex);
@@ -1200,6 +1813,14 @@ void ResetSession() {
     {
         std::lock_guard<std::mutex> lock(g_textMutex);
         g_textItems.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_extraStateMutex);
+        g_lastPartialPacket = PartialPacketProgress{};
+        g_lastDisconnect = DisconnectRecord{};
+        g_lastReturnSync = ReturnSyncRecord{};
+        g_lastUpdateInfo = UpdateInfoRecord{};
+        g_lastDebugEvent = DebugEventRecord{};
     }
 }
 

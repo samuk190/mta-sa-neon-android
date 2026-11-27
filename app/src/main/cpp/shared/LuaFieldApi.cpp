@@ -9,6 +9,7 @@
 // Engine writes that are not hooked stay as DIAG. The value is still stored.
 
 #include "LuaFieldApi.h"
+#include "CorePackets.h"
 #include "LuaWorldObjectApi.h"
 #include "LuaElementTree.h"
 #include "LuaSpatialApi.h"
@@ -957,7 +958,8 @@ int l_setWorldSpecialPropertyEnabled(lua_State* L) {
         return 1;
     }
     prop->enabled = lua_toboolean(L, 2) != 0;
-    Diag(g_diagWorld, "DIAG setWorldSpecialPropertyEnabled: the CGame write and the player packet are not hooked; the flag is stored");
+    CorePackets::SendWorldSpecialProperty(prop->name, prop->enabled);
+    Diag(g_diagWorld, "DIAG setWorldSpecialPropertyEnabled: CGame special-property toggle not hooked; flag stored and PACKET_ID_PLAYER_WORLD_SPECIAL_PROPERTY sent");
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1936,6 +1938,13 @@ void RpcSetFpsLimit(uint16_t fps) { g_fps = fps; }
 
 void RpcSetGarageOpen(uint8_t garageId, bool open) {
     if (garageId < 50) g_garage[garageId] = open;
+}
+
+void RpcSetWorldSpecialProperty(int propertyIndex, bool enabled) {
+    constexpr int kCount = static_cast<int>(sizeof(g_worldProps) / sizeof(g_worldProps[0]));
+    if (propertyIndex >= 0 && propertyIndex < kCount) {
+        g_worldProps[propertyIndex].enabled = enabled;
+    }
 }
 
 void RpcSetGlitchEnabled(uint8_t glitchId, bool enabled) {

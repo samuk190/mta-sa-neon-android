@@ -149,10 +149,13 @@ def switch_blocks(src):
             yield brace
 
 
-def parse_enum(src, open_idx):
+def parse_enum(src, open_idx, extra_consts=None):
     """Ordered {name: value} for an enum body (C rules: implicit +1, explicit '= N')."""
     close = src.block_end(open_idx)
     body = src.clean[open_idx + 1:close]
+    consts = dict(extra_consts or {})
+    for cm in re.finditer(r"(?:#define|constexpr\s+\w+)\s+([A-Za-z_]\w*)\s*=?\s*(0x[0-9a-fA-F]+|\d+)", src.clean):
+        consts[cm.group(1)] = int(cm.group(2), 0)
     values = OrderedDict()
     nxt = 0
     for item in body.split(","):
@@ -162,17 +165,21 @@ def parse_enum(src, open_idx):
         m = re.match(r"^([A-Za-z_]\w*)\s*(?:=\s*(.+))?$", item)
         if not m:
             raise SystemExit("unparsed enum item: %r" % item)
-        value = int(m.group(2).strip(), 0) if m.group(2) else nxt
+        if m.group(2):
+            rhs = m.group(2).strip()
+            value = consts[rhs] if rhs in consts else int(rhs, 0)
+        else:
+            value = nxt
         values[m.group(1)] = value
         nxt = value + 1
     return values
 
 
-def find_enum(src, pattern):
+def find_enum(src, pattern, extra_consts=None):
     m = re.search(pattern, src.masked)
     if not m:
         return None
-    return parse_enum(src, src.masked.find("{", m.start()))
+    return parse_enum(src, src.masked.find("{", m.start()), extra_consts=extra_consts)
 
 
 def rel(path, base):
@@ -337,6 +344,8 @@ FOLLOW_INSTALLS = {
     "InstallSightLua",
     "InstallAmbientLua",
     "InstallUtilLua",
+    "InstallOopLua",
+    "InstallRocketSoccerLua",
     "InstallCryptLua",
     "InstallFileLua",
     "InstallXmlLua",
@@ -499,11 +508,24 @@ def desktop_events(client_root):
 
 def port_fired_events():
     fired = OrderedDict()
-    pattern = re.compile(r'(?:\b(?:fireHandlers|ActiveVmFireSpatialEvent)\(\s*|handlers\.find\(\s*|handlers\[\s*)"(on\w+)"')
+    # Match actual dispatch sites (never the static registration table in LuaEventNames.inc).
+    call_pat = re.compile(
+        r'(?:\b(?:fireHandlers|ActiveVmFireSpatialEvent|ActiveVmFireElementEvent|'
+        r'FireGuiMouseEvent|FireElementEvent|dispatch|emitEvent)\s*\([^;\n]*?|'
+        r'QueuedEvent\s*\{[^;\n]*?|handlers\.find\(\s*|handlers\[\s*)"(on\w+)"'
+    )
+    ternary_pat = re.compile(
+        r'\b(?:fireHandlers|ActiveVmFireSpatialEvent|ActiveVmFireElementEvent|'
+        r'FireGuiMouseEvent|FireElementEvent|dispatch|QueuedEvent)\b[^;\n]*?'
+        r'"(on\w+)"\s*:\s*"(on\w+)"'
+    )
     for path in walk(PORT_CPP, {".cpp", ".h"}, skip=("lua53", "opus")):
         src = Src(path)
-        for m in pattern.finditer(src.clean):
+        for m in call_pat.finditer(src.clean):
             fired.setdefault(m.group(1), []).append("%s:%d" % (rel(path, REPO), src.line(m.start())))
+        for m in ternary_pat.finditer(src.clean):
+            for name in (m.group(1), m.group(2)):
+                fired.setdefault(name, []).append("%s:%d" % (rel(path, REPO), src.line(m.start())))
     return fired
 
 
@@ -572,46 +594,128 @@ def desktop_other_refs(client_root, known):
 
 def port_packet_enum(path, enum_name):
     src = Src(path)
-    enum = find_enum(src, r"\benum\s+class\s+%s\b[^{]*\{" % enum_name)
-    if enum is None:
-        raise SystemExit("%s not found in %s" % (enum_name, path))
-    return enum
+    extra = {}
+    for hdr in path.parent.glob("*.h"):
+        if hdr == path:
+            continue
+        hsrc = Src(hdr)
+        for cm in re.finditer(r"(?:#define|constexpr\s+\w+)\s+([A-Za-z_]\w*)\s*=?\s*(0x[0-9a-fA-F]+|\d+)", hsrc.clean):
+            extra[cm.group(1)] = int(cm.group(2), 0)
+    enum = find_enum(src, r"\benum\s+class\s+%s\b[^{]*\{" % enum_name, extra_consts=extra)
+    return enum or {}
+
+
+def port_mta_packet_ids():
+    ids = {}
+    path = PORT_SHARED / "MtaIds.h"
+    if not path.is_file():
+        return ids
+    src = Src(path)
+    m = re.search(r"\bnamespace\s+Packet\s*\{", src.masked)
+    if not m:
+        return ids
+    brace = src.masked.find("{", m.start())
+    close = src.block_end(brace)
+    for item in re.finditer(r"\bconstexpr\s+uint8_t\s+(\w+)\s*=\s*(\d+)\s*;", src.clean[brace:close]):
+        ids[item.group(1)] = int(item.group(2))
+    return ids
 
 
 def port_inbound():
     """(explicit {id: (handler, where)}, provisional {id: (name, where)})."""
     ph = PORT_SHARED / "PacketHandler.cpp"
     src = Src(ph)
+    mta_ids = port_mta_packet_ids()
+    neon_ids = port_packet_enum(PORT_CPP / "net" / "NeonJoinProtocol.h", "NeonPacketID")
     explicit = OrderedDict()
-    for m in re.finditer(r"\bif\s*\(\s*gameId\s*==\s*(\d+)\s*\)(.*)", src.clean):
-        rest = m.group(2)
-        call = re.search(r"([\w:]+)\s*\(", rest)
-        handler = call.group(1).split("::")[-1] if call else "(block)"
-        explicit.setdefault(int(m.group(1)), (handler, "%s:%d" % (rel(ph, REPO), src.line(m.start()))))
+    # Match `if (gameId == N)` and `if (gameId == [WorldRPG::]MtaIds::Packet::Name [|| gameId == ...])`
+    cond_re = re.compile(r"\bif\s*\(([^\n]+)\)\s*(\{[^\n]*|[^\n]+)")
+    term_re = re.compile(
+        r"\bgameId\s*==\s*(?:(\d+)|(?:WorldRPG::)?MtaIds::Packet::(\w+)|"
+        r"static_cast<uint8_t>\(\s*(?:WorldRPG::Net::)?NeonPacketID::(\w+)\s*\))"
+    )
+    for target in (ph, PORT_CPP / "net" / "NeonJoinProtocol.cpp"):
+        tsrc = src if target == ph else Src(target)
+        for m in cond_re.finditer(tsrc.clean):
+            terms = list(term_re.finditer(m.group(1)))
+            if not terms:
+                continue
+            rest = m.group(2)
+            call = re.search(r"([\w:]+)\s*\(", rest)
+            handler = call.group(1).split("::")[-1] if call else "(block)"
+            where = "%s:%d" % (rel(target, REPO), tsrc.line(m.start()))
+            for t in terms:
+                if t.group(1) is not None:
+                    pkt_id = int(t.group(1))
+                elif t.group(2) is not None:
+                    pkt_id = mta_ids.get(t.group(2))
+                else:
+                    pkt_id = neon_ids.get(t.group(3))
+                if pkt_id is None:
+                    continue
+                explicit.setdefault(pkt_id, (handler, where))
     provisional = OrderedDict()
     mtapacket = port_packet_enum(PORT_SHARED / "PacketHandler.h", "MTAPacketID")
-    for path in walk(PORT_CPP, {".cpp"}, skip=("lua53", "opus")):
-        s = Src(path)
-        for m in re.finditer(r"\bregisterHandler\(\s*MTAPacketID::(\w+)", s.clean):
-            name = m.group(1)
-            provisional.setdefault(mtapacket[name], (name, "%s:%d" % (rel(path, REPO), s.line(m.start()))))
+    if mtapacket:
+        for path in walk(PORT_CPP, {".cpp"}, skip=("lua53", "opus")):
+            s = Src(path)
+            for m in re.finditer(r"\bregisterHandler\(\s*MTAPacketID::(\w+)", s.clean):
+                name = m.group(1)
+                if name in mtapacket:
+                    provisional.setdefault(mtapacket[name], (name, "%s:%d" % (rel(path, REPO), s.line(m.start()))))
     return explicit, provisional
 
 
 def port_outbound():
-    """{id: (where, note)} for the first BitStreamWriter write in each builder."""
+    """{id: (where, note)} for outbound game packet writers across port sources."""
     out = OrderedDict()
+    mta_ids = port_mta_packet_ids()
+    neon_ids = port_packet_enum(PORT_CPP / "net" / "NeonJoinProtocol.h", "NeonPacketID")
     for sub in ("net", "shared", "gtasa", "jni"):
-        for path in walk(PORT_CPP / sub, {".cpp"}, skip=("lua53", "opus", "raknet")):
+        for path in walk(PORT_CPP / sub, {".cpp", ".h"}, skip=("lua53", "opus", "raknet")):
             src = Src(path)
+            local_consts = dict(mta_ids)
+            for c in re.finditer(r"\bconstexpr\s+uint8_t\s+(k\w+)\s*=\s*(\d+)\s*;", src.clean):
+                local_consts[c.group(1)] = int(c.group(2))
             for m in re.finditer(r"\bBitStreamWriter\s+(\w+)\s*;", src.clean):
                 var = m.group(1)
-                first = re.search(r"\b%s\.Write\(\s*static_cast<uint8_t>\(\s*(\d+)\s*\)\s*\)" % re.escape(var),
-                                  src.clean[m.end():])
+                tail = src.clean[m.end():m.end() + 400]
+                ternary = re.search(r"\b%s\.Write\(\s*static_cast<uint8_t>\([^?]*\?\s*(\d+)\s*:\s*(\d+)\s*\)\s*\)" % re.escape(var), tail)
+                if ternary:
+                    pos = m.end() + ternary.start()
+                    where = "%s:%d" % (rel(path, REPO), src.line(pos))
+                    out.setdefault(int(ternary.group(1)), (where, ""))
+                    out.setdefault(int(ternary.group(2)), (where, ""))
+                    continue
+                first = re.search(
+                    r"\b%s\.Write\(\s*(?:static_cast<uint8_t>\(\s*(?:(\d+)|(?:WorldRPG::Net::)?NeonPacketID::(\w+)|(?:WorldRPG::)?MtaIds::Packet::(\w+))\s*\)|(?:WorldRPG::)?MtaIds::Packet::(\w+))\s*\)" % re.escape(var),
+                    tail,
+                )
                 if not first:
                     continue
                 pos = m.end() + first.start()
-                out.setdefault(int(first.group(1)), ("%s:%d" % (rel(path, REPO), src.line(pos)), ""))
+                if first.group(1) is not None:
+                    pkt_id = int(first.group(1))
+                elif first.group(2) is not None:
+                    pkt_id = neon_ids.get(first.group(2))
+                else:
+                    pkt_id = local_consts.get(first.group(3) or first.group(4))
+                if pkt_id is not None:
+                    out.setdefault(pkt_id, ("%s:%d" % (rel(path, REPO), src.line(pos)), ""))
+            for m in re.finditer(r"\bSendVoicePacketRaw\(\s*(k\w+)\b", src.clean):
+                pkt_id = local_consts.get(m.group(1))
+                if pkt_id is not None:
+                    out.setdefault(pkt_id, ("%s:%d" % (rel(path, REPO), src.line(m.start())), ""))
+            for m in re.finditer(r"\bSendHighPriorityGamePacket\(\s*(\d+|(?:WorldRPG::)?MtaIds::Packet::(\w+)|k\w+)", src.clean):
+                tok = m.group(1)
+                pkt_id = int(tok) if tok.isdigit() else local_consts.get(m.group(2) or tok)
+                if pkt_id is not None:
+                    out.setdefault(pkt_id, ("%s:%d" % (rel(path, REPO), src.line(m.start())), ""))
+            for m in re.finditer(r"\b(NEON_JOIN_DATA_ID)\b", src.clean):
+                if path.name == "JoinDataCodec.h":
+                    pkt_id = neon_ids.get("PLAYER_JOINDATA")
+                    if pkt_id is not None:
+                        out.setdefault(pkt_id, ("%s:%d" % (rel(path, REPO), src.line(m.start())), ""))
     return out
 
 
@@ -674,6 +778,9 @@ def port_entity_cases():
         if call:
             state, parser = "parser", call.group(1)
             where = parsers.get(call.group(1), "?")
+        elif re.search(r"\b(?:reader\.Read|ReadPosition|ReadCompressed|ReadFlag|ReadElementId|ReadRotation\w+)\s*\(", body):
+            state, parser = "parser", "(inline reader)"
+            where = rel(PORT_SHARED / "entity" / "EntityAddCore.cpp", REPO)
         elif re.search(r"return\s+true\s*;", body):
             state, parser, where = "no-op", "(returns true, reads nothing)", "-"
         else:
@@ -750,15 +857,24 @@ def main():
 
     class_rows = []
     port_globals = set(eff)
+    oop_path = PORT_SHARED / "LuaOopApi.cpp"
+    port_oop_classes = set()
+    if oop_path.is_file():
+        oop_raw = oop_path.read_text(encoding="utf-8", errors="replace")
+        for cm in re.finditer(r'\b(?:defineClass|makeHandleClass)\(\s*"(\w+)"', oop_raw):
+            port_oop_classes.add(cm.group(1))
+        for cm in re.finditer(r'\b(?:_G\.)?(Vector[234]|Matrix)\s*=', oop_raw):
+            port_oop_classes.add(cm.group(1))
+    port_globals |= port_oop_classes
     for name, kind, parent, file, line in lua_classes:
         class_rows.append((name, kind, parent, file + ":" + str(line),
                            "implemented" if name in port_globals else "missing"))
     cls_impl = sum(1 for r in class_rows if r[4] == "implemented")
-    port_class_calls = sum(
+    port_class_calls = len(port_oop_classes) + sum(
         len(re.findall(r"\blua_(?:registerclass|registerstaticclass|classfunction|classvariable)\b", Src(p).clean))
         for p in walk(PORT_CPP, {".cpp", ".h"}, skip=("lua53", "opus")))
     summary.append(("A2 Lua OOP classes", len(class_rows), cls_impl, 0, len(class_rows) - cls_impl,
-                    "Matched by global name only. Port class-registration calls found: %d."
+                    "Matched by global/LuaOopApi class name. Port class-registration calls found: %d."
                     % port_class_calls))
 
     # ---- B. Client events -------------------------------------------------

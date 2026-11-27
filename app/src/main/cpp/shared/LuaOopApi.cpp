@@ -1536,6 +1536,25 @@ addMethods(Engine, {
     getModelNameFromID = "engineGetModelNameFromID", getModelIDFromName = "engineGetModelIDFromName",
 })
 
+-- EngineStreaming (CLuaEngineDefs.cpp:382-399)
+local EngineStreaming = defineClass("EngineStreaming", nil, nil)
+addMethods(EngineStreaming, {
+    freeUpMemory = "engineStreamingFreeUpMemory",
+    getUsedMemory = "engineStreamingGetUsedMemory",
+    setMemorySize = "engineStreamingSetMemorySize",
+    getMemorySize = "engineStreamingGetMemorySize",
+    setModelCacheLimits = "engineStreamingSetModelCacheLimits",
+    restoreMemorySize = "engineStreamingRestoreMemorySize",
+    getBufferSize = "engineStreamingGetBufferSize",
+    setBufferSize = "engineStreamingSetBufferSize",
+    restoreBufferSize = "engineStreamingRestoreBufferSize",
+})
+addProps(EngineStreaming, {
+    memorySize = { "engineStreamingGetMemorySize", "engineStreamingSetMemorySize" },
+    bufferSize = { "engineStreamingGetBufferSize", "engineStreamingSetBufferSize" },
+    usedMemory = { "engineStreamingGetUsedMemory", nil },
+})
+
 local World = defineClass("World", nil, nil)
 addMethods(World, {
     getTime = "getTime", setTime = "setTime",

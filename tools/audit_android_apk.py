@@ -34,7 +34,7 @@ def audit_elf(data, name):
     return min(alignments)
 
 
-def audit(path, external_game_libraries=False):
+def audit(path, external_game_libraries=False, allow_netc_assets=False):
     libraries = {}
     with zipfile.ZipFile(path) as apk, path.open("rb") as archive:
         for entry in apk.infolist():
@@ -64,13 +64,22 @@ def audit(path, external_game_libraries=False):
         required = REQUIRED - {"libGTASA.so", "libOpenAL64.so", "libSCAnd.so"} if external_game_libraries else REQUIRED
         if missing := required - libraries.keys():
             raise ValueError(f"Missing required libraries: {', '.join(sorted(missing))}")
-        if any(name.lower().endswith(".dll") for name in apk.namelist()):
-            raise ValueError("Windows DLL found in the native Android APK")
+        dlls = [name for name in apk.namelist() if name.lower().endswith(".dll")]
+        if allow_netc_assets:
+            disallowed_dlls = [
+                name for name in dlls
+                if not (name.startswith("assets/netc/") and name.endswith("/netc.dll") and name.count("/") == 3)
+            ]
+        else:
+            disallowed_dlls = dlls
+        if disallowed_dlls:
+            raise ValueError(f"Windows DLL found in the native Android APK: {', '.join(disallowed_dlls)}")
     return {
         "apk": str(path),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "libraries": libraries,
         "external_game_libraries": external_game_libraries,
+        "netc_assets": sorted(dlls) if allow_netc_assets else [],
         "scope": "APK packaging only; execution requires device validation",
     }
 
@@ -80,8 +89,10 @@ if __name__ == "__main__":
     parser.add_argument("apk", type=Path)
     parser.add_argument("--external-game-libraries", action="store_true",
                         help="Audit release/-PnoGameFiles APKs whose GTA libraries are verified in the game folder at startup")
+    parser.add_argument("--allow-netc-assets", action="store_true",
+                        help="Allow intentionally bundled assets/netc/<variant>/netc.dll protocol assets (still rejects any other .dll)")
     args = parser.parse_args()
     try:
-        print(json.dumps(audit(args.apk, args.external_game_libraries), indent=2))
+        print(json.dumps(audit(args.apk, args.external_game_libraries, args.allow_netc_assets), indent=2))
     except (OSError, ValueError, struct.error, zipfile.BadZipFile) as error:
         parser.exit(1, str(error) + "\n")

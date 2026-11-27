@@ -47,6 +47,7 @@ void RpcResetHeatHaze();
 void RpcSetFpsLimit(uint16_t fps);
 void RpcSetGarageOpen(uint8_t garageId, bool open);
 void RpcSetGlitchEnabled(uint8_t glitchId, bool enabled);
+void RpcSetWorldSpecialProperty(int propertyIndex, bool enabled);
 void RpcSetTrafficLightState(uint8_t state, bool forced);
 void RpcSetWaterColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 void RpcResetWaterColor();

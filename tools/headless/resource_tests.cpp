@@ -6766,6 +6766,23 @@ int main(int argc, char** argv) {
             CHECK(s_rsCalls == 1);
             CHECK(s_rsAllCalls == 1);
         }
+
+        // Tranche 5: EngineStreaming OOP static class (CLuaEngineDefs.cpp:382-399)
+        RunLua(vm, "tranche5-engine-streaming-oop", R"LUA(
+            assert(type(EngineStreaming) == "table", "EngineStreaming class registered")
+            assert(type(EngineStreaming.getMemorySize) == "function", "EngineStreaming.getMemorySize")
+            assert(type(EngineStreaming.setMemorySize) == "function", "EngineStreaming.setMemorySize")
+            assert(type(EngineStreaming.getBufferSize) == "function", "EngineStreaming.getBufferSize")
+            assert(type(EngineStreaming.setBufferSize) == "function", "EngineStreaming.setBufferSize")
+            assert(type(EngineStreaming.getUsedMemory) == "function", "EngineStreaming.getUsedMemory")
+            assert(type(EngineStreaming.freeUpMemory) == "function", "EngineStreaming.freeUpMemory")
+            assert(type(EngineStreaming.restoreMemorySize) == "function", "EngineStreaming.restoreMemorySize")
+            assert(type(EngineStreaming.restoreBufferSize) == "function", "EngineStreaming.restoreBufferSize")
+            assert(type(EngineStreaming.setModelCacheLimits) == "function", "EngineStreaming.setModelCacheLimits")
+            local mem = EngineStreaming.getMemorySize()
+            assert(type(mem) == "number" and mem > 0, "EngineStreaming.getMemorySize returns positive bytes")
+            assert(EngineStreaming.memorySize == mem, "EngineStreaming.memorySize static property")
+        )LUA");
     }
 
     if (argc > 1) {

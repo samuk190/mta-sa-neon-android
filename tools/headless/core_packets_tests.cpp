@@ -913,6 +913,151 @@ void TestRemainingPacketsAndTextItems() {
     Check(ServerWorld::MaxPlayers() == 256, "SERVER_INFO_SYNC updated MaxPlayers");
 }
 
+void TestPostJoinInboundAndOutboundPackets() {
+    Fixture f;
+    ServerWorld::NotePlayerNick(701, "Runner");
+    f.Lua("assert(EngineStreaming ~= nil, 'EngineStreaming static OOP class exists')");
+
+    // 1. PACKET_ID_PACKET_PROGRESS (8)
+    Pkt prog(PktId::PacketProgress);
+    prog.U32(3).U32(10).U32(1400).U8(149);
+    Check(f.Send(prog), "PACKET_PROGRESS accepted");
+    const auto pp = CorePackets::LastPartialPacketProgress();
+    Check(pp.partCount == 3 && pp.partTotal == 10 && pp.partLength == 1400, "PACKET_PROGRESS fields stored");
+
+    // 2. PACKET_ID_SERVER_DISCONNECTED (23)
+    Pkt disc(PktId::ServerDisconnected);
+    disc.Bits(17, 5);  // KICK
+    const std::string kicker = "Admin";
+    disc.U16(static_cast<uint16_t>(kicker.size())).Bytes(reinterpret_cast<const uint8_t*>(kicker.data()), kicker.size());
+    disc.U16(0);  // trouble link
+    Check(f.Send(disc), "SERVER_DISCONNECTED accepted");
+    const auto dr = CorePackets::LastDisconnectRecord();
+    Check(dr.received && dr.type == 17 && dr.reason == "Admin", "SERVER_DISCONNECTED parsed");
+
+    // 3. PACKET_ID_RETURN_SYNC (36) — vehicle form
+    Pkt rs(PktId::ReturnSync);
+    rs.Bit(true).Pos(100.0f, -200.0f, 15.5f).RotDeg(10.0f, 20.0f, 90.0f);
+    Check(f.Send(rs), "RETURN_SYNC accepted");
+    const auto rsr = CorePackets::LastReturnSyncRecord();
+    Check(rsr.valid && rsr.inVehicle && std::fabs(rsr.x - 100.0f) < 0.05f && std::fabs(rsr.rotZ - 90.0f) < 0.2f,
+          "RETURN_SYNC vehicle pose parsed");
+
+    // 4. PACKET_ID_MAP_INFO (46) — full 0x0030 wire sequence
+    Pkt mi(PktId::MapInfo);
+    mi.U8(7).U8(9).U8(0xFF)          // weather 7, no blend
+        .Bit(true).U8(10).U8(20).U8(30).U8(40).U8(50).U8(60)  // sky gradient
+        .Bit(false)                  // no heat haze
+        .U8(14).U8(30)               // clock 14:30
+        .Compressed32(5000)          // minute duration
+        .Bits(0x07u, 3)              // nametags + radar + clouds
+        .F32(0.012f)                 // gravity
+        .Bit(false).F32(1.25f)       // non-default gamespeed
+        .F32(1.5f)                   // wave height
+        .F32(0.0f).Bit(false).Bit(false)  // water levels
+        .Compressed16(60);           // fps limit
+    for (int i = 0; i < 50; ++i) mi.Bit(i == 2);  // garage 2 open
+    mi.Bits(0x001u, 10)              // funBugs: quickreload (10 bits at 0x0030)
+        .Bits(0x00001u, 20)          // world special properties: hovercars
+        .F32(150.0f)                 // jetpack max height
+        .Bit(true).U8(1).U8(2).U8(3).U8(200)  // water color
+        .Bit(false)                  // interior sounds off
+        .Bit(true).F32(0.75f)        // rain level
+        .Bit(true).U32(5)            // moon size
+        .Bit(true).F32(2.5f)         // sun size
+        .Bit(false)                  // sun color
+        .Bit(false)                  // wind velocity
+        .Bit(true).F32(1200.0f)      // far clip
+        .Bit(true).F32(450.0f)       // fog distance
+        .F32(950.0f).F32(2.2f);      // aircraft max height & velocity
+    Check(f.Send(mi), "MAP_INFO (0x0030) decoded");
+    f.Pump();
+    f.Lua("assert(getWeather() == 7, 'map info weather')\n"
+          "assert(math.abs(getGravity() - 0.012) < 0.0005, 'map info gravity')\n"
+          "assert(math.abs(getGameSpeed() - 1.25) < 0.001, 'map info gamespeed')\n"
+          "assert(getFPSLimit() == 60, 'map info fps')\n"
+          "assert(isGarageOpen(2) == true and isGarageOpen(3) == false, 'map info garages')\n"
+          "assert(isWorldSpecialPropertyEnabled('hovercars') == true, 'map info world special prop')\n"
+          "assert(math.abs(getFarClipDistance() - 1200.0) < 0.1, 'map info far clip')\n"
+          "assert(math.abs(getFogDistance() - 450.0) < 0.1, 'map info fog')");
+
+    // 5. PACKET_ID_UPDATE_INFO (89)
+    Pkt ui(PktId::UpdateInfo);
+    const std::string uType = "optional", uData = "2.0.1";
+    ui.U16(static_cast<uint16_t>(uType.size())).Bytes(reinterpret_cast<const uint8_t*>(uType.data()), uType.size());
+    ui.U16(static_cast<uint16_t>(uData.size())).Bytes(reinterpret_cast<const uint8_t*>(uData.data()), uData.size());
+    Check(f.Send(ui), "UPDATE_INFO accepted");
+    const auto uir = CorePackets::LastUpdateInfoRecord();
+    Check(uir.received && uir.type == "optional" && uir.data == "2.0.1", "UPDATE_INFO parsed");
+
+    // 6. PACKET_ID_DEBUG_EVENT (110)
+    Pkt de(PktId::DebugEvent);
+    de.U8(2).U32(77).U32(12345).U8(1).U8(2).U32(42).U32(1).U8(255).U8(180).U8(0);
+    auto writeStr = [&](const std::string& s) {
+        de.U16(static_cast<uint16_t>(s.size())).Bytes(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+    };
+    writeStr("script");
+    writeStr("ctx");
+    writeStr("myres");
+    writeStr("main.lua");
+    writeStr("bad arg");
+    writeStr("corr-1");
+    Check(f.Send(de), "DEBUG_EVENT accepted");
+    const auto der = CorePackets::LastDebugEventRecord();
+    Check(der.received && der.eventId == 77 && der.message == "main.lua:42: bad arg", "DEBUG_EVENT parsed");
+
+    // 7. Outbound packet encoders + wire round-trips
+    struct Captured {
+        uint8_t id = 0;
+        std::vector<uint8_t> bytes;
+        size_t bits = 0;
+    };
+    std::vector<Captured> sent;
+    CorePackets::SetOutboundPacketSink([&](uint8_t id, const uint8_t* data, size_t len, size_t bitLen, bool, bool) {
+        sent.push_back(Captured{id, std::vector<uint8_t>(data, data + len), bitLen});
+        return true;
+    });
+
+    Check(CorePackets::SendExplosionSync(10.0f, 20.0f, 30.0f, 4), "SendExplosionSync ok");
+    Check(CorePackets::SendDetonateSatchels(), "SendDetonateSatchels ok");
+    Check(CorePackets::SendDestroySatchels(), "SendDestroySatchels ok");
+
+    // Round-trip SendVehicleDamageSync -> HandleVehicleDamageSync
+    const uint8_t doors[6] = {1, 2, 0, 3, 4, 2};
+    const uint8_t wheels[4] = {1, 0, 2, 1};
+    const uint8_t panels[7] = {1, 2, 3, 0, 1, 2, 1};
+    const uint8_t lights[4] = {1, 1, 0, 1};
+    Check(CorePackets::SendVehicleDamageSync(900, doors, wheels, panels, lights), "SendVehicleDamageSync ok");
+    Check(sent.back().id == PktId::VehicleDamageSync && sent.back().bytes.size() > 1, "SendVehicleDamageSync id");
+    Check(CorePackets::HandleVehicleDamageSync(sent.back().bytes.data() + 1, sent.back().bytes.size() - 1,
+                                               sent.back().bits - 8),
+          "SendVehicleDamageSync round-tripped through HandleVehicleDamageSync");
+
+    const uint8_t rawVal[1] = {0x01};
+    Check(CorePackets::SendCustomData(701, "score", rawVal, 1, 8), "SendCustomData ok");
+    Check(CorePackets::SendCameraSync(true, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f), "SendCameraSync fixed ok");
+    Check(CorePackets::SendCameraSync(false, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 701), "SendCameraSync target ok");
+    Check(CorePackets::SendObjectSync(800, 1, true, 12.f, 34.f, 5.f, true, 0.5f, 0.25f, 1.0f, true, 750.f),
+          "SendObjectSync ok");
+    Check(CorePackets::SendVehiclePushSync(900), "SendVehiclePushSync ok");
+
+    // Verify Lua setWorldSpecialPropertyEnabled dispatches PACKET_ID_PLAYER_WORLD_SPECIAL_PROPERTY (109)
+    f.Lua("assert(setWorldSpecialPropertyEnabled('aircars', true) == true)");
+    Check(sent.back().id == PktId::PlayerWorldSpecialProperty, "Lua setWorldSpecialPropertyEnabled sent pkt 109");
+    {
+        Net::BitStreamReader r(sent.back().bytes.data() + 1, sent.back().bytes.size() - 1, sent.back().bits - 8);
+        uint16_t nameLen = 0;
+        Check(r.Read(nameLen) && nameLen == 7, "world special prop name len");
+        std::string name(nameLen, '\0');
+        Check(r.ReadBytes(reinterpret_cast<uint8_t*>(name.data()), nameLen) && name == "aircars",
+              "world special prop name");
+        uint8_t bit = 0;
+        Check(r.ReadBits(&bit, 1) && (bit & 1u) == 1u, "world special prop enabled bit");
+    }
+    CorePackets::SetOutboundPacketSink(nullptr);
+    Check(sent.size() == 10, "all 10 outbound packets captured");
+}
+
 }  // namespace
 
 int main() {
@@ -927,6 +1072,7 @@ int main() {
     TestLatentTransferAndPedTask();
     TestLocalWastedAndGuiFixes();
     TestRemainingPacketsAndTextItems();
+    TestPostJoinInboundAndOutboundPackets();
     std::printf("core_packets_tests: %u checks passed\n", checks);
     return 0;
 }

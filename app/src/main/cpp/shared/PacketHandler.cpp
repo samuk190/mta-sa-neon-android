@@ -1601,6 +1601,8 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
             }
         }
         // Real ePacketID values from Shared/sdk/net/Packets.h.
+        if (gameId == MtaIds::Packet::PacketProgress) return CorePackets::HandlePartialPacketInfo(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ServerDisconnected) return CorePackets::HandleServerDisconnected(body, bodyLength, bodyBits);
         if (gameId == 43) return HandleChatEcho(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PlayerChangeNick) return CorePackets::HandlePlayerChangeNick(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PlayerStats) return CorePackets::HandlePlayerStats(body, bodyLength, bodyBits);
@@ -1608,6 +1610,7 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Lightsync) return CorePackets::HandleLightSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::VehicleResync) return CorePackets::HandleVehicleResync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ReturnSync) return CorePackets::HandleReturnSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Explosion) return CorePackets::HandleExplosion(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Fire) return CorePackets::HandleFire(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Projectile) return CorePackets::HandleProjectile(body, bodyLength, bodyBits);
@@ -1615,6 +1618,7 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         if (gameId == MtaIds::Packet::DestroySatchels) return CorePackets::HandleDestroySatchels(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ConsoleEcho) return CorePackets::HandleConsoleEcho(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::DebugEcho) return CorePackets::HandleDebugEcho(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::MapInfo) return CorePackets::HandleMapInfo(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PickupHideShow) return CorePackets::HandlePickupHideShow(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PickupHitConfirm) return CorePackets::HandlePickupHitConfirm(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::VehicleSpawn) return CorePackets::HandleVehicleSpawn(body, bodyLength, bodyBits);
@@ -1625,6 +1629,7 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         if (gameId == MtaIds::Packet::ObjectStartSync) return CorePackets::HandleObjectStartSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ObjectStopSync) return CorePackets::HandleObjectStopSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ObjectSync) return CorePackets::HandleObjectSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::UpdateInfo) return CorePackets::HandleUpdateInfo(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::LatentTransfer) {
             return CorePackets::HandleLatentTransfer(
                 body, bodyLength, bodyBits,
@@ -1635,6 +1640,7 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         if (gameId == MtaIds::Packet::PedTask) return CorePackets::HandlePedTask(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ChatClear) return CorePackets::HandleChatClear(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ServerInfoSync) return CorePackets::HandleServerInfoSync(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::DebugEvent) return CorePackets::HandleDebugEvent(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PlayerNetworkStatus) {
             Net::BitStreamReader reader(body, bodyLength, bodyBits);
             uint8_t type = 0;
