@@ -720,6 +720,24 @@ bool HandleVehicleDamageSync(const uint8_t* body, size_t length, size_t bits) {
 
     Script::VehicleApplyDamageSync(vehicleId, doorChanged, doors, wheelChanged, wheels, panelChanged, panels,
                                    lightChanged, lights);
+    bool anyChanged = false;
+    for (int i = 0; i < 6; ++i) anyChanged = anyChanged || doorChanged[i];
+    for (int i = 0; i < 4; ++i) anyChanged = anyChanged || wheelChanged[i] || lightChanged[i];
+    for (int i = 0; i < 7; ++i) anyChanged = anyChanged || panelChanged[i];
+    if (anyChanged) {
+        ServerRpc::Enqueue([vehicleId] {
+            lua_State* L = Script::ActiveVmState();
+            if (!L) return;
+            lua_pushnil(L);      // attacker
+            lua_pushnil(L);      // weapon
+            lua_pushnumber(L, 0.0);  // loss
+            lua_pushnumber(L, 0.0);
+            lua_pushnumber(L, 0.0);
+            lua_pushnumber(L, 0.0);
+            lua_pushinteger(L, 0);
+            Script::ActiveVmFireElementEvent(L, "onClientVehicleDamage", vehicleId, 7);
+        });
+    }
     static bool logged = false;
     if (!logged) {
         logged = true;

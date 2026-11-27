@@ -15,6 +15,8 @@
 #include "net/raknet/RakNetWrapper.h"
 #include "shared/CorePackets.h"
 #include "shared/LuaApiExtra.h"
+#include "shared/LuaAudioApi.h"
+#include "shared/LuaBrowserApi.h"
 #include "shared/LuaGuiApi.h"
 #include "shared/LuaVMStub.h"
 #include "shared/LuaWorldObjectApi.h"
@@ -1093,6 +1095,125 @@ void TestPostJoinInboundAndOutboundPackets() {
           "assert(evCounts.moveStop == 1, 'onClientObjectMoveStop fired')");
 }
 
+void TestParityClientEvents() {
+    Fixture f;
+    f.Lua("ev = { vehDmg=0, plrDmg=0, pedDmg=0, objDmg=0, objBrk=0, wepFire=0,\n"
+          "       sndMeta='', sndDl=0, sndBeat=0,\n"
+          "       brBlk='', brCon='', brCur=-1, brTip='',\n"
+          "       guiMove=0, guiSize=0, guiScroll=0, guiTab=0, guiCombo=0 }\n"
+          "addEventHandler('onClientVehicleDamage', root, function(_, _, loss) ev.vehDmg = ev.vehDmg + 1 end)\n"
+          "addEventHandler('onClientPlayerDamage', root, function(_, _, _, loss) ev.plrDmg = loss end)\n"
+          "addEventHandler('onClientPedDamage', root, function(_, _, _, loss) ev.pedDmg = loss end)\n"
+          "addEventHandler('onClientObjectDamage', root, function(loss) ev.objDmg = loss end)\n"
+          "addEventHandler('onClientObjectBreak', root, function() ev.objBrk = ev.objBrk + 1 end)\n"
+          "addEventHandler('onClientWeaponFire', root, function(_, x) ev.wepFire = x end)\n"
+          "addEventHandler('onClientSoundChangedMeta', root, function(t) ev.sndMeta = t end)\n"
+          "addEventHandler('onClientSoundFinishedDownload', root, function(l) ev.sndDl = l end)\n"
+          "addEventHandler('onClientSoundBeat', root, function(b) ev.sndBeat = b end)\n"
+          "addEventHandler('onClientBrowserResourceBlocked', root, function(u) ev.brBlk = u end)\n"
+          "addEventHandler('onClientBrowserConsoleMessage', root, function(m) ev.brCon = m end)\n"
+          "addEventHandler('onClientBrowserCursorChange', root, function(c) ev.brCur = c end)\n"
+          "addEventHandler('onClientBrowserTooltip', root, function(t) ev.brTip = t end)\n"
+          "addEventHandler('onClientGUIMove', root, function() ev.guiMove = ev.guiMove + 1 end)\n"
+          "addEventHandler('onClientGUISize', root, function() ev.guiSize = ev.guiSize + 1 end)\n"
+          "addEventHandler('onClientGUIScroll', root, function() ev.guiScroll = ev.guiScroll + 1 end)\n"
+          "addEventHandler('onClientGUITabSwitched', root, function() ev.guiTab = ev.guiTab + 1 end)\n"
+          "addEventHandler('onClientGUIComboBoxAccepted', root, function() ev.guiCombo = ev.guiCombo + 1 end)\n");
+
+    // 1. Vehicle damage sync + Element RPC health drops (vehicle, player, ped, object)
+    ServerWorld::SetLocalPlayer(912);
+    ServerWorld::NoteVehicle(910, 411);
+    AddServerObject(f.handler, 911, 1337, 0.f, 0.f, 5.f);
+    {
+        Pkt ped(PktId::EntityAdd);
+        ped.Compressed(1, 4);
+        WriteEntityCommon(ped, 913, Entity::kTypePed);
+        ped.Pos(0.f, 0.f, 5.f).Compressed(61, 2).Bits(32768, 16)
+            .U8(100)   // health = 100
+            .U8(0)     // armor = 0
+            .Bit(false) // not in vehicle
+            .Bit(false).Bit(true).Bit(false).Bit(false) // jetpack, synced, headless, frozen
+            .Compressed(0, 1) // alpha = 255
+            .U8(0)     // moveAnim
+            .U8(0)     // clothes count = 0
+            .U8(0xFF)  // end of weapons
+            .U8(0)     // current slot
+            .Bit(false); // no animation
+        Check(f.Send(ped), "ENTITY_ADD ped for damage event test");
+    }
+
+    auto sendSetHealthRpc = [&](uint32_t elemId, float hp) {
+        Pkt p(77);  // PACKET_ID_LUA_ELEMENT_RPC
+        p.U8(MtaIds::Rpc::SetElementHealth).Id(elemId).F(hp).U8(1);
+        Check(f.Send(p), "SET_ELEMENT_HEALTH RPC");
+    };
+    sendSetHealthRpc(910, 850.f);
+    sendSetHealthRpc(911, 900.f);
+    sendSetHealthRpc(912, 75.f);
+    sendSetHealthRpc(913, 60.f);
+
+    // 2. WEAPON_BULLETSYNC (100) -> onClientWeaponFire
+    {
+        Pkt p(PktId::WeaponBulletSync);
+        p.Id(914).F(1.0f).F(2.0f).F(3.0f).F(42.0f).F(5.0f).F(6.0f).U8(1);
+        Check(f.Send(p), "WEAPON_BULLETSYNC decoded");
+    }
+
+    // 3. Object break + GUI events + Browser blocked/console/cursor/tooltip + Sound meta/download/beat
+    f.Lua("breakObject({id=911, element=true})\n"
+          "local win = guiCreateWindow(0, 0, 200, 200, 'T', false)\n"
+          "guiSetPosition(win, 10, 20, false)\n"
+          "guiSetSize(win, 250, 220, false)\n"
+          "local sb = guiCreateScrollBar(0, 0, 100, 20, true, false, win)\n"
+          "guiScrollBarSetScrollPosition(sb, 50)\n"
+          "local tp = guiCreateTabPanel(0, 30, 180, 100, false, win)\n"
+          "local t1 = guiCreateTab('One', tp)\n"
+          "guiSetSelectedTab(tp, t1)\n"
+          "local cb = guiCreateComboBox(0, 140, 100, 40, 'Pick', false, win)\n"
+          "guiComboBoxAddItem(cb, 'Alpha')\n"
+          "guiComboBoxSetSelected(cb, 0)\n"
+          "testBrowser = createBrowser(320, 240, false, false)\n"
+          "loadBrowserURL(testBrowser, 'https://blocked-parity-example.invalid/page')\n"
+          "testSound = playSound('https://example.invalid/stream.mp3')\n");
+
+    lua_State* L = Script::ActiveVmState();
+    lua_getglobal(L, "testBrowser");
+    const uint32_t brId = Script::ElementIdOf(L, -1);
+    lua_pop(L, 1);
+    lua_getglobal(L, "testSound");
+    const uint32_t sndId = Script::ElementIdOf(L, -1);
+    lua_pop(L, 1);
+
+    Script::BrowserNoteConsoleMessage(brId, "hello-console");
+    Script::BrowserNoteCursorChange(brId, 7);
+    Script::BrowserNoteTooltip(brId, "tip-text");
+    Script::AudioNoteSoundChangedMeta(sndId, "Track Name");
+    Script::AudioNoteSoundFinishedDownload(sndId, 184.5);
+    Script::AudioNoteSoundBeat(sndId, 128.0);
+
+    f.vm.pumpDx(true);
+
+    f.Lua("assert(ev.vehDmg >= 1, 'onClientVehicleDamage fired')\n"
+          "assert(math.abs(ev.plrDmg - 25) < 0.01, 'onClientPlayerDamage fired')\n"
+          "assert(math.abs(ev.pedDmg - 40) < 0.01, 'onClientPedDamage fired')\n"
+          "assert(math.abs(ev.objDmg - 100) < 0.01, 'onClientObjectDamage fired')\n"
+          "assert(ev.objBrk == 1, 'onClientObjectBreak fired')\n"
+          "assert(math.abs(ev.wepFire - 42) < 0.01, 'onClientWeaponFire fired')\n"
+          "assert(ev.sndMeta == 'Track Name', 'onClientSoundChangedMeta fired')\n"
+          "assert(math.abs(ev.sndDl - 184.5) < 0.01, 'onClientSoundFinishedDownload fired')\n"
+          "assert(math.abs(ev.sndBeat - 128.0) < 0.01, 'onClientSoundBeat fired')\n"
+          "assert(ev.brBlk == 'https://blocked-parity-example.invalid/page', 'onClientBrowserResourceBlocked fired')\n"
+          "assert(ev.brCon == 'hello-console', 'onClientBrowserConsoleMessage fired')\n"
+          "assert(ev.brCur == 7, 'onClientBrowserCursorChange fired')\n"
+          "assert(ev.brTip == 'tip-text', 'onClientBrowserTooltip fired')\n"
+          "assert(ev.guiMove == 1, 'onClientGUIMove fired')\n"
+          "assert(ev.guiSize == 1, 'onClientGUISize fired')\n"
+          "assert(ev.guiScroll == 1, 'onClientGUIScroll fired')\n"
+          "assert(ev.guiTab == 1, 'onClientGUITabSwitched fired')\n"
+          "assert(ev.guiCombo == 1, 'onClientGUIComboBoxAccepted fired')");
+    Check(true, "all 18 newly wired parity client events fired and verified");
+}
+
 }  // namespace
 
 int main() {
@@ -1108,6 +1229,7 @@ int main() {
     TestLocalWastedAndGuiFixes();
     TestRemainingPacketsAndTextItems();
     TestPostJoinInboundAndOutboundPackets();
+    TestParityClientEvents();
     std::printf("core_packets_tests: %u checks passed\n", checks);
     return 0;
 }

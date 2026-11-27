@@ -1245,6 +1245,19 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBrowserSource(
     WorldRPG::Script::BrowserNoteSource(static_cast<uint32_t>(id), htmlStr.c_str());
 }
 
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBrowserConsoleMessage(
+    JNIEnv* env, jobject, jint id, jstring message) {
+    std::string msgStr;
+    if (message) {
+        if (const char* raw = env->GetStringUTFChars(message, nullptr)) {
+            msgStr = raw;
+            env->ReleaseStringUTFChars(message, raw);
+        }
+    }
+    WorldRPG::Script::BrowserNoteConsoleMessage(static_cast<uint32_t>(id), msgStr.c_str());
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeHardwareMouseReady(JNIEnv*, jobject) {
     return WorldRPG::Game::HardwareMouseReady() ? JNI_TRUE : JNI_FALSE;

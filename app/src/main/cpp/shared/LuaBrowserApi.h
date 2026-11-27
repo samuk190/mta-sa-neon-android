@@ -27,5 +27,9 @@ void BrowserNoteNavigate(uint32_t id, const char* targetUrl, bool isBlocked, boo
 void BrowserNotePopup(uint32_t id, const char* targetUrl, const char* openerUrl);
 void BrowserNoteSource(uint32_t id, const char* html);
 void BrowserNoteInputFocus(uint32_t id, bool gainedFocus);
+void BrowserNoteResourceBlocked(uint32_t id, const char* url, const char* domain, int reason);
+void BrowserNoteConsoleMessage(uint32_t id, const char* message);
+void BrowserNoteCursorChange(uint32_t id, int cursorId);
+void BrowserNoteTooltip(uint32_t id, const char* tooltip);
 
 }  // namespace WorldRPG::Script

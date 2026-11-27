@@ -24,6 +24,10 @@
 #include "ResourceFiles.h"
 #include "../gtasa/RemoteCombat.h"
 
+extern "C" {
+#include "lua.h"
+}
+
 namespace PedSyncState = WorldRPG::Sync::PedSyncState;
 
 #include <algorithm>
@@ -306,16 +310,67 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             if (!reader.Read(health) || !reader.Read(context)) return false;
             WorldRPG::ServerWorld::SetSyncTimeContext(id, context);
             if (!pedLike) {
-                if (kind && std::strcmp(kind, "vehicle") == 0) WorldRPG::Game::RpcSetVehicleHealth(id, health);
-                else logUnported("health on a non-ped element not ported");
+                if (kind && std::strcmp(kind, "vehicle") == 0) {
+                    float prevHealth = 1000.0f;
+                    WorldRPG::ServerWorld::ActorSpawn prevElem;
+                    if (WorldRPG::ServerWorld::CopyVisual(id, prevElem) && prevElem.health >= 0.0f) {
+                        prevHealth = prevElem.health;
+                    }
+                    WorldRPG::ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, health);
+                    WorldRPG::Game::RpcSetVehicleHealth(id, health);
+                    if (health < prevHealth) {
+                        const float loss = prevHealth - health;
+                        WorldRPG::ServerRpc::Enqueue([id, loss] {
+                            lua_State* L = WorldRPG::Script::ActiveVmState();
+                            if (!L) return;
+                            lua_pushnil(L);
+                            lua_pushnil(L);
+                            lua_pushnumber(L, loss);
+                            lua_pushnumber(L, 0.0);
+                            lua_pushnumber(L, 0.0);
+                            lua_pushnumber(L, 0.0);
+                            lua_pushinteger(L, 0);
+                            WorldRPG::Script::ActiveVmFireElementEvent(L, "onClientVehicleDamage", id, 7);
+                        });
+                    }
+                } else if (kind && std::strcmp(kind, "object") == 0) {
+                    const float loss = health < 1000.0f ? (1000.0f - health) : 0.0f;
+                    if (loss > 0.0f) {
+                        WorldRPG::ServerRpc::Enqueue([id, loss] {
+                            lua_State* L = WorldRPG::Script::ActiveVmState();
+                            if (!L) return;
+                            lua_pushnumber(L, loss);
+                            lua_pushnil(L);
+                            WorldRPG::Script::ActiveVmFireElementEvent(L, "onClientObjectDamage", id, 2);
+                        });
+                    }
+                } else {
+                    logUnported("health on a non-ped element not ported");
+                }
                 return true;
             }
+            WorldRPG::PedQueries::Snapshot prevSnap{};
+            const float prevHealth = WorldRPG::PedQueries::Copy(id, prevSnap) ? prevSnap.health : 100.0f;
             bool healthLocked = false, armorLocked = false;
             float lockedHealth = 0.f, lockedArmor = 0.f;
             WorldRPG::Game::CopyPedVitalsLock(id, healthLocked, lockedHealth, armorLocked, lockedArmor);
             // LockHealth stores the value; only SetHealth clears m_bDead (CClientPed.cpp:3655-3675,3745-3749).
             WorldRPG::PedQueries::Health(id, health, !healthLocked);
             WorldRPG::Game::RpcSetHealth(id, health);
+            if (health < prevHealth) {
+                const float loss = prevHealth - health;
+                const bool isPlayer = kind && std::strcmp(kind, "player") == 0;
+                WorldRPG::ServerRpc::Enqueue([id, loss, isPlayer] {
+                    lua_State* L = WorldRPG::Script::ActiveVmState();
+                    if (!L) return;
+                    lua_pushnil(L);  // attacker
+                    lua_pushnil(L);  // weapon
+                    lua_pushinteger(L, 3);  // torso bodypart
+                    lua_pushnumber(L, loss);
+                    WorldRPG::Script::ActiveVmFireElementEvent(
+                        L, isPlayer ? "onClientPlayerDamage" : "onClientPedDamage", id, 4);
+                });
+            }
             return true;
         }
         case Rpc::SetPedArmor: {
@@ -1161,6 +1216,23 @@ bool HandleWeaponBulletSync(const uint8_t* body, size_t length, size_t bits) {
     WorldRPG::Combat::SWeaponBulletSync shot;
     if (!WorldRPG::Combat::ReadWeaponBulletSync(reader, shot)) return true;
     WorldRPG::Combat::ShowRemoteWeaponFire(shot.weaponElement, shot.start, shot.end);
+    const uint32_t wepId = shot.weaponElement;
+    const float ex = shot.end[0], ey = shot.end[1], ez = shot.end[2];
+    WorldRPG::ServerRpc::Enqueue([wepId, ex, ey, ez] {
+        lua_State* L = WorldRPG::Script::ActiveVmState();
+        if (!L || wepId == 0) return;
+        lua_pushnil(L);       // hitElement
+        lua_pushnumber(L, ex);
+        lua_pushnumber(L, ey);
+        lua_pushnumber(L, ez);
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, 1.0);
+        lua_pushinteger(L, 0);  // material
+        lua_pushnumber(L, 0.0); // lighting
+        lua_pushinteger(L, 0);  // piece
+        WorldRPG::Script::ActiveVmFireElementEvent(L, "onClientWeaponFire", wepId, 10);
+    });
     return true;
 }
 

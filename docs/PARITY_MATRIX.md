@@ -14,7 +14,7 @@ Percent = implemented / desktop total. Stub and missing columns are defined in t
 |---|---|---|---|---|---|---|
 | A1 Lua functions | 1581 | 1581 | 0 | 0 | 100.0% | Port-only bindings not in desktop: 26. Duplicates across groups skipped: 0. |
 | A2 Lua OOP classes | 63 | 63 | 0 | 0 | 100.0% | Matched by global/LuaOopApi class name. Port class-registration calls found: 69. |
-| B Client events | 144 | 91 | 0 | 53 | 63.2% | Port fires 91 literal event names in total (onClientExplosion, onClientVehicleExplode, onClientProjectileCreation, onClientVehicleRespawn, onClientTrailerAttach, onClientTrailerDetach, onClientPlayerChangeNick, onClientConsole, onClientDebugMessage, onClientElementDataChange, onClientPlayerRadioSwitch, onClientBrowserWhitelistChange, onClientBrowserCreated, onClientBrowserLoadingStart, onClientBrowserDocumentReady, onClientBrowserLoadingFailed, onClientBrowserNavigate, onClientBrowserPopup, onClientBrowserInputFocusChanged, onClientElementModelChange, onClientElementAttach, onClientElementDetach, onClientElementInteriorChange, onClientElementDimensionChange, onClientPlayerWeaponSwitch, onClientMarkerHit, onClientPlayerMarkerHit, onClientPickupHit, onClientPlayerPickupHit, onClientColShapeHit, onClientColShapeLeave, onClientElementColShapeHit, onClientElementColShapeLeave, onClientMarkerLeave, onClientPlayerMarkerLeave, onClientPickupLeave, onClientPlayerPickupLeave, onClientKey, onClientGUIFocus, onClientGUIChanged, onClientGUIAccepted, onClientCharacter, onClientSoundStarted, onClientSoundStream, onClientSoundStopped, onClientResourceStart, onClientChatMessage, onClientGUIMouseDown, onClientGUIClick, onClientGUIDoubleClick, onClientGUIMouseUp, onClientCursorMove, onClientClick, onClientMTAFocusChange, onClientMinimize, onClientRestore, onClientPlayerWeaponFire, onClientPreRender, onClientPedsProcessed, onClientHUDRender, onClientRender, onClientPlayerNetworkStatus, onClientPlayerSpawn, onClientPlayerWasted, onClientPlayerJoin, onClientPlayerQuit, onClientElementDestroy, onClientPlayerVehicleEnter, onClientVehicleEnter, onClientPlayerVehicleExit, onClientVehicleExit, onClientVehicleStartEnter, onClientElementStreamIn, onClientBirdShot, onClientResourceStop, onClientFileDownloadComplete, onClientTransferBoxProgressChange, onClientTransferBoxVisibilityChange, onClientGUIBlur, onClientPedWeaponFire, onClientPedWasted, onClientPedVehicleEnter, onClientPedVehicleExit, onClientVehicleStartExit, onClientElementStreamOut, onClientObjectMoveStart, onClientObjectMoveStop, onClientPlayerVoiceStop, onClientPlayerVoicePause, onClientPlayerVoiceStart, onClientPlayerVoiceResumed). Server-triggered names from packet 81 are dispatched dynamically and are not counted. |
+| B Client events | 144 | 108 | 0 | 36 | 75.0% | Port fires 108 literal event names in total (onClientExplosion, onClientVehicleExplode, onClientProjectileCreation, onClientVehicleRespawn, onClientVehicleDamage, onClientTrailerAttach, onClientTrailerDetach, onClientPlayerChangeNick, onClientConsole, onClientDebugMessage, onClientElementDataChange, onClientPlayerRadioSwitch, onClientBrowserWhitelistChange, onClientBrowserCreated, onClientBrowserLoadingStart, onClientBrowserDocumentReady, onClientBrowserLoadingFailed, onClientBrowserNavigate, onClientBrowserPopup, onClientBrowserInputFocusChanged, onClientBrowserResourceBlocked, onClientBrowserConsoleMessage, onClientBrowserCursorChange, onClientBrowserTooltip, onClientElementModelChange, onClientElementAttach, onClientElementDetach, onClientElementInteriorChange, onClientElementDimensionChange, onClientGUIComboBoxAccepted, onClientGUIMove, onClientGUISize, onClientGUIScroll, onClientGUITabSwitched, onClientPlayerWeaponSwitch, onClientMarkerHit, onClientPlayerMarkerHit, onClientPickupHit, onClientPlayerPickupHit, onClientColShapeHit, onClientColShapeLeave, onClientElementColShapeHit, onClientElementColShapeLeave, onClientMarkerLeave, onClientPlayerMarkerLeave, onClientPickupLeave, onClientPlayerPickupLeave, onClientKey, onClientGUIFocus, onClientGUIChanged, onClientGUIAccepted, onClientCharacter, onClientSoundStarted, onClientSoundStream, onClientSoundChangedMeta, onClientSoundFinishedDownload, onClientSoundBeat, onClientSoundStopped, onClientResourceStart, onClientChatMessage, onClientGUIMouseDown, onClientGUIClick, onClientGUIDoubleClick, onClientGUIMouseUp, onClientCursorMove, onClientClick, onClientMTAFocusChange, onClientMinimize, onClientRestore, onClientPlayerWeaponFire, onClientPreRender, onClientPedsProcessed, onClientHUDRender, onClientRender, onClientPlayerNetworkStatus, onClientPlayerSpawn, onClientPlayerWasted, onClientPlayerJoin, onClientPlayerQuit, onClientElementDestroy, onClientPlayerVehicleEnter, onClientVehicleEnter, onClientPlayerVehicleExit, onClientVehicleExit, onClientVehicleStartEnter, onClientElementStreamIn, onClientBirdShot, onClientResourceStop, onClientFileDownloadComplete, onClientResourceFileDownload, onClientTransferBoxProgressChange, onClientTransferBoxVisibilityChange, onClientGUIBlur, onClientPedWeaponFire, onClientPedWasted, onClientPedVehicleEnter, onClientPedVehicleExit, onClientVehicleStartExit, onClientElementStreamOut, onClientObjectMoveStart, onClientObjectMoveStop, onClientObjectBreak, onClientObjectDamage, onClientWeaponFire, onClientPlayerVoiceStop, onClientPlayerVoicePause, onClientPlayerVoiceStart, onClientPlayerVoiceResumed). Server-triggered names from packet 81 are dispatched dynamically and are not counted. |
 | C1 Inbound packets (UPE game ids) | 62 | 62 | 0 | 0 | 100.0% | 0 desktop ids reachable only via provisional registerHandler (ids 0-11, not wire ids) counted as missing. Port explicitly dispatches 66 ids. |
 | C2 Outbound packets (client sends) | 31 | 31 | 0 | 0 | 100.0% | Port sends 31 game ids in total, of which 0 have no desktop SendPacket site. |
 | D Element types (ENTITY_ADD) | 17 | 17 | 0 | 0 | 100.0% | Desktop enum has 25 entries; 8 not in the desktop ENTITY_ADD switch. Desktop default branch present: yes. |
@@ -34,13 +34,13 @@ Desktop scope: the load graph from `CLuaManager::LoadCFunctions` (52 loader func
 | FalseResult | lua_pushboolean(L, 0) | shared/LuaApiExtra.cpp:512 |
 | FileOpen | lua_pushnil(L) | shared/LuaApiExtra.cpp:518 |
 | Fail | lua_pushboolean(L, 0) | shared/LuaWorldQueryApi.cpp:62 |
-| False | lua_pushboolean(L, 0) | shared/LuaBrowserApi.cpp:169 |
+| False | lua_pushboolean(L, 0) | shared/LuaBrowserApi.cpp:173 |
 | PushFalse | lua_pushboolean(L, 0) | shared/LuaWeaponApi.cpp:518 |
 | TaskFalse | lua_pushboolean(L, 0) | shared/LuaPedApi.cpp:2743 |
-| l_nil | lua_pushnil(L) | shared/LuaVMStub.cpp:1287 |
-| l_num0 | lua_pushinteger(L, 0) | shared/LuaVMStub.cpp:1288 |
-| l_false | lua_pushboolean(L, 0) | shared/LuaVMStub.cpp:1465 |
-| l_true | lua_pushboolean(L, 1) | shared/LuaVMStub.cpp:1466 |
+| l_nil | lua_pushnil(L) | shared/LuaVMStub.cpp:1296 |
+| l_num0 | lua_pushinteger(L, 0) | shared/LuaVMStub.cpp:1297 |
+| l_false | lua_pushboolean(L, 0) | shared/LuaVMStub.cpp:1474 |
+| l_true | lua_pushboolean(L, 1) | shared/LuaVMStub.cpp:1475 |
 | FailNil | lua_pushnil(L) | shared/LuaVehicleApi.cpp:827 |
 | PushTrue | lua_pushboolean(L, 1) | shared/LuaWeaponApi.cpp:513 |
 | FailFalse | lua_pushboolean(L, 0) | shared/SurfaceInfo.cpp:490 |
@@ -377,26 +377,26 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 
 | Event | Status | Port dispatch site(s) | Desktop registration |
 |---|---|---|---|
-| onClientBirdShot | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3530 | Client/mods/deathmatch/logic/CClientBirdManager.cpp:84 |
+| onClientBirdShot | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3539 | Client/mods/deathmatch/logic/CClientBirdManager.cpp:84 |
 | onClientFireDamage | not fired | - | Client/mods/deathmatch/logic/CClientFireManager.cpp:99 |
-| onClientResourceStart | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2939 | Client/mods/deathmatch/logic/CClientGame.cpp:2730 |
-| onClientResourceStop | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3636, app/src/main/cpp/shared/LuaVMStub.cpp:3642 | Client/mods/deathmatch/logic/CClientGame.cpp:2731 |
+| onClientResourceStart | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2948 | Client/mods/deathmatch/logic/CClientGame.cpp:2730 |
+| onClientResourceStop | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3645, app/src/main/cpp/shared/LuaVMStub.cpp:3651 | Client/mods/deathmatch/logic/CClientGame.cpp:2731 |
 | onClientElementDataChange | fired | app/src/main/cpp/shared/LuaApiExtra.cpp:478, app/src/main/cpp/shared/LuaApiExtra.cpp:869 | Client/mods/deathmatch/logic/CClientGame.cpp:2734 |
-| onClientElementStreamIn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3500, app/src/main/cpp/shared/LuaVMStub.cpp:3500 | Client/mods/deathmatch/logic/CClientGame.cpp:2735 |
-| onClientElementStreamOut | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3500 | Client/mods/deathmatch/logic/CClientGame.cpp:2736 |
-| onClientElementDestroy | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3426, app/src/main/cpp/shared/LuaVMStub.cpp:3439 | Client/mods/deathmatch/logic/CClientGame.cpp:2737 |
+| onClientElementStreamIn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3509, app/src/main/cpp/shared/LuaVMStub.cpp:3509 | Client/mods/deathmatch/logic/CClientGame.cpp:2735 |
+| onClientElementStreamOut | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3509 | Client/mods/deathmatch/logic/CClientGame.cpp:2736 |
+| onClientElementDestroy | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3435, app/src/main/cpp/shared/LuaVMStub.cpp:3448 | Client/mods/deathmatch/logic/CClientGame.cpp:2737 |
 | onClientElementModelChange | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1190 | Client/mods/deathmatch/logic/CClientGame.cpp:2738 |
 | onClientElementDimensionChange | fired | app/src/main/cpp/shared/LuaFieldApi.cpp:472 | Client/mods/deathmatch/logic/CClientGame.cpp:2739 |
 | onClientElementInteriorChange | fired | app/src/main/cpp/shared/LuaFieldApi.cpp:419 | Client/mods/deathmatch/logic/CClientGame.cpp:2740 |
 | onClientElementAttach | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1295, app/src/main/cpp/shared/ServerRpc.cpp:634 | Client/mods/deathmatch/logic/CClientGame.cpp:2741 |
 | onClientElementDetach | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1347, app/src/main/cpp/shared/ServerRpc.cpp:663 | Client/mods/deathmatch/logic/CClientGame.cpp:2743 |
-| onClientPlayerJoin | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3416 | Client/mods/deathmatch/logic/CClientGame.cpp:2747 |
-| onClientPlayerQuit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3421 | Client/mods/deathmatch/logic/CClientGame.cpp:2748 |
+| onClientPlayerJoin | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3425 | Client/mods/deathmatch/logic/CClientGame.cpp:2747 |
+| onClientPlayerQuit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3430 | Client/mods/deathmatch/logic/CClientGame.cpp:2748 |
 | onClientPlayerTarget | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2749 |
-| onClientPlayerSpawn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3397 | Client/mods/deathmatch/logic/CClientGame.cpp:2750 |
-| onClientPlayerChangeNick | fired | app/src/main/cpp/shared/CorePackets.cpp:1074 | Client/mods/deathmatch/logic/CClientGame.cpp:2751 |
-| onClientPlayerVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3468, app/src/main/cpp/shared/LuaVMStub.cpp:3468 | Client/mods/deathmatch/logic/CClientGame.cpp:2752 |
-| onClientPlayerVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3471, app/src/main/cpp/shared/LuaVMStub.cpp:3471 | Client/mods/deathmatch/logic/CClientGame.cpp:2753 |
+| onClientPlayerSpawn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3406 | Client/mods/deathmatch/logic/CClientGame.cpp:2750 |
+| onClientPlayerChangeNick | fired | app/src/main/cpp/shared/CorePackets.cpp:1092 | Client/mods/deathmatch/logic/CClientGame.cpp:2751 |
+| onClientPlayerVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3477, app/src/main/cpp/shared/LuaVMStub.cpp:3477 | Client/mods/deathmatch/logic/CClientGame.cpp:2752 |
+| onClientPlayerVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3480, app/src/main/cpp/shared/LuaVMStub.cpp:3480 | Client/mods/deathmatch/logic/CClientGame.cpp:2753 |
 | onClientPlayerTask | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2754 |
 | onClientPlayerWeaponSwitch | fired | app/src/main/cpp/shared/LuaPedApi.cpp:981 | Client/mods/deathmatch/logic/CClientGame.cpp:2755 |
 | onClientPlayerStuntStart | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2756 |
@@ -405,9 +405,9 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientPlayerDamage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2759 |
 | onClientPedNativeDamageAttempt | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2760 |
 | onClientPlayerNativeDamageAttempt | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2761 |
-| onClientPlayerWeaponFire | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3151, app/src/main/cpp/shared/LuaVMStub.cpp:3151 | Client/mods/deathmatch/logic/CClientGame.cpp:2762 |
+| onClientPlayerWeaponFire | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3160, app/src/main/cpp/shared/LuaVMStub.cpp:3160 | Client/mods/deathmatch/logic/CClientGame.cpp:2762 |
 | onClientPlayerWeaponReload | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2763 |
-| onClientPlayerWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3413, app/src/main/cpp/shared/LuaVMStub.cpp:3413 | Client/mods/deathmatch/logic/CClientGame.cpp:2764 |
+| onClientPlayerWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3422, app/src/main/cpp/shared/LuaVMStub.cpp:3422 | Client/mods/deathmatch/logic/CClientGame.cpp:2764 |
 | onClientPlayerChoke | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2765 |
 | onClientPlayerVoiceStart | fired | app/src/main/cpp/shared/VoiceRuntime.cpp:364 | Client/mods/deathmatch/logic/CClientGame.cpp:2766 |
 | onClientPlayerVoiceStop | fired | app/src/main/cpp/shared/VoiceRuntime.cpp:202, app/src/main/cpp/shared/VoiceRuntime.cpp:401 | Client/mods/deathmatch/logic/CClientGame.cpp:2767 |
@@ -418,66 +418,66 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientPlayerHeliKilled | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2772 |
 | onClientPlayerPickupHit | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:344, app/src/main/cpp/shared/LuaSpatialApi.cpp:344 | Client/mods/deathmatch/logic/CClientGame.cpp:2773 |
 | onClientPlayerPickupLeave | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:344 | Client/mods/deathmatch/logic/CClientGame.cpp:2774 |
-| onClientPlayerNetworkStatus | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3362 | Client/mods/deathmatch/logic/CClientGame.cpp:2775 |
+| onClientPlayerNetworkStatus | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3371 | Client/mods/deathmatch/logic/CClientGame.cpp:2775 |
 | onClientPedDamage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2778 |
 | onClientPedNativeBikeJackAttempt | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2779 |
-| onClientPedVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3468 | Client/mods/deathmatch/logic/CClientGame.cpp:2780 |
-| onClientPedVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3471 | Client/mods/deathmatch/logic/CClientGame.cpp:2781 |
-| onClientPedWeaponFire | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3151 | Client/mods/deathmatch/logic/CClientGame.cpp:2782 |
+| onClientPedVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3477 | Client/mods/deathmatch/logic/CClientGame.cpp:2780 |
+| onClientPedVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3480 | Client/mods/deathmatch/logic/CClientGame.cpp:2781 |
+| onClientPedWeaponFire | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3160 | Client/mods/deathmatch/logic/CClientGame.cpp:2782 |
 | onClientPedWeaponReload | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2783 |
-| onClientPedWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3413 | Client/mods/deathmatch/logic/CClientGame.cpp:2784 |
+| onClientPedWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3422 | Client/mods/deathmatch/logic/CClientGame.cpp:2784 |
 | onClientPedChoke | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2785 |
 | onClientPedHeliKilled | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2786 |
 | onClientPedCarryStateChange | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2787 |
 | onClientPedHitByWaterCannon | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2788 |
 | onClientPedStep | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2789 |
 | onClientVehicleRespawn | fired | app/src/main/cpp/shared/CorePackets.cpp:700 | Client/mods/deathmatch/logic/CClientGame.cpp:2792 |
-| onClientVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3469 | Client/mods/deathmatch/logic/CClientGame.cpp:2793 |
-| onClientVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3472 | Client/mods/deathmatch/logic/CClientGame.cpp:2794 |
-| onClientVehicleStartEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3488, app/src/main/cpp/shared/LuaVMStub.cpp:3488 | Client/mods/deathmatch/logic/CClientGame.cpp:2795 |
-| onClientVehicleStartExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3488 | Client/mods/deathmatch/logic/CClientGame.cpp:2796 |
-| onClientTrailerAttach | fired | app/src/main/cpp/shared/CorePackets.cpp:758 | Client/mods/deathmatch/logic/CClientGame.cpp:2797 |
-| onClientTrailerDetach | fired | app/src/main/cpp/shared/CorePackets.cpp:767 | Client/mods/deathmatch/logic/CClientGame.cpp:2798 |
+| onClientVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3478 | Client/mods/deathmatch/logic/CClientGame.cpp:2793 |
+| onClientVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3481 | Client/mods/deathmatch/logic/CClientGame.cpp:2794 |
+| onClientVehicleStartEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3497, app/src/main/cpp/shared/LuaVMStub.cpp:3497 | Client/mods/deathmatch/logic/CClientGame.cpp:2795 |
+| onClientVehicleStartExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3497 | Client/mods/deathmatch/logic/CClientGame.cpp:2796 |
+| onClientTrailerAttach | fired | app/src/main/cpp/shared/CorePackets.cpp:776 | Client/mods/deathmatch/logic/CClientGame.cpp:2797 |
+| onClientTrailerDetach | fired | app/src/main/cpp/shared/CorePackets.cpp:785 | Client/mods/deathmatch/logic/CClientGame.cpp:2798 |
 | onClientVehicleExplode | fired | app/src/main/cpp/shared/CorePackets.cpp:470 | Client/mods/deathmatch/logic/CClientGame.cpp:2799 |
 | onClientVehicleCollision | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2800 |
-| onClientVehicleDamage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2801 |
+| onClientVehicleDamage | fired | app/src/main/cpp/shared/CorePackets.cpp:738, app/src/main/cpp/shared/PacketHandler.cpp:333 | Client/mods/deathmatch/logic/CClientGame.cpp:2801 |
 | onClientVehicleNitroStateChange | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2802 |
 | onClientVehicleWeaponHit | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2803 |
-| onClientGUIClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3021, app/src/main/cpp/shared/LuaVMStub.cpp:3029 | Client/mods/deathmatch/logic/CClientGame.cpp:2806 |
-| onClientGUIDoubleClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3022 | Client/mods/deathmatch/logic/CClientGame.cpp:2807 |
-| onClientGUIMouseDown | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3020 | Client/mods/deathmatch/logic/CClientGame.cpp:2808 |
-| onClientGUIMouseUp | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3028 | Client/mods/deathmatch/logic/CClientGame.cpp:2809 |
-| onClientGUIScroll | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2810 |
+| onClientGUIClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3030, app/src/main/cpp/shared/LuaVMStub.cpp:3038 | Client/mods/deathmatch/logic/CClientGame.cpp:2806 |
+| onClientGUIDoubleClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3031 | Client/mods/deathmatch/logic/CClientGame.cpp:2807 |
+| onClientGUIMouseDown | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3029 | Client/mods/deathmatch/logic/CClientGame.cpp:2808 |
+| onClientGUIMouseUp | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3037 | Client/mods/deathmatch/logic/CClientGame.cpp:2809 |
+| onClientGUIScroll | fired | app/src/main/cpp/shared/LuaGuiApi.cpp:2234 | Client/mods/deathmatch/logic/CClientGame.cpp:2810 |
 | onClientGUIChanged | fired | app/src/main/cpp/shared/LuaVMStub.cpp:471 | Client/mods/deathmatch/logic/CClientGame.cpp:2811 |
 | onClientGUIAccepted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:474 | Client/mods/deathmatch/logic/CClientGame.cpp:2812 |
-| onClientGUITabSwitched | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2815 |
-| onClientGUIComboBoxAccepted | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2816 |
+| onClientGUITabSwitched | fired | app/src/main/cpp/shared/LuaGuiApi.cpp:2516 | Client/mods/deathmatch/logic/CClientGame.cpp:2815 |
+| onClientGUIComboBoxAccepted | fired | app/src/main/cpp/shared/LuaGuiApi.cpp:1611 | Client/mods/deathmatch/logic/CClientGame.cpp:2816 |
 | onClientDoubleClick | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2819 |
 | onClientMouseMove | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2820 |
 | onClientMouseEnter | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2821 |
 | onClientMouseLeave | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2822 |
 | onClientMouseWheel | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2823 |
-| onClientGUIMove | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2824 |
-| onClientGUISize | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2825 |
+| onClientGUIMove | fired | app/src/main/cpp/shared/LuaGuiApi.cpp:1770 | Client/mods/deathmatch/logic/CClientGame.cpp:2824 |
+| onClientGUISize | fired | app/src/main/cpp/shared/LuaGuiApi.cpp:1789 | Client/mods/deathmatch/logic/CClientGame.cpp:2825 |
 | onClientGUIFocus | fired | app/src/main/cpp/shared/LuaVMStub.cpp:423, app/src/main/cpp/shared/LuaVMStub.cpp:423 | Client/mods/deathmatch/logic/CClientGame.cpp:2826 |
 | onClientGUIBlur | fired | app/src/main/cpp/shared/LuaVMStub.cpp:423 | Client/mods/deathmatch/logic/CClientGame.cpp:2827 |
 | onClientKey | fired | app/src/main/cpp/shared/LuaVMStub.cpp:400, app/src/main/cpp/shared/LuaVMStub.cpp:403, app/src/main/cpp/shared/LuaVMStub.cpp:645 | Client/mods/deathmatch/logic/CClientGame.cpp:2828 |
 | onClientCharacter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:487 | Client/mods/deathmatch/logic/CClientGame.cpp:2829 |
 | onClientPaste | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2830 |
-| onClientConsole | fired | app/src/main/cpp/shared/CorePackets.cpp:1132, app/src/main/cpp/shared/LuaVMStub.cpp:611 | Client/mods/deathmatch/logic/CClientGame.cpp:2833 |
+| onClientConsole | fired | app/src/main/cpp/shared/CorePackets.cpp:1150, app/src/main/cpp/shared/LuaVMStub.cpp:611 | Client/mods/deathmatch/logic/CClientGame.cpp:2833 |
 | onClientCoreCommand | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2834 |
-| onClientChatMessage | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2947, app/src/main/cpp/shared/LuaVMStub.cpp:2955, app/src/main/cpp/shared/LuaVMStub.cpp:2967, app/src/main/cpp/shared/LuaVMStub.cpp:2975, app/src/main/cpp/shared/LuaVMStub.cpp:3627 | Client/mods/deathmatch/logic/CClientGame.cpp:2837 |
-| onClientDebugMessage | fired | app/src/main/cpp/shared/CorePackets.cpp:1164 | Client/mods/deathmatch/logic/CClientGame.cpp:2840 |
-| onClientPreRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3173 | Client/mods/deathmatch/logic/CClientGame.cpp:2843 |
-| onClientPedsProcessed | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3175 | Client/mods/deathmatch/logic/CClientGame.cpp:2844 |
+| onClientChatMessage | fired | app/src/main/cpp/shared/LuaVMStub.cpp:2956, app/src/main/cpp/shared/LuaVMStub.cpp:2964, app/src/main/cpp/shared/LuaVMStub.cpp:2976, app/src/main/cpp/shared/LuaVMStub.cpp:2984, app/src/main/cpp/shared/LuaVMStub.cpp:3636 | Client/mods/deathmatch/logic/CClientGame.cpp:2837 |
+| onClientDebugMessage | fired | app/src/main/cpp/shared/CorePackets.cpp:1182 | Client/mods/deathmatch/logic/CClientGame.cpp:2840 |
+| onClientPreRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3182 | Client/mods/deathmatch/logic/CClientGame.cpp:2843 |
+| onClientPedsProcessed | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3184 | Client/mods/deathmatch/logic/CClientGame.cpp:2844 |
 | onClientNativeUI | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2845 |
-| onClientHUDRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3178 | Client/mods/deathmatch/logic/CClientGame.cpp:2846 |
-| onClientRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3181 | Client/mods/deathmatch/logic/CClientGame.cpp:2847 |
-| onClientMinimize | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3096 | Client/mods/deathmatch/logic/CClientGame.cpp:2848 |
-| onClientRestore | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3099 | Client/mods/deathmatch/logic/CClientGame.cpp:2849 |
-| onClientMTAFocusChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3094 | Client/mods/deathmatch/logic/CClientGame.cpp:2850 |
-| onClientClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3072 | Client/mods/deathmatch/logic/CClientGame.cpp:2853 |
-| onClientCursorMove | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3049, app/src/main/cpp/shared/LuaVMStub.cpp:3057 | Client/mods/deathmatch/logic/CClientGame.cpp:2854 |
+| onClientHUDRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3187 | Client/mods/deathmatch/logic/CClientGame.cpp:2846 |
+| onClientRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3190 | Client/mods/deathmatch/logic/CClientGame.cpp:2847 |
+| onClientMinimize | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3105 | Client/mods/deathmatch/logic/CClientGame.cpp:2848 |
+| onClientRestore | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3108 | Client/mods/deathmatch/logic/CClientGame.cpp:2849 |
+| onClientMTAFocusChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3103 | Client/mods/deathmatch/logic/CClientGame.cpp:2850 |
+| onClientClick | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3081 | Client/mods/deathmatch/logic/CClientGame.cpp:2853 |
+| onClientCursorMove | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3058, app/src/main/cpp/shared/LuaVMStub.cpp:3066 | Client/mods/deathmatch/logic/CClientGame.cpp:2854 |
 | onClientMarkerHit | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:334, app/src/main/cpp/shared/LuaSpatialApi.cpp:334 | Client/mods/deathmatch/logic/CClientGame.cpp:2857 |
 | onClientMarkerLeave | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:334 | Client/mods/deathmatch/logic/CClientGame.cpp:2858 |
 | onClientPlayerMarkerHit | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:337, app/src/main/cpp/shared/LuaSpatialApi.cpp:337 | Client/mods/deathmatch/logic/CClientGame.cpp:2860 |
@@ -491,33 +491,33 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientExplosion | fired | app/src/main/cpp/shared/CorePackets.cpp:457 | Client/mods/deathmatch/logic/CClientGame.cpp:2874 |
 | onClientProjectileCreation | fired | app/src/main/cpp/shared/CorePackets.cpp:614 | Client/mods/deathmatch/logic/CClientGame.cpp:2877 |
 | onClientSoundStream | fired | app/src/main/cpp/shared/LuaVMStub.cpp:718, app/src/main/cpp/shared/LuaVMStub.cpp:720 | Client/mods/deathmatch/logic/CClientGame.cpp:2880 |
-| onClientSoundFinishedDownload | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2881 |
-| onClientSoundChangedMeta | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2882 |
+| onClientSoundFinishedDownload | fired | app/src/main/cpp/shared/LuaVMStub.cpp:727 | Client/mods/deathmatch/logic/CClientGame.cpp:2881 |
+| onClientSoundChangedMeta | fired | app/src/main/cpp/shared/LuaVMStub.cpp:724 | Client/mods/deathmatch/logic/CClientGame.cpp:2882 |
 | onClientSoundStarted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:711 | Client/mods/deathmatch/logic/CClientGame.cpp:2883 |
-| onClientSoundStopped | fired | app/src/main/cpp/shared/LuaVMStub.cpp:724 | Client/mods/deathmatch/logic/CClientGame.cpp:2884 |
-| onClientSoundBeat | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2885 |
-| onClientObjectDamage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2888 |
+| onClientSoundStopped | fired | app/src/main/cpp/shared/LuaVMStub.cpp:733 | Client/mods/deathmatch/logic/CClientGame.cpp:2884 |
+| onClientSoundBeat | fired | app/src/main/cpp/shared/LuaVMStub.cpp:730 | Client/mods/deathmatch/logic/CClientGame.cpp:2885 |
+| onClientObjectDamage | fired | app/src/main/cpp/shared/PacketHandler.cpp:344 | Client/mods/deathmatch/logic/CClientGame.cpp:2888 |
 | onClientObjectGangTagProgress | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2889 |
-| onClientObjectBreak | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2890 |
-| onClientObjectMoveStart | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:781 | Client/mods/deathmatch/logic/CClientGame.cpp:2891 |
-| onClientObjectMoveStop | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:796 | Client/mods/deathmatch/logic/CClientGame.cpp:2892 |
-| onClientBrowserWhitelistChange | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1066 | Client/mods/deathmatch/logic/CClientGame.cpp:2895 |
-| onClientBrowserCreated | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1073 | Client/mods/deathmatch/logic/CClientGame.cpp:2896 |
-| onClientBrowserLoadingStart | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1078 | Client/mods/deathmatch/logic/CClientGame.cpp:2897 |
-| onClientBrowserDocumentReady | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1086 | Client/mods/deathmatch/logic/CClientGame.cpp:2898 |
-| onClientBrowserLoadingFailed | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1092 | Client/mods/deathmatch/logic/CClientGame.cpp:2899 |
-| onClientBrowserNavigate | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1098 | Client/mods/deathmatch/logic/CClientGame.cpp:2900 |
-| onClientBrowserPopup | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1103 | Client/mods/deathmatch/logic/CClientGame.cpp:2901 |
-| onClientBrowserCursorChange | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2902 |
-| onClientBrowserTooltip | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2903 |
-| onClientBrowserInputFocusChanged | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1107 | Client/mods/deathmatch/logic/CClientGame.cpp:2904 |
-| onClientBrowserResourceBlocked | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2905 |
-| onClientBrowserConsoleMessage | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2906 |
-| onClientFileDownloadComplete | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3729 | Client/mods/deathmatch/logic/CClientGame.cpp:2909 |
-| onClientResourceFileDownload | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2911 |
-| onClientTransferBoxProgressChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3814, app/src/main/cpp/shared/LuaVMStub.cpp:3820 | Client/mods/deathmatch/logic/CClientGame.cpp:2912 |
-| onClientTransferBoxVisibilityChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3825, app/src/main/cpp/shared/LuaVMStub.cpp:3830 | Client/mods/deathmatch/logic/CClientGame.cpp:2913 |
-| onClientWeaponFire | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2915 |
+| onClientObjectBreak | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:807 | Client/mods/deathmatch/logic/CClientGame.cpp:2890 |
+| onClientObjectMoveStart | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:779 | Client/mods/deathmatch/logic/CClientGame.cpp:2891 |
+| onClientObjectMoveStop | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:794 | Client/mods/deathmatch/logic/CClientGame.cpp:2892 |
+| onClientBrowserWhitelistChange | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1119 | Client/mods/deathmatch/logic/CClientGame.cpp:2895 |
+| onClientBrowserCreated | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1126 | Client/mods/deathmatch/logic/CClientGame.cpp:2896 |
+| onClientBrowserLoadingStart | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1131 | Client/mods/deathmatch/logic/CClientGame.cpp:2897 |
+| onClientBrowserDocumentReady | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1139 | Client/mods/deathmatch/logic/CClientGame.cpp:2898 |
+| onClientBrowserLoadingFailed | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1145 | Client/mods/deathmatch/logic/CClientGame.cpp:2899 |
+| onClientBrowserNavigate | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1151 | Client/mods/deathmatch/logic/CClientGame.cpp:2900 |
+| onClientBrowserPopup | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1156 | Client/mods/deathmatch/logic/CClientGame.cpp:2901 |
+| onClientBrowserCursorChange | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1174 | Client/mods/deathmatch/logic/CClientGame.cpp:2902 |
+| onClientBrowserTooltip | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1178 | Client/mods/deathmatch/logic/CClientGame.cpp:2903 |
+| onClientBrowserInputFocusChanged | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1160 | Client/mods/deathmatch/logic/CClientGame.cpp:2904 |
+| onClientBrowserResourceBlocked | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1166 | Client/mods/deathmatch/logic/CClientGame.cpp:2905 |
+| onClientBrowserConsoleMessage | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1170 | Client/mods/deathmatch/logic/CClientGame.cpp:2906 |
+| onClientFileDownloadComplete | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3738 | Client/mods/deathmatch/logic/CClientGame.cpp:2909 |
+| onClientResourceFileDownload | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3744 | Client/mods/deathmatch/logic/CClientGame.cpp:2911 |
+| onClientTransferBoxProgressChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3829, app/src/main/cpp/shared/LuaVMStub.cpp:3835 | Client/mods/deathmatch/logic/CClientGame.cpp:2912 |
+| onClientTransferBoxVisibilityChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3840, app/src/main/cpp/shared/LuaVMStub.cpp:3845 | Client/mods/deathmatch/logic/CClientGame.cpp:2913 |
+| onClientWeaponFire | fired | app/src/main/cpp/shared/PacketHandler.cpp:1234 | Client/mods/deathmatch/logic/CClientGame.cpp:2915 |
 | onClientWorldSound | not fired | - | Client/mods/deathmatch/logic/CClientGame.cpp:2917 |
 | onClientWorldObjectDamage | not fired | - | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:140 |
 | onClientWorldObjectBreak | not fired | - | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:141 |
@@ -531,67 +531,67 @@ Desktop ids come from `Shared/sdk/net/Packets.h` (`ePacketID`, 111 ids). Anchors
 | Id | Packet | Desktop case (file:line) | Desktop owner | Handler call | Port status | Port site |
 |---|---|---|---|---|---|---|
 | 2 | SERVER_JOIN_COMPLETE | Client/mods/deathmatch/logic/CPacketHandler.cpp:63 | CPacketHandler::ProcessPacket | Packet_ServerConnected | handled | (block) (app/src/main/cpp/net/NeonJoinProtocol.cpp:1659) |
-| 5 | PLAYER_QUIT | Client/mods/deathmatch/logic/CPacketHandler.cpp:79 | CPacketHandler::ProcessPacket | Packet_PlayerQuit | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1668) |
-| 8 | PACKET_PROGRESS | Client/mods/deathmatch/logic/CPacketHandler.cpp:141 | CPacketHandler::ProcessPacket | Packet_PartialPacketInfo | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1604) |
+| 5 | PLAYER_QUIT | Client/mods/deathmatch/logic/CPacketHandler.cpp:79 | CPacketHandler::ProcessPacket | Packet_PlayerQuit | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1740) |
+| 8 | PACKET_PROGRESS | Client/mods/deathmatch/logic/CPacketHandler.cpp:141 | CPacketHandler::ProcessPacket | Packet_PartialPacketInfo | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1676) |
 | 22 | SERVER_JOINEDGAME | Client/mods/deathmatch/logic/CPacketHandler.cpp:67 | CPacketHandler::ProcessPacket | Packet_ServerJoined | handled | (block) (app/src/main/cpp/net/NeonJoinProtocol.cpp:1669) |
-| 23 | SERVER_DISCONNECTED | Client/mods/deathmatch/logic/CPacketHandler.cpp:71 | CPacketHandler::ProcessPacket | Packet_ServerDisconnected | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1605) |
-| 25 | PLAYER_LIST | Client/mods/deathmatch/logic/CPacketHandler.cpp:75 | CPacketHandler::ProcessPacket | Packet_PlayerList | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1703) |
-| 26 | PLAYER_SPAWN | Client/mods/deathmatch/logic/CPacketHandler.cpp:83 | CPacketHandler::ProcessPacket | Packet_PlayerSpawn | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1667) |
-| 27 | PLAYER_WASTED | Client/mods/deathmatch/logic/CPacketHandler.cpp:91 | CPacketHandler::ProcessPacket | Packet_PlayerWasted | handled | HandleWasted (app/src/main/cpp/shared/PacketHandler.cpp:1701) |
-| 28 | PLAYER_CHANGE_NICK | Client/mods/deathmatch/logic/CPacketHandler.cpp:95 | CPacketHandler::ProcessPacket | Packet_PlayerChangeNick | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1607) |
-| 29 | PLAYER_STATS | Client/mods/deathmatch/logic/CPacketHandler.cpp:191 | CPacketHandler::ProcessPacket | Packet_PlayerStats | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1608) |
-| 30 | PLAYER_CLOTHES | Client/mods/deathmatch/logic/CPacketHandler.cpp:195 | CPacketHandler::ProcessPacket | Packet_PlayerClothes | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1700) |
-| 31 | PLAYER_KEYSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:115 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1609) |
-| 32 | PLAYER_PURESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:74 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1610) |
-| 33 | PLAYER_VEHICLE_PURESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:92 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1663) |
-| 34 | LIGHTSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:43 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1611) |
-| 35 | VEHICLE_RESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:56 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1612) |
-| 36 | RETURN_SYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:161 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1613) |
-| 37 | EXPLOSION | Client/mods/deathmatch/logic/CPacketHandler.cpp:179 | CPacketHandler::ProcessPacket | Packet_ExplosionSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1614) |
-| 38 | FIRE | Client/mods/deathmatch/logic/CPacketHandler.cpp:183 | CPacketHandler::ProcessPacket | Packet_FireSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1615) |
-| 39 | PROJECTILE | Client/mods/deathmatch/logic/CPacketHandler.cpp:187 | CPacketHandler::ProcessPacket | Packet_ProjectileSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1616) |
-| 40 | DETONATE_SATCHELS | Client/mods/deathmatch/logic/CPacketHandler.cpp:215 | CPacketHandler::ProcessPacket | Packet_DetonateSatchels | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1617) |
-| 41 | DESTROY_SATCHELS | Client/mods/deathmatch/logic/CPacketHandler.cpp:219 | CPacketHandler::ProcessPacket | Packet_DestroySatchels | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1618) |
-| 43 | CHAT_ECHO | Client/mods/deathmatch/logic/CPacketHandler.cpp:99 | CPacketHandler::ProcessPacket | Packet_ChatEcho | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1606) |
-| 44 | CONSOLE_ECHO | Client/mods/deathmatch/logic/CPacketHandler.cpp:107 | CPacketHandler::ProcessPacket | Packet_ConsoleEcho | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1619) |
-| 45 | DEBUG_ECHO | Client/mods/deathmatch/logic/CPacketHandler.cpp:111 | CPacketHandler::ProcessPacket | Packet_DebugEcho | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1620) |
-| 46 | MAP_INFO | Client/mods/deathmatch/logic/CPacketHandler.cpp:136 | CPacketHandler::ProcessPacket | Packet_MapInfo | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1621) |
-| 50 | ENTITY_ADD | Client/mods/deathmatch/logic/CPacketHandler.cpp:150 | CPacketHandler::ProcessPacket | Packet_EntityAdd | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1704) |
-| 51 | ENTITY_REMOVE | Client/mods/deathmatch/logic/CPacketHandler.cpp:155 | CPacketHandler::ProcessPacket | Packet_EntityRemove | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1705) |
-| 52 | PICKUP_HIDESHOW | Client/mods/deathmatch/logic/CPacketHandler.cpp:160 | CPacketHandler::ProcessPacket | Packet_PickupHideShow | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1622) |
-| 53 | PICKUP_HIT_CONFIRM | Client/mods/deathmatch/logic/CPacketHandler.cpp:165 | CPacketHandler::ProcessPacket | Packet_PickupHitConfirm | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1623) |
-| 54 | UNOCCUPIED_VEHICLE_STARTSYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:35 | CUnoccupiedVehicleSync::ProcessPacket | Packet_UnoccupiedVehicleStartSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1661) |
-| 55 | UNOCCUPIED_VEHICLE_STOPSYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:41 | CUnoccupiedVehicleSync::ProcessPacket | Packet_UnoccupiedVehicleStopSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1662) |
-| 56 | UNOCCUPIED_VEHICLE_SYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:47 | CUnoccupiedVehicleSync::ProcessPacket | Packet_UnoccupiedVehicleSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1664) |
-| 57 | VEHICLE_SPAWN | Client/mods/deathmatch/logic/CPacketHandler.cpp:119 | CPacketHandler::ProcessPacket | Packet_VehicleSpawn | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1624) |
-| 58 | VEHICLE_INOUT | Client/mods/deathmatch/logic/CPacketHandler.cpp:123 | CPacketHandler::ProcessPacket | Packet_Vehicle_InOut | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1665) |
-| 59 | VEHICLE_DAMAGE_SYNC | Client/mods/deathmatch/logic/CPacketHandler.cpp:127 | CPacketHandler::ProcessPacket | Packet_VehicleDamageSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1625) |
-| 60 | VEHICLE_TRAILER | Client/mods/deathmatch/logic/CPacketHandler.cpp:131 | CPacketHandler::ProcessPacket | Packet_VehicleTrailer | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1626) |
-| 61 | PED_STARTSYNC | Client/mods/deathmatch/logic/CPedSync.cpp:103 | CPedSync::ProcessPacket | Packet_PedStartSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1659) |
-| 62 | PED_STOPSYNC | Client/mods/deathmatch/logic/CPedSync.cpp:109 | CPedSync::ProcessPacket | Packet_PedStopSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1660) |
-| 63 | PED_SYNC | Client/mods/deathmatch/logic/CPedSync.cpp:115 | CPedSync::ProcessPacket | Packet_PedSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1658) |
-| 64 | PED_WASTED | Client/mods/deathmatch/logic/CPacketHandler.cpp:87 | CPacketHandler::ProcessPacket | Packet_PlayerWasted | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1595) |
-| 71 | VOICE_DATA | Client/mods/deathmatch/logic/CPacketHandler.cpp:223 | CPacketHandler::ProcessPacket | Packet_VoiceData | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1707) |
-| 76 | LUA | Client/mods/deathmatch/logic/CPacketHandler.cpp:170 | CPacketHandler::ProcessPacket | Packet_Lua | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1595) |
-| 77 | LUA_ELEMENT_RPC | Client/mods/deathmatch/logic/CPacketHandler.cpp:171 | CPacketHandler::ProcessPacket | Packet_Lua | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1595) |
-| 78 | TEXT_ITEM | Client/mods/deathmatch/logic/CPacketHandler.cpp:175 | CPacketHandler::ProcessPacket | Packet_TextItem | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1628) |
-| 81 | LUA_EVENT | Client/mods/deathmatch/logic/CPacketHandler.cpp:199 | CPacketHandler::ProcessPacket | Packet_LuaEvent | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1666) |
-| 82 | RESOURCE_START | Client/mods/deathmatch/logic/CPacketHandler.cpp:203 | CPacketHandler::ProcessPacket | Packet_ResourceStart | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1722) |
-| 83 | RESOURCE_STOP | Client/mods/deathmatch/logic/CPacketHandler.cpp:207 | CPacketHandler::ProcessPacket | Packet_ResourceStop | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1723) |
-| 86 | OBJECT_STARTSYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:43 | CObjectSync::ProcessPacket | Packet_ObjectStartSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1629) |
-| 87 | OBJECT_STOPSYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:46 | CObjectSync::ProcessPacket | Packet_ObjectStopSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1630) |
-| 88 | OBJECT_SYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:49 | CObjectSync::ProcessPacket | Packet_ObjectSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1631) |
-| 89 | UPDATE_INFO | Client/mods/deathmatch/logic/CPacketHandler.cpp:227 | CPacketHandler::ProcessPacket | Packet_UpdateInfo | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1632) |
-| 95 | RESOURCE_CLIENT_SCRIPTS | Client/mods/deathmatch/logic/CPacketHandler.cpp:211 | CPacketHandler::ProcessPacket | Packet_ResourceClientScripts | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1727) |
-| 96 | LATENT_TRANSFER | Client/mods/deathmatch/logic/CPacketHandler.cpp:231 | CPacketHandler::ProcessPacket | Packet_LatentTransfer | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1633) |
-| 98 | PLAYER_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:133 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1655) |
-| 99 | SYNC_SETTINGS | Client/mods/deathmatch/logic/CPacketHandler.cpp:235 | CPacketHandler::ProcessPacket | Packet_SyncSettings | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1656) |
-| 100 | WEAPON_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:147 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1657) |
-| 101 | PED_TASK | Client/mods/deathmatch/logic/CPacketHandler.cpp:239 | CPacketHandler::ProcessPacket | Packet_PedTask | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1595) |
-| 103 | PLAYER_NETWORK_STATUS | Client/mods/deathmatch/logic/CPacketHandler.cpp:145 | CPacketHandler::ProcessPacket | Packet_PlayerNetworkStatus | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1644) |
-| 105 | CHAT_CLEAR | Client/mods/deathmatch/logic/CPacketHandler.cpp:103 | CPacketHandler::ProcessPacket | Packet_ChatClear | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1641) |
-| 106 | SERVER_INFO_SYNC | Client/mods/deathmatch/logic/CPacketHandler.cpp:243 | CPacketHandler::ProcessPacket | Packet_ServerInfoSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1642) |
-| 110 | DEBUG_EVENT | Client/mods/deathmatch/logic/CPacketHandler.cpp:115 | CPacketHandler::ProcessPacket | Packet_DebugEvent | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1643) |
+| 23 | SERVER_DISCONNECTED | Client/mods/deathmatch/logic/CPacketHandler.cpp:71 | CPacketHandler::ProcessPacket | Packet_ServerDisconnected | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1677) |
+| 25 | PLAYER_LIST | Client/mods/deathmatch/logic/CPacketHandler.cpp:75 | CPacketHandler::ProcessPacket | Packet_PlayerList | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1775) |
+| 26 | PLAYER_SPAWN | Client/mods/deathmatch/logic/CPacketHandler.cpp:83 | CPacketHandler::ProcessPacket | Packet_PlayerSpawn | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1739) |
+| 27 | PLAYER_WASTED | Client/mods/deathmatch/logic/CPacketHandler.cpp:91 | CPacketHandler::ProcessPacket | Packet_PlayerWasted | handled | HandleWasted (app/src/main/cpp/shared/PacketHandler.cpp:1773) |
+| 28 | PLAYER_CHANGE_NICK | Client/mods/deathmatch/logic/CPacketHandler.cpp:95 | CPacketHandler::ProcessPacket | Packet_PlayerChangeNick | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1679) |
+| 29 | PLAYER_STATS | Client/mods/deathmatch/logic/CPacketHandler.cpp:191 | CPacketHandler::ProcessPacket | Packet_PlayerStats | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1680) |
+| 30 | PLAYER_CLOTHES | Client/mods/deathmatch/logic/CPacketHandler.cpp:195 | CPacketHandler::ProcessPacket | Packet_PlayerClothes | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1772) |
+| 31 | PLAYER_KEYSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:115 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1681) |
+| 32 | PLAYER_PURESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:74 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1682) |
+| 33 | PLAYER_VEHICLE_PURESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:92 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1735) |
+| 34 | LIGHTSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:43 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1683) |
+| 35 | VEHICLE_RESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:56 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1684) |
+| 36 | RETURN_SYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:161 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1685) |
+| 37 | EXPLOSION | Client/mods/deathmatch/logic/CPacketHandler.cpp:179 | CPacketHandler::ProcessPacket | Packet_ExplosionSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1686) |
+| 38 | FIRE | Client/mods/deathmatch/logic/CPacketHandler.cpp:183 | CPacketHandler::ProcessPacket | Packet_FireSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1687) |
+| 39 | PROJECTILE | Client/mods/deathmatch/logic/CPacketHandler.cpp:187 | CPacketHandler::ProcessPacket | Packet_ProjectileSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1688) |
+| 40 | DETONATE_SATCHELS | Client/mods/deathmatch/logic/CPacketHandler.cpp:215 | CPacketHandler::ProcessPacket | Packet_DetonateSatchels | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1689) |
+| 41 | DESTROY_SATCHELS | Client/mods/deathmatch/logic/CPacketHandler.cpp:219 | CPacketHandler::ProcessPacket | Packet_DestroySatchels | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1690) |
+| 43 | CHAT_ECHO | Client/mods/deathmatch/logic/CPacketHandler.cpp:99 | CPacketHandler::ProcessPacket | Packet_ChatEcho | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1678) |
+| 44 | CONSOLE_ECHO | Client/mods/deathmatch/logic/CPacketHandler.cpp:107 | CPacketHandler::ProcessPacket | Packet_ConsoleEcho | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1691) |
+| 45 | DEBUG_ECHO | Client/mods/deathmatch/logic/CPacketHandler.cpp:111 | CPacketHandler::ProcessPacket | Packet_DebugEcho | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1692) |
+| 46 | MAP_INFO | Client/mods/deathmatch/logic/CPacketHandler.cpp:136 | CPacketHandler::ProcessPacket | Packet_MapInfo | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1693) |
+| 50 | ENTITY_ADD | Client/mods/deathmatch/logic/CPacketHandler.cpp:150 | CPacketHandler::ProcessPacket | Packet_EntityAdd | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1776) |
+| 51 | ENTITY_REMOVE | Client/mods/deathmatch/logic/CPacketHandler.cpp:155 | CPacketHandler::ProcessPacket | Packet_EntityRemove | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1777) |
+| 52 | PICKUP_HIDESHOW | Client/mods/deathmatch/logic/CPacketHandler.cpp:160 | CPacketHandler::ProcessPacket | Packet_PickupHideShow | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1694) |
+| 53 | PICKUP_HIT_CONFIRM | Client/mods/deathmatch/logic/CPacketHandler.cpp:165 | CPacketHandler::ProcessPacket | Packet_PickupHitConfirm | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1695) |
+| 54 | UNOCCUPIED_VEHICLE_STARTSYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:35 | CUnoccupiedVehicleSync::ProcessPacket | Packet_UnoccupiedVehicleStartSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1733) |
+| 55 | UNOCCUPIED_VEHICLE_STOPSYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:41 | CUnoccupiedVehicleSync::ProcessPacket | Packet_UnoccupiedVehicleStopSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1734) |
+| 56 | UNOCCUPIED_VEHICLE_SYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:47 | CUnoccupiedVehicleSync::ProcessPacket | Packet_UnoccupiedVehicleSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1736) |
+| 57 | VEHICLE_SPAWN | Client/mods/deathmatch/logic/CPacketHandler.cpp:119 | CPacketHandler::ProcessPacket | Packet_VehicleSpawn | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1696) |
+| 58 | VEHICLE_INOUT | Client/mods/deathmatch/logic/CPacketHandler.cpp:123 | CPacketHandler::ProcessPacket | Packet_Vehicle_InOut | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1737) |
+| 59 | VEHICLE_DAMAGE_SYNC | Client/mods/deathmatch/logic/CPacketHandler.cpp:127 | CPacketHandler::ProcessPacket | Packet_VehicleDamageSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1697) |
+| 60 | VEHICLE_TRAILER | Client/mods/deathmatch/logic/CPacketHandler.cpp:131 | CPacketHandler::ProcessPacket | Packet_VehicleTrailer | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1698) |
+| 61 | PED_STARTSYNC | Client/mods/deathmatch/logic/CPedSync.cpp:103 | CPedSync::ProcessPacket | Packet_PedStartSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1731) |
+| 62 | PED_STOPSYNC | Client/mods/deathmatch/logic/CPedSync.cpp:109 | CPedSync::ProcessPacket | Packet_PedStopSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1732) |
+| 63 | PED_SYNC | Client/mods/deathmatch/logic/CPedSync.cpp:115 | CPedSync::ProcessPacket | Packet_PedSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1730) |
+| 64 | PED_WASTED | Client/mods/deathmatch/logic/CPacketHandler.cpp:87 | CPacketHandler::ProcessPacket | Packet_PlayerWasted | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1667) |
+| 71 | VOICE_DATA | Client/mods/deathmatch/logic/CPacketHandler.cpp:223 | CPacketHandler::ProcessPacket | Packet_VoiceData | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1779) |
+| 76 | LUA | Client/mods/deathmatch/logic/CPacketHandler.cpp:170 | CPacketHandler::ProcessPacket | Packet_Lua | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1667) |
+| 77 | LUA_ELEMENT_RPC | Client/mods/deathmatch/logic/CPacketHandler.cpp:171 | CPacketHandler::ProcessPacket | Packet_Lua | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1667) |
+| 78 | TEXT_ITEM | Client/mods/deathmatch/logic/CPacketHandler.cpp:175 | CPacketHandler::ProcessPacket | Packet_TextItem | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1700) |
+| 81 | LUA_EVENT | Client/mods/deathmatch/logic/CPacketHandler.cpp:199 | CPacketHandler::ProcessPacket | Packet_LuaEvent | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1738) |
+| 82 | RESOURCE_START | Client/mods/deathmatch/logic/CPacketHandler.cpp:203 | CPacketHandler::ProcessPacket | Packet_ResourceStart | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1794) |
+| 83 | RESOURCE_STOP | Client/mods/deathmatch/logic/CPacketHandler.cpp:207 | CPacketHandler::ProcessPacket | Packet_ResourceStop | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1795) |
+| 86 | OBJECT_STARTSYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:43 | CObjectSync::ProcessPacket | Packet_ObjectStartSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1701) |
+| 87 | OBJECT_STOPSYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:46 | CObjectSync::ProcessPacket | Packet_ObjectStopSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1702) |
+| 88 | OBJECT_SYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:49 | CObjectSync::ProcessPacket | Packet_ObjectSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1703) |
+| 89 | UPDATE_INFO | Client/mods/deathmatch/logic/CPacketHandler.cpp:227 | CPacketHandler::ProcessPacket | Packet_UpdateInfo | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1704) |
+| 95 | RESOURCE_CLIENT_SCRIPTS | Client/mods/deathmatch/logic/CPacketHandler.cpp:211 | CPacketHandler::ProcessPacket | Packet_ResourceClientScripts | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1799) |
+| 96 | LATENT_TRANSFER | Client/mods/deathmatch/logic/CPacketHandler.cpp:231 | CPacketHandler::ProcessPacket | Packet_LatentTransfer | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1705) |
+| 98 | PLAYER_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:133 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1727) |
+| 99 | SYNC_SETTINGS | Client/mods/deathmatch/logic/CPacketHandler.cpp:235 | CPacketHandler::ProcessPacket | Packet_SyncSettings | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1728) |
+| 100 | WEAPON_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:147 | CNetAPI::ProcessPacket | (inline) | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1729) |
+| 101 | PED_TASK | Client/mods/deathmatch/logic/CPacketHandler.cpp:239 | CPacketHandler::ProcessPacket | Packet_PedTask | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1667) |
+| 103 | PLAYER_NETWORK_STATUS | Client/mods/deathmatch/logic/CPacketHandler.cpp:145 | CPacketHandler::ProcessPacket | Packet_PlayerNetworkStatus | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1716) |
+| 105 | CHAT_CLEAR | Client/mods/deathmatch/logic/CPacketHandler.cpp:103 | CPacketHandler::ProcessPacket | Packet_ChatClear | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1713) |
+| 106 | SERVER_INFO_SYNC | Client/mods/deathmatch/logic/CPacketHandler.cpp:243 | CPacketHandler::ProcessPacket | Packet_ServerInfoSync | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1714) |
+| 110 | DEBUG_EVENT | Client/mods/deathmatch/logic/CPacketHandler.cpp:115 | CPacketHandler::ProcessPacket | Packet_DebugEvent | handled | (block) (app/src/main/cpp/shared/PacketHandler.cpp:1715) |
 
 Port inbound ids with no desktop inbound case: 68 (PLAYER_RCON_BAN), 72 (VOICE_END), 84 (CUSTOM_DATA), 4 (PLAYER_JOINDATA)
 
@@ -605,31 +605,31 @@ Port inbound ids with no desktop inbound case: 68 (PLAYER_RCON_BAN), 72 (VOICE_E
 | 31 | PLAYER_KEYSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:394 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:348 |
 | 32 | PLAYER_PURESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:340 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:556 |
 | 33 | PLAYER_VEHICLE_PURESYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:352 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:271 |
-| 37 | EXPLOSION | Client/mods/deathmatch/logic/CClientGame.cpp:6315 | sent | app/src/main/cpp/shared/CorePackets.cpp:1666 |
-| 39 | PROJECTILE | Client/mods/deathmatch/logic/CClientGame.cpp:6413 | sent | app/src/main/cpp/shared/CorePackets.cpp:1815 |
-| 40 | DETONATE_SATCHELS | Client/mods/deathmatch/logic/CClientGame.cpp:2044 | sent | app/src/main/cpp/shared/CorePackets.cpp:1681 |
-| 41 | DESTROY_SATCHELS | Client/mods/deathmatch/logic/CClientGame.cpp:6515 | sent | app/src/main/cpp/shared/CorePackets.cpp:1688 |
+| 37 | EXPLOSION | Client/mods/deathmatch/logic/CClientGame.cpp:6315 | sent | app/src/main/cpp/shared/CorePackets.cpp:1684 |
+| 39 | PROJECTILE | Client/mods/deathmatch/logic/CClientGame.cpp:6413 | sent | app/src/main/cpp/shared/CorePackets.cpp:1833 |
+| 40 | DETONATE_SATCHELS | Client/mods/deathmatch/logic/CClientGame.cpp:2044 | sent | app/src/main/cpp/shared/CorePackets.cpp:1699 |
+| 41 | DESTROY_SATCHELS | Client/mods/deathmatch/logic/CClientGame.cpp:6515 | sent | app/src/main/cpp/shared/CorePackets.cpp:1706 |
 | 42 | COMMAND | Client/mods/deathmatch/ClientCommands.cpp:91 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:1719 |
 | 56 | UNOCCUPIED_VEHICLE_SYNC | Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp:260 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:1027 |
 | 58 | VEHICLE_INOUT | Client/mods/deathmatch/logic/CClientPed.cpp:10075 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:1064 |
-| 59 | VEHICLE_DAMAGE_SYNC | Client/mods/deathmatch/logic/CDeathmatchVehicle.cpp:127 | sent | app/src/main/cpp/shared/CorePackets.cpp:1697 |
+| 59 | VEHICLE_DAMAGE_SYNC | Client/mods/deathmatch/logic/CDeathmatchVehicle.cpp:127 | sent | app/src/main/cpp/shared/CorePackets.cpp:1715 |
 | 63 | PED_SYNC | Client/mods/deathmatch/logic/CPedSync.cpp:632 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:813 |
 | 64 | PED_WASTED | Client/mods/deathmatch/logic/CClientGame.cpp:6573 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:369 |
 | 71 | VOICE_DATA | Client/mods/deathmatch/CVoiceRecorder.cpp:313 | sent | app/src/main/cpp/shared/VoiceRuntime.cpp:260 |
 | 72 | VOICE_END | Client/mods/deathmatch/CVoiceRecorder.cpp:335 | sent | app/src/main/cpp/shared/VoiceRuntime.cpp:219 |
-| 81 | LUA_EVENT | Client/mods/deathmatch/logic/CStaticFunctionDefinitions.cpp:195 | sent | app/src/main/cpp/shared/LuaVMStub.cpp:1555 |
-| 84 | CUSTOM_DATA | Client/mods/deathmatch/logic/CStaticFunctionDefinitions.cpp:1045 | sent | app/src/main/cpp/shared/CorePackets.cpp:1723 |
-| 85 | CAMERA_SYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:454 | sent | app/src/main/cpp/shared/CorePackets.cpp:1742 |
-| 88 | OBJECT_SYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:212 | sent | app/src/main/cpp/shared/CorePackets.cpp:1766 |
-| 91 | PLAYER_TRANSGRESSION | Client/mods/deathmatch/logic/CClientGame.cpp:1254 | sent | app/src/main/cpp/shared/CorePackets.cpp:1877 |
-| 92 | PLAYER_DIAGNOSTIC | Client/mods/deathmatch/logic/CClientGame.cpp:1281 | sent | app/src/main/cpp/shared/CorePackets.cpp:1888 |
-| 94 | PLAYER_SCREENSHOT | Client/mods/deathmatch/logic/CClientGame.cpp:7271 | sent | app/src/main/cpp/shared/CorePackets.cpp:1900 |
-| 97 | VEHICLE_PUSH_SYNC | Client/mods/deathmatch/logic/CClientGame.cpp:4959 | sent | app/src/main/cpp/shared/CorePackets.cpp:1789 |
+| 81 | LUA_EVENT | Client/mods/deathmatch/logic/CStaticFunctionDefinitions.cpp:195 | sent | app/src/main/cpp/shared/LuaVMStub.cpp:1564 |
+| 84 | CUSTOM_DATA | Client/mods/deathmatch/logic/CStaticFunctionDefinitions.cpp:1045 | sent | app/src/main/cpp/shared/CorePackets.cpp:1741 |
+| 85 | CAMERA_SYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:454 | sent | app/src/main/cpp/shared/CorePackets.cpp:1760 |
+| 88 | OBJECT_SYNC | Client/mods/deathmatch/logic/CObjectSync.cpp:212 | sent | app/src/main/cpp/shared/CorePackets.cpp:1784 |
+| 91 | PLAYER_TRANSGRESSION | Client/mods/deathmatch/logic/CClientGame.cpp:1254 | sent | app/src/main/cpp/shared/CorePackets.cpp:1895 |
+| 92 | PLAYER_DIAGNOSTIC | Client/mods/deathmatch/logic/CClientGame.cpp:1281 | sent | app/src/main/cpp/shared/CorePackets.cpp:1906 |
+| 94 | PLAYER_SCREENSHOT | Client/mods/deathmatch/logic/CClientGame.cpp:7271 | sent | app/src/main/cpp/shared/CorePackets.cpp:1918 |
+| 97 | VEHICLE_PUSH_SYNC | Client/mods/deathmatch/logic/CClientGame.cpp:4959 | sent | app/src/main/cpp/shared/CorePackets.cpp:1807 |
 | 98 | PLAYER_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:2412 | sent | app/src/main/cpp/net/NeonJoinProtocol.cpp:409 |
-| 100 | WEAPON_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:2428 | sent | app/src/main/cpp/shared/CorePackets.cpp:1914 |
-| 101 | PED_TASK | Client/mods/deathmatch/logic/CClientGame.cpp:5360 | sent | app/src/main/cpp/shared/CorePackets.cpp:1931 |
+| 100 | WEAPON_BULLETSYNC | Client/mods/deathmatch/logic/CNetAPI.cpp:2428 | sent | app/src/main/cpp/shared/CorePackets.cpp:1932 |
+| 101 | PED_TASK | Client/mods/deathmatch/logic/CClientGame.cpp:5360 | sent | app/src/main/cpp/shared/CorePackets.cpp:1949 |
 | 108 | PLAYER_RESOURCE_START | Client/mods/deathmatch/logic/CResource.cpp:1636 | sent | app/src/main/cpp/shared/ResourcePackets.cpp:7 |
-| 109 | PLAYER_WORLD_SPECIAL_PROPERTY | Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp:2011 | sent | app/src/main/cpp/shared/CorePackets.cpp:1799 |
+| 109 | PLAYER_WORLD_SPECIAL_PROPERTY | Client/mods/deathmatch/logic/luadefs/CLuaWorldDefs.cpp:2011 | sent | app/src/main/cpp/shared/CorePackets.cpp:1817 |
 
 Port sends with no desktop SendPacket site: none
 

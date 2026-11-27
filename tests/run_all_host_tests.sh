@@ -58,6 +58,37 @@ suite_abi() {
                 --build-dir "$build/dx-view-test" \
                 --javac "$javac_bin" \
                 --java "$java_bin" || rc=1
+
+            # Run Kotlin JVM regression suites when a JVM org.json jar and Kotlin compiler cache are available.
+            local json_jar="${NEON_JSON_JAR:-}"
+            if [[ -z "$json_jar" ]]; then
+                json_jar="$(ls -1 "$HOME"/.gradle/caches/modules-2/files-2.1/org.json/json/*/*/*.jar /usr/share/java/json.jar 2>/dev/null | tail -n1 || true)"
+            fi
+            local kotlin_compiler=""
+            kotlin_compiler="$(ls -1 "$HOME"/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/1.9.20/*/*.jar 2>/dev/null | head -n1 || true)"
+            if [[ -n "$json_jar" && -f "$json_jar" && -n "$kotlin_compiler" && -f "$kotlin_compiler" ]]; then
+                echo "== run_asset_sync_tests.py"
+                python3 "$root/tools/headless/run_asset_sync_tests.py" \
+                    --json-jar "$json_jar" \
+                    --build-dir "$build/asset-sync-test" \
+                    --java "$java_bin" || rc=1
+                echo "== run_identity_tests.py"
+                python3 "$root/tools/headless/run_identity_tests.py" \
+                    --json-jar "$json_jar" \
+                    --android-jar "$android_jar" \
+                    --build-dir "$build/identity-test" \
+                    --java "$java_bin" || rc=1
+                if [[ -f "$root/app/build/generated/source/buildConfig/debug/com/saonline/neonlauncher/BuildConfig.java" ]]; then
+                    echo "== run_server_browser_tests.py"
+                    python3 "$root/tools/headless/run_server_browser_tests.py" \
+                        --json-jar "$json_jar" \
+                        --build-dir "$build/server-browser-test" \
+                        --javac "$javac_bin" \
+                        --java "$java_bin" || rc=1
+                fi
+            else
+                echo "== kotlin JVM suites skipped (set NEON_JSON_JAR to a JVM org.json jar to enable asset_sync, identity, server_browser)"
+            fi
         fi
     fi
     return $rc

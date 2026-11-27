@@ -198,6 +198,7 @@ public final class EngineHostActivity extends GTASA {
     private native void nativeBrowserDocumentReady(int id, String url, String title, boolean canBack, boolean canForward);
     private native void nativeBrowserLoadingFailed(int id, String url, int errorCode, String description);
     private native void nativeBrowserSource(int id, String html);
+    private native void nativeBrowserConsoleMessage(int id, String message);
     private BrowserEngine browserEngine;
     private native boolean nativeHardwareMouseReady();
     private native void nativeHardwareMouse(float x, float y, int buttons, float wheel, boolean captured);
@@ -1417,6 +1418,11 @@ public final class EngineHostActivity extends GTASA {
                                 @Override
                                 public void onSourceReady(int id, String html) {
                                     nativeBrowserSource(id, html);
+                                }
+
+                                @Override
+                                public void onConsoleMessage(int id, String message) {
+                                    nativeBrowserConsoleMessage(id, message);
                                 }
                             });
                 }

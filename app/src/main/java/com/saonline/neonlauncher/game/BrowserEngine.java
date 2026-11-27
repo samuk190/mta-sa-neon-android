@@ -11,6 +11,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
+import android.webkit.ConsoleMessage;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -39,6 +40,7 @@ final class BrowserEngine {
         void onDocumentReady(int id, String url, String title, boolean canBack, boolean canForward);
         void onLoadingFailed(int id, String url, int errorCode, String description);
         void onSourceReady(int id, String html);
+        void onConsoleMessage(int id, String message);
     }
 
     private static final class Slot {
@@ -255,7 +257,15 @@ final class BrowserEngine {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
 
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage cm) {
+                if (cm != null && cm.message() != null) {
+                    callbacks.onConsoleMessage(id, cm.message());
+                }
+                return super.onConsoleMessage(cm);
+            }
+        });
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {

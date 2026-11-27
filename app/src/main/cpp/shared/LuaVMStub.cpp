@@ -719,6 +719,15 @@ static void PumpEndedSounds() {
             } else {
                 fireHandlers("onClientSoundStream", 3, ev.id);
             }
+        } else if (ev.kind == SoundLifecycleEvent::Kind::ChangedMeta) {
+            lua_pushstring(g_dx.L, ev.reasonOrName.c_str());
+            fireHandlers("onClientSoundChangedMeta", 1, ev.id);
+        } else if (ev.kind == SoundLifecycleEvent::Kind::FinishedDownload) {
+            lua_pushnumber(g_dx.L, ev.length);
+            fireHandlers("onClientSoundFinishedDownload", 1, ev.id);
+        } else if (ev.kind == SoundLifecycleEvent::Kind::Beat) {
+            lua_pushnumber(g_dx.L, ev.length);
+            fireHandlers("onClientSoundBeat", 1, ev.id);
         } else {
             lua_pushstring(g_dx.L, ev.reasonOrName.empty() ? "finished" : ev.reasonOrName.c_str());
             fireHandlers("onClientSoundStopped", 1, ev.id);
@@ -3727,6 +3736,12 @@ bool ActiveVmPulseResources() {
             !PushResourceInstance(L, requester.netId, done.requesterGeneration))
             lua_pushboolean(L, 0);
         fireHandlers("onClientFileDownloadComplete", 3, target.root);
+        lua_pushlstring(L, done.file.data(), done.file.size());
+        lua_pushboolean(L, done.ok);
+        if (!ResourceLoader::CopyResourceByGeneration(done.requesterGeneration, requester) ||
+            !PushResourceInstance(L, requester.netId, done.requesterGeneration))
+            lua_pushboolean(L, 0);
+        fireHandlers("onClientResourceFileDownload", 3, target.root);
         lua_setglobal(L, "source");
     }
     FlushPendingChat(g_dx.L);

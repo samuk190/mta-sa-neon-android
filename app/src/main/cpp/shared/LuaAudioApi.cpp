@@ -1928,6 +1928,42 @@ void AudioNoteSoundStream(uint32_t id, bool success, double length, const char* 
     g_soundEvents.push_back(std::move(ev));
 }
 
+void AudioNoteSoundChangedMeta(uint32_t id, const char* streamTitle) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    SoundSlot* slot = FindSound(id);
+    if (!slot) return;
+    const std::string title = streamTitle ? streamTitle : "";
+    slot->metaTags["stream_title"] = title;
+    SoundLifecycleEvent ev;
+    ev.kind = SoundLifecycleEvent::Kind::ChangedMeta;
+    ev.id = id;
+    ev.reasonOrName = title;
+    g_soundEvents.push_back(std::move(ev));
+}
+
+void AudioNoteSoundFinishedDownload(uint32_t id, double length) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    SoundSlot* slot = FindSound(id);
+    if (!slot) return;
+    if (std::isfinite(length) && length >= 0.0) slot->length = length;
+    SoundLifecycleEvent ev;
+    ev.kind = SoundLifecycleEvent::Kind::FinishedDownload;
+    ev.id = id;
+    ev.length = (std::isfinite(length) && length >= 0.0) ? length : 0.0;
+    g_soundEvents.push_back(std::move(ev));
+}
+
+void AudioNoteSoundBeat(uint32_t id, double bpm) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    SoundSlot* slot = FindSound(id);
+    if (!slot) return;
+    SoundLifecycleEvent ev;
+    ev.kind = SoundLifecycleEvent::Kind::Beat;
+    ev.id = id;
+    ev.length = (std::isfinite(bpm) && bpm > 0.0) ? bpm : 0.0;
+    g_soundEvents.push_back(std::move(ev));
+}
+
 void AudioNoteSoundAnalysis(uint32_t id, int leftLevel, int rightLevel,
                             const float* fft, int fftCount,
                             const float* wave, int waveCount) {

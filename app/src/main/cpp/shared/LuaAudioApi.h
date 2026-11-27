@@ -9,7 +9,7 @@ struct lua_State;
 namespace WorldRPG::Script {
 
 struct SoundLifecycleEvent {
-    enum class Kind : uint8_t { Started, Stream, Stopped };
+    enum class Kind : uint8_t { Started, Stream, Stopped, ChangedMeta, FinishedDownload, Beat };
     Kind kind = Kind::Stopped;
     uint32_t id = 0;
     bool success = true;
@@ -29,6 +29,9 @@ void AudioNoteSoundLength(uint32_t id, double seconds);
 void AudioNoteSoundStarted(uint32_t id, const char* reason = "play");
 void AudioNoteSoundStream(uint32_t id, bool success, double length, const char* streamName = "",
                           const char* errorMsg = "");
+void AudioNoteSoundChangedMeta(uint32_t id, const char* streamTitle);
+void AudioNoteSoundFinishedDownload(uint32_t id, double length);
+void AudioNoteSoundBeat(uint32_t id, double bpm);
 void AudioNoteSoundAnalysis(uint32_t id, int leftLevel, int rightLevel,
                             const float* fft, int fftCount,
                             const float* wave, int waveCount);

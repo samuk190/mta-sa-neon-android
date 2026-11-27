@@ -803,6 +803,8 @@ int BreakObject(lua_State* L) {
         g_diagBreak = true;
         LUA_LOGE("DIAG breakObject: CObject::Break is not hooked");
     }
+    lua_pushnil(L);  // attacker
+    ActiveVmFireElementEvent(L, "onClientObjectBreak", object->id, 1);
     ApplyTree(object->id, [](Object&) { return false; });
     return Fail(L);
 }

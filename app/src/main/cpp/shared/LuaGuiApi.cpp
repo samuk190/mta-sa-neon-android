@@ -1606,6 +1606,10 @@ static int GuiComboBoxSetSelected(lua_State* L) {
         ok = true;
     };
     PostOrder(id, visit);
+    if (ok && index >= 0) {
+        PushElement(L, id);
+        ActiveVmFireElementEvent(L, "onClientGUIComboBoxAccepted", id, 1);
+    }
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
@@ -1763,6 +1767,7 @@ static int GuiSetPosition(lua_State* L) {
         element->x = x;
         element->y = y;
         element->relPos = relative;
+        ActiveVmFireElementEvent(L, "onClientGUIMove", id, 0);
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -1781,6 +1786,7 @@ static int GuiSetSize(lua_State* L) {
         element->w = width;
         element->h = height;
         element->relSize = relative;
+        ActiveVmFireElementEvent(L, "onClientGUISize", id, 0);
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -2222,7 +2228,11 @@ static int GuiScrollBarSetScrollPosition(lua_State* L) {
     const int whole = static_cast<int>(value);
     double clamped = 0;
     if (!ClampPercent(static_cast<double>(whole), clamped)) return Reject(L, "guiScrollBarSetScrollPosition", args, false);
-    if (GuiElement* element = Find(id)) element->scroll = clamped;
+    if (GuiElement* element = Find(id)) {
+        element->scroll = clamped;
+        PushElement(L, id);
+        ActiveVmFireElementEvent(L, "onClientGUIScroll", id, 1);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2502,6 +2512,8 @@ static int GuiSetSelectedTab(lua_State* L) {
         return 1;
     }
     panel->tab = tabId;
+    PushElement(L, tabId);
+    ActiveVmFireElementEvent(L, "onClientGUITabSwitched", tabId, 1);
     lua_pushboolean(L, 1);
     return 1;
 }

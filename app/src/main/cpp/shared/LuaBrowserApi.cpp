@@ -74,6 +74,10 @@ struct BrowserEvent {
         SourceReady,
         InputFocus,
         WhitelistChange,
+        ResourceBlocked,
+        ConsoleMessage,
+        CursorChange,
+        Tooltip,
     };
     Kind kind = Kind::Created;
     uint32_t id = 0;
@@ -380,6 +384,13 @@ int LoadBrowserURL(lua_State* L) {
                 nav.flagA = true;
                 nav.flagB = true;
                 g_browserEvents.push_back(std::move(nav));
+                BrowserEvent blk;
+                blk.kind = BrowserEvent::Kind::ResourceBlocked;
+                blk.id = id;
+                blk.textA = url;
+                blk.textB = dom;
+                blk.code = 0;  // blocked: not whitelisted
+                g_browserEvents.push_back(std::move(blk));
                 return False(L);
             }
         }
@@ -1004,6 +1015,48 @@ void BrowserNoteInputFocus(uint32_t id, bool gainedFocus) {
     g_browserEvents.push_back(std::move(ev));
 }
 
+void BrowserNoteResourceBlocked(uint32_t id, const char* url, const char* domain, int reason) {
+    std::lock_guard<std::mutex> lock(g_browserMu);
+    if (!FindBrowserLocked(id)) return;
+    BrowserEvent ev;
+    ev.kind = BrowserEvent::Kind::ResourceBlocked;
+    ev.id = id;
+    ev.textA = url ? url : "";
+    ev.textB = domain ? domain : "";
+    ev.code = reason;
+    g_browserEvents.push_back(std::move(ev));
+}
+
+void BrowserNoteConsoleMessage(uint32_t id, const char* message) {
+    std::lock_guard<std::mutex> lock(g_browserMu);
+    if (!FindBrowserLocked(id)) return;
+    BrowserEvent ev;
+    ev.kind = BrowserEvent::Kind::ConsoleMessage;
+    ev.id = id;
+    ev.textA = message ? message : "";
+    g_browserEvents.push_back(std::move(ev));
+}
+
+void BrowserNoteCursorChange(uint32_t id, int cursorId) {
+    std::lock_guard<std::mutex> lock(g_browserMu);
+    if (!FindBrowserLocked(id)) return;
+    BrowserEvent ev;
+    ev.kind = BrowserEvent::Kind::CursorChange;
+    ev.id = id;
+    ev.code = cursorId;
+    g_browserEvents.push_back(std::move(ev));
+}
+
+void BrowserNoteTooltip(uint32_t id, const char* tooltip) {
+    std::lock_guard<std::mutex> lock(g_browserMu);
+    if (!FindBrowserLocked(id)) return;
+    BrowserEvent ev;
+    ev.kind = BrowserEvent::Kind::Tooltip;
+    ev.id = id;
+    ev.textA = tooltip ? tooltip : "";
+    g_browserEvents.push_back(std::move(ev));
+}
+
 void BrowserPumpEvents(lua_State* L) {
     if (!L) return;
     std::vector<BrowserEvent> events;
@@ -1105,6 +1158,24 @@ void BrowserPumpEvents(lua_State* L) {
             case BrowserEvent::Kind::InputFocus:
                 lua_pushboolean(L, ev.flagA ? 1 : 0);
                 ActiveVmFireElementEvent(L, "onClientBrowserInputFocusChanged", ev.id, 1);
+                break;
+            case BrowserEvent::Kind::ResourceBlocked:
+                lua_pushstring(L, ev.textA.c_str());
+                lua_pushstring(L, ev.textB.c_str());
+                lua_pushinteger(L, ev.code);
+                ActiveVmFireElementEvent(L, "onClientBrowserResourceBlocked", ev.id, 3);
+                break;
+            case BrowserEvent::Kind::ConsoleMessage:
+                lua_pushstring(L, ev.textA.c_str());
+                ActiveVmFireElementEvent(L, "onClientBrowserConsoleMessage", ev.id, 1);
+                break;
+            case BrowserEvent::Kind::CursorChange:
+                lua_pushinteger(L, ev.code);
+                ActiveVmFireElementEvent(L, "onClientBrowserCursorChange", ev.id, 1);
+                break;
+            case BrowserEvent::Kind::Tooltip:
+                lua_pushstring(L, ev.textA.c_str());
+                ActiveVmFireElementEvent(L, "onClientBrowserTooltip", ev.id, 1);
                 break;
             default:
                 break;
