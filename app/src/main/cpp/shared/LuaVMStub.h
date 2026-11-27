@@ -78,8 +78,8 @@ public:
     void setScreenSize(int width, int height);
 
     /// Delivers a CHAT_ECHO into onClientChatMessage when a resource
-    /// registered one. Returns false when the Java chat should show it.
-    bool onChatMessage(const char* text, int red, int green, int blue);
+    /// registered one. Returns false when a handler cancels the display.
+    bool onChatMessage(const char* text, int red, int green, int blue, uint32_t speaker, uint8_t type);
 
     /// Runs timers and onClientRender. The result is one frame of
     /// "R x y w h argb" and "T x y size argb text" commands.
@@ -104,7 +104,7 @@ bool ActiveVmFeedScripts(const uint8_t* body, size_t length, size_t bits);
 bool ActiveVmPulseResources();
 // New session: drops every resource and restarts the VM with a clean state.
 void ActiveVmResetSession();
-bool ActiveVmOnChat(const char* text, int red, int green, int blue);
+bool ActiveVmOnChat(const char* text, int red, int green, int blue, uint32_t speaker, uint8_t type);
 std::string ActiveVmPump(bool renderFrame = true);
 // Appends draw lines ("L ...\n", "P ...\n") to the DX frame being built. VM thread.
 void ActiveVmAppendDraw(const std::string& lines);

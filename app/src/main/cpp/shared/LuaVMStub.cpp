@@ -2914,7 +2914,7 @@ static void FlushPendingChat(lua_State* L) {
     g_dx.pendingChat.clear();
 }
 
-bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
+bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue, uint32_t speaker, uint8_t type) {
     if (!text) return true;
     if (!g_dx.chatHooked || !pImpl_->L) {
         return true;
@@ -2923,12 +2923,19 @@ bool LuaVMStub::onChatMessage(const char* text, int red, int green, int blue) {
     auto found = g_dx.handlers.find("onClientChatMessage");
     if (found == g_dx.handlers.end() || found->second.empty()) return true;
 
+    const uint32_t root = ClientRootElement();
+    const uint32_t source = speaker == 0xFFFFFFFFu ? root : speaker;
+    lua_getglobal(L, "source");
+    PushElement(L, source);
+    lua_setglobal(L, "source");
     lua_pushstring(L, text);
     lua_pushinteger(L, red);
     lua_pushinteger(L, green);
     lua_pushinteger(L, blue);
-    lua_pushinteger(L, 0);
-    return fireHandlers("onClientChatMessage", 5, ClientRootElement());
+    lua_pushinteger(L, type);
+    const bool allowed = fireHandlers("onClientChatMessage", 5, source, L, source != root);
+    lua_setglobal(L, "source");
+    return allowed;
 }
 
 // Fires onClientClick (and onClientCursorMove) for the queued touches. Signature as on desktop:
@@ -3645,8 +3652,8 @@ void ActiveVmResetSession() {
     g_dx.screenW = width;
     g_dx.screenH = height;
 }
-bool ActiveVmOnChat(const char* text, int red, int green, int blue) {
-    return g_active && g_active->onChatMessage(text, red, green, blue);
+bool ActiveVmOnChat(const char* text, int red, int green, int blue, uint32_t speaker, uint8_t type) {
+    return g_active && g_active->onChatMessage(text, red, green, blue, speaker, type);
 }
 void ActiveVmAppendDraw(const std::string& lines) { g_dx.frame += lines; }
 void ActiveVmAppendPostGuiDraw(const std::string& lines) { g_dx.postGuiFrame += lines; }
