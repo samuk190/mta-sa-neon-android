@@ -15,6 +15,7 @@
 #include "../net/RemoteCalls.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/HardwareMouse.h"
+#include "../gtasa/ControlMask.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
 #include "../gtasa/RemoteVehicle.h"
@@ -425,6 +426,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     WorldRPG::Game::InstallStreamingCapacities();
     WorldRPG::Game::InstallServerSessionHook();
     WorldRPG::Game::InstallHardwareMouse();
+    WorldRPG::Game::InstallControlMask();
     return JNI_VERSION_1_6;
 }
 

@@ -1,5 +1,6 @@
 #include "../shared/DebugFlags.h"
 #include "GameEngine.h"
+#include "../shared/ControlToggles.h"
 #include "GameImports.h"
 #include "WorldObjects.h"
 #include "GameTasks.h"
@@ -865,13 +866,17 @@ static void SamplePadControls(const TaskFns& api, LocalCarState& c) {
     if (!api.getPad) return;
     void* pad = api.getPad(0);
     if (!pad) return;
-    if (api.padSteering) c.steering = static_cast<int16_t>(std::clamp(api.padSteering(pad), -128, 128));
-    if (api.padAccelerate) c.accelerate = static_cast<uint8_t>(std::clamp(api.padAccelerate(pad), 0, 255));
-    if (api.padBrake) c.brake = static_cast<uint8_t>(std::clamp(api.padBrake(pad), 0, 255));
-    if (api.padHandBrake) c.handBrake = api.padHandBrake(pad) != 0;
-    if (api.padHorn) c.horn = api.padHorn(pad, false);
-    if (api.padLookLeft) c.lookLeft = api.padLookLeft(pad, true);
-    if (api.padLookRight) c.lookRight = api.padLookRight(pad, true);
+    // These getters are called through dlsym, which skips the GOT mask of ControlMask.cpp, so toggleControl is
+    // applied here. Desktop sends the pad after CClientPad::ProcessAllToggledControls (CClientPad.cpp:781-870).
+    using Controls::Getter;
+    using Controls::MaskGetter;
+    if (api.padSteering) c.steering = static_cast<int16_t>(std::clamp(MaskGetter(Getter::SteeringLeftRight, api.padSteering(pad)), -128, 128));
+    if (api.padAccelerate) c.accelerate = static_cast<uint8_t>(std::clamp(MaskGetter(Getter::Accelerate, api.padAccelerate(pad)), 0, 255));
+    if (api.padBrake) c.brake = static_cast<uint8_t>(std::clamp(MaskGetter(Getter::Brake, api.padBrake(pad)), 0, 255));
+    if (api.padHandBrake) c.handBrake = MaskGetter(Getter::HandBrake, api.padHandBrake(pad)) != 0;
+    if (api.padHorn) c.horn = MaskGetter(Getter::Horn, api.padHorn(pad, false)) != 0;
+    if (api.padLookLeft) c.lookLeft = MaskGetter(Getter::LookLeft, api.padLookLeft(pad, true)) != 0;
+    if (api.padLookRight) c.lookRight = MaskGetter(Getter::LookRight, api.padLookRight(pad, true)) != 0;
 }
 
 // On-foot stick and camera, sampled on the game thread for SendPureSync / SendKeySync.
@@ -927,12 +932,15 @@ static void SampleLocalPadAndCamera() {
                 std::memcpy(&sx, static_cast<unsigned char*>(pad) + 0, sizeof sx);
                 std::memcpy(&sy, static_cast<unsigned char*>(pad) + 2, sizeof sy);
             }
+            // The same dlsym bypass: apply left/right/forwards/backwards and sprint (CClientPad.cpp:803-870).
+            sx = static_cast<int16_t>(Controls::MaskGetter(Controls::Getter::PedWalkLeftRight, sx));
+            sy = static_cast<int16_t>(Controls::MaskGetter(Controls::Getter::PedWalkUpDown, sy));
             g_padStickX = sx;
             g_padStickY = sy;
             g_padStickValid = true;
             // ButtonCross: CPad::GetSprint (IsTouched 0xa8 / 0x1f). The int argument is the
             // sprint type the game passes; 0 is the on-foot form.
-            g_localSprint = getSprint ? getSprint(pad, 0) : false;
+            g_localSprint = getSprint && Controls::MaskGetter(Controls::Getter::Sprint, getSprint(pad, 0)) != 0;
             // ButtonCircle: the attack widget (0x1) that CPad::GetMeleeAttack and GetWeapon read with IsTouched.
             // Desktop sends the button, so each tap is a separate press; the phone used to send "an attack task
             // exists", which stays set through a whole combo, so desktop only played the first punch.
@@ -953,8 +961,8 @@ static void SampleLocalPadAndCamera() {
                 void* ped = g_findPlayer ? g_findPlayer(0) : nullptr;
                 // GetWeapon reads the fire widgets used with a weapon camera in
                 // addition to widget 1 (libGTASA 2.10, 0x4ddb20-0x4ddcf8).
-                const bool held = (getWeapon && ped && getWeapon(pad, ped, false)) ||
-                    (isTouched && isTouched(0x1, vec, 0));
+                const bool held = !Controls::IsGtaControlDisabled(Controls::Gta::Fire) &&
+                    ((getWeapon && ped && getWeapon(pad, ped, false)) || (isTouched && isTouched(0x1, vec, 0)));
                 if (held && !g_localAttackHeld.load()) g_localAttackLatch = ++g_controlPressSequence;
                 g_localAttackHeld = held;
             }
