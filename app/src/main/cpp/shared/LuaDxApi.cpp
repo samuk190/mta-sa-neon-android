@@ -61,6 +61,9 @@ constexpr int kTriangleFan = 6;
 
 // VM thread only.
 int g_blendMode = 0;
+bool g_allowAspectRatioAdjustment = false;
+bool g_aspectRatioAdjustmentEnabled = false;
+float g_aspectRatioSource = 4.f / 3.f;
 int g_testMode = 0;
 uint32_t g_activeTarget = 0;
 
@@ -314,22 +317,27 @@ int DxGetBlendMode(lua_State* L) {
 }
 
 // bool dxSetAspectRatioAdjustmentEnabled( bool enabled, float sourceRatio = 4/3 )
-// CLuaDrawingDefs.cpp:2074-2099. Desktop allows it only while onClientHUDRender runs
-// (g_bAllowAspectRatioAdjustment). The phone does not fire that event, so the call always fails
-// with the desktop error.
+// CLuaDrawingDefs.cpp:2074-2099 + CMapEvent.cpp:26 + CMapEventManager.cpp:186,281.
+// Allowed only while onClientPreRender, onClientHUDRender, or onClientRender runs.
 int DxSetAspectRatioAdjustmentEnabled(lua_State* L) {
     double ratio = 0;
     if (!lua_isboolean(L, 1)) return Fail(L, "dxSetAspectRatioAdjustmentEnabled", "bool", 1);
     if (!ReadNumberOr(L, 2, 4 / 3.0, ratio)) return Fail(L, "dxSetAspectRatioAdjustmentEnabled", "number", 2);
-    LUA_LOGI("WARNING: Bad usage @ 'dxSetAspectRatioAdjustmentEnabled' [Function can only be used inside certain events]");
-    lua_pushboolean(L, 0);
+    if (!g_allowAspectRatioAdjustment) {
+        LUA_LOGI("WARNING: Bad usage @ 'dxSetAspectRatioAdjustmentEnabled' [Function can only be used inside certain events]");
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_aspectRatioAdjustmentEnabled = lua_toboolean(L, 1) != 0;
+    g_aspectRatioSource = static_cast<float>(ratio);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
-// bool, float dxIsAspectRatioAdjustmentEnabled(). CLuaDrawingDefs.cpp:2101-2109. Never enabled here.
+// bool, float dxIsAspectRatioAdjustmentEnabled(). CLuaDrawingDefs.cpp:2101-2109.
 int DxIsAspectRatioAdjustmentEnabled(lua_State* L) {
-    lua_pushboolean(L, 0);
-    lua_pushnumber(L, 4 / 3.f);
+    lua_pushboolean(L, g_aspectRatioAdjustmentEnabled ? 1 : 0);
+    lua_pushnumber(L, g_aspectRatioSource);
     return 2;
 }
 
@@ -1528,12 +1536,23 @@ void DxEndRender(std::string& frame) {
     frame += "G\n";
 }
 
+void DxSetAspectRatioAdjustmentAllowed(bool allowed) {
+    g_allowAspectRatioAdjustment = allowed;
+    if (!allowed) {
+        g_aspectRatioAdjustmentEnabled = false;
+        g_aspectRatioSource = 4.f / 3.f;
+    }
+}
+
 void DxReset() {
     DxShader::Reset();
     Dx3D::Reset();
     ModelEffects::Reset();
     SvgReset(ActiveVmState());
     g_blendMode = 0;
+    g_allowAspectRatioAdjustment = false;
+    g_aspectRatioAdjustmentEnabled = false;
+    g_aspectRatioSource = 4.f / 3.f;
     g_testMode = 0;
     for (const Texture& texture : g_textures)
         if (texture.renderTarget || texture.memory) g_deadTargets.push_back(texture.id);

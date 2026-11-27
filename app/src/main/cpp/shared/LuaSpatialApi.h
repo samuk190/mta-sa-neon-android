@@ -14,6 +14,9 @@ void ResetSpatial();
 // The shape cannot be destroyed by script. 0 when no resource can own it.
 uint32_t RetainMarkerColShape(uint32_t marker, int kind, float x, float y, float z, float size);
 void ReleaseMarkerColShape(uint32_t marker);
+// CClientPickup collision sphere (radius 1.0f, CClientPickup.cpp:178).
+uint32_t RetainPickupColShape(uint32_t pickup, float x, float y, float z);
+void ReleasePickupColShape(uint32_t pickup);
 // Cached collider list (CClientEntity::CollisionExists), after publishing current positions.
 bool ElementInsideShape(uint32_t entity, uint32_t shape);
 }

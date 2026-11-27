@@ -7,6 +7,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaMarkerApi.h"
+#include "LuaPickupApi.h"
 #include "LuaSpatialApi.h"
 #include "LuaVMStub.h"
 #include "LuaWorldObjectApi.h"
@@ -383,8 +384,14 @@ int GetElementColShape(lua_State* L) {
         PushElement(L, shape);
         return 1;
     }
-    if (type == "pickup")
+    if (type == "pickup") {
+        const uint32_t shape = PickupColShape(id);
+        if (shape) {
+            PushElement(L, shape);
+            return 1;
+        }
         Diag(g_diagPickupCol, "DIAG getElementColShape: CClientPickup creates its sphere when CPickup streams in");
+    }
     return Fail(L);
 }
 

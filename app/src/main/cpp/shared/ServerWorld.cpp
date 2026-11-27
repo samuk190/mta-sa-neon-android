@@ -485,7 +485,7 @@ void CopySpatialElements(std::vector<Spatial::Element>& out) {
         }
         if(!v.generation) v.generation=++g_generation;
         Spatial::Element e;
-        e.id=id; e.generation=v.generation; e.shapeRevision=v.shapeRevision; e.type=type; e.position={v.x,v.y,v.z};
+        e.id=id; e.generation=(id==g_local && g_localGeneration)?g_localGeneration:v.generation; e.shapeRevision=v.shapeRevision; e.type=type; e.position={v.x,v.y,v.z};
         e.model=v.model; e.interior=id==g_local?g_localInterior.load():v.interior; e.dimension=id==g_local?g_localDimension.load():v.dimension;
         e.bounds={e.position,v.kind==4?v.size:0.f};
         if(v.colshape) { e.shape=*v.colshape; e.bounds=Spatial::ShapeBounds(e.position,*e.shape); }

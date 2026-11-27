@@ -21,6 +21,9 @@ namespace {
 struct LocalShape { Spatial::Element element; std::string owner; uint16_t netId=0; uint32_t generation=0; };
 std::map<uint32_t,LocalShape> localShapes;
 std::map<uint32_t,uint32_t> markerCols;
+std::map<uint32_t,uint32_t> pickupCols;
+std::set<std::pair<uint32_t,uint32_t>> serverMarkerHits;
+std::set<std::pair<uint32_t,uint32_t>> serverPickupHits;
 Spatial::World world;
 bool pulsing=false;
 int Fail(lua_State* L) { lua_pushboolean(L,0); return 1; }
@@ -284,12 +287,61 @@ void Collect(bool native) {
     }
     for(auto& e:scene) ApplySpatialArea(e.id,e.generation,e.interior,e.dimension);
     for(const auto& [id,shape]:localShapes) scene.push_back(shape.element);
+    // Propagate parent + offset position for attached spatial elements (e.g. colshape attached to player/vehicle).
+    {
+        std::map<uint32_t, size_t> indexById;
+        for (size_t i = 0; i < scene.size(); ++i) indexById[scene[i].id] = i;
+        for (int pass = 0; pass < 4; ++pass) {
+            bool movedAny = false;
+            for (auto& e : scene) {
+                ServerWorld::Attachment att;
+                if (!ServerWorld::CopyAttachment(e.id, att) || att.parent == 0xFFFFFFFFu) continue;
+                auto pIt = indexById.find(att.parent);
+                if (pIt == indexById.end()) continue;
+                const auto& parentPos = scene[pIt->second].position;
+                const Spatial::Vec next{parentPos.x + att.position[0], parentPos.y + att.position[1], parentPos.z + att.position[2]};
+                if (e.position != next) {
+                    e.position = next;
+                    e.bounds = e.shape ? Spatial::ShapeBounds(e.position, *e.shape) : Spatial::Sphere{e.position, e.bounds.radius};
+                    movedAny = true;
+                }
+            }
+            if (!movedAny) break;
+        }
+    }
     world.Sync(scene);
 }
 bool Current(uint32_t id,uint64_t generation) {
     if(auto it=localShapes.find(id);it!=localShapes.end()) return it->second.element.generation==generation;
     if(ServerWorld::ElementGeneration(id)==generation && generation) return true;
     return Game::ScriptPedAlive(id) && generation==id;
+}
+uint32_t FindMarkerByCol(uint32_t shape) {
+    for (const auto& [marker, col] : markerCols) if (col == shape) return marker;
+    return 0;
+}
+uint32_t FindPickupByCol(uint32_t shape) {
+    for (const auto& [pickup, col] : pickupCols) if (col == shape) return pickup;
+    return 0;
+}
+uint16_t ElementDimensionOf(uint32_t id) {
+    if (const auto* found = world.Find(id)) return found->dimension;
+    return ElementDimensionValue(id);
+}
+void DispatchMarkerTransition(uint32_t markerId, uint32_t entityId, bool isPlayer, bool hit, bool matchingDimension) {
+    // CClientMarker::Callback_OnCollision / Callback_OnLeave (CClientMarker.cpp 426-465).
+    if (!KnownClientElement(markerId) || !KnownClientElement(entityId)) return;
+    ActiveVmFireSpatialEvent(hit ? "onClientMarkerHit" : "onClientMarkerLeave", markerId, entityId, matchingDimension);
+    if (!isPlayer) return;
+    if (!KnownClientElement(markerId) || !KnownClientElement(entityId)) return;
+    ActiveVmFireSpatialEvent(hit ? "onClientPlayerMarkerHit" : "onClientPlayerMarkerLeave", entityId, markerId, matchingDimension);
+}
+void DispatchPickupTransition(uint32_t pickupId, uint32_t playerId, bool hit, bool matchingDimension) {
+    // CClientPickup::Callback_OnCollision / Callback_OnLeave (CClientPickup.cpp 249-287).
+    if (!KnownClientElement(pickupId) || !KnownClientElement(playerId)) return;
+    ActiveVmFireSpatialEvent(hit ? "onClientPickupHit" : "onClientPickupLeave", pickupId, playerId, matchingDimension);
+    if (!KnownClientElement(pickupId) || !KnownClientElement(playerId)) return;
+    ActiveVmFireSpatialEvent(hit ? "onClientPlayerPickupHit" : "onClientPlayerPickupLeave", playerId, pickupId, matchingDimension);
 }
 void Dispatch(const Spatial::Transition& t) {
     if(!Current(t.shape,t.shapeGeneration)||!Current(t.entity,t.entityGeneration)) return;
@@ -302,6 +354,17 @@ void Dispatch(const Spatial::Transition& t) {
     if(s&&e) {
         if(t.hit) ActiveVmFireSpatialEvent("onClientElementColShapeHit",t.entity,t.shape,s->dimension==e->dimension);
         else ActiveVmFireSpatialEvent("onClientElementColShapeLeave",t.entity,t.shape,s->dimension==e->dimension);
+    }
+    if(!Current(t.shape,t.shapeGeneration)||!Current(t.entity,t.entityGeneration)) return;
+    Collect(false);
+    e = world.Find(t.entity);
+    if (!e) return;
+    const bool isPlayer = e->type == "player";
+    const uint16_t entityDim = e->dimension;
+    if (const uint32_t markerId = FindMarkerByCol(t.shape); markerId && t.entity != markerId) {
+        DispatchMarkerTransition(markerId, t.entity, isPlayer, t.hit, ElementDimensionOf(markerId) == entityDim);
+    } else if (const uint32_t pickupId = FindPickupByCol(t.shape); pickupId && isPlayer && t.entity != pickupId) {
+        DispatchPickupTransition(pickupId, t.entity, t.hit, ElementDimensionOf(pickupId) == entityDim);
     }
 }
 int Create(lua_State* L,bool cuboid) {
@@ -790,6 +853,50 @@ void ForgetMarkerCol(uint32_t shape) {
         else ++it;
     }
 }
+void ForgetPickupCol(uint32_t shape) {
+    for (auto it = pickupCols.begin(); it != pickupCols.end();) {
+        if (it->second == shape) it = pickupCols.erase(it);
+        else ++it;
+    }
+}
+uint32_t RetainPickupColShapeImpl(uint32_t pickup, float x, float y, float z) {
+    // CClientPickup::Create collision sphere (CClientPickup.cpp 178): radius 1.0f.
+    Spatial::Geometry geometry;
+    geometry.type = Spatial::ShapeType::Sphere;
+    geometry.radius = 1.0f;
+    uint32_t id = 0;
+    bool created = false;
+    if (const auto found = pickupCols.find(pickup); found != pickupCols.end() && localShapes.contains(found->second))
+        id = found->second;
+    else {
+        id = CreateResourceElement("colshape");
+        if (!id) return 0;
+        SetClientElementDestroyable(id, false);
+        pickupCols[pickup] = id;
+        created = true;
+    }
+    LocalShape& shape = localShapes[id];
+    const bool moved = created || !shape.element.shape || shape.element.position.x != x ||
+                       shape.element.position.y != y || shape.element.position.z != z;
+    if (shape.owner.empty()) {
+        shape.owner = ActiveVmOwner();
+        shape.netId = ActiveVmOwnerNet();
+        shape.generation = ActiveVmOwnerGeneration();
+    }
+    shape.element.id = id;
+    shape.element.type = "colshape";
+    shape.element.generation = shape.element.generation ? shape.element.generation : id;
+    if (moved) shape.element.shapeRevision++;
+    shape.element.position = {x, y, z};
+    shape.element.shape = geometry;
+    shape.element.bounds = Spatial::ShapeBounds(shape.element.position, geometry);
+    if (moved) {
+        Collect(false);
+        world.Refresh(id);
+        PulseSpatial();
+    }
+    return id;
+}
 uint32_t RetainMarkerColShapeImpl(uint32_t marker, int kind, float x, float y, float z, float size) {
     // CClientMarker::CreateOfType (CClientMarker.cpp 466-532).
     Spatial::Geometry geometry;
@@ -846,6 +953,15 @@ void SpatialRelease(uint32_t id) {
     localShapes.erase(id);
     world.Remove(id);
     ForgetMarkerCol(id);
+    ForgetPickupCol(id);
+    for (auto it = serverMarkerHits.begin(); it != serverMarkerHits.end();) {
+        if (it->first == id || it->second == id) it = serverMarkerHits.erase(it);
+        else ++it;
+    }
+    for (auto it = serverPickupHits.begin(); it != serverPickupHits.end();) {
+        if (it->first == id || it->second == id) it = serverPickupHits.erase(it);
+        else ++it;
+    }
 }
 void SpatialDropResource(const std::string& owner,uint16_t net,uint32_t generation) {
     std::vector<uint32_t> ids;
@@ -864,19 +980,138 @@ void ReleaseMarkerColShape(uint32_t marker) {
     markerCols.erase(found);
     if (!DestroyClientElement(id)) DestroyClientElementForced(id);
 }
+uint32_t RetainPickupColShape(uint32_t pickup, float x, float y, float z) {
+    return RetainPickupColShapeImpl(pickup, x, y, z);
+}
+void ReleasePickupColShape(uint32_t pickup) {
+    const auto found = pickupCols.find(pickup);
+    if (found == pickupCols.end()) return;
+    const uint32_t id = found->second;
+    pickupCols.erase(found);
+    if (!DestroyClientElement(id)) DestroyClientElementForced(id);
+}
 bool ElementInsideShape(uint32_t entity, uint32_t shape) { return ElementInsideShapeImpl(entity, shape); }
+namespace {
+void PulseServerMarkersAndPickups() {
+    std::vector<Spatial::Element> scene;
+    ServerWorld::CopySpatialElements(scene);
+    for (auto& e : scene) {
+        float x = 0, y = 0, z = 0, h = 0;
+        if (e.id == ServerWorld::LocalPlayer()) {
+            Game::CopyPose(x, y, z, h);
+            e.position = {x, y, z};
+        } else if (!e.shape && Game::CopyRemotePose(e.id, x, y, z)) {
+            e.position = {x, y, z};
+        }
+        ApplySpatialArea(e.id, e.generation, e.interior, e.dimension);
+    }
+    std::map<uint32_t, const Spatial::Element*> byId;
+    for (const auto& e : scene) byId[e.id] = &e;
+
+    std::set<std::pair<uint32_t, uint32_t>> nextMarkers;
+    std::set<std::pair<uint32_t, uint32_t>> nextPickups;
+    for (const auto& src : scene) {
+        if (src.type == "marker" && !markerCols.contains(src.id)) {
+            ServerWorld::MarkerFields mf{};
+            ServerWorld::CopyMarkerFields(src.id, mf);
+            const float radius = mf.size > 0.f ? mf.size : (src.bounds.radius > 0.f ? src.bounds.radius : 1.f);
+            Spatial::Geometry g;
+            if (mf.type == 0) {
+                g.type = Spatial::ShapeType::Circle;
+                g.radius = radius;
+            } else if (mf.type == 2) {
+                g.type = Spatial::ShapeType::Tube;
+                g.radius = radius;
+                g.height = radius;
+            } else {
+                g.type = Spatial::ShapeType::Sphere;
+                g.radius = radius;
+            }
+            for (const auto& target : scene) {
+                if (target.id == src.id || !Spatial::ColliderType(target.type)) continue;
+                if (Spatial::Hit(src.position, g, target.position))
+                    nextMarkers.emplace(src.id, target.id);
+            }
+        } else if (src.type == "pickup" && !pickupCols.contains(src.id)) {
+            Spatial::Geometry g;
+            g.type = Spatial::ShapeType::Sphere;
+            g.radius = 1.0f;
+            for (const auto& target : scene) {
+                if (target.id == src.id || target.type != "player") continue;
+                if (Spatial::Hit(src.position, g, target.position))
+                    nextPickups.emplace(src.id, target.id);
+            }
+        }
+    }
+
+    struct Pending { uint32_t source; uint32_t entity; bool isPlayer; bool hit; bool matchDim; bool isPickup; };
+    std::vector<Pending> events;
+    for (const auto& pair : nextMarkers) {
+        if (!serverMarkerHits.contains(pair)) {
+            const auto* s = byId[pair.first];
+            const auto* t = byId[pair.second];
+            events.push_back({pair.first, pair.second, t->type == "player", true, s->dimension == t->dimension, false});
+        }
+    }
+    for (const auto& pair : serverMarkerHits) {
+        if (!nextMarkers.contains(pair)) {
+            auto sIt = byId.find(pair.first);
+            auto tIt = byId.find(pair.second);
+            if (sIt != byId.end() && tIt != byId.end())
+                events.push_back({pair.first, pair.second, tIt->second->type == "player", false, sIt->second->dimension == tIt->second->dimension, false});
+        }
+    }
+    for (const auto& pair : nextPickups) {
+        if (!serverPickupHits.contains(pair)) {
+            const auto* s = byId[pair.first];
+            const auto* t = byId[pair.second];
+            events.push_back({pair.first, pair.second, true, true, s->dimension == t->dimension, true});
+        }
+    }
+    for (const auto& pair : serverPickupHits) {
+        if (!nextPickups.contains(pair)) {
+            auto sIt = byId.find(pair.first);
+            auto tIt = byId.find(pair.second);
+            if (sIt != byId.end() && tIt != byId.end())
+                events.push_back({pair.first, pair.second, true, false, sIt->second->dimension == tIt->second->dimension, true});
+        }
+    }
+    serverMarkerHits = std::move(nextMarkers);
+    serverPickupHits = std::move(nextPickups);
+
+    for (const auto& ev : events) {
+        if (ev.isPickup) DispatchPickupTransition(ev.source, ev.entity, ev.hit, ev.matchDim);
+        else DispatchMarkerTransition(ev.source, ev.entity, ev.isPlayer, ev.hit, ev.matchDim);
+    }
+}
+}
 void PulseSpatial() {
     const bool nested=pulsing;
     if(localShapes.empty()) {
         std::vector<Spatial::Element> scene; ServerWorld::CopySpatialElements(scene);
-        if(std::none_of(scene.begin(),scene.end(),[](const auto& e){return e.shape.has_value();})) {
+        const bool anyShapeOrTrigger = std::any_of(scene.begin(), scene.end(), [](const auto& e) {
+            return e.shape.has_value() || e.type == "marker" || e.type == "pickup";
+        });
+        if(!anyShapeOrTrigger && serverMarkerHits.empty() && serverPickupHits.empty()) {
             world.Sync(scene); world.Pulse([](const auto&){}); return;
         }
     }
     Collect(!nested);
-    pulsing=true; world.Pulse(Dispatch); pulsing=nested;
+    pulsing=true;
+    world.Pulse(Dispatch);
+    if (!nested) PulseServerMarkersAndPickups();
+    pulsing=nested;
 }
-void ResetSpatial() { localShapes.clear(); markerCols.clear(); world.Clear(); pulsing=false; g_showCollision=false; }
+void ResetSpatial() {
+    localShapes.clear();
+    markerCols.clear();
+    pickupCols.clear();
+    serverMarkerHits.clear();
+    serverPickupHits.clear();
+    world.Clear();
+    pulsing=false;
+    g_showCollision=false;
+}
 void InstallSpatialLua(lua_State* L) {
     ResetSpatial();
     const struct { const char* name; lua_CFunction fn; } binds[]={

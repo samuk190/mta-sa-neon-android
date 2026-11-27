@@ -406,7 +406,45 @@ void CopyBody(float& x, float& y, float& z, float& heading,
 }
 float CopyLocalArmor() { return 0.f; }
 // No libGTASA in this build, so getGroundPosition cannot query the world.
+// Optional host-test overrides for sight and camera projection unit tests (default disabled).
+static bool g_hostRoofEnabled = false;
+static float g_hostRoofZ = 0.f;
+static bool g_hostLosEnabled = false;
+static bool g_hostLosHit = false;
+static LineOfSightResult g_hostLosResult{};
+static bool g_hostViewMatrixEnabled = false;
+static float g_hostViewMatrix[16]{};
+
+void HostSetRoofTest(bool enabled, float roofZ) { g_hostRoofEnabled = enabled; g_hostRoofZ = roofZ; }
+void HostSetLosTest(bool enabled, bool hit, const LineOfSightResult& result) {
+    g_hostLosEnabled = enabled; g_hostLosHit = hit; g_hostLosResult = result;
+}
+void HostSetViewMatrixTest(bool enabled, const float matrix[16]) {
+    g_hostViewMatrixEnabled = enabled;
+    if (enabled && matrix) std::memcpy(g_hostViewMatrix, matrix, sizeof(g_hostViewMatrix));
+}
+
 bool FindGroundZFor3DPosition(float, float, float, float&) { return false; }
+bool FindRoofZFor3DPosition(float, float, float, float& out) {
+    if (!g_hostRoofEnabled) return false;
+    out = g_hostRoofZ;
+    return true;
+}
+bool ProcessLineOfSight(float, float, float, float, float, float, const LineOfSightFlags&, LineOfSightResult& out) {
+    if (!g_hostLosEnabled || !g_hostLosHit) return false;
+    out = g_hostLosResult;
+    return true;
+}
+bool IsLineOfSightClear(float, float, float, float, float, float, const LineOfSightFlags&, bool& clear) {
+    if (!g_hostLosEnabled) return false;
+    clear = !g_hostLosHit;
+    return true;
+}
+bool CopyCameraViewMatrix(float out[16]) {
+    if (!g_hostViewMatrixEnabled || !out) return false;
+    std::memcpy(out, g_hostViewMatrix, sizeof(g_hostViewMatrix));
+    return true;
+}
 bool IsAmbientSphereVisible(float, float, float, float, bool&) { return false; }
 uint32_t NoteScriptPed(int model, float x, float y, float z, float) {
     if (model < 0 || model > 312 || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return 0;

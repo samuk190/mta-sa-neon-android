@@ -1506,6 +1506,19 @@ void ApplySpatialArea(uint32_t id,uint64_t generation,uint8_t& interior,uint16_t
     if(it->second.dimensionSet) dimension=it->second.dimension;
 }
 
+uint16_t ElementDimensionValue(uint32_t id) {
+    if (!id) return 0;
+    Spatial::Element shape;
+    if (CopySpatialShape(id, shape)) return shape.dimension;
+    uint8_t interior = 0;
+    uint16_t dimension = 0;
+    ServerWorld::ActorSpawn visual;
+    if (ServerWorld::CopyVisual(id, visual) || id == ServerWorld::LocalPlayer())
+        dimension = ServerWorld::DimensionOf(id);
+    ApplySpatialArea(id, AreaGeneration(id), interior, dimension);
+    return dimension;
+}
+
 void InstallFieldLua(lua_State* L) {
     const struct { const char* name; lua_CFunction fn; } binds[] = {
         {"getElementModel", l_getElementModel},

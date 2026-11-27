@@ -222,6 +222,7 @@ static bool PlausiblePosition(float x, float y, float z) {
 // otherwise the embedded transform at +0x08 and heading at +0x14.
 static void SampleLocalTasks(void* ped);
 static void SampleLocalWeapon(void* ped, Vec3 position, float heading);
+static void SampleCameraViewMatrix();
 static void* g_sampledLocalPed = nullptr;  // game thread only
 static uint64_t g_sampledLife = UINT64_MAX;
 static void SampleLocalPose() {
@@ -998,6 +999,7 @@ static void SampleLocalPadAndCamera() {
     }
     g_cameraRot = orient;
     g_cameraRotValid = true;
+    SampleCameraViewMatrix();
 }
 
 static void* PedIntel(void* ped) {
@@ -1413,6 +1415,7 @@ struct GroundApi {
     bool looked = false;
     void (*setState)(void*, int) = nullptr;
     float (*findGround)(float, float, float, bool*, void**) = nullptr;
+    float (*findRoof)(float, float, float, bool*) = nullptr;
     void (*standCtor)(void*, int, bool, bool, float) = nullptr;
 };
 
@@ -1426,6 +1429,8 @@ static GroundApi& Ground() {
         dlsym(handle, "_ZN4CPed11SetPedStateE9ePedState"));
     api.findGround = reinterpret_cast<float (*)(float, float, float, bool*, void**)>(
         dlsym(handle, "_ZN6CWorld21FindGroundZFor3DCoordEfffPbPP7CEntity"));
+    api.findRoof = reinterpret_cast<float (*)(float, float, float, bool*)>(
+        dlsym(handle, "_ZN6CWorld19FindRoofZFor3DCoordEfffPb"));
     api.standCtor = reinterpret_cast<void (*)(void*, int, bool, bool, float)>(
         dlsym(handle, "_ZN21CTaskSimpleStandStillC1Eibbf"));
     return api;
@@ -1675,6 +1680,184 @@ bool FindGroundZFor3DPosition(float x, float y, float z, float& out) {
     static std::atomic_bool reported{false};
     if (!reported.exchange(true)) ENGINE_LOGE("DIAG getGroundPosition: game-thread collision query unavailable");
     return false;
+}
+
+bool FindRoofZFor3DPosition(float x, float y, float z, float& out) {
+    bool found = false;
+    float roofZ = 0.f;
+    const bool ran = GameTasks::RunQuery([&] {
+        auto findRoof = Ground().findRoof;
+        if (!findRoof) return;
+        // CWorldSA::FindRoofZFor3DCoord (libGTASA 2.10 0x50f4a4): sets *outOk=1 on hit, 0 on miss.
+        bool ok = false;
+        const float value = findRoof(x, y, z, &ok);
+        if (ok && std::isfinite(value)) {
+            roofZ = value;
+            found = true;
+        }
+    });
+    if (!ran) {
+        static std::atomic_bool reported{false};
+        if (!reported.exchange(true)) ENGINE_LOGE("DIAG getRoofPosition: game-thread collision query unavailable");
+        return false;
+    }
+    if (!found) return false;
+    out = roofZ;
+    return true;
+}
+
+uint32_t EntityElementId(void* entity);
+void* ElementEntity(uint32_t id);
+
+// CColPoint layout in libGTASA 2.10 ARM64 (verified from _ZN9CColPointaSERKS_ 0x3a4ca8-0x3a4cec):
+// +0x00 position (Vec3), +0x10 normal (Vec3), +0x20 surfaceTypeA/pieceTypeA/lightingA,
+// +0x23 surfaceTypeB, +0x24 pieceTypeB, +0x25 lightingB, +0x28 depth (float).
+struct alignas(16) NativeColPoint {
+    Vec3 position{};
+    float pad0 = 0.f;
+    Vec3 normal{};
+    float pad1 = 0.f;
+    uint8_t surfaceTypeA = 0;
+    uint8_t pieceTypeA = 0;
+    uint8_t lightingA = 0;
+    uint8_t surfaceTypeB = 0;
+    uint8_t pieceTypeB = 0;
+    uint8_t lightingB = 0;
+    uint8_t pad2[2]{};
+    float depth = 0.f;
+    uint8_t pad3[4]{};
+};
+static_assert(sizeof(NativeColPoint) == 0x30, "NativeColPoint size mismatch");
+
+struct SightApi {
+    bool looked = false;
+    bool colLayoutOk = false;
+    bool (*processLos)(const Vec3&, const Vec3&, NativeColPoint&, void*&,
+        bool, bool, bool, bool, bool, bool, bool, bool) = nullptr;
+    bool (*isLosClear)(const Vec3&, const Vec3&,
+        bool, bool, bool, bool, bool, bool, bool) = nullptr;
+    void** ignoreEntity = nullptr;
+};
+
+static SightApi& Sight() {
+    static SightApi api;
+    if (api.looked) return api;
+    api.looked = true;
+    void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!lib) return api;
+    api.processLos = reinterpret_cast<decltype(api.processLos)>(
+        dlsym(lib, "_ZN6CWorld18ProcessLineOfSightERK7CVectorS2_R9CColPointRP7CEntitybbbbbbbb"));
+    api.isLosClear = reinterpret_cast<decltype(api.isLosClear)>(
+        dlsym(lib, "_ZN6CWorld21GetIsLineOfSightClearERK7CVectorS2_bbbbbbb"));
+    api.ignoreEntity = static_cast<void**>(dlsym(lib, "_ZN6CWorld13pIgnoreEntityE"));
+    const auto* copy = static_cast<const uint32_t*>(dlsym(lib, "_ZN9CColPointaSERKS_"));
+    api.colLayoutOk = copy && copy[1] == 0xb9000808 && copy[3] == 0xf9000008 && copy[0x44 / 4] == 0xb9002808;
+    return api;
+}
+
+bool ProcessLineOfSight(float startX, float startY, float startZ, float endX, float endY, float endZ,
+    const LineOfSightFlags& flags, LineOfSightResult& out) {
+    bool hit = false;
+    LineOfSightResult result{};
+    const bool ran = GameTasks::RunQuery([&] {
+        auto& api = Sight();
+        if (!api.processLos || !api.ignoreEntity || !api.colLayoutOk) return;
+        const Vec3 start{startX, startY, startZ};
+        const Vec3 end{endX, endY, endZ};
+        NativeColPoint point{};
+        void* entity = nullptr;
+        void* previous = *api.ignoreEntity;
+        *api.ignoreEntity = flags.ignoredElement ? ElementEntity(flags.ignoredElement) : nullptr;
+        const bool found = api.processLos(start, end, point, entity,
+            flags.buildings, flags.vehicles, flags.peds, flags.objects, flags.dummies,
+            flags.seeThrough, flags.ignoreCameraObjects, flags.shootThrough);
+        *api.ignoreEntity = previous;
+        if (!found) return;
+        result.x = point.position.x;
+        result.y = point.position.y;
+        result.z = point.position.z;
+        result.nx = point.normal.x;
+        result.ny = point.normal.y;
+        result.nz = point.normal.z;
+        result.material = point.surfaceTypeB;
+        result.piece = point.pieceTypeB;
+        result.lighting = point.lightingB;
+        result.hitElement = entity ? EntityElementId(entity) : 0xFFFFFFFFu;
+        hit = true;
+    });
+    if (!ran) {
+        static std::atomic_bool reported{false};
+        if (!reported.exchange(true)) ENGINE_LOGE("DIAG processLineOfSight: game-thread query unavailable");
+        return false;
+    }
+    if (!hit) return false;
+    out = result;
+    return true;
+}
+
+bool IsLineOfSightClear(float startX, float startY, float startZ, float endX, float endY, float endZ,
+    const LineOfSightFlags& flags, bool& clear) {
+    bool executed = false;
+    bool result = false;
+    const bool ran = GameTasks::RunQuery([&] {
+        auto& api = Sight();
+        if (!api.isLosClear || !api.ignoreEntity) return;
+        const Vec3 start{startX, startY, startZ};
+        const Vec3 end{endX, endY, endZ};
+        void* previous = *api.ignoreEntity;
+        *api.ignoreEntity = flags.ignoredElement ? ElementEntity(flags.ignoredElement) : nullptr;
+        result = api.isLosClear(start, end,
+            flags.buildings, flags.vehicles, flags.peds, flags.objects, flags.dummies,
+            flags.seeThrough, flags.ignoreCameraObjects);
+        *api.ignoreEntity = previous;
+        executed = true;
+    });
+    if (!ran || !executed) {
+        static std::atomic_bool reported{false};
+        if (!reported.exchange(true)) ENGINE_LOGE("DIAG isLineOfSightClear: game-thread query unavailable");
+        return false;
+    }
+    clear = result;
+    return true;
+}
+
+static std::mutex g_viewMatrixMutex;
+static float g_viewMatrix[16]{};
+static bool g_viewMatrixValid = false;
+
+static void SampleCameraViewMatrix() {
+    static bool looked = false;
+    static void* camera = nullptr;
+    static bool layoutOk = false;
+    if (!looked) {
+        looked = true;
+        if (void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL)) {
+            camera = dlsym(lib, "TheCamera");
+            // CSprite::CalcScreenCoors (0x6e9df8): +0x4c is `add x0, x9, #0xa10` (0x91284120),
+            // confirming TheCamera.m_mViewMatrix sits at TheCamera + 0xA10.
+            const auto* fn = static_cast<const uint32_t*>(
+                dlsym(lib, "_ZN7CSprite15CalcScreenCoorsERK5RwV3dPS0_PfS4_bb"));
+            layoutOk = camera && fn && fn[0x4c / 4] == 0x91284120;
+        }
+    }
+    if (!layoutOk) return;
+    const auto* src = reinterpret_cast<const float*>(static_cast<const uint8_t*>(camera) + 0xA10);
+    float copy[16];
+    for (int i = 0; i < 16; ++i) {
+        copy[i] = src[i];
+        if (!std::isfinite(copy[i])) return;
+    }
+    std::lock_guard<std::mutex> lock(g_viewMatrixMutex);
+    std::memcpy(g_viewMatrix, copy, sizeof(copy));
+    g_viewMatrixValid = true;
+}
+
+bool CopyCameraViewMatrix(float out[16]) {
+    if (!out) return false;
+    std::lock_guard<std::mutex> lock(g_viewMatrixMutex);
+    if (!g_viewMatrixValid) return false;
+    std::memcpy(out, g_viewMatrix, sizeof(g_viewMatrix));
+    return true;
 }
 
 bool IsAmbientSphereVisible(float x, float y, float z, float radius, bool& visible) {

@@ -18,6 +18,7 @@
 #include "LuaGuiApi.h"
 #include "LuaVMStub.h"
 #include "LuaCameraApi.h"
+#include "LuaFieldApi.h"
 #include "LuaStoredElementApi.h"
 #include "LuaDxApi.h"
 #include "LuaSpatialApi.h"
@@ -1205,8 +1206,58 @@ bool ReadOffset(lua_State* L, int index, float& x, float& y, float& z) {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
 }
 
-// CLuaElementDefs.cpp:2184-2211. Physical attachment is not hooked, so a well-formed
-// call returns false and does not change the server attachment snapshot.
+bool IsAttachableType(const std::string& type, bool asChild) {
+    // CClientEntity::IsAttachable / IsAttachToable (CClientEntity.cpp 1134-1182).
+    if (type == "ped" || type == "player" || type == "blip" || type == "vehicle" ||
+        type == "object" || type == "marker" || type == "pickup" || type == "sound" ||
+        type == "colshape" || type == "weapon" || type == "light")
+        return true;
+    return asChild && type == "camera";
+}
+
+bool IsAttachedToElement(uint32_t element, uint32_t candidateAncestor) {
+    if (element == candidateAncestor) return true;
+    uint32_t current = element;
+    for (int depth = 0; depth < 64; ++depth) {
+        ServerWorld::Attachment att;
+        if (!ServerWorld::CopyAttachment(current, att) || att.parent == 0xFFFFFFFFu) return false;
+        if (att.parent == candidateAncestor) return true;
+        current = att.parent;
+    }
+    return true;
+}
+
+uint16_t ReadElementDimension(lua_State* L, int argIndex, uint32_t id) {
+    const int top = lua_gettop(L);
+    lua_getglobal(L, "getElementDimension");
+    if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, argIndex);
+        if (lua_pcall(L, 1, 1, 0) == 0 && lua_isnumber(L, -1)) {
+            const lua_Integer dim = lua_tointeger(L, -1);
+            lua_settop(L, top);
+            return static_cast<uint16_t>(dim & 0xFFFF);
+        }
+    }
+    lua_settop(L, top);
+    return ElementDimensionValue(id);
+}
+
+void ReadElementVec3(lua_State* L, const char* fnName, int argIndex, float& x, float& y, float& z) {
+    x = y = z = 0.f;
+    const int top = lua_gettop(L);
+    lua_getglobal(L, fnName);
+    if (lua_isfunction(L, -1)) {
+        lua_pushvalue(L, argIndex);
+        if (lua_pcall(L, 1, 3, 0) == 0 && lua_isnumber(L, -3) && lua_isnumber(L, -2) && lua_isnumber(L, -1)) {
+            x = static_cast<float>(lua_tonumber(L, -3));
+            y = static_cast<float>(lua_tonumber(L, -2));
+            z = static_cast<float>(lua_tonumber(L, -1));
+        }
+    }
+    lua_settop(L, top);
+}
+
+// CLuaElementDefs.cpp:2184-2211 + CStaticFunctionDefinitions::AttachElements (1372-1401).
 int AttachElements(lua_State* L) {
     uint32_t id = 0, parent = 0;
     if (!ReadElement(L, 1, id) || !ReadElement(L, 2, parent)) {
@@ -1220,22 +1271,40 @@ int AttachElements(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    (void)x;
-    (void)y;
-    (void)z;
-    (void)rx;
-    (void)ry;
-    (void)rz;
+    if (!KnownClientElement(id) || !KnownClientElement(parent)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!IsAttachableType(ClientElementTypeName(id), true) ||
+        !IsAttachableType(ClientElementTypeName(parent), false) ||
+        IsAttachedToElement(parent, id) ||
+        ReadElementDimension(L, 1, id) != ReadElementDimension(L, 2, parent)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    PushElement(L, parent);
+    lua_pushnumber(L, x);
+    lua_pushnumber(L, y);
+    lua_pushnumber(L, z);
+    lua_pushnumber(L, rx);
+    lua_pushnumber(L, ry);
+    lua_pushnumber(L, rz);
+    if (!ActiveVmFireElementEvent(L, "onClientElementAttach", id, 7)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    ServerWorld::NoteAttachedOffsets(id, x, y, z, rx, ry, rz);
+    ServerWorld::NoteAttachTo(id, parent);
     static bool once = false;
     if (!once) {
         once = true;
-        LUA_LOGI("DIAG attachElements: physical attachment and onClientElementAttach are not run");
+        LUA_LOGI("DIAG attachElements: attachment graph and onClientElementAttach updated; CPhysical::AttachEntityToEntity is not hooked");
     }
-    lua_pushboolean(L, 0);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
-// CLuaElementDefs.cpp:2214-2227. Same rule: do not clear a server attachment.
+// CLuaElementDefs.cpp:2214-2227 + CStaticFunctionDefinitions::DetachElements (1403-1435).
 int DetachElements(lua_State* L) {
     uint32_t id = 0;
     if (!ReadElement(L, 1, id)) {
@@ -1243,20 +1312,46 @@ int DetachElements(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    uint32_t filterParent = 0;
+    bool hasFilter = false;
     if (!lua_isnoneornil(L, 2)) {
-        uint32_t parent = 0;
-        if (!ReadElement(L, 2, parent)) {
+        if (!ReadElement(L, 2, filterParent)) {
             LUA_LOGE("detachElements: expected an element");
             lua_pushboolean(L, 0);
             return 1;
         }
+        hasFilter = true;
     }
+    ServerWorld::Attachment att;
+    if (!ServerWorld::CopyAttachment(id, att) || att.parent == 0xFFFFFFFFu) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (hasFilter && att.parent != filterParent) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0;
+    ReadElementVec3(L, "getElementPosition", 1, px, py, pz);
+    ReadElementVec3(L, "getElementRotation", 1, rx, ry, rz);
+    PushElement(L, att.parent);
+    lua_pushnumber(L, px);
+    lua_pushnumber(L, py);
+    lua_pushnumber(L, pz);
+    lua_pushnumber(L, rx);
+    lua_pushnumber(L, ry);
+    lua_pushnumber(L, rz);
+    if (!ActiveVmFireElementEvent(L, "onClientElementDetach", id, 7)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    ServerWorld::NoteAttachTo(id, 0xFFFFFFFFu);
     static bool once = false;
     if (!once) {
         once = true;
-        LUA_LOGI("DIAG detachElements: physical detach is not run");
+        LUA_LOGI("DIAG detachElements: attachment cleared and onClientElementDetach fired; CPhysical::AttachEntityToEntity(NULL) is not hooked");
     }
-    lua_pushboolean(L, 0);
+    lua_pushboolean(L, 1);
     return 1;
 }
 

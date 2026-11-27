@@ -2013,7 +2013,20 @@ public final class EngineHostActivity extends GTASA {
     }
 
     @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (clientReady && !hardwareInputBlocked && !visible(chatInputBar) && !scriptKeyboardShown
+                && handleGamepadMotionEvent(event)) {
+            return true;
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (clientReady && !hardwareInputBlocked && !visible(chatInputBar) && !scriptKeyboardShown
+                && handleGamepadKeyEvent(event)) {
+            return true;
+        }
         if (!clientReady || !event.isFromSource(InputDevice.SOURCE_KEYBOARD)
                 || (event.getFlags() & KeyEvent.FLAG_SOFT_KEYBOARD) != 0) {
             return super.dispatchKeyEvent(event);

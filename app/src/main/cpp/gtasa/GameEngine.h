@@ -166,6 +166,32 @@ float CopyLocalArmor();
 // the game thread. False when the symbol is missing or that thread does not
 // run the call; out is then unchanged.
 bool FindGroundZFor3DPosition(float x, float y, float z, float& out);
+bool FindRoofZFor3DPosition(float x, float y, float z, float& out);
+struct LineOfSightFlags {
+    bool buildings = true;
+    bool vehicles = true;
+    bool peds = true;
+    bool objects = true;
+    bool dummies = true;
+    bool seeThrough = false;
+    bool ignoreCameraObjects = false;
+    bool shootThrough = false;
+    uint32_t ignoredElement = 0;
+};
+struct LineOfSightResult {
+    float x = 0.f, y = 0.f, z = 0.f;
+    uint32_t hitElement = 0xFFFFFFFFu;
+    float nx = 0.f, ny = 0.f, nz = 0.f;
+    uint8_t material = 0;
+    uint8_t lighting = 0;
+    uint8_t piece = 0;
+};
+bool ProcessLineOfSight(float startX, float startY, float startZ, float endX, float endY, float endZ,
+    const LineOfSightFlags& flags, LineOfSightResult& out);
+bool IsLineOfSightClear(float startX, float startY, float startZ, float endX, float endY, float endZ,
+    const LineOfSightFlags& flags, bool& clear);
+// Snapshot of TheCamera.m_mViewMatrix (TheCamera + 0xA10, 4x4 row-major CMatrix), sampled on the game thread.
+bool CopyCameraViewMatrix(float out[16]);
 bool IsAmbientSphereVisible(float x, float y, float z, float radius, bool& visible);
 
 // Client-only ped for createPed (CStaticFunctionDefinitions::CreatePed 2815-2852).

@@ -3111,8 +3111,18 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     PulseCamera();
     PulseSpatial();
     // login_camera.lua moves the tour in onClientPreRender, before the DX menu.
+    // CClientGame.cpp:915 + CMapEvent.cpp:26: fire onClientHUDRender before onClientRender.
+    DxSetAspectRatioAdjustmentAllowed(true);
     fireHandlers("onClientPreRender", 0, ClientRootElement());
-    if (!WorldRPG::Debug::Flag("nodx")) fireHandlers("onClientRender", 0, ClientRootElement());
+    DxSetAspectRatioAdjustmentAllowed(false);
+    if (!WorldRPG::Debug::Flag("nodx")) {
+        DxSetAspectRatioAdjustmentAllowed(true);
+        fireHandlers("onClientHUDRender", 0, ClientRootElement());
+        DxSetAspectRatioAdjustmentAllowed(false);
+        DxSetAspectRatioAdjustmentAllowed(true);
+        fireHandlers("onClientRender", 0, ClientRootElement());
+        DxSetAspectRatioAdjustmentAllowed(false);
+    }
     DxEndRender(g_dx.frame);
     GuiAppendDraws(g_dx.frame);
     g_dx.frame += g_dx.postGuiFrame;

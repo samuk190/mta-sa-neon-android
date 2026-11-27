@@ -1258,15 +1258,15 @@ void CheckCustomWeapons(WorldRPG::Script::LuaVMStub& vm) {
 void CheckElementsGuiDx(WorldRPG::Script::LuaVMStub& vm) {
     using namespace WorldRPG;
     Net::BitStreamWriter packet;
-    packet.WriteCompressed(4u, 4);
+    packet.WriteCompressed(5u, 4);
     WriteWeaponHeader(packet, 2001, 2002); WriteWeaponBody(packet, 2);
     WriteWeaponHeader(packet, 2002); WriteWeaponBody(packet, 2);
     WriteWeaponHeader(packet, 2003, 2002); WriteWeaponBody(packet, 2);
     WriteWeaponHeader(packet, 2004, 9999); WriteWeaponBody(packet, 2);
+    WriteWeaponHeader(packet, 2005); WriteWeaponBody(packet, 2);
     ServerWorld::OnEntityAdd(packet.GetData(), packet.GetByteLength(), packet.GetBitLength());
     RunLua(vm, "element-attachments", R"LUA(
-        local a, b = {id=2001}, {id=2002}
-        assert(attachElements(a,b) == false and detachElements(a,b) == false, 'missing physical hook must not report a successful mutation')
+        local a, b, c = {id=2001, element=true}, {id=2002, element=true}, {id=2005, element=true}
         assert(isElementAttached(a) == true and getElementAttachedTo(a).id == 2002, 'forward attachment reference')
         local list = getAttachedElements(b)
         assert(#list == 2 and list[1].id == 2001 and list[2].id == 2003, 'attachment order')
@@ -1277,6 +1277,38 @@ void CheckElementsGuiDx(WorldRPG::Script::LuaVMStub& vm) {
         assert(isElementAttached({}) == nil and getElementAttachedTo({}) == nil, 'bad argument nil')
         assert(getAttachedElements({}) == false and getElementAttachedOffsets({}) == false, 'bad argument false')
         assert(select('#',getElementAttachedOffsets(b)) == 6, 'unattached element also has six offsets')
+        -- Client attachElements / detachElements (CStaticFunctionDefinitions.cpp:1372-1435)
+        assert(attachElements(b, b) == false, 'self-attach rejected')
+        assert(attachElements(b, a) == false, 'cycle attach rejected')
+        local attachedEvent, detachedEvent = 0, 0
+        local attachFn = function(parent, ox, oy, oz, orx, ory, orz)
+            attachedEvent = attachedEvent + 1
+            assert(parent.id == 2002 and ox == 2 and oy == 3 and oz == 4 and orx == 10 and ory == 20 and orz == 30)
+        end
+        local detachFn = function(parent)
+            detachedEvent = detachedEvent + 1
+            assert(parent.id == 2002)
+        end
+        addEventHandler('onClientElementAttach', c, attachFn)
+        addEventHandler('onClientElementDetach', c, detachFn)
+        assert(attachElements(c, b, 2, 3, 4, 10, 20, 30) == true and attachedEvent == 1, 'client attach succeeds and fires event')
+        assert(isElementAttached(c) == true and getElementAttachedTo(c).id == 2002, 'client attach linked')
+        local cx, cy, cz, crx, cry, crz = getElementAttachedOffsets(c)
+        assert(cx == 2 and cy == 3 and cz == 4 and crx == 10 and cry == 20 and crz == 30, 'client attach offsets')
+        assert(detachElements(c, a) == false, 'detach wrong parent rejected')
+        assert(detachElements(c, b) == true and detachedEvent == 1, 'detach matching parent succeeds and fires event')
+        assert(isElementAttached(c) == nil and getElementAttachedTo(c) == false, 'detached state cleared')
+        assert(detachElements(c) == false, 'detach unattached returns false')
+        -- Cancelable attach event
+        local cancelAttach = function() cancelEvent() end
+        addEventHandler('onClientElementAttach', c, cancelAttach)
+        assert(attachElements(c, b, 2, 3, 4, 10, 20, 30) == false and isElementAttached(c) == nil, 'canceled attach rejected')
+        removeEventHandler('onClientElementAttach', c, cancelAttach)
+        -- Dimension mismatch rejected
+        setElementDimension(c, 5)
+        assert(attachElements(c, b, 2, 3, 4, 10, 20, 30) == false, 'dimension mismatch rejected')
+        removeEventHandler('onClientElementAttach', c, attachFn)
+        removeEventHandler('onClientElementDetach', c, detachFn)
     )LUA");
     Net::BitStreamWriter removed;
     WriteTestBits(removed, 2002, 17);
@@ -5398,6 +5430,12 @@ void CheckSight(WorldRPG::Script::LuaVMStub& vm) {
     )LUA");
 }
 
+namespace WorldRPG::Game {
+void HostSetRoofTest(bool enabled, float roofZ);
+void HostSetLosTest(bool enabled, bool hit, const LineOfSightResult& result);
+void HostSetViewMatrixTest(bool enabled, const float matrix[16]);
+}
+
 int main(int argc, char** argv) {
     // These scenarios check the script API from the Lua 5.3 VM, with the
     // resources in the same VM; CheckTwoVms covers resources in Lua 5.1.
@@ -5482,6 +5520,129 @@ int main(int argc, char** argv) {
     CheckNetworkCalls(vm);
     CheckModelDownloads(vm);
     CheckPedBodyState(vm);
+
+    // P1: onClientHUDRender order + dxSetAspectRatioAdjustmentEnabled + marker/pickup events + sight/projection math
+    {
+        RunLua(vm, "p1-hud-render-and-aspect", R"LUA(
+            _G._renderOrder = {}
+            _G._hudAspect = nil
+            local onHud = function()
+                table.insert(_G._renderOrder, 'hud')
+                assert(dxSetAspectRatioAdjustmentEnabled(true, 16/9) == true, 'aspect allowed in onClientHUDRender')
+                local en, ratio = dxIsAspectRatioAdjustmentEnabled()
+                _G._hudAspect = en and math.abs(ratio - 16/9) < 1e-4
+            end
+            local onRen = function()
+                table.insert(_G._renderOrder, 'render')
+                local en = dxIsAspectRatioAdjustmentEnabled()
+                assert(en == false, 'aspect reset between events')
+            end
+            _G._onHud, _G._onRen = onHud, onRen
+            addEventHandler('onClientHUDRender', root, onHud)
+            addEventHandler('onClientRender', root, onRen)
+        )LUA");
+        (void)vm.pumpDx(true);
+        RunLua(vm, "p1-hud-render-verify", R"LUA(
+            assert(#_G._renderOrder == 2 and _G._renderOrder[1] == 'hud' and _G._renderOrder[2] == 'render', 'HUDRender runs before Render')
+            assert(_G._hudAspect == true, 'aspect ratio adjustment worked inside onClientHUDRender')
+            assert(dxIsAspectRatioAdjustmentEnabled() == false, 'aspect reset after frame')
+            assert(dxSetAspectRatioAdjustmentEnabled(true) == false, 'aspect blocked outside render events')
+            removeEventHandler('onClientHUDRender', root, _G._onHud)
+            removeEventHandler('onClientRender', root, _G._onRen)
+        )LUA");
+
+        // Marker & pickup hit/leave events (script markers & pickups inside an active resource)
+        {
+            using namespace WorldRPG;
+            Net::ResourceStartInfo info;
+            info.name = "p1_events";
+            info.resourceId = 199;
+            info.entityId = 0x3C90;
+            info.dynamicEntityId = 0x3C91;
+            info.noClientCacheScripts = 1;
+            info.startCounter = 1;
+            Script::ActiveVmOnResourceStart(info);
+            const std::vector<uint8_t> body = NoCacheScriptBody(199, R"LUA(
+                local px, py, pz = getElementPosition(localPlayer)
+                local pdim = getElementDimension(localPlayer)
+                local mHits, mLeaves, pmHits, pmLeaves = 0, 0, 0, 0
+                local pHits, pLeaves, ppHits, ppLeaves = 0, 0, 0, 0
+                local m = createMarker(px + 200, py, pz, 'cylinder', 3.0)
+                local p = createPickup(px + 200, py, pz, 0, 50)
+                setElementDimension(m, pdim)
+                setElementDimension(p, pdim)
+                assert(isElement(getElementColShape(p)) and getElementType(getElementColShape(p)) == 'colshape', 'pickup colshape')
+                addEventHandler('onClientMarkerHit', m, function(el, match) if el == localPlayer and match then mHits = mHits + 1 end end)
+                addEventHandler('onClientMarkerLeave', m, function(el, match) if el == localPlayer and match then mLeaves = mLeaves + 1 end end)
+                addEventHandler('onClientPlayerMarkerHit', localPlayer, function(mk, match) if mk == m and match then pmHits = pmHits + 1 end end)
+                addEventHandler('onClientPlayerMarkerLeave', localPlayer, function(mk, match) if mk == m and match then pmLeaves = pmLeaves + 1 end end)
+                addEventHandler('onClientPickupHit', p, function(el, match) if el == localPlayer and match then pHits = pHits + 1 end end)
+                addEventHandler('onClientPickupLeave', p, function(el, match) if el == localPlayer and match then pLeaves = pLeaves + 1 end end)
+                addEventHandler('onClientPlayerPickupHit', localPlayer, function(pk, match) if pk == p and match then ppHits = ppHits + 1 end end)
+                addEventHandler('onClientPlayerPickupLeave', localPlayer, function(pk, match) if pk == p and match then ppLeaves = ppLeaves + 1 end end)
+                setElementPosition(m, px, py, pz)
+                setElementPosition(p, px, py, pz)
+                assert(mHits == 1 and pmHits == 1, 'marker hit events: ' .. mHits .. ',' .. pmHits)
+                assert(pHits == 1 and ppHits == 1, 'pickup hit events: ' .. pHits .. ',' .. ppHits)
+                setElementPosition(m, px + 200, py, pz)
+                setElementPosition(p, px + 200, py, pz)
+                assert(mLeaves == 1 and pmLeaves == 1, 'marker leave events: ' .. mLeaves .. ',' .. pmLeaves)
+                assert(pLeaves == 1 and ppLeaves == 1, 'pickup leave events: ' .. pLeaves .. ',' .. ppLeaves)
+                -- Verify dimension mismatch reports matchingDimension=false
+                local mismatchHits = 0
+                addEventHandler('onClientMarkerHit', m, function(el, match) if el == localPlayer and not match then mismatchHits = mismatchHits + 1 end end)
+                setElementDimension(m, pdim + 1)
+                setElementPosition(m, px, py, pz)
+                assert(mismatchHits == 1, 'marker hit mismatch dim: ' .. mismatchHits)
+                destroyElement(m)
+                destroyElement(p)
+                _G._p1MarkerPickupOk = true
+            )LUA");
+            CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
+            Script::ActiveVmPulseResources();
+            RunLua(vm, "p1-marker-pickup-verify", "assert(_G._p1MarkerPickupOk == true, 'marker/pickup hit/leave')");
+            Net::BitStreamWriter stop;
+            stop.Write(static_cast<uint16_t>(199));
+            Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+        }
+
+        // Native sight & screen/world projection math round-trip with injected mock matrix & raycast
+        WorldRPG::Game::LineOfSightResult mockHit{};
+        mockHit.x = 12.5f; mockHit.y = -4.25f; mockHit.z = 7.0f;
+        mockHit.hitElement = WorldRPG::ServerWorld::LocalPlayer();
+        mockHit.nx = 0.f; mockHit.ny = 0.f; mockHit.nz = 1.f;
+        mockHit.material = 14; mockHit.lighting = 128; mockHit.piece = 3;
+        // Non-trivial invertible affine view matrix (rotated + translated, row-major CMatrix).
+        const float mockMat[16] = {
+            0.8f,  0.6f,  0.0f, 0.0f,
+           -0.6f,  0.8f,  0.0f, 0.0f,
+            0.0f,  0.0f,  1.0f, 0.0f,
+            1.5f,  2.0f, 10.0f, 1.0f,
+        };
+        WorldRPG::Game::HostSetRoofTest(true, 42.5f);
+        WorldRPG::Game::HostSetLosTest(true, true, mockHit);
+        WorldRPG::Game::HostSetViewMatrixTest(true, mockMat);
+        RunLua(vm, "p1-sight-projection-roundtrip", R"LUA(
+            assert(getRoofPosition(1, 2, 3) == 42.5, 'roof Z')
+            local hit, hx, hy, hz, el, nx, ny, nz, mat, light, piece = processLineOfSight(0, 0, 10, 12.5, -4.25, 0)
+            assert(hit == true and hx == 12.5 and hy == -4.25 and hz == 7.0, 'LOS hit pos')
+            assert(isElement(el) and el.id == localPlayer.id, 'LOS hit element')
+            assert(nx == 0 and ny == 0 and nz == 1 and mat == 14 and light == 128 and piece == 3, 'LOS normal/mat/light/piece')
+            assert(isLineOfSightClear(0, 0, 10, 12.5, -4.25, 0) == false, 'LOS blocked')
+            local wx, wy, wz = 2.5, 3.0, 4.0
+            local sx, sy, sz = getScreenFromWorldPosition(wx, wy, wz, 0.5, true)
+            assert(type(sx) == 'number' and type(sy) == 'number' and math.abs(sz - 14.0) < 1e-4, 'screen projection')
+            local rx, ry, rz = getWorldFromScreenPosition(sx, sy, sz)
+            assert(math.abs(rx - wx) < 1e-3 and math.abs(ry - wy) < 1e-3 and math.abs(rz - wz) < 1e-3,
+                   'screen->world round-trip: ' .. tostring(rx) .. ',' .. tostring(ry) .. ',' .. tostring(rz))
+            assert(getScreenFromWorldPosition(0, 0, -20) == false, 'behind camera returns false')
+        )LUA");
+        WorldRPG::Game::HostSetLosTest(true, false, mockHit);
+        RunLua(vm, "p1-los-clear", "assert(isLineOfSightClear(0, 0, 10, 1, 2, 3) == true, 'LOS clear')");
+        WorldRPG::Game::HostSetRoofTest(false, 0.f);
+        WorldRPG::Game::HostSetLosTest(false, false, mockHit);
+        WorldRPG::Game::HostSetViewMatrixTest(false, nullptr);
+    }
 
     if (argc > 1) {
         RunLua(vm, "catalog-count", "assert(_G.catalogModels == 1435, 'catalog holds 1435 models')");

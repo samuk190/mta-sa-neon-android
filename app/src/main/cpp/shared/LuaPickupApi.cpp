@@ -4,6 +4,7 @@
 #include "LuaPickupApi.h"
 
 #include "LuaApiExtra.h"
+#include "LuaSpatialApi.h"
 #include "LuaVMStub.h"
 #include "ModelInfoRead.h"
 
@@ -189,6 +190,7 @@ int CreatePickup(lua_State* L) {
     if (!id) return Fail(L);
     pickup.id = id;
     g_pickups[id] = pickup;
+    RetainPickupColShape(id, pickup.x, pickup.y, pickup.z);
     if (!g_diag) {
         g_diag = true;
         LUA_LOGE("DIAG createPickup: CPickup is not created");
@@ -269,6 +271,7 @@ int SetElementPositionPickup(lua_State* L) {
     pickup->x = static_cast<float>(x);
     pickup->y = static_cast<float>(y);
     pickup->z = static_cast<float>(z);
+    RetainPickupColShape(pickup->id, pickup->x, pickup->y, pickup->z);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -297,7 +300,15 @@ void Register(lua_State* L) {
 
 }  // namespace
 
-void PickupRelease(uint32_t id) { g_pickups.erase(id); }
+void PickupRelease(uint32_t id) {
+    g_pickups.erase(id);
+    ReleasePickupColShape(id);
+}
+uint32_t PickupColShape(uint32_t id) {
+    Pickup* pickup = Find(id);
+    if (!pickup) return 0;
+    return RetainPickupColShape(pickup->id, pickup->x, pickup->y, pickup->z);
+}
 void InstallPickupLua(lua_State* L) { Register(L); }
 
 }  // namespace WorldRPG::Script

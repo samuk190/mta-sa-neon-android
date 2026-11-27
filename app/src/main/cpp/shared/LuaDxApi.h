@@ -20,6 +20,9 @@ void DxReset();
 // Start of a DX frame: writes the blend mode that is still active from the last frame
 // (desktop CGraphics keeps m_ActiveBlendMode until a script changes it).
 void DxBeginFrame(std::string& frame);
+// Desktop CMapEventManager g_bAllowAspectRatioAdjustment: true while running
+// onClientPreRender, onClientHUDRender, or onClientRender; resets adjustment on exit.
+void DxSetAspectRatioAdjustmentAllowed(bool allowed);
 
 // Queue a complete draw command (including any font selection/reset). Screen
 // calls capture blend state and honor postGUI; active render targets draw in order.
