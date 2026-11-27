@@ -1974,4 +1974,63 @@ void RpcSetElementDoubleSided(uint32_t id, bool doubleSided) {
     if (id != 0) g_fields[id].doubleSided = doubleSided;
 }
 
+void RpcResetMapInfo() {
+    g_weather = 0;
+    g_weatherSet = false;
+    g_blendSet = false;
+    g_gravity = 0.008f;
+    g_gameSpeed = 1.f;
+    g_wave = 0.f;
+    g_skySet = false;
+    g_windSet = false;
+    g_windX = g_windY = g_windZ = 0.f;
+    g_farSet = false;
+    g_fogSet = false;
+    g_waterSet = false;
+}
+
+void RpcResetWorldProperties(bool resetSpecial, bool resetWorld, bool resetWeather, bool resetLods, bool resetSounds) {
+    if (resetSpecial) {
+        static const bool kDefaultSpecial[] = {
+            false, false, false, false, true, false, true, true, false, true,
+            true, true, true, true, true, true, false, true, true, true,
+        };
+        constexpr size_t kCount = sizeof(g_worldProps) / sizeof(g_worldProps[0]);
+        for (size_t i = 0; i < kCount; ++i) g_worldProps[i].enabled = kDefaultSpecial[i];
+    }
+    if (resetWorld) {
+        g_gravity = 0.008f;
+        g_gameSpeed = 1.f;
+        g_minuteMs = 1000;
+        g_aircraft = 800.f;
+        g_aircraftVelocity = 200.f;
+        g_jetpack = 100.f;
+        g_occlusions = true;
+    }
+    if (resetWeather) {
+        g_weather = 0;
+        g_weatherSet = false;
+        g_blendSet = false;
+        g_skySet = false;
+        g_windSet = false;
+        g_windX = g_windY = g_windZ = 0.f;
+        g_farSet = false;
+        g_fogSet = false;
+        g_rain = 0.f;
+    }
+    if (resetLods) {
+        g_pedsLod = 500.f;
+        g_vehiclesLod = 500.f;
+        g_trainsLod = 500.f;
+    }
+    if (resetSounds) {
+        g_interiorSounds = true;
+    }
+}
+
+void RpcSetJetpackWeaponEnabled(uint8_t weaponId, bool enabled) {
+    (void)weaponId;
+    (void)enabled;
+}
+
 }  // namespace WorldRPG::Script

@@ -1271,4 +1271,34 @@ bool WorldObjectNoteBreak(uint32_t proxyId, uint32_t attackerId) {
     return ActiveVmFireElementEvent(L, "onClientWorldObjectBreak", proxyId, 1);
 }
 
+void ServerSetObjectVisibleInAllDimensions(uint32_t id, bool visible, uint16_t newDimension) {
+    if (!id) return;
+    (void)visible;
+    ServerWorld::NoteElementDimension(id, newDimension);
+}
+
+void ServerSetObjectBreakable(uint32_t id, bool breakable) {
+    if (Object* obj = Live(id)) obj->breakDisabled = !breakable;
+}
+
+void ServerSetObjectDynamicPhysics(uint32_t id, bool enabled) {
+    if (Object* obj = Live(id)) obj->frozen = !enabled;
+}
+
+void ServerBreakObject(uint32_t id) {
+    if (Object* obj = Live(id)) {
+        obj->respawning = obj->respawn;
+    }
+}
+
+void ServerRespawnObject(uint32_t id) {
+    if (Object* obj = Live(id)) {
+        obj->respawning = false;
+    }
+}
+
+void ServerToggleObjectRespawn(uint32_t id, bool enabled) {
+    if (Object* obj = Live(id)) obj->respawn = enabled;
+}
+
 }  // namespace WorldRPG::Script

@@ -1710,4 +1710,10 @@ void InstallUtilLua(lua_State* L) {
     InstallCryptLua(L);
 }
 
+void RpcSetTransferBoxVisibility(bool visible) {
+    if (g_transferVisible == visible) return;
+    g_transferVisible = visible;
+    ActiveVmFireTransferVisibility(visible);
+}
+
 }  // namespace WorldRPG::Script

@@ -1152,8 +1152,9 @@ int GetVehicleSirensOn(lua_State* L) {
     int model = 0;
     uint32_t id = 0;
     if (!ReadVehicleId(L, "getVehicleSirensOn", id, model)) return FailNil(L);
-    if (!ModelHasSirens(model)) return FailNil(L);
-    lua_pushboolean(L, CopyFlags(id).sirensOn ? 1 : 0);
+    const VehicleFlags flags = CopyFlags(id);
+    if (!ModelHasSirens(model) && flags.sirenCount == 0) return FailNil(L);
+    lua_pushboolean(L, flags.sirensOn ? 1 : 0);
     return 1;
 }
 
@@ -3314,6 +3315,210 @@ void VehicleDetachTowedBy(uint32_t vehicleId) {
 void VehicleFlagsResetSession() {
     std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
     g_vehicleFlags.clear();
+}
+
+void VehicleRpcSetDoorsUndamageable(uint32_t id, bool undamageable) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].doorsUndamageable = undamageable;
+}
+
+void VehicleRpcSetSirensOn(uint32_t id, bool on) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].sirensOn = on;
+}
+
+void VehicleRpcSetLandingGearDown(uint32_t id, bool down) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].landingGearDown = down;
+}
+
+void VehicleRpcSetHeliRotorSpeed(uint32_t id, float speed) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].heliRotor = speed;
+}
+
+void VehicleRpcSetDamageState(uint32_t id, uint8_t objectType, uint8_t part, uint8_t state) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.damageReady = true;
+    switch (objectType) {
+        case 0: if (part < 6) f.doors[part] = state; break;
+        case 1: if (part < 4) f.wheels[part] = state; break;
+        case 2: if (part < 4) f.lights[part] = state; break;
+        case 3: if (part < 7) f.panels[part] = state; break;
+        default: break;
+    }
+}
+
+void VehicleRpcSetOverrideLights(uint32_t id, uint8_t lights) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].overrideLights = lights;
+}
+
+void VehicleRpcSetDirtLevel(uint32_t id, float dirt) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].dirt = dirt;
+}
+
+void VehicleRpcSetDamageProof(uint32_t id, bool proof) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].damageProof = proof;
+}
+
+void VehicleRpcSetPaintjob(uint32_t id, uint8_t paintjob) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].paintjob = paintjob;
+}
+
+void VehicleRpcSetFuelTankExplodable(uint32_t id, bool explodable) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].fuelExplodable = explodable;
+}
+
+void VehicleRpcSetWheelStates(uint32_t id, const uint8_t states[4]) {
+    if (!id || !states) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.damageReady = true;
+    for (int i = 0; i < 4; ++i) f.wheels[i] = states[i];
+}
+
+void VehicleRpcSetTrainDerailed(uint32_t id, bool derailed) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].derailed = derailed;
+}
+
+void VehicleRpcSetTrainDerailable(uint32_t id, bool derailable) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].derailable = derailable;
+}
+
+void VehicleRpcSetTrainDirection(uint32_t id, bool clockwise) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].trainDirection = clockwise;
+}
+
+void VehicleRpcSetTrainSpeed(uint32_t id, float speed) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].trainSpeed = speed;
+}
+
+void VehicleRpcSetTrainTrack(uint32_t id, uint8_t track) {
+    if (!id) return;
+    (void)track;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    (void)g_vehicleFlags[id];
+}
+
+void VehicleRpcSetTrainPosition(uint32_t id, float position) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].trainPosition = position;
+}
+
+void VehicleRpcSetTaxiLightOn(uint32_t id, bool on) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].taxiLight = on;
+}
+
+void VehicleRpcSetHeadlightColor(uint32_t id, uint8_t r, uint8_t g, uint8_t b) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.headR = r;
+    f.headG = g;
+    f.headB = b;
+}
+
+void VehicleRpcSetDoorOpenRatio(uint32_t id, uint8_t door, float ratio) {
+    if (!id || door >= 6) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].doorRatio[door] = std::max(0.f, std::min(1.f, ratio));
+}
+
+void VehicleRpcSetTurretPosition(uint32_t id, float h, float v) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.turretH = h;
+    f.turretV = v;
+}
+
+void VehicleRpcSetVariant(uint32_t id, uint8_t v1, uint8_t v2) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.variant = v1;
+    f.variant2 = v2;
+}
+
+void VehicleRpcGiveSirens(uint32_t id, uint8_t count, uint8_t type, bool f360, bool los, bool rnd, bool silent) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.sirenCount = count <= 8 ? count : 8;
+    f.sirenType = type;
+    f.siren360 = f360;
+    f.sirenLos = los;
+    f.sirenRandom = rnd;
+    f.sirenSilent = silent;
+}
+
+void VehicleRpcRemoveSirens(uint32_t id) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.sirenCount = 0;
+    f.sirenType = 0;
+}
+
+void VehicleRpcSetSirenPoint(uint32_t id, uint8_t point, float x, float y, float z, uint8_t r, uint8_t g, uint8_t b,
+                             uint8_t a, uint32_t minAlpha, bool f360, bool los, bool rnd, bool silent) {
+    if (!id || point >= 8) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    VehicleFlags& f = g_vehicleFlags[id];
+    f.siren360 = f360;
+    f.sirenLos = los;
+    f.sirenRandom = rnd;
+    f.sirenSilent = silent;
+    VehicleFlags::SirenPoint& p = f.sirenPoints[point];
+    p.x = x;
+    p.y = y;
+    p.z = z;
+    p.r = r;
+    p.g = g;
+    p.b = b;
+    p.a = a;
+    p.minAlpha = minAlpha;
+}
+
+void VehicleRpcSetPlateText(uint32_t id, const std::string& text) {
+    if (!id) return;
+    std::lock_guard<std::mutex> lock(g_vehicleFlagsLock);
+    g_vehicleFlags[id].plate = text.size() > 8 ? text.substr(0, 8) : text;
+}
+
+void VehicleRpcSetNitroActivated(uint32_t id, bool activated) {
+    if (!id) return;
+    if (lua_State* L = ActiveVmState()) {
+        lua_pushboolean(L, activated ? 1 : 0);
+        ActiveVmFireElementEvent(L, "onClientVehicleNitroStateChange", id, 1);
+    }
 }
 
 }  // namespace WorldRPG::Script

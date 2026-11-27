@@ -59,10 +59,21 @@ suite_abi() {
                 --javac "$javac_bin" \
                 --java "$java_bin" || rc=1
 
-            # Run Kotlin JVM regression suites when a JVM org.json jar and Kotlin compiler cache are available.
+            # Run Kotlin JVM regression suites (auto-compile local org.json host shim when NEON_JSON_JAR is unset).
             local json_jar="${NEON_JSON_JAR:-}"
             if [[ -z "$json_jar" ]]; then
                 json_jar="$(ls -1 "$HOME"/.gradle/caches/modules-2/files-2.1/org.json/json/*/*/*.jar /usr/share/java/json.jar 2>/dev/null | tail -n1 || true)"
+            fi
+            if [[ -z "$json_jar" && -d "$root/tools/headless/java/org/json" ]]; then
+                local jar_bin="${JAVA_HOME:+$JAVA_HOME/bin/jar}"
+                [[ -x "${jar_bin:-}" ]] || jar_bin="$(command -v jar || true)"
+                if [[ -n "$jar_bin" ]]; then
+                    mkdir -p "$build/org-json-classes"
+                    if "$javac_bin" --release 17 -d "$build/org-json-classes" "$root"/tools/headless/java/org/json/*.java \
+                        && "$jar_bin" cf "$build/org-json-shim.jar" -C "$build/org-json-classes" .; then
+                        json_jar="$build/org-json-shim.jar"
+                    fi
+                fi
             fi
             local kotlin_compiler=""
             kotlin_compiler="$(ls -1 "$HOME"/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/1.9.20/*/*.jar 2>/dev/null | head -n1 || true)"
@@ -78,14 +89,12 @@ suite_abi() {
                     --android-jar "$android_jar" \
                     --build-dir "$build/identity-test" \
                     --java "$java_bin" || rc=1
-                if [[ -f "$root/app/build/generated/source/buildConfig/debug/com/saonline/neonlauncher/BuildConfig.java" ]]; then
-                    echo "== run_server_browser_tests.py"
-                    python3 "$root/tools/headless/run_server_browser_tests.py" \
-                        --json-jar "$json_jar" \
-                        --build-dir "$build/server-browser-test" \
-                        --javac "$javac_bin" \
-                        --java "$java_bin" || rc=1
-                fi
+                echo "== run_server_browser_tests.py"
+                python3 "$root/tools/headless/run_server_browser_tests.py" \
+                    --json-jar "$json_jar" \
+                    --build-dir "$build/server-browser-test" \
+                    --javac "$javac_bin" \
+                    --java "$java_bin" || rc=1
             else
                 echo "== kotlin JVM suites skipped (set NEON_JSON_JAR to a JVM org.json jar to enable asset_sync, identity, server_browser)"
             fi

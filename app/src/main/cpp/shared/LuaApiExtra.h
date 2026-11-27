@@ -57,4 +57,52 @@ void VehicleApplyTrailerLink(uint32_t vehicleId, uint32_t trailerId, bool attach
 void VehicleDetachTowedBy(uint32_t vehicleId);
 void VehicleFlagsResetSession();
 
+// Vehicle RPC state setters (CVehicleRPCs.cpp & CHandlingRPCs.cpp). Thread-safe via g_vehicleFlagsLock.
+void VehicleRpcSetDoorsUndamageable(uint32_t id, bool undamageable);
+void VehicleRpcSetSirensOn(uint32_t id, bool on);
+void VehicleRpcSetLandingGearDown(uint32_t id, bool down);
+void VehicleRpcSetHeliRotorSpeed(uint32_t id, float speed);
+void VehicleRpcSetDamageState(uint32_t id, uint8_t objectType, uint8_t part, uint8_t state);
+void VehicleRpcSetOverrideLights(uint32_t id, uint8_t lights);
+void VehicleRpcSetDirtLevel(uint32_t id, float dirt);
+void VehicleRpcSetDamageProof(uint32_t id, bool proof);
+void VehicleRpcSetPaintjob(uint32_t id, uint8_t paintjob);
+void VehicleRpcSetFuelTankExplodable(uint32_t id, bool explodable);
+void VehicleRpcSetWheelStates(uint32_t id, const uint8_t states[4]);
+void VehicleRpcSetTrainDerailed(uint32_t id, bool derailed);
+void VehicleRpcSetTrainDerailable(uint32_t id, bool derailable);
+void VehicleRpcSetTrainDirection(uint32_t id, bool clockwise);
+void VehicleRpcSetTrainSpeed(uint32_t id, float speed);
+void VehicleRpcSetTrainTrack(uint32_t id, uint8_t track);
+void VehicleRpcSetTrainPosition(uint32_t id, float position);
+void VehicleRpcSetTaxiLightOn(uint32_t id, bool on);
+void VehicleRpcSetHeadlightColor(uint32_t id, uint8_t r, uint8_t g, uint8_t b);
+void VehicleRpcSetDoorOpenRatio(uint32_t id, uint8_t door, float ratio);
+void VehicleRpcSetTurretPosition(uint32_t id, float h, float v);
+void VehicleRpcSetVariant(uint32_t id, uint8_t v1, uint8_t v2);
+void VehicleRpcGiveSirens(uint32_t id, uint8_t count, uint8_t type, bool f360, bool los, bool rnd, bool silent);
+void VehicleRpcRemoveSirens(uint32_t id);
+void VehicleRpcSetSirenPoint(uint32_t id, uint8_t point, float x, float y, float z, uint8_t r, uint8_t g, uint8_t b,
+                             uint8_t a, uint32_t minAlpha, bool f360, bool los, bool rnd, bool silent);
+void VehicleRpcSetPlateText(uint32_t id, const std::string& text);
+void VehicleRpcSetNitroActivated(uint32_t id, bool activated);
+
+// Ped & player RPC state setters (CPedRPCs.cpp, CPlayerRPCs.cpp). VM thread.
+void RpcForcePlayerMap(bool forced);
+void RpcSetPlayerScriptDebugLevel(uint8_t level);
+void RpcSetPedJetpack(uint32_t id, bool hasJetpack);
+void RpcRemovePedClothes(uint32_t id, uint8_t type);
+void RpcSetPedGravity(uint32_t id, float gravity);
+void RpcSetPedChoking(uint32_t id, bool choking);
+void RpcSetPedFightingStyle(uint32_t id, uint8_t style);
+void RpcSetPedMoveAnim(uint32_t id, uint32_t anim);
+void RpcSetPedOnFire(uint32_t id, bool onFire);
+void RpcSetPedHeadless(uint32_t id, bool headless);
+void RpcSetPedFrozen(uint32_t id, bool frozen);
+void RpcReloadPedWeapon(uint32_t id);
+
+// Element / transfer-box RPC setters (CElementRPCs.cpp, COutputRPCs.cpp). VM thread.
+void RpcSetCallPropagationEnabled(uint32_t id, bool enabled);
+void RpcSetTransferBoxVisibility(bool visible);
+
 } // namespace WorldRPG::Script

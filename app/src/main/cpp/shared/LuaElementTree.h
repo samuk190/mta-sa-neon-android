@@ -18,4 +18,9 @@ bool CopyScriptMoveSpeed(uint32_t id, float& x, float& y, float& z);
 // Right, front, up, position. False when setElementMatrix has not stored one.
 bool CopyScriptMatrix(uint32_t id, float rows[4][3]);
 
+// CElementRPCs: angular velocity, low LOD link, element on fire. VM thread.
+void RpcSetElementAngularVelocity(uint32_t id, float rx, float ry, float rz);
+void RpcSetLowLodElement(uint32_t id, uint32_t lowLodId);
+void RpcSetElementOnFire(uint32_t id, bool onFire);
+
 }  // namespace WorldRPG::Script

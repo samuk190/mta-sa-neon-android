@@ -1441,6 +1441,11 @@ void RpcSetElementName(uint32_t id, const std::string& name) {
     }
 }
 
+void RpcSetCallPropagationEnabled(uint32_t id, bool enabled) {
+    if (id == 0) return;
+    SetCallProp(id, enabled);
+}
+
 }  // namespace WorldRPG::Script
 
 extern "C" void InstallElementLua(lua_State* L) {

@@ -933,4 +933,122 @@ void InstallWeaponLua(lua_State* L) {
     }
 }
 
+void RpcFireCustomWeapon(uint32_t id) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        Weapons::Fire(*w, isLocal, ServerWorld::LocalPlayer(), false, NowMs(), MakeHooks());
+    }
+}
+
+void RpcSetCustomWeaponState(uint32_t id, int8_t state) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        w->state = (state >= 0 && state < 3) ? static_cast<Weapons::State>(state) : Weapons::State::Ready;
+    }
+}
+
+void RpcSetCustomWeaponAmmo(uint32_t id, int32_t ammo) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        w->ammoTotal = ammo < 0 ? 0 : ammo;
+    }
+}
+
+void RpcSetCustomWeaponClipAmmo(uint32_t id, int32_t ammo) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        w->ammoInClip = ammo < 0 ? 0 : ammo;
+    }
+}
+
+void RpcSetCustomWeaponTargetPos(uint32_t id, float x, float y, float z) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        Weapons::SetWeaponTarget(*w, Weapons::Vec3{x, y, z});
+    }
+}
+
+void RpcSetCustomWeaponTargetElement(uint32_t id, uint32_t targetId, int8_t bone) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        const char* kind = ServerWorld::ElementKindName(targetId);
+        const bool ped = Game::ScriptPedAlive(targetId) || (kind && std::strcmp(kind, "ped") == 0);
+        const bool veh = kind && std::strcmp(kind, "vehicle") == 0;
+        Weapons::SetWeaponTarget(*w, targetId, static_cast<int>(static_cast<uint8_t>(bone)), ped, veh);
+    }
+}
+
+void RpcResetCustomWeaponTarget(uint32_t id) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        Weapons::ResetWeaponTarget(*w);
+    }
+}
+
+void RpcSetCustomWeaponFlags(uint32_t id, bool disableModel, bool instantReload, bool shootBlocked,
+                             bool shootOutOfRange, bool checkBuildings, bool checkCarTires, bool checkDummies,
+                             bool checkObjects, bool checkPeds, bool checkVehicles, bool ignoreSomeObjects,
+                             bool seeThrough, bool shootThrough) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        Weapons::Config& c = w->config;
+        c.disableWeaponModel = disableModel;
+        c.instantReload = instantReload;
+        c.shootIfTargetBlocked = shootBlocked;
+        c.shootIfTargetOutOfRange = shootOutOfRange;
+        c.flags.checkBuildings = checkBuildings;
+        c.flags.checkCarTires = checkCarTires;
+        c.flags.checkDummies = checkDummies;
+        c.flags.checkObjects = checkObjects;
+        c.flags.checkPeds = checkPeds;
+        c.flags.checkVehicles = checkVehicles;
+        c.flags.ignoreSomeObjectsForCamera = ignoreSomeObjects;
+        c.flags.seeThroughStuff = seeThrough;
+        c.flags.shootThroughStuff = shootThrough;
+        w->visible = !c.disableWeaponModel;
+    }
+}
+
+void RpcSetCustomWeaponFiringRate(uint32_t id, int32_t rateMs) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        w->fireRate = rateMs;
+    }
+}
+
+void RpcResetCustomWeaponFiringRate(uint32_t id) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        w->fireRate = Weapons::WeaponFireTime(w->stat);
+    }
+}
+
+void RpcSetWeaponOwner(uint32_t id, uint32_t ownerId) {
+    bool isLocal = false;
+    if (Weapons::Weapon* w = ResolveWeapon(id, isLocal)) {
+        w->owner = ownerId == 0xFFFFFFFFu ? 0 : ownerId;
+    }
+}
+
+void RpcSetWeaponPropertyScalar(uint8_t weaponId, uint8_t skill, const char* property, double value) {
+    if (!property || weaponId < 22 || weaponId > 42) return;
+    Override next{static_cast<int>(weaponId), static_cast<int>(skill), property, value, 0, 0, false};
+    if (Override* cur = FindOverride(next.id, next.skill, property)) *cur = next;
+    else g_overrides.push_back(next);
+}
+
+void RpcSetWeaponPropertyFlag(uint8_t weaponId, uint8_t skill, int flagBit, bool enable) {
+    if (weaponId < 22 || weaponId > 42 || flagBit == 0) return;
+    const WStat* stat = FindStat(static_cast<int>(weaponId), static_cast<int>(skill));
+    int flags = stat ? stat->flags : 0;
+    if (Override* cur = FindOverride(static_cast<int>(weaponId), static_cast<int>(skill), "flags")) {
+        flags = static_cast<int>(cur->a);
+    }
+    if (enable) flags |= flagBit;
+    else flags &= ~flagBit;
+    Override next{static_cast<int>(weaponId), static_cast<int>(skill), "flags", static_cast<double>(flags), 0, 0, false};
+    if (Override* cur = FindOverride(next.id, next.skill, "flags")) *cur = next;
+    else g_overrides.push_back(next);
+}
+
 }  // namespace WorldRPG::Script

@@ -54,4 +54,7 @@ void RpcResetWaterColor();
 void RpcSetElementDoubleSided(uint32_t id, bool doubleSided);
 // The corona colour setSunColor does not keep in g_sunR..B (Android getSunColor has four slots).
 void RpcCopySunCorona(uint8_t& r, uint8_t& g, uint8_t& b);
+void RpcResetMapInfo();
+void RpcResetWorldProperties(bool resetSpecial, bool resetWorld, bool resetWeather, bool resetLods, bool resetSounds);
+void RpcSetJetpackWeaponEnabled(uint8_t weaponId, bool enabled);
 }

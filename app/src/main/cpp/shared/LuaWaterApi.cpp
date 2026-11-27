@@ -474,6 +474,30 @@ void RpcResetWorldWaterLevel() {
     g_outsideLevel = 0.f;
 }
 
+void RpcSetElementWaterLevel(uint32_t id, float level) {
+    auto it = g_water.find(id);
+    if (it != g_water.end()) SetPolyLevel(it->second, level);
+}
+
+void RpcSetAllElementWaterLevel(float level) {
+    for (auto& [id, water] : g_water) {
+        (void)id;
+        SetPolyLevel(water, level);
+    }
+}
+
+void RpcSetWaterVertexPosition(uint32_t id, uint8_t vertexIndex, int16_t x, int16_t y, float z) {
+    auto it = g_water.find(id);
+    if (it == g_water.end()) return;
+    if (vertexIndex < it->second.verts.size()) {
+        it->second.verts[vertexIndex] = Vec3{static_cast<float>(x), static_cast<float>(y), z};
+    }
+}
+
+void RpcSetWorldSeabedOuterBoundary(float boundary) {
+    (void)boundary;
+}
+
 void InstallWaterLua(lua_State* L) { Register(L); }
 
 }  // namespace WorldRPG::Script

@@ -794,6 +794,73 @@ def port_entity_cases():
     return types, rows
 
 
+def desktop_rpcs(client_root):
+    """Parse desktop eElementRPCFunctions enum and AddHandler registrations."""
+    enum_path = client_root / "Shared" / "sdk" / "net" / "rpc_enums.h"
+    esrc = Src(enum_path)
+    m = re.search(r"\benum\s+eElementRPCFunctions\s*\{", esrc.clean)
+    if not m:
+        raise SystemExit("eElementRPCFunctions enum not found in %s" % enum_path)
+    open_idx = esrc.clean.find("{", m.start())
+    close = esrc.block_end(open_idx)
+    body = esrc.clean[open_idx + 1:close]
+    cur = 0
+    enum = OrderedDict()
+    for raw in body.split(","):
+        tok = raw.strip()
+        if not tok:
+            continue
+        if "=" in tok:
+            name, val = [s.strip() for s in tok.split("=", 1)]
+            cur = int(val, 0)
+        else:
+            name = tok.split()[0]
+        enum[name] = cur
+        cur += 1
+    active = OrderedDict((k, v) for k, v in enum.items()
+                         if not k.startswith("DONT_USE") and k != "NUM_RPC_FUNCS")
+    sites = {}
+    rpc_dir = client_root / DESKTOP_CLIENT_REL / "rpc"
+    if rpc_dir.is_dir():
+        for p in walk(rpc_dir, {".cpp"}):
+            s = Src(p)
+            for hm in re.finditer(r"\bAddHandler\s*\(\s*(\w+)\s*,\s*([^,\s)]+)", s.clean):
+                sites.setdefault(hm.group(1), ("%s:%d" % (rel(p, client_root), s.line(hm.start())), hm.group(2)))
+    return active, sites
+
+
+def port_rpcs():
+    """Map numeric RPC id -> (name, file:line) handled in Android ServerRpc/PacketHandler."""
+    mta_ids = Src(PORT_SHARED / "MtaIds.h")
+    m = re.search(r"\bnamespace\s+Rpc\s*\{", mta_ids.clean)
+    if not m:
+        raise SystemExit("MtaIds::Rpc namespace not found")
+    open_idx = mta_ids.clean.find("{", m.start())
+    close = mta_ids.block_end(open_idx)
+    consts = {}
+    for cm in re.finditer(r"\bconstexpr\s+uint8_t\s+(\w+)\s*=\s*(\d+)", mta_ids.clean[open_idx:close]):
+        consts[cm.group(1)] = int(cm.group(2))
+    handled = {}
+    for fname in ("ServerRpc.cpp", "PacketHandler.cpp"):
+        p = PORT_SHARED / fname
+        if not p.is_file():
+            continue
+        s = Src(p)
+        for hm in re.finditer(r"\bcase\s+(?:WorldRPG::)?(?:MtaIds::)?(?:Rpc::)?(\w+)\s*:", s.clean):
+            name = hm.group(1)
+            if name in consts:
+                handled.setdefault(consts[name], (name, "%s:%d" % (rel(p, PORT_CPP), s.line(hm.start()))))
+        for hm in re.finditer(r"\bfunc(?:Id)?\s*[!=]=\s*(?:WorldRPG::)?(?:MtaIds::)?Rpc::(\w+)\b", s.clean):
+            name = hm.group(1)
+            if name in consts:
+                handled.setdefault(consts[name], (name, "%s:%d" % (rel(p, PORT_CPP), s.line(hm.start()))))
+        if fname == "ServerRpc.cpp":
+            for hm in re.finditer(r"\bcase\s+(\d+)\s*:", s.clean):
+                val = int(hm.group(1))
+                handled.setdefault(val, (str(val), "%s:%d" % (rel(p, PORT_CPP), s.line(hm.start()))))
+    return handled
+
+
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
@@ -951,6 +1018,24 @@ def main():
                     "Port sends %d game ids in total, of which %d have no desktop SendPacket site."
                     % (len(p_out), len(out_extra))))
 
+    d_rpcs, d_rpc_sites = desktop_rpcs(client_root)
+    p_rpcs = port_rpcs()
+    rpc_rows = []
+    rpc_impl = 0
+    for name, val in d_rpcs.items():
+        dloc, dfn = d_rpc_sites.get(name, ("-", "-"))
+        if val in p_rpcs:
+            rpc_impl += 1
+            st = "handled"
+            pdetail = "MtaIds::Rpc::%s (%s)" % p_rpcs[val]
+        else:
+            st = "missing"
+            pdetail = ""
+        rpc_rows.append((val, name, dloc, dfn, st, pdetail))
+    summary.append(("C3 Server-to-Client RPCs (`eElementRPCFunctions`)", len(d_rpcs), rpc_impl, 0,
+                    len(d_rpcs) - rpc_impl,
+                    "Desktop `Shared/sdk/net/rpc_enums.h` active RPCs (excluding DONT_USE_0/NUM_RPC_FUNCS) vs `ServerRpc.cpp` + `PacketHandler.cpp`."))
+
     # ---- D. Element types -------------------------------------------------
     d_types, d_switch, d_has_default = desktop_entity_types(client_root)
     p_types, p_cases = port_entity_cases()
@@ -1083,6 +1168,13 @@ def main():
                % (", ".join("%d (%s, %s)" % (v, n, w) for v, n, w in out_extra) or "none"))
     out.append("Desktop references without a case or send (enum/other uses): %s\n"
                % (", ".join("`%s`" % n for n in d_other) or "none"))
+
+    out.append("### C3. Server-to-Client RPCs (`PACKET_ID_LUA` 76 / `PACKET_ID_LUA_ELEMENT_RPC` 77)\n")
+    out.append("Desktop ids come from `Shared/sdk/net/rpc_enums.h` (`eElementRPCFunctions`, %d active ids).\n"
+               % len(d_rpcs))
+    out.append(table(["Id", "RPC", "Desktop handler (file:line)", "Desktop function", "Port status", "Port site"],
+                     rpc_rows))
+    out.append("")
 
     # D
     out.append("## D. Element types (ENTITY_ADD)\n")

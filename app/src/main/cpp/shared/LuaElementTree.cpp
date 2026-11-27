@@ -813,6 +813,29 @@ bool CopyScriptMatrix(uint32_t id, float rows[4][3]) {
     return true;
 }
 
+void RpcSetElementAngularVelocity(uint32_t id, float rx, float ry, float rz) {
+    if (!id) return;
+    if (ClientElementTypeName(id) == "vehicle" && ServerWorld::ActorHosted(id)) {
+        Game::SetTrafficVehicleVelocity(id, rx, ry, rz, true);
+        return;
+    }
+    StoreTurn(id, rx, ry, rz, 0);
+}
+
+void RpcSetLowLodElement(uint32_t id, uint32_t lowLodId) {
+    if (!id) return;
+    ApplyLowLod(id, lowLodId, lowLodId == 0 || lowLodId == 0xFFFFFFFFu, 0);
+}
+
+void RpcSetElementOnFire(uint32_t id, bool onFire) {
+    if (!id) return;
+    const std::string type = ClientElementTypeName(id);
+    if (type == "ped" || type == "player") {
+        PedQueries::OnFire(id, onFire);
+        Game::SetPedOnFire(id, onFire);
+    }
+}
+
 void InstallElementTreeLua(lua_State* L) {
     Bind(L, "getElementAngularVelocity", GetElementAngularVelocity);
     Bind(L, "setElementVelocity", SetElementVelocity);

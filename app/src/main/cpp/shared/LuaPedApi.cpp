@@ -142,6 +142,8 @@ void DiagOnce(bool& once, const char* text) {
 
 // CLuaPedDefs.cpp:1240-1259. ENTITY_ADD stores SetHasJetPack. The local jetpack task is not read.
 // isPedWearingJetpack is the same function (CLuaPedDefs.cpp:432).
+bool CopyJetpackOverride(uint32_t id, bool& hasJetpack);
+
 int JetPackQuery(lua_State* L, const char* name) {
     uint32_t id = 0;
     if (!ReadPed(L, id)) {
@@ -149,8 +151,10 @@ int JetPackQuery(lua_State* L, const char* name) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    bool overrideHas = false;
     Entity::PedSpawn spawn;
-    const bool has = ServerWorld::CopyPedSpawn(id, spawn) && spawn.hasJetpack;
+    const bool has = CopyJetpackOverride(id, overrideHas) ? overrideHas
+                                                          : (ServerWorld::CopyPedSpawn(id, spawn) && spawn.hasJetpack);
     if (id == ServerWorld::LocalPlayer()) {
         static bool once = false;
         DiagOnce(once, "DIAG doesPedHaveJetPack: the local CPed jetpack task is not read");
@@ -1065,6 +1069,9 @@ struct BodyState {
     uint64_t generation = 0;
     bool haveHead = false, headless = false;
     bool haveFrozen = false, frozen = false;
+    bool haveJetpack = false, jetpack = false;
+    bool haveGravity = false;
+    float gravity = 0.008f;
     bool bleeding = false;
     bool haveFight = false;
     unsigned fight = 15;
@@ -1096,6 +1103,7 @@ std::unordered_map<uint32_t, BodyState> g_body;
 long long g_money = 0;
 bool g_mapForced = false;
 int g_mapAlpha = 155;
+uint8_t g_scriptDebugLevel = 0;
 std::string g_missionOwner;
 std::string g_missionBlock;
 
@@ -1128,6 +1136,7 @@ void ResetPedBody() {
     g_money = 0;
     g_mapForced = false;
     g_mapAlpha = 155;
+    g_scriptDebugLevel = 0;
     g_missionOwner.clear();
     g_missionBlock.clear();
     for (HudSlot& slot : g_hud) slot = {};
@@ -1139,6 +1148,13 @@ BodyState LoadBody(uint32_t id) {
     auto found = g_body.find(id);
     if (found == g_body.end() || found->second.generation != generation) return {};
     return found->second;
+}
+
+bool CopyJetpackOverride(uint32_t id, bool& hasJetpack) {
+    const BodyState body = LoadBody(id);
+    if (!body.haveJetpack) return false;
+    hasJetpack = body.jetpack;
+    return true;
 }
 
 void StoreBody(uint32_t id, BodyState state) {
@@ -2272,11 +2288,9 @@ int GetPlayerMapOpacity(lua_State* L) {
     return 1;
 }
 
-// CLuaPlayerDefs.cpp:526-528. The local player starts at debug level 0.
+// CLuaPlayerDefs.cpp:526-528. The local player starts at debug level 0 and is updated by SET_PLAYER_SCRIPT_DEBUG_LEVEL.
 int GetPlayerScriptDebugLevel(lua_State* L) {
-    static bool once = false;
-    DiagOnce(once, "DIAG getPlayerScriptDebugLevel: the local player starts at level 0");
-    lua_pushinteger(L, 0);
+    lua_pushinteger(L, g_scriptDebugLevel);
     return 1;
 }
 
@@ -4320,6 +4334,96 @@ void RpcSetPlayerNametagShowing(uint32_t id, bool showing) {
 
 void RpcSetWantedLevel(uint8_t level) {
     g_wantedLevel = level > 6 ? 6 : level;
+}
+
+void RpcForcePlayerMap(bool forced) {
+    g_mapForced = forced;
+}
+
+void RpcSetPlayerScriptDebugLevel(uint8_t level) {
+    g_scriptDebugLevel = level;
+}
+
+void RpcSetPedJetpack(uint32_t id, bool hasJetpack) {
+    if (!id) return;
+    BodyState state = LoadBody(id);
+    state.haveJetpack = true;
+    state.jetpack = hasJetpack;
+    StoreBody(id, state);
+}
+
+void RpcRemovePedClothes(uint32_t id, uint8_t type) {
+    if (!id || type >= 18) return;
+    Game::NoteScriptClothes(id, nullptr, nullptr, type, true);
+}
+
+void RpcSetPedGravity(uint32_t id, float gravity) {
+    if (!id) return;
+    BodyState state = LoadBody(id);
+    state.haveGravity = true;
+    state.gravity = gravity;
+    StoreBody(id, state);
+}
+
+void RpcSetPedChoking(uint32_t id, bool choking) {
+    if (!id) return;
+    const auto pres = PedQueries::ReadPresentation(id);
+    PedQueries::Keys(id, pres.ducked, choking);
+}
+
+void RpcSetPedFightingStyle(uint32_t id, uint8_t style) {
+    if (!id) return;
+    BodyState state = LoadBody(id);
+    state.haveFight = true;
+    state.fight = style;
+    StoreBody(id, state);
+}
+
+void RpcSetPedMoveAnim(uint32_t id, uint32_t anim) {
+    if (!id) return;
+    BodyState state = LoadBody(id);
+    state.haveWalk = true;
+    state.walk = anim;
+    StoreBody(id, state);
+}
+
+void RpcSetPedOnFire(uint32_t id, bool onFire) {
+    if (!id) return;
+    PedQueries::OnFire(id, onFire);
+    Game::SetPedOnFire(id, onFire);
+}
+
+void RpcSetPedHeadless(uint32_t id, bool headless) {
+    if (!id) return;
+    BodyState state = LoadBody(id);
+    state.haveHead = true;
+    state.headless = headless;
+    StoreBody(id, state);
+}
+
+void RpcSetPedFrozen(uint32_t id, bool frozen) {
+    if (!id) return;
+    BodyState state = LoadBody(id);
+    state.haveFrozen = true;
+    state.frozen = frozen;
+    StoreBody(id, state);
+    Game::RpcSetFrozen(id, frozen);
+}
+
+void RpcReloadPedWeapon(uint32_t id) {
+    if (!id) return;
+    PedQueries::Snapshot snap;
+    bool isPlayer = (id == ServerWorld::LocalPlayer());
+    int weapon = 0;
+    int clip = 0;
+    if (PedQueries::Copy(id, snap)) {
+        isPlayer = snap.player;
+        if (snap.currentSlot < PedQueries::Slots) {
+            weapon = static_cast<int>(snap.weapons[snap.currentSlot].type);
+            clip = static_cast<int>(snap.weapons[snap.currentSlot].clip);
+        }
+    }
+    ActiveVmOnWeaponReload(id, isPlayer, weapon, clip);
 }
 
 }  // namespace WorldRPG::Script

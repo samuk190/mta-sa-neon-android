@@ -845,6 +845,212 @@ void ExtendedGlobalAndElementRpcs() {
     Check(ServerWorld::CountKind(5) == 0, "all blips destroyed");
     Check(ServerWorld::CountKind(7) == 0, "all radar areas destroyed");
 }
+
+void AllRemaining84Rpcs() {
+    Fixture f;
+    constexpr uint32_t local = 500;
+    constexpr uint32_t vehId = 501;
+    constexpr uint32_t objId = 502;
+    f.Lua("g_rpcEvents = {}\n"
+          "addEventHandler('onClientTransferBoxVisibilityChange', root, function(v) g_rpcEvents.transfer = v end)\n"
+          "addEventHandler('onClientVehicleNitroStateChange', root, function(s) g_rpcEvents.nitro = s end)\n"
+          "addEventHandler('onClientPlayerWeaponReload', root, function() g_rpcEvents.reloaded = true end)\n");
+    ServerWorld::SetLocalPlayer(local);
+    AddVehicle(vehId);
+    AddObject(objId, 1338);
+    SetGlobalElement("lp", local);
+    SetGlobalElement("veh", vehId);
+    SetGlobalElement("obj", objId);
+
+    // ---- All 18 remaining global RPCs ----
+    Check(f.Send(Pkt(Rpc::ForcePlayerMap).U8(1).w), "FORCE_PLAYER_MAP");
+    Check(f.Send(Pkt(Rpc::ForceReconnect).Str("127.0.0.1").U16(22003).Str("pw").w), "FORCE_RECONNECT");
+    Check(f.Send(Pkt(Rpc::ResetMapInfo).w), "RESET_MAP_INFO");
+    Check(f.Send(Pkt(Rpc::ToggleDebugger).U8(1).w), "TOGGLE_DEBUGGER");
+    Check(f.Send(Pkt(Rpc::SetAllElementWaterLevel).F(3.5f).w), "SET_ALL_ELEMENT_WATER_LEVEL");
+    Check(f.Send(Pkt(Rpc::SetWeaponProperty).U8(24).U8(4).U8(1).U16(99).w), "SET_WEAPON_PROPERTY damage");
+    Check(f.Send(Pkt(Rpc::SetWeaponProperty).U8(24).U8(1).U8(1).F(55.f).w), "SET_WEAPON_PROPERTY range");
+    {
+        Pkt p(Rpc::TakePlayerScreenShot);
+        p.U16(320).U16(240);
+        EasingString(p, "tag1");
+        p.U8(75).U32(50000).U16(1024).U16(1).U32(1000);
+        Check(f.Send(p.w), "TAKE_PLAYER_SCREEN_SHOT");
+    }
+    {
+        Pkt p(Rpc::SetSyncIntervals);
+        for (int i = 0; i < 10; ++i) p.U32(100 + i);
+        Check(f.Send(p.w), "SET_SYNC_INTERVALS");
+    }
+    Check(f.Send(Pkt(Rpc::SetJetpackWeaponEnabled).U8(28).Bit(true).w), "SET_JETPACK_WEAPON_ENABLED");
+    Check(f.Send(Pkt(Rpc::SetDiscordJoinParameters).w), "SET_DISCORD_JOIN_PARAMETERS");
+    Check(f.Send(Pkt(Rpc::SetTransferBoxVisibility).Bit(true).w), "SET_TRANSFER_BOX_VISIBILITY");
+    Check(f.Send(Pkt(Rpc::SetWorldSpecialProperty).U8(0).Bit(true).w), "SET_WORLD_SPECIAL_PROPERTY");
+    Check(f.Send(Pkt(Rpc::SetPlayerScriptDebugLevel).U8(3).w), "SET_PLAYER_SCRIPT_DEBUG_LEVEL");
+    {
+        Pkt p(Rpc::ResetWorldProperties);
+        p.Bit(false).Bit(true).Bit(true).Bit(true).Bit(true);
+        Check(f.Send(p.w), "RESET_WORLD_PROPERTIES");
+    }
+    Check(f.Send(Pkt(Rpc::SetWorldSeabedOuterBoundary).F(4500.f).w), "SET_WORLD_SEABED_OUTER_BOUNDARY");
+    {
+        Pkt p(Rpc::AllocateServerModel);
+        p.U16(20001).U16(411).U8(0);
+        EasingString(p, "custom_car");
+        Check(f.Send(p.w), "ALLOCATE_SERVER_MODEL");
+    }
+    Check(f.Send(Pkt(Rpc::FreeServerModel).U16(20001).w), "FREE_SERVER_MODEL");
+    Check(f.Send(Pkt(Rpc::ToggleDevTools).U8(1).w), "TOGGLE_DEVTOOLS");
+    f.Pump();
+
+    f.Lua("assert(isPlayerMapForced() == true, 'forcePlayerMap')");
+    f.Lua("assert(getPlayerScriptDebugLevel() == 3, 'scriptDebugLevel')");
+    f.Lua("assert(isTransferBoxVisible() == true and g_rpcEvents.transfer == true, 'transferBox')");
+    f.Lua("assert(isWorldSpecialPropertyEnabled('hovercars') == true, 'worldSpecialProp')");
+    f.Lua("assert(getWeaponProperty(24, 'std', 'damage') == 99, 'weaponProperty damage')");
+    f.Lua("assert(math.abs(getWeaponProperty(24, 'std', 'weapon_range') - 55) < 0.01, 'weaponProperty range')");
+
+    // ---- All 11 Ped RPCs ----
+    Check(f.Send(EPkt(Rpc::GivePedJetpack, local).w), "GIVE_PED_JETPACK");
+    f.Pump();
+    f.Lua("assert(doesPedHaveJetPack(lp) == true, 'givePedJetpack')");
+    Check(f.Send(EPkt(Rpc::RemovePedJetpack, local).w), "REMOVE_PED_JETPACK");
+    Check(f.Send(EPkt(Rpc::RemovePedClothes, local).U8(0).w), "REMOVE_PED_CLOTHES");
+    Check(f.Send(EPkt(Rpc::SetPedGravity, local).F(0.012f).w), "SET_PED_GRAVITY");
+    Check(f.Send(EPkt(Rpc::SetPedChoking, local).Bit(true).w), "SET_PED_CHOKING");
+    Check(f.Send(EPkt(Rpc::SetPedFightingStyle, local).U8(5).w), "SET_PED_FIGHTING_STYLE");
+    {
+        EPkt p(Rpc::SetPedMoveAnim, local);
+        p.w.WriteCompressed(118u, 4);
+        Check(f.Send(p.w), "SET_PED_MOVE_ANIM");
+    }
+    Check(f.Send(EPkt(Rpc::SetPedOnFire, local).Bit(true).w), "SET_PED_ON_FIRE");
+    Check(f.Send(EPkt(Rpc::SetPedHeadless, local).Bit(true).w), "SET_PED_HEADLESS");
+    Check(f.Send(EPkt(Rpc::SetPedFrozen, local).Bit(true).w), "SET_PED_FROZEN");
+    Check(f.Send(EPkt(Rpc::ReloadPedWeapon, local).w), "RELOAD_PED_WEAPON");
+    f.Pump();
+    f.Lua("assert(doesPedHaveJetPack(lp) == false, 'removePedJetpack')");
+    f.Lua("assert(isPedChoking(lp) == true, 'pedChoking')");
+    f.Lua("assert(isPedOnFire(lp) == true, 'pedOnFire')");
+    f.Lua("assert(isPedHeadless(lp) == true, 'pedHeadless')");
+    f.Lua("assert(g_rpcEvents.reloaded == true, 'reloadPedWeapon')");
+
+    // ---- All 31 Vehicle & Handling RPCs ----
+    Check(f.Send(EPkt(Rpc::SetVehicleDoorsUndamageable, vehId).U8(1).w), "SET_VEHICLE_DOORS_UNDAMAGEABLE");
+    Check(f.Send(EPkt(Rpc::SetVehicleSireneOn, vehId).U8(1).w), "SET_VEHICLE_SIRENE_ON");
+    Check(f.Send(EPkt(Rpc::SetVehicleLandingGearDown, vehId).U8(0).w), "SET_VEHICLE_LANDING_GEAR_DOWN");
+    Check(f.Send(EPkt(Rpc::SetHelicopterRotorSpeed, vehId).U8(255).w), "SET_HELICOPTER_ROTOR_SPEED");
+    Check(f.Send(EPkt(Rpc::SetVehicleDamageState, vehId).U8(0).U8(2).U8(3).Bit(false).w), "SET_VEHICLE_DAMAGE_STATE");
+    Check(f.Send(EPkt(Rpc::SetVehicleOverrideLights, vehId).U8(2).w), "SET_VEHICLE_OVERRIDE_LIGHTS");
+    Check(f.Send(EPkt(Rpc::SetVehicleDirtLevel, vehId).F(7.5f).w), "SET_VEHICLE_DIRT_LEVEL");
+    Check(f.Send(EPkt(Rpc::SetVehicleDamageProof, vehId).U8(1).w), "SET_VEHICLE_DAMAGE_PROOF");
+    Check(f.Send(EPkt(Rpc::SetVehiclePaintjob, vehId).U8(2).w), "SET_VEHICLE_PAINTJOB");
+    Check(f.Send(EPkt(Rpc::SetVehicleFuelTankExplodable, vehId).Bit(false).w), "SET_VEHICLE_FUEL_TANK_EXPLODABLE");
+    Check(f.Send(EPkt(Rpc::SetVehicleWheelStates, vehId).U8(1).U8(2).U8(0).U8(1).w), "SET_VEHICLE_WHEEL_STATES");
+    Check(f.Send(EPkt(Rpc::SetTrainDerailed, vehId).Bit(true).w), "SET_TRAIN_DERAILED");
+    Check(f.Send(EPkt(Rpc::SetTrainDerailable, vehId).Bit(false).w), "SET_TRAIN_DERAILABLE");
+    Check(f.Send(EPkt(Rpc::SetTrainDirection, vehId).Bit(true).w), "SET_TRAIN_DIRECTION");
+    Check(f.Send(EPkt(Rpc::SetTrainSpeed, vehId).F(1.25f).w), "SET_TRAIN_SPEED");
+    Check(f.Send(EPkt(Rpc::SetTaxiLightOn, vehId).U8(1).w), "SET_TAXI_LIGHT_ON");
+    Check(f.Send(EPkt(Rpc::SetVehicleHeadlightColor, vehId).U8(10).U8(20).U8(30).w), "SET_VEHICLE_HEADLIGHT_COLOR");
+    {
+        EPkt p(Rpc::SetVehicleDoorOpenRatio, vehId);
+        p.Bits(1, 3).Bit(false).Bit(true);
+        p.w.WriteCompressed(250u, 4);
+        Check(f.Send(p.w), "SET_VEHICLE_DOOR_OPEN_RATIO");
+    }
+    Check(f.Send(EPkt(Rpc::SetVehicleTurretPosition, vehId).F(0.5f).F(0.25f).w), "SET_VEHICLE_TURRET_POSITION");
+    Check(f.Send(EPkt(Rpc::SetVehicleVariant, vehId).U8(1).U8(2).w), "SET_VEHICLE_VARIANT");
+    Check(f.Send(EPkt(Rpc::GiveVehicleSirens, vehId).Bit(true).U8(2).U8(4).Bit(true).Bit(true).Bit(false).Bit(false).w),
+          "GIVE_VEHICLE_SIRENS");
+    f.Lua("assert(getVehicleSirensOn(veh) == true, 'sirensOn')");
+    Check(f.Send(EPkt(Rpc::SetVehicleSirens, vehId)
+                     .Bit(true)
+                     .U8(0)
+                     .F(0.5f)
+                     .F(0.f)
+                     .F(1.f)
+                     .U8(255)
+                     .U8(0)
+                     .U8(0)
+                     .U8(200)
+                     .U32(50)
+                     .Bit(true)
+                     .Bit(true)
+                     .Bit(false)
+                     .Bit(false)
+                     .w),
+          "SET_VEHICLE_SIRENS");
+    Check(f.Send(EPkt(Rpc::RemoveVehicleSirens, vehId).w), "REMOVE_VEHICLE_SIRENS");
+    {
+        EPkt p(Rpc::SetVehiclePlateText, vehId);
+        EasingString(p, "NEON99");
+        Check(f.Send(p.w), "SET_VEHICLE_PLATE_TEXT");
+    }
+    Check(f.Send(EPkt(Rpc::SetTrainTrack, vehId).U8(1).w), "SET_TRAIN_TRACK");
+    Check(f.Send(EPkt(Rpc::SetTrainPosition, vehId).F(42.f).w), "SET_TRAIN_POSITION");
+    Check(f.Send(EPkt(Rpc::SpawnVehicleFlyingComponent, vehId).U8(2).U8(1).U32(5000).w),
+          "SPAWN_VEHICLE_FLYING_COMPONENT");
+    Check(f.Send(EPkt(Rpc::SetVehicleNitroActivated, vehId).Bit(true).w), "SET_VEHICLE_NITRO_ACTIVATED");
+    {
+        EPkt p(Rpc::SetVehicleHandling, vehId);
+        p.F(1500.f).F(3000.f).F(2.f).F(0.f).F(0.f).F(0.f).U8(75).F(0.75f).U8('R').U8('P').U8(5);
+        p.F(10.f).F(10.f).F(200.f).F(8.f).F(0.5f).Bit(false).F(30.f).F(0.85f).F(0.5f);
+        p.F(1.2f).F(0.15f).F(0.f).F(0.25f).F(-0.15f).F(0.5f).F(0.3f).F(0.5f).U32(0).U32(0).F(0.2f).U8(0);
+        Check(f.Send(p.w), "SET_VEHICLE_HANDLING");
+    }
+    Check(f.Send(EPkt(Rpc::SetVehicleHandlingProperty, vehId).U8(1).F(1800.f).w), "SET_VEHICLE_HANDLING_PROPERTY");
+    Check(f.Send(EPkt(Rpc::ResetVehicleHandlingProperty, vehId).U8(1).w), "RESET_VEHICLE_HANDLING_PROPERTY");
+    Check(f.Send(EPkt(Rpc::ResetVehicleHandling, vehId).w), "RESET_VEHICLE_HANDLING");
+    f.Pump();
+
+    f.Lua("assert(getVehicleOverrideLights(veh) == 2, 'overrideLights')");
+    f.Lua("assert(isVehicleDamageProof(veh) == true, 'damageProof')");
+    f.Lua("assert(getVehiclePaintjob(veh) == 2, 'paintjob')");
+    f.Lua("assert(getVehiclePlateText(veh) == 'NEON99', 'plateText')");
+    f.Lua("local r, g, b = getVehicleHeadLightColor(veh) assert(r == 10 and g == 20 and b == 30, 'headlights')");
+    f.Lua("assert(getVehicleDoorOpenRatio(veh, 1) > 0.99, 'doorOpenRatio')");
+    f.Lua("assert(g_rpcEvents.nitro == true, 'nitro event')");
+
+    // ---- Water / Object / Marker / Element / Custom Weapon RPCs (24) ----
+    Check(f.Send(EPkt(Rpc::SetElementWaterLevel, objId).F(4.f).w), "SET_ELEMENT_WATER_LEVEL");
+    Check(f.Send(EPkt(Rpc::SetWaterVertexPosition, objId).U8(0).U16(10).U16(20).F(3.f).w), "SET_WATER_VERTEX_POSITION");
+    Check(f.Send(EPkt(Rpc::SetLowLodElement, objId).Id(0).w), "SET_LOW_LOD_ELEMENT");
+    Check(f.Send(EPkt(Rpc::SetPropagateCallsEnabled, vehId).Bit(false).w), "SET_PROPAGATE_CALLS_ENABLED");
+    Check(f.Send(EPkt(Rpc::SetElementAngularVelocity, vehId).F(0.1f).F(0.2f).F(0.3f).w), "SET_ELEMENT_ANGULAR_VELOCITY");
+    Check(f.Send(EPkt(Rpc::SetElementOnFire, local).Bit(false).w), "SET_ELEMENT_ON_FIRE");
+    Check(f.Send(EPkt(Rpc::SetObjectVisibleInAllDimensions, objId).Bit(true).U16(5).w),
+          "SET_OBJECT_VISIBLE_IN_ALL_DIMENSIONS");
+    Check(f.Send(EPkt(Rpc::SetObjectBreakable, objId).Bit(false).w), "SET_OBJECT_BREAKABLE");
+    Check(f.Send(EPkt(Rpc::BreakObject, objId).w), "BREAK_OBJECT");
+    Check(f.Send(EPkt(Rpc::RespawnObject, objId).w), "RESPAWN_OBJECT");
+    Check(f.Send(EPkt(Rpc::ToggleObjectRespawn, objId).Bit(false).w), "TOGGLE_OBJECT_RESPAWN");
+    Check(f.Send(EPkt(Rpc::SetObjectDynamicPhysics, objId).Bit(true).w), "SET_OBJECT_DYNAMIC_PHYSICS");
+    Check(f.Send(EPkt(Rpc::SetMarkerTargetArrowProperties, objId).U8(1).U8(2).U8(3).U8(255).F(2.5f).w),
+          "SET_MARKER_TARGET_ARROW_PROPERTIES");
+    Check(f.Send(EPkt(Rpc::FireCustomWeapon, objId).w), "FIRE_CUSTOM_WEAPON");
+    Check(f.Send(EPkt(Rpc::SetCustomWeaponState, objId).U8(1).w), "SET_CUSTOM_WEAPON_STATE");
+    Check(f.Send(EPkt(Rpc::SetCustomWeaponAmmo, objId).U32(120).w), "SET_CUSTOM_WEAPON_AMMO");
+    Check(f.Send(EPkt(Rpc::SetCustomWeaponClipAmmo, objId).U32(30).w), "SET_CUSTOM_WEAPON_CLIP_AMMO");
+    Check(f.Send(EPkt(Rpc::SetCustomWeaponTarget, objId).Bit(true).F(1.f).F(2.f).F(3.f).w),
+          "SET_CUSTOM_WEAPON_TARGET pos");
+    Check(f.Send(EPkt(Rpc::SetCustomWeaponTarget, objId).Bit(false).Id(local).U8(8).w), "SET_CUSTOM_WEAPON_TARGET el");
+    Check(f.Send(EPkt(Rpc::ResetCustomWeaponTarget, objId).w), "RESET_CUSTOM_WEAPON_TARGET");
+    {
+        EPkt p(Rpc::SetCustomWeaponFlags, objId);
+        for (int i = 0; i < 13; ++i) p.Bit((i & 1) != 0);
+        Check(f.Send(p.w), "SET_CUSTOM_WEAPON_FLAGS");
+    }
+    Check(f.Send(EPkt(Rpc::SetCustomWeaponFiringRate, objId).U32(150).w), "SET_CUSTOM_WEAPON_FIRING_RATE");
+    Check(f.Send(EPkt(Rpc::ResetCustomWeaponFiringRate, objId).w), "RESET_CUSTOM_WEAPON_FIRING_RATE");
+    Check(f.Send(EPkt(Rpc::SetWeaponOwner, objId).Id(local).w), "SET_WEAPON_OWNER");
+    f.Pump();
+
+    f.Lua("assert(isElementCallPropagationEnabled(veh) == false, 'callProp')");
+    f.Lua("assert(isPedOnFire(lp) == false, 'elementOnFire cleared')");
+    f.Lua("local rx, ry, rz = getElementAngularVelocity(veh) "
+          "assert(math.abs(rx - 0.1) < 0.01 and math.abs(ry - 0.2) < 0.01 and math.abs(rz - 0.3) < 0.01, 'angVel')");
+}
 }  // namespace
 
 int main() {
@@ -857,6 +1063,7 @@ int main() {
     Objects();
     QueueAndSession();
     ExtendedGlobalAndElementRpcs();
+    AllRemaining84Rpcs();
     std::printf("server RPC tests passed (%u checks)\n", checks);
     return 0;
 }

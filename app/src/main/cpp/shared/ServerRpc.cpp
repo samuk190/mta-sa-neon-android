@@ -2,6 +2,8 @@
 
 #include "LuaApiExtra.h"
 #include "LuaAudioApi.h"
+#include "LuaElementTree.h"
+#include "LuaWeaponApi.h"
 #include "LuaWorldObjectApi.h"
 #include "LuaWorldQueryApi.h"
 #include "LuaWaterApi.h"
@@ -953,6 +955,702 @@ Result HandleEntityMisc(uint8_t func, uint32_t id, BitStreamReader& reader) {
     }
 }
 
+bool ReadU8String(BitStreamReader& reader, std::string& out) {
+    uint8_t length = 0;
+    out.clear();
+    if (!reader.Read(length)) return false;
+    if (static_cast<size_t>(length) * 8 > reader.GetRemainingBits()) return false;
+    std::vector<uint8_t> bytes(length);
+    if (length && !reader.ReadBits(bytes.data(), static_cast<size_t>(length) * 8)) return false;
+    out.assign(bytes.begin(), bytes.end());
+    return true;
+}
+
+// Desktop CWorldRPCs::SetWeaponProperty / COutputRPCs / CPlayerRPCs / CWaterRPCs / CModelRPCs / CInputRPCs.
+Result HandleGlobalExtended(uint8_t func, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::ForcePlayerMap: {
+            uint8_t visible = 0;
+            if (!reader.Read(visible)) return Result::Malformed;
+            const bool forced = visible == 1;
+            Enqueue([forced] { Script::RpcForcePlayerMap(forced); });
+            return Result::Handled;
+        }
+        case Rpc::ForceReconnect: {
+            std::string host, password;
+            uint16_t port = 0;
+            if (!ReadU8String(reader, host) || !reader.Read(port) || !ReadU8String(reader, password))
+                return Result::Malformed;
+            (void)password;
+            LUA_LOGI("DIAG FORCE_RECONNECT: target=%s:%u (auto-reconnect not hooked)", host.c_str(),
+                     static_cast<unsigned>(port));
+            return Result::Handled;
+        }
+        case Rpc::ResetMapInfo: {
+            Enqueue([] { Script::RpcResetMapInfo(); });
+            return Result::Handled;
+        }
+        case Rpc::ToggleDebugger: {
+            uint8_t enable = 0;
+            if (!reader.Read(enable)) return Result::Malformed;
+            LUA_LOGI("DIAG TOGGLE_DEBUGGER: enable=%u", static_cast<unsigned>(enable != 0));
+            return Result::Handled;
+        }
+        case Rpc::SetAllElementWaterLevel: {
+            float level = 0.f;
+            if (!ReadFiniteFloat(reader, level)) return Result::Malformed;
+            Enqueue([level] { Script::RpcSetAllElementWaterLevel(level); });
+            return Result::Handled;
+        }
+        case Rpc::SetWeaponProperty: {
+            uint8_t weapon = 0, prop = 0, skill = 0;
+            if (!reader.Read(weapon) || !reader.Read(prop) || !reader.Read(skill)) return Result::Malformed;
+            const char* propName = nullptr;
+            switch (prop) {
+                case 1: propName = "weapon_range"; break;
+                case 2: propName = "target_range"; break;
+                case 3: propName = "accuracy"; break;
+                case 5: propName = "life_span"; break;
+                case 6: propName = "firing_speed"; break;
+                case 9: propName = "move_speed"; break;
+                case 21: propName = "anim_loop_start"; break;
+                case 22: propName = "anim_loop_stop"; break;
+                case 23: propName = "anim_loop_bullet_fire"; break;
+                case 24: propName = "anim2_loop_start"; break;
+                case 25: propName = "anim2_loop_stop"; break;
+                case 26: propName = "anim2_loop_bullet_fire"; break;
+                case 27: propName = "anim_breakout_time"; break;
+                default: break;
+            }
+            if (propName) {
+                float v = 0.f;
+                if (!ReadFiniteFloat(reader, v)) return Result::Malformed;
+                Enqueue([weapon, skill, propName, v] { Script::RpcSetWeaponPropertyScalar(weapon, skill, propName, v); });
+                return Result::Handled;
+            }
+            if (prop == 4 || prop == 8 || prop == 11) {
+                uint16_t raw = 0;
+                if (!reader.Read(raw)) return Result::Malformed;
+                const int16_t v = static_cast<int16_t>(raw);
+                const char* name = prop == 4 ? "damage" : (prop == 8 ? "maximum_clip_ammo" : "anim_group");
+                Enqueue([weapon, skill, name, v] { Script::RpcSetWeaponPropertyScalar(weapon, skill, name, v); });
+                return Result::Handled;
+            }
+            if (prop == 10) {
+                int32_t v = 0;
+                if (!reader.Read(v)) return Result::Malformed;
+                Enqueue([weapon, skill, v] { Script::RpcSetWeaponPropertyScalar(weapon, skill, "flags", v); });
+                return Result::Handled;
+            }
+            if (prop >= 33 && prop <= 52 && prop != 39 && prop != 40) {
+                bool enable = false;
+                if (!ReadBit(reader, enable)) return Result::Malformed;
+                const int flagBit = 1 << (prop - 33);
+                Enqueue([weapon, skill, flagBit, enable] { Script::RpcSetWeaponPropertyFlag(weapon, skill, flagBit, enable); });
+                return Result::Handled;
+            }
+            return Result::Handled;
+        }
+        case Rpc::TakePlayerScreenShot: {
+            uint16_t sizeX = 0, sizeY = 0, maxPacket = 0, resNetId = 0;
+            std::string tag;
+            uint8_t quality = 0;
+            uint32_t maxBw = 0, serverTime = 0;
+            if (!reader.Read(sizeX) || !reader.Read(sizeY) || !ReadU16String(reader, tag) || !reader.Read(quality) ||
+                !reader.Read(maxBw) || !reader.Read(maxPacket) || !reader.Read(resNetId) || !reader.Read(serverTime))
+                return Result::Malformed;
+            LUA_LOGI("DIAG TAKE_PLAYER_SCREEN_SHOT: %ux%u tag=%s quality=%u (capture not hooked)",
+                     static_cast<unsigned>(sizeX), static_cast<unsigned>(sizeY), tag.c_str(),
+                     static_cast<unsigned>(quality));
+            return Result::Handled;
+        }
+        case Rpc::SetSyncIntervals: {
+            int32_t intervals[10] = {};
+            for (int i = 0; i < 10; ++i) {
+                if (!reader.Read(intervals[i])) return Result::Malformed;
+            }
+            LUA_LOGI("DIAG SET_SYNC_INTERVALS: pure=%d light=%d ped=%d unocc=%d", intervals[0], intervals[1],
+                     intervals[3], intervals[4]);
+            return Result::Handled;
+        }
+        case Rpc::SetJetpackWeaponEnabled: {
+            uint8_t weaponId = 0;
+            bool enabled = false;
+            if (!reader.Read(weaponId) || !ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([weaponId, enabled] { Script::RpcSetJetpackWeaponEnabled(weaponId, enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetDiscordJoinParameters: {
+            LUA_LOGI("DIAG SET_DISCORD_JOIN_PARAMETERS: unused on desktop client");
+            return Result::Handled;
+        }
+        case Rpc::SetTransferBoxVisibility: {
+            bool visible = false;
+            if (!ReadBit(reader, visible)) return Result::Malformed;
+            Enqueue([visible] { Script::RpcSetTransferBoxVisibility(visible); });
+            return Result::Handled;
+        }
+        case Rpc::SetWorldSpecialProperty: {
+            uint8_t property = 0;
+            bool enabled = false;
+            if (!reader.Read(property) || !ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([property, enabled] { Script::RpcSetWorldSpecialProperty(property, enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetPlayerScriptDebugLevel: {
+            uint8_t level = 0;
+            if (!reader.Read(level)) return Result::Malformed;
+            Enqueue([level] { Script::RpcSetPlayerScriptDebugLevel(level); });
+            return Result::Handled;
+        }
+        case Rpc::ResetWorldProperties: {
+            bool rSpec = false, rWorld = false, rWeather = false, rLods = false, rSounds = false;
+            if (!ReadBit(reader, rSpec) || !ReadBit(reader, rWorld) || !ReadBit(reader, rWeather) ||
+                !ReadBit(reader, rLods) || !ReadBit(reader, rSounds))
+                return Result::Malformed;
+            Enqueue([rSpec, rWorld, rWeather, rLods, rSounds] {
+                Script::RpcResetWorldProperties(rSpec, rWorld, rWeather, rLods, rSounds);
+            });
+            return Result::Handled;
+        }
+        case Rpc::SetWorldSeabedOuterBoundary: {
+            float boundary = 0.f;
+            if (!ReadFiniteFloat(reader, boundary)) return Result::Malformed;
+            Enqueue([boundary] { Script::RpcSetWorldSeabedOuterBoundary(boundary); });
+            return Result::Handled;
+        }
+        case Rpc::AllocateServerModel: {
+            uint16_t logicalId = 0, parentId = 0;
+            uint8_t rawType = 0;
+            if (!reader.Read(logicalId) || !reader.Read(parentId) || !reader.Read(rawType)) return Result::Malformed;
+            std::string name;
+            if (reader.GetRemainingBits() >= 16) ReadU16String(reader, name);
+            LUA_LOGI("DIAG ALLOCATE_SERVER_MODEL: logical=%u parent=%u type=%u name=%s",
+                     static_cast<unsigned>(logicalId), static_cast<unsigned>(parentId),
+                     static_cast<unsigned>(rawType), name.c_str());
+            return Result::Handled;
+        }
+        case Rpc::FreeServerModel: {
+            uint16_t logicalId = 0;
+            if (!reader.Read(logicalId)) return Result::Malformed;
+            LUA_LOGI("DIAG FREE_SERVER_MODEL: logical=%u", static_cast<unsigned>(logicalId));
+            return Result::Handled;
+        }
+        case Rpc::ToggleDevTools: {
+            uint8_t enable = 0;
+            if (!reader.Read(enable)) return Result::Malformed;
+            LUA_LOGI("DIAG TOGGLE_DEVTOOLS: enable=%u", static_cast<unsigned>(enable != 0));
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
+// Desktop CPedRPCs, CVehicleRPCs, CHandlingRPCs, CWaterRPCs, CObjectRPCs, CMarkerRPCs, and custom weapon/element RPCs.
+Result HandleElementExtended(uint8_t func, uint32_t id, BitStreamReader& reader) {
+    switch (func) {
+        // ---- Ped RPCs (CPedRPCs.cpp) ----
+        case Rpc::GivePedJetpack: {
+            Enqueue([id] { Script::RpcSetPedJetpack(id, true); });
+            return Result::Handled;
+        }
+        case Rpc::RemovePedJetpack: {
+            Enqueue([id] { Script::RpcSetPedJetpack(id, false); });
+            return Result::Handled;
+        }
+        case Rpc::RemovePedClothes: {
+            uint8_t type = 0;
+            if (!reader.Read(type)) return Result::Malformed;
+            Enqueue([id, type] { Script::RpcRemovePedClothes(id, type); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedGravity: {
+            float gravity = 0.f;
+            if (!ReadFiniteFloat(reader, gravity)) return Result::Malformed;
+            Enqueue([id, gravity] { Script::RpcSetPedGravity(id, gravity); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedChoking: {
+            bool choking = false;
+            if (!ReadBit(reader, choking)) return Result::Malformed;
+            Enqueue([id, choking] { Script::RpcSetPedChoking(id, choking); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedFightingStyle: {
+            uint8_t style = 0;
+            if (!reader.Read(style)) return Result::Malformed;
+            Enqueue([id, style] { Script::RpcSetPedFightingStyle(id, style); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedMoveAnim: {
+            uint32_t anim = 0;
+            if (!Entity::ReadCompressed(reader, 4, anim)) return Result::Malformed;
+            Enqueue([id, anim] { Script::RpcSetPedMoveAnim(id, anim); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedOnFire: {
+            bool onFire = false;
+            if (!ReadBit(reader, onFire)) return Result::Malformed;
+            Enqueue([id, onFire] { Script::RpcSetPedOnFire(id, onFire); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedHeadless: {
+            bool headless = false;
+            if (!ReadBit(reader, headless)) return Result::Malformed;
+            Enqueue([id, headless] { Script::RpcSetPedHeadless(id, headless); });
+            return Result::Handled;
+        }
+        case Rpc::SetPedFrozen: {
+            bool frozen = false;
+            if (!ReadBit(reader, frozen)) return Result::Malformed;
+            Enqueue([id, frozen] { Script::RpcSetPedFrozen(id, frozen); });
+            return Result::Handled;
+        }
+        case Rpc::ReloadPedWeapon: {
+            Enqueue([id] { Script::RpcReloadPedWeapon(id); });
+            return Result::Handled;
+        }
+
+        // ---- Vehicle RPCs (CVehicleRPCs.cpp) ----
+        case Rpc::SetVehicleDoorsUndamageable: {
+            uint8_t v = 0;
+            if (!reader.Read(v)) return Result::Malformed;
+            Script::VehicleRpcSetDoorsUndamageable(id, v != 0);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleSireneOn: {
+            uint8_t v = 0;
+            if (!reader.Read(v)) return Result::Malformed;
+            Script::VehicleRpcSetSirensOn(id, v != 0);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleLandingGearDown: {
+            uint8_t v = 0;
+            if (!reader.Read(v)) return Result::Malformed;
+            Script::VehicleRpcSetLandingGearDown(id, v != 0);
+            return Result::Handled;
+        }
+        case Rpc::SetHelicopterRotorSpeed: {
+            uint8_t raw = 0;
+            if (!reader.Read(raw)) return Result::Malformed;
+            const float speed = static_cast<float>(raw) / 255.f * 0.22f;
+            Script::VehicleRpcSetHeliRotorSpeed(id, speed);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleDamageState: {
+            uint8_t obj = 0, part = 0, state = 0;
+            if (!reader.Read(obj) || !reader.Read(part) || !reader.Read(state)) return Result::Malformed;
+            bool dummy = false;
+            if (obj == 0 && reader.GetRemainingBits() >= 1) ReadBit(reader, dummy);
+            if (obj == 3) {
+                if (reader.GetRemainingBits() >= 1) ReadBit(reader, dummy);
+                if (reader.GetRemainingBits() >= 1) ReadBit(reader, dummy);
+            }
+            Script::VehicleRpcSetDamageState(id, obj, part, state);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleOverrideLights: {
+            uint8_t lights = 0;
+            if (!reader.Read(lights)) return Result::Malformed;
+            Script::VehicleRpcSetOverrideLights(id, lights);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleDirtLevel: {
+            float dirt = 0.f;
+            if (!ReadFiniteFloat(reader, dirt)) return Result::Malformed;
+            Script::VehicleRpcSetDirtLevel(id, dirt);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleDamageProof: {
+            uint8_t v = 0;
+            if (!reader.Read(v)) return Result::Malformed;
+            Script::VehicleRpcSetDamageProof(id, v != 0);
+            return Result::Handled;
+        }
+        case Rpc::SetVehiclePaintjob: {
+            uint8_t pj = 0;
+            if (!reader.Read(pj)) return Result::Malformed;
+            Script::VehicleRpcSetPaintjob(id, pj);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleFuelTankExplodable: {
+            bool expl = false;
+            if (!ReadBit(reader, expl)) return Result::Malformed;
+            Script::VehicleRpcSetFuelTankExplodable(id, expl);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleWheelStates: {
+            uint8_t wheels[4] = {};
+            if (!reader.ReadBits(wheels, 32)) return Result::Malformed;
+            Script::VehicleRpcSetWheelStates(id, wheels);
+            return Result::Handled;
+        }
+        case Rpc::SetTrainDerailed: {
+            bool derailed = false;
+            if (!ReadBit(reader, derailed)) return Result::Malformed;
+            Script::VehicleRpcSetTrainDerailed(id, derailed);
+            return Result::Handled;
+        }
+        case Rpc::SetTrainDerailable: {
+            bool derailable = false;
+            if (!ReadBit(reader, derailable)) return Result::Malformed;
+            Script::VehicleRpcSetTrainDerailable(id, derailable);
+            return Result::Handled;
+        }
+        case Rpc::SetTrainDirection: {
+            bool dir = false;
+            if (!ReadBit(reader, dir)) return Result::Malformed;
+            Script::VehicleRpcSetTrainDirection(id, dir);
+            return Result::Handled;
+        }
+        case Rpc::SetTrainSpeed: {
+            float speed = 0.f;
+            if (!ReadFiniteFloat(reader, speed)) return Result::Malformed;
+            Script::VehicleRpcSetTrainSpeed(id, speed);
+            return Result::Handled;
+        }
+        case Rpc::SetTaxiLightOn: {
+            uint8_t on = 0;
+            if (!reader.Read(on)) return Result::Malformed;
+            Script::VehicleRpcSetTaxiLightOn(id, on != 0);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleHeadlightColor: {
+            uint8_t rgb[3] = {};
+            if (!reader.ReadBits(rgb, 24)) return Result::Malformed;
+            Script::VehicleRpcSetHeadlightColor(id, rgb[0], rgb[1], rgb[2]);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleDoorOpenRatio: {
+            uint8_t doorRaw = 0;
+            bool uncompressed = false;
+            if (!reader.ReadBits(&doorRaw, 3) || !ReadBit(reader, uncompressed)) return Result::Malformed;
+            float ratio = 0.f;
+            if (!uncompressed) {
+                bool notZero = false;
+                if (!ReadBit(reader, notZero)) return Result::Malformed;
+                ratio = notZero ? 1.f : 0.f;
+            } else {
+                uint8_t rbytes[2] = {};
+                if (!reader.ReadBits(rbytes, 10)) return Result::Malformed;
+                const uint16_t raw10 = static_cast<uint16_t>((rbytes[0] | (static_cast<uint16_t>(rbytes[1]) << 8)) & 0x3FFu);
+                ratio = static_cast<float>(raw10) / 1023.f;
+            }
+            uint32_t timeMs = 0;
+            if (!Entity::ReadCompressed(reader, 4, timeMs)) return Result::Malformed;
+            (void)timeMs;
+            Script::VehicleRpcSetDoorOpenRatio(id, doorRaw & 0x07u, ratio);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleTurretPosition: {
+            float h = 0.f, v = 0.f;
+            if (!ReadFiniteFloat(reader, h) || !ReadFiniteFloat(reader, v)) return Result::Malformed;
+            Script::VehicleRpcSetTurretPosition(id, h, v);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleVariant: {
+            uint8_t v1 = 255, v2 = 255;
+            if (!reader.Read(v1) || !reader.Read(v2)) return Result::Malformed;
+            Script::VehicleRpcSetVariant(id, v1, v2);
+            return Result::Handled;
+        }
+        case Rpc::GiveVehicleSirens: {
+            bool overrideSiren = false;
+            if (!ReadBit(reader, overrideSiren)) return Result::Malformed;
+            if (overrideSiren) {
+                uint8_t type = 0, count = 0;
+                bool f360 = false, los = true, rnd = true, silent = false;
+                if (!reader.Read(type) || !reader.Read(count) || !ReadBit(reader, f360) || !ReadBit(reader, los) ||
+                    !ReadBit(reader, rnd) || !ReadBit(reader, silent))
+                    return Result::Malformed;
+                Script::VehicleRpcGiveSirens(id, count, type, f360, los, rnd, silent);
+            }
+            return Result::Handled;
+        }
+        case Rpc::RemoveVehicleSirens: {
+            Script::VehicleRpcRemoveSirens(id);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleSirens: {
+            bool overrideSiren = false;
+            if (!ReadBit(reader, overrideSiren)) return Result::Malformed;
+            if (overrideSiren) {
+                uint8_t point = 0;
+                float x = 0.f, y = 0.f, z = 0.f;
+                uint8_t argb[4] = {};
+                uint32_t minAlpha = 0;
+                bool f360 = false, los = true, rnd = true, silent = false;
+                if (!reader.Read(point) || !ReadFiniteFloat(reader, x) || !ReadFiniteFloat(reader, y) ||
+                    !ReadFiniteFloat(reader, z) || !reader.ReadBits(argb, 32) || !reader.Read(minAlpha) ||
+                    !ReadBit(reader, f360) || !ReadBit(reader, los) || !ReadBit(reader, rnd) ||
+                    !ReadBit(reader, silent))
+                    return Result::Malformed;
+                // Desktop SColorSync writes B, G, R, A or R, G, B, A; preserve channel order.
+                Script::VehicleRpcSetSirenPoint(id, point, x, y, z, argb[0], argb[1], argb[2], argb[3], minAlpha, f360,
+                                                los, rnd, silent);
+            }
+            return Result::Handled;
+        }
+        case Rpc::SetVehiclePlateText: {
+            std::string plate;
+            if (!ReadU16String(reader, plate)) return Result::Malformed;
+            Script::VehicleRpcSetPlateText(id, plate);
+            return Result::Handled;
+        }
+        case Rpc::SetTrainTrack: {
+            uint8_t track = 0;
+            if (!reader.Read(track)) return Result::Malformed;
+            Script::VehicleRpcSetTrainTrack(id, track);
+            return Result::Handled;
+        }
+        case Rpc::SetTrainPosition: {
+            float pos = 0.f;
+            if (!ReadFiniteFloat(reader, pos)) return Result::Malformed;
+            Script::VehicleRpcSetTrainPosition(id, pos);
+            return Result::Handled;
+        }
+        case Rpc::SpawnVehicleFlyingComponent: {
+            uint8_t nodeIdx = 0, colType = 0;
+            int32_t removalTime = 0;
+            if (!reader.Read(nodeIdx) || !reader.Read(colType) || !reader.Read(removalTime)) return Result::Malformed;
+            LUA_LOGI("DIAG SPAWN_VEHICLE_FLYING_COMPONENT: veh=%u node=%u col=%u time=%d", id,
+                     static_cast<unsigned>(nodeIdx), static_cast<unsigned>(colType), removalTime);
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleNitroActivated: {
+            bool activated = false;
+            if (!ReadBit(reader, activated)) return Result::Malformed;
+            Enqueue([id, activated] { Script::VehicleRpcSetNitroActivated(id, activated); });
+            return Result::Handled;
+        }
+
+        // ---- Handling RPCs (CHandlingRPCs.cpp, SyncStructures.h:1981-2002) ----
+        case Rpc::SetVehicleHandling: {
+            float f = 0.f;
+            uint8_t u8 = 0;
+            uint32_t u32 = 0;
+            bool b = false;
+            if (!ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f) ||
+                !ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f) ||
+                !reader.Read(u8) || !ReadFloat(reader, f) || !reader.Read(u8) || !reader.Read(u8) ||
+                !reader.Read(u8) || !ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f) ||
+                !ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadBit(reader, b) ||
+                !ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f) ||
+                !ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f) ||
+                !ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f) ||
+                !ReadFloat(reader, f) || !ReadFloat(reader, f) || !reader.Read(u32) || !reader.Read(u32) ||
+                !ReadFloat(reader, f) || !reader.Read(u8))
+                return Result::Malformed;
+            return Result::Handled;
+        }
+        case Rpc::SetVehicleHandlingProperty: {
+            uint8_t prop = 0;
+            if (!reader.Read(prop)) return Result::Malformed;
+            float f = 0.f;
+            uint32_t u32 = 0;
+            uint8_t u8 = 0;
+            switch (prop) {
+                case 4:  // HANDLING_CENTEROFMASS
+                    if (!ReadFloat(reader, f) || !ReadFloat(reader, f) || !ReadFloat(reader, f))
+                        return Result::Malformed;
+                    break;
+                case 5:   // HANDLING_PERCENTSUBMERGED
+                case 29:  // HANDLING_HANDLINGFLAGS
+                case 30:  // HANDLING_MODELFLAGS
+                    if (!reader.Read(u32)) return Result::Malformed;
+                    break;
+                case 7:   // HANDLING_DRIVETYPE
+                case 8:   // HANDLING_ENGINETYPE
+                case 9:   // HANDLING_NUMOFGEARS
+                case 15:  // HANDLING_ABS
+                case 33:  // HANDLING_ANIMGROUP
+                    if (!reader.Read(u8)) return Result::Malformed;
+                    break;
+                case 1: case 2: case 3: case 6: case 10: case 11: case 12: case 13: case 14: case 16:
+                case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 24: case 25: case 26:
+                case 27:
+                    if (!ReadFloat(reader, f)) return Result::Malformed;
+                    break;
+                default:
+                    break;
+            }
+            return Result::Handled;
+        }
+        case Rpc::ResetVehicleHandlingProperty: {
+            uint8_t prop = 0;
+            if (!reader.Read(prop)) return Result::Malformed;
+            return Result::Handled;
+        }
+        case Rpc::ResetVehicleHandling: {
+            return Result::Handled;
+        }
+
+        // ---- Water RPCs (CWaterRPCs.cpp) ----
+        case Rpc::SetElementWaterLevel: {
+            float level = 0.f;
+            if (!ReadFiniteFloat(reader, level)) return Result::Malformed;
+            Enqueue([id, level] { Script::RpcSetElementWaterLevel(id, level); });
+            return Result::Handled;
+        }
+        case Rpc::SetWaterVertexPosition: {
+            uint8_t idx = 0;
+            uint16_t ux = 0, uy = 0;
+            float z = 0.f;
+            if (!reader.Read(idx) || !reader.Read(ux) || !reader.Read(uy) || !ReadFiniteFloat(reader, z))
+                return Result::Malformed;
+            const int16_t x = static_cast<int16_t>(ux);
+            const int16_t y = static_cast<int16_t>(uy);
+            Enqueue([id, idx, x, y, z] { Script::RpcSetWaterVertexPosition(id, idx, x, y, z); });
+            return Result::Handled;
+        }
+
+        // ---- Element & Object & Marker RPCs ----
+        case Rpc::SetLowLodElement: {
+            uint32_t lowId = 0;
+            if (!Entity::ReadElementId(reader, lowId)) return Result::Malformed;
+            Enqueue([id, lowId] { Script::RpcSetLowLodElement(id, lowId); });
+            return Result::Handled;
+        }
+        case Rpc::SetPropagateCallsEnabled: {
+            bool enabled = false;
+            if (!ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([id, enabled] { Script::RpcSetCallPropagationEnabled(id, enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetElementAngularVelocity: {
+            float rx = 0.f, ry = 0.f, rz = 0.f;
+            if (!ReadFiniteFloat(reader, rx) || !ReadFiniteFloat(reader, ry) || !ReadFiniteFloat(reader, rz))
+                return Result::Malformed;
+            Enqueue([id, rx, ry, rz] { Script::RpcSetElementAngularVelocity(id, rx, ry, rz); });
+            return Result::Handled;
+        }
+        case Rpc::SetElementOnFire: {
+            bool onFire = false;
+            if (!ReadBit(reader, onFire)) return Result::Malformed;
+            Enqueue([id, onFire] { Script::RpcSetElementOnFire(id, onFire); });
+            return Result::Handled;
+        }
+        case Rpc::SetObjectVisibleInAllDimensions: {
+            bool visible = false;
+            uint16_t newDim = 0;
+            if (!ReadBit(reader, visible) || !reader.Read(newDim)) return Result::Malformed;
+            Enqueue([id, visible, newDim] { Script::ServerSetObjectVisibleInAllDimensions(id, visible, newDim); });
+            return Result::Handled;
+        }
+        case Rpc::SetObjectBreakable: {
+            bool breakable = false;
+            if (!ReadBit(reader, breakable)) return Result::Malformed;
+            Enqueue([id, breakable] { Script::ServerSetObjectBreakable(id, breakable); });
+            return Result::Handled;
+        }
+        case Rpc::BreakObject: {
+            Enqueue([id] { Script::ServerBreakObject(id); });
+            return Result::Handled;
+        }
+        case Rpc::RespawnObject: {
+            Enqueue([id] { Script::ServerRespawnObject(id); });
+            return Result::Handled;
+        }
+        case Rpc::ToggleObjectRespawn: {
+            bool enabled = false;
+            if (!ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([id, enabled] { Script::ServerToggleObjectRespawn(id, enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetObjectDynamicPhysics: {
+            bool enabled = false;
+            if (!ReadBit(reader, enabled)) return Result::Malformed;
+            Enqueue([id, enabled] { Script::ServerSetObjectDynamicPhysics(id, enabled); });
+            return Result::Handled;
+        }
+        case Rpc::SetMarkerTargetArrowProperties: {
+            uint8_t rgba[4] = {};
+            float size = 0.f;
+            if (!reader.ReadBits(rgba, 32) || !ReadFiniteFloat(reader, size)) return Result::Malformed;
+            LUA_LOGI("DIAG SET_MARKER_TARGET_ARROW_PROPERTIES: marker=%u rgba=(%u,%u,%u,%u) size=%.2f", id, rgba[0],
+                     rgba[1], rgba[2], rgba[3], size);
+            return Result::Handled;
+        }
+
+        // ---- Custom Weapon RPCs (CWeaponRPCs.cpp / CElementRPCs.cpp 181-190) ----
+        case Rpc::FireCustomWeapon: {
+            Enqueue([id] { Script::RpcFireCustomWeapon(id); });
+            return Result::Handled;
+        }
+        case Rpc::SetCustomWeaponState: {
+            uint8_t raw = 0;
+            if (!reader.Read(raw)) return Result::Malformed;
+            const int8_t state = static_cast<int8_t>(raw);
+            Enqueue([id, state] { Script::RpcSetCustomWeaponState(id, state); });
+            return Result::Handled;
+        }
+        case Rpc::SetCustomWeaponAmmo: {
+            int32_t ammo = 0;
+            if (!reader.Read(ammo)) return Result::Malformed;
+            Enqueue([id, ammo] { Script::RpcSetCustomWeaponAmmo(id, ammo); });
+            return Result::Handled;
+        }
+        case Rpc::SetCustomWeaponClipAmmo: {
+            int32_t ammo = 0;
+            if (!reader.Read(ammo)) return Result::Malformed;
+            Enqueue([id, ammo] { Script::RpcSetCustomWeaponClipAmmo(id, ammo); });
+            return Result::Handled;
+        }
+        case Rpc::SetCustomWeaponTarget: {
+            bool isVector = false;
+            if (!ReadBit(reader, isVector)) return Result::Malformed;
+            if (isVector) {
+                float x = 0.f, y = 0.f, z = 0.f;
+                if (!ReadFiniteFloat(reader, x) || !ReadFiniteFloat(reader, y) || !ReadFiniteFloat(reader, z))
+                    return Result::Malformed;
+                Enqueue([id, x, y, z] { Script::RpcSetCustomWeaponTargetPos(id, x, y, z); });
+            } else {
+                uint32_t targetId = 0;
+                uint8_t rawBone = 0;
+                if (!Entity::ReadElementId(reader, targetId) || !reader.Read(rawBone)) return Result::Malformed;
+                const int8_t bone = static_cast<int8_t>(rawBone);
+                Enqueue([id, targetId, bone] { Script::RpcSetCustomWeaponTargetElement(id, targetId, bone); });
+            }
+            return Result::Handled;
+        }
+        case Rpc::ResetCustomWeaponTarget: {
+            Enqueue([id] { Script::RpcResetCustomWeaponTarget(id); });
+            return Result::Handled;
+        }
+        case Rpc::SetCustomWeaponFlags: {
+            bool flags[13] = {};
+            for (int i = 0; i < 13; ++i) {
+                if (!ReadBit(reader, flags[i])) return Result::Malformed;
+            }
+            Enqueue([id, flags] {
+                Script::RpcSetCustomWeaponFlags(id, flags[0], flags[1], flags[2], flags[3], flags[4], flags[5],
+                                                flags[6], flags[7], flags[8], flags[9], flags[10], flags[11],
+                                                flags[12]);
+            });
+            return Result::Handled;
+        }
+        case Rpc::SetCustomWeaponFiringRate: {
+            int32_t rate = 0;
+            if (!reader.Read(rate)) return Result::Malformed;
+            Enqueue([id, rate] { Script::RpcSetCustomWeaponFiringRate(id, rate); });
+            return Result::Handled;
+        }
+        case Rpc::ResetCustomWeaponFiringRate: {
+            Enqueue([id] { Script::RpcResetCustomWeaponFiringRate(id); });
+            return Result::Handled;
+        }
+        case Rpc::SetWeaponOwner: {
+            uint32_t ownerId = 0;
+            if (!Entity::ReadElementId(reader, ownerId)) return Result::Malformed;
+            Enqueue([id, ownerId] { Script::RpcSetWeaponOwner(id, ownerId); });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
 }  // namespace
 
 Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
@@ -966,7 +1664,9 @@ Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
     if (result != Result::NotHandled) return result;
     result = HandleChat(func, reader);
     if (result != Result::NotHandled) return result;
-    return HandleInput(func, reader);
+    result = HandleInput(func, reader);
+    if (result != Result::NotHandled) return result;
+    return HandleGlobalExtended(func, reader);
 }
 
 Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
@@ -980,7 +1680,10 @@ Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
         case Rpc::MoveObject:
         case Rpc::StopObject:
         case Rpc::SetObjectScale: return HandleObject(func, id, reader);
-        default: return HandleEntityMisc(func, id, reader);
+        default: {
+            const Result r = HandleEntityMisc(func, id, reader);
+            return r != Result::NotHandled ? r : HandleElementExtended(func, id, reader);
+        }
     }
 }
 

@@ -59,4 +59,12 @@ bool CopyObjectState(uint32_t id, float pos[3], float rot[3], float scale[3], bo
 bool WorldObjectNoteDamage(uint32_t proxyId, float loss, uint32_t attackerId);
 bool WorldObjectNoteBreak(uint32_t proxyId, uint32_t attackerId);
 
+// CObjectRPCs: visible-in-all-dimensions, breakable, dynamic physics, break, respawn, toggle respawn. VM thread.
+void ServerSetObjectVisibleInAllDimensions(uint32_t id, bool visible, uint16_t newDimension);
+void ServerSetObjectBreakable(uint32_t id, bool breakable);
+void ServerSetObjectDynamicPhysics(uint32_t id, bool enabled);
+void ServerBreakObject(uint32_t id);
+void ServerRespawnObject(uint32_t id);
+void ServerToggleObjectRespawn(uint32_t id, bool enabled);
+
 }  // namespace WorldRPG::Script
