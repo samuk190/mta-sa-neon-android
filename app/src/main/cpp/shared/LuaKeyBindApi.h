@@ -51,4 +51,28 @@ void KeyBindsCollect(const std::string& key, bool down, std::vector<KeyBindCall>
 // False when the bind was removed after KeyBindsCollect (desktop beingDeleted).
 bool KeyBindLive(uint64_t id);
 
+// Binds the server owns. CInputRPCs::BindKey / UnbindKey add and remove the server's key function
+// (CClientGame::StaticProcessServerKeyBind, CInputRPCs.cpp:30-110) and BindCommand / UnbindCommand call
+// CStaticFunctionDefinitions::BindKey / UnbindKey (CInputRPCs.cpp:113-181). The command forms touch VM state and run
+// on the VM thread (ServerRpc::Pump). A name that is neither a key nor a control is ignored (false).
+bool KeyBindsServerBindFunction(const std::string& name, bool down);
+bool KeyBindsServerUnbindFunction(const std::string& name, bool down);
+bool KeyBindsServerBound(const std::string& name, bool down);
+bool KeyBindsServerBindCommand(const std::string& key, const std::string& hitState, const std::string& command,
+                               const std::string& arguments, const std::string& resource);
+bool KeyBindsServerUnbindCommand(const std::string& key, const std::string& hitState, const std::string& command,
+                                 const std::string& resource);
+// A new session: every server bind and every unsent KEY_BIND event is dropped. Any thread.
+void KeyBindsServerReset();
+
+// CClientGame::ProcessServerKeyBind (CClientGame.cpp:2409-2434): a key with a server bind went down or up. The
+// event is sent as the KEY_BIND RPC (bit control, bit state, the key name). VM thread queues, the JNI pulse takes.
+struct ServerKeyEvent {
+    std::string name;
+    bool control = false;
+    bool down = true;
+};
+void KeyBindsServerFire(const std::string& key, bool down);
+std::vector<ServerKeyEvent> KeyBindsTakeServerEvents();
+
 }  // namespace WorldRPG::Script

@@ -3,8 +3,11 @@
 #include "LuaApiExtra.h"
 #include "LuaCameraApi.h"
 #include "LuaFieldApi.h"
+#include "LuaGuiApi.h"
+#include "LuaKeyBindApi.h"
 #include "LuaVMStub.h"
 #include "MtaIds.h"
+#include "ResourceLoader.h"
 #include "ServerWorld.h"
 #include "entity/EntityAddTypes.h"
 #include "../gtasa/GameEngine.h"
@@ -18,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace WorldRPG::ServerRpc {
 namespace {
@@ -308,6 +312,97 @@ Result HandleChat(uint8_t func, BitStreamReader& reader) {
     return Result::Handled;
 }
 
+// A u8 length followed by that many bytes (CInputRPCs.cpp reads these into a new char[len + 1]).
+bool ReadLengthString(BitStreamReader& reader, std::string& out) {
+    uint8_t length = 0;
+    out.clear();
+    if (!reader.Read(length)) return false;
+    std::vector<uint8_t> bytes(length);
+    if (length && !reader.ReadBits(bytes.data(), static_cast<size_t>(length) * 8)) return false;
+    out.assign(bytes.begin(), bytes.end());
+    return true;
+}
+
+// CInputRPCs.cpp:127-130 and 225-228: 0 down, 1 up, 3 both, anything else down.
+const char* HitStateName(int8_t hitState) { return hitState == 0 ? "down" : (hitState == 1 ? "up" : (hitState == 3 ? "both" : "down")); }
+
+// CInputRPCs.cpp:30-295.
+Result HandleInput(uint8_t func, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::BindKey:
+        case Rpc::UnbindKey: {
+            // BindKey (CInputRPCs.cpp:30-67) and UnbindKey (CInputRPCs.cpp:114-151): key length, key, state byte
+            // (down when == 1). The same bit state is used to find the server function.
+            std::string key;
+            uint8_t state = 0;
+            if (!ReadLengthString(reader, key) || !reader.Read(state)) return Result::Malformed;
+            const bool down = state == 1;
+            const bool bind = func == Rpc::BindKey;
+            Enqueue([key, down, bind] {
+                const bool ok = bind ? Script::KeyBindsServerBindFunction(key, down) : Script::KeyBindsServerUnbindFunction(key, down);
+                if (bind && ok) {
+                    static bool seen = false;
+                    if (!seen) {
+                        seen = true;
+                        LUA_LOGI("DIAG BIND_KEY: only hardware key presses fire server binds; the touch controls and "
+                                 "GTA control names (no keyboard mapping) never do");
+                    }
+                }
+            });
+            return Result::Handled;
+        }
+        case Rpc::BindCommand: {
+            // CInputRPCs.cpp:69-112: key, hit state char, command, arguments, resource (u8 length strings).
+            std::string key, command, arguments, resource;
+            uint8_t hitState = 0;
+            if (!ReadLengthString(reader, key) || !reader.Read(hitState) || !ReadLengthString(reader, command) ||
+                !ReadLengthString(reader, arguments) || !ReadLengthString(reader, resource))
+                return Result::Malformed;
+            const std::string state = HitStateName(static_cast<int8_t>(hitState));
+            Enqueue([=] { Script::KeyBindsServerBindCommand(key, state, command, arguments, resource); });
+            return Result::Handled;
+        }
+        case Rpc::UnbindCommand: {
+            // CInputRPCs.cpp:153-198: key, hit state char, command, resource.
+            std::string key, command, resource;
+            uint8_t hitState = 0;
+            if (!ReadLengthString(reader, key) || !reader.Read(hitState) || !ReadLengthString(reader, command) ||
+                !ReadLengthString(reader, resource))
+                return Result::Malformed;
+            const std::string state = HitStateName(static_cast<int8_t>(hitState));
+            Enqueue([=] { Script::KeyBindsServerUnbindCommand(key, state, command, resource); });
+            return Result::Handled;
+        }
+        case Rpc::SetControlState: {
+            // CInputRPCs.cpp:220-239: control name, state byte (true when == 1); an empty name is ignored.
+            std::string control;
+            uint8_t state = 0;
+            if (!ReadLengthString(reader, control) || !reader.Read(state)) return Result::Malformed;
+            if (control.empty()) return Result::Handled;
+            // DIAG: CStaticFunctionDefinitions::SetControlState (CStaticFunctionDefinitions.cpp:7470-7520) writes
+            // CClientPad analog state or SBindableGTAControl::bState; the phone has no CPad injection (see
+            // setPedAnalogControlState in LuaPedApi.cpp).
+            LUA_LOGI("DIAG SET_CONTROL_STATE %s=%u: CClientPad::SetAnalogControlState is not hooked", control.c_str(),
+                     static_cast<unsigned>(state == 1));
+            return Result::Handled;
+        }
+        case Rpc::ShowCursor: {
+            // CInputRPCs.cpp:268-281: show, resource net id (u16), toggle controls. An unknown resource is ignored.
+            uint8_t show = 0, toggle = 0;
+            uint16_t netId = 0;
+            if (!reader.Read(show) || !reader.Read(netId) || !reader.Read(toggle)) return Result::Malformed;
+            Enqueue([show, netId, toggle] {
+                Script::ResourceLoader::ResourceView resource;
+                if (!Script::ResourceLoader::CopyResourceByNet(netId, resource)) return;
+                Script::GuiServerShowCursor(resource.name, resource.generation, show == 1, toggle == 1);
+            });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
 }  // namespace
 
 Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
@@ -319,7 +414,9 @@ Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
     if (result != Result::NotHandled) return result;
     result = HandleAudio(func, reader);
     if (result != Result::NotHandled) return result;
-    return HandleChat(func, reader);
+    result = HandleChat(func, reader);
+    if (result != Result::NotHandled) return result;
+    return HandleInput(func, reader);
 }
 
 Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
@@ -344,8 +441,11 @@ size_t Pending() {
 }
 
 void ResetSession() {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_queue.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_queue.clear();
+    }
+    Script::KeyBindsServerReset();
 }
 
 uint8_t CameraSyncTimeContext() { return g_cameraContext; }

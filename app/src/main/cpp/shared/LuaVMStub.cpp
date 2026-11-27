@@ -670,6 +670,8 @@ static void ApplyKeyEvents() {
                                                                       : command.command + " " + command.arguments);
             }
         }
+        // CKeyBinds::ProcessKeyStroke also calls the server's key functions: the press goes to the server as KEY_BIND.
+        KeyBindsServerFire(key, down);
     }
 }
 

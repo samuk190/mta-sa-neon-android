@@ -69,6 +69,8 @@ struct CommandBind {
     // The instance that bound it, so stopping an old start keeps the binds of a newer one.
     uint16_t netId = 0;
     uint32_t generation = 0;
+    // Bound by the server (BIND_COMMAND): dropped with the session, not with a resource instance.
+    bool server = false;
 };
 
 // VM thread only.
@@ -160,17 +162,40 @@ bool CommandExists(const char* key, const char* command, bool down, const char* 
 
 // CStaticFunctionDefinitions::BindKey, command form (CStaticFunctionDefinitions.cpp:7278-7320).
 bool BindCommand(const char* key, const char* state, const char* command, const char* arguments,
-                 const std::string& resource) {
+                 const std::string& resource, bool server = false) {
     bool success = false;
+    const uint16_t netId = server ? 0 : ActiveVmOwnerNet();
+    const uint32_t generation = server ? 0 : ActiveVmOwnerGeneration();
     if (CommandExists(key, command, true, arguments, resource)) return true;
     if (strcasecmp(state, "down") == 0 || strcasecmp(state, "both") == 0) {
-        g_commands.push_back(CommandBind{key, command, arguments, true, resource, ActiveVmOwnerNet(), ActiveVmOwnerGeneration()});
+        g_commands.push_back(CommandBind{key, command, arguments, true, resource, netId, generation, server});
         success = true;
     }
     if (CommandExists(key, command, false, arguments, resource)) return true;
     if (strcasecmp(state, "up") == 0 || strcasecmp(state, "both") == 0) {
-        g_commands.push_back(CommandBind{key, command, arguments, false, resource, ActiveVmOwnerNet(), ActiveVmOwnerGeneration()});
+        g_commands.push_back(CommandBind{key, command, arguments, false, resource, netId, generation, server});
         success = true;
+    }
+    return success;
+}
+
+// CStaticFunctionDefinitions::UnbindKey, command form (CStaticFunctionDefinitions.cpp:7361-7401). Shared by the Lua
+// function and the UNBIND_COMMAND RPC, which pass their own resource.
+bool UnbindCommand(const char* key, const char* state, const std::string& command, const std::string& resource) {
+    bool check = false, down = true;
+    HitFilter(state, check, down);
+    bool success = false;
+    auto remove = [&](bool hitState) {
+        const auto before = g_commands.size();
+        g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(), [&](const CommandBind& bind) {
+            return bind.key == key && bind.command == command && bind.resource == resource &&
+                   (!check || bind.down == hitState);
+        }), g_commands.end());
+        return g_commands.size() != before;
+    };
+    if (key) {
+        if ((strcasecmp(state, "down") == 0 || strcasecmp(state, "both") == 0) && remove(down)) success = true;
+        if ((strcasecmp(state, "up") == 0 || strcasecmp(state, "both") == 0) && remove(false)) success = true;
     }
     return success;
 }
@@ -241,21 +266,7 @@ int UnbindKey(lua_State* L) {
         if (!IsStringArg(L, 2)) return Fail(L, "unbindKey", "string", 2);
         const char* state = lua_tostring(L, 2);
         const std::string command = lua_tostring(L, 3);
-        bool check = false, down = true;
-        HitFilter(state, check, down);
-        bool success = false;
-        auto remove = [&](bool hitState) {
-            const auto before = g_commands.size();
-            g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(), [&](const CommandBind& bind) {
-                return bind.key == key && bind.command == command && bind.resource == ActiveVmOwner() &&
-                       (!check || bind.down == hitState);
-            }), g_commands.end());
-            return g_commands.size() != before;
-        };
-        if (key) {
-            if ((strcasecmp(state, "down") == 0 || strcasecmp(state, "both") == 0) && remove(down)) success = true;
-            if ((strcasecmp(state, "up") == 0 || strcasecmp(state, "both") == 0) && remove(false)) success = true;
-        }
+        const bool success = UnbindCommand(key, state, command, ActiveVmOwner());
         RefreshBoundKeys();
         lua_pushboolean(L, success ? 1 : 0);
         return 1;
@@ -401,7 +412,7 @@ void KeyBindsDropResource(lua_State* L, const std::string& owner, uint16_t netId
         return true;
     }), g_functions.end());
     g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(), [&](const CommandBind& bind) {
-        if (bind.resource != owner) return false;
+        if (bind.server || bind.resource != owner) return false;
         if (netId != 0 && bind.netId != 0 && bind.netId != netId) return false;
         if (generation != 0 && bind.generation != 0 && bind.generation != generation) return false;
         return true;
@@ -454,10 +465,97 @@ bool KeyBindLive(uint64_t id) {
     return false;
 }
 
+namespace {
+// Server-owned function binds (CInputRPCs::BindKey adds CClientGame::StaticProcessServerKeyBind and
+// StaticProcessServerControlBind to CKeyBinds). They hold no Lua function: a press is reported to the server.
+struct ServerBind {
+    const char* name = nullptr;  // points into kKeys or kControls
+    bool control = false;
+    bool down = true;
+};
+std::mutex g_serverMutex;
+std::vector<ServerBind> g_serverBinds;
+std::vector<ServerKeyEvent> g_serverEvents;
+}  // namespace
+
+bool KeyBindsServerBindFunction(const std::string& name, bool down) {
+    const char* key = Find(kKeys, name.c_str());
+    const char* control = key ? nullptr : Find(kControls, name.c_str());
+    if (!key && !control) return false;
+    std::lock_guard<std::mutex> lock(g_serverMutex);
+    // "Make sure we only have it once" (CInputRPCs.cpp:46-62).
+    for (const ServerBind& bind : g_serverBinds)
+        if (bind.name == (key ? key : control) && bind.down == down) return true;
+    g_serverBinds.push_back(ServerBind{key ? key : control, control != nullptr, down});
+    return true;
+}
+
+bool KeyBindsServerUnbindFunction(const std::string& name, bool down) {
+    const char* key = Find(kKeys, name.c_str());
+    const char* control = key ? nullptr : Find(kControls, name.c_str());
+    const char* target = key ? key : control;
+    if (!target) return false;
+    std::lock_guard<std::mutex> lock(g_serverMutex);
+    const auto before = g_serverBinds.size();
+    g_serverBinds.erase(std::remove_if(g_serverBinds.begin(), g_serverBinds.end(), [&](const ServerBind& bind) {
+        return bind.name == target && bind.down == down;
+    }), g_serverBinds.end());
+    return g_serverBinds.size() != before;
+}
+
+bool KeyBindsServerBound(const std::string& name, bool down) {
+    std::lock_guard<std::mutex> lock(g_serverMutex);
+    for (const ServerBind& bind : g_serverBinds)
+        if (name == bind.name && bind.down == down) return true;
+    return false;
+}
+
+bool KeyBindsServerBindCommand(const std::string& key, const std::string& hitState, const std::string& command,
+                               const std::string& arguments, const std::string& resource) {
+    const char* entry = Find(kKeys, key.c_str());
+    const bool bound = entry && BindCommand(entry, hitState.c_str(), command.c_str(), arguments.c_str(), resource, true);
+    RefreshBoundKeys();
+    return bound;
+}
+
+bool KeyBindsServerUnbindCommand(const std::string& key, const std::string& hitState, const std::string& command,
+                                 const std::string& resource) {
+    const bool removed = UnbindCommand(Find(kKeys, key.c_str()), hitState.c_str(), command, resource);
+    RefreshBoundKeys();
+    return removed;
+}
+
+void KeyBindsServerFire(const std::string& key, bool down) {
+    std::lock_guard<std::mutex> lock(g_serverMutex);
+    for (const ServerBind& bind : g_serverBinds) {
+        // Control binds fire when the key mapped to the control is pressed. The phone has no GTA_CONTROL keyboard
+        // mapping, so only key binds are reported.
+        if (bind.control || bind.down != down || key != bind.name) continue;
+        if (g_serverEvents.size() < 64) g_serverEvents.push_back(ServerKeyEvent{bind.name, false, down});
+    }
+}
+
+std::vector<ServerKeyEvent> KeyBindsTakeServerEvents() {
+    std::vector<ServerKeyEvent> out;
+    std::lock_guard<std::mutex> lock(g_serverMutex);
+    out.swap(g_serverEvents);
+    return out;
+}
+
+void KeyBindsServerReset() {
+    {
+        std::lock_guard<std::mutex> lock(g_serverMutex);
+        g_serverBinds.clear();
+        g_serverEvents.clear();
+    }
+}
+
 void InstallKeyBindLua(lua_State* L) {
     // The refs belonged to the previous Lua state, which is already closed.
     g_functions.clear();
-    g_commands.clear();
+    // The server's BIND_COMMAND binds belong to the session, not to this VM.
+    g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(), [](const CommandBind& bind) { return !bind.server; }),
+                     g_commands.end());
     g_pressed.clear();
     RefreshBoundKeys();
     {

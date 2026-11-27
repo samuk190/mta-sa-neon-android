@@ -28,6 +28,8 @@ bool GuiDestroy(uint32_t id);
 // Destroys the GUI elements a resource created (desktop: the resource GUI entity on stop).
 // netId 0 drops every element of that resource name. A non-zero netId drops only
 // the elements created by that instance, so a restarted resource keeps its own.
+// CInputRPCs::ShowCursor (CInputRPCs.cpp:268-281): the resource's cursor hold, set by the server. VM thread.
+void GuiServerShowCursor(const std::string& owner, uint32_t generation, bool show, bool toggleControls);
 void GuiDropResource(const std::string& owner, uint16_t netId, uint32_t generation);
 // The resource GUI parent (CResource.cpp 87-88). One full-screen guiroot per
 // resource instance, accepted by guiCreate* as a parent. The same id is returned

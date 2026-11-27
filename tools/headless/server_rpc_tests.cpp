@@ -3,6 +3,7 @@
 // Desktop references: CWorldRPCs.cpp, CCameraRPCs.cpp, CPlayerRPCs.cpp, CAudioRPCs.cpp, CInputRPCs.cpp,
 // CElementRPCs.cpp, CVehicleRPCs.cpp, CObjectRPCs.cpp.
 #include "game_script.h"
+#include "shared/LuaKeyBindApi.h"
 #include "shared/LuaVMStub.h"
 #include "shared/MtaIds.h"
 #include "shared/PacketHandler.h"
@@ -72,6 +73,7 @@ struct Pkt {
         w.Write(func);
     }
     Pkt& U8(uint8_t v) { w.Write(v); return *this; }
+    Pkt& U16(uint16_t v) { w.Write(v); return *this; }
     Pkt& U32(uint32_t v) { w.Write(v); return *this; }
     Pkt& I32(int32_t v) { w.Write(v); return *this; }
     Pkt& F(float v) { w.Write(v); return *this; }
@@ -320,6 +322,85 @@ void PlayerHudChat() {
     Check(!f.Send(Pkt(Rpc::ShowChat).w), "SHOW_CHAT without the byte is malformed");
 }
 
+void Input() {
+    Fixture f;
+    // BIND_KEY: key length, key, state (down when == 1). A server bind reports a hardware press as KEY_BIND.
+    Check(f.Send(Pkt(Rpc::BindKey).Str("m").U8(1).w), "BIND_KEY decodes");
+    Check(!Script::KeyBindsServerBound("m", true), "nothing binds before Pump");
+    f.Pump();
+    Check(Script::KeyBindsServerBound("m", true) && !Script::KeyBindsServerBound("m", false), "bound for down only");
+    Check(f.Send(Pkt(Rpc::BindKey).Str("m").U8(1).w), "the same bind again");
+    f.Pump();
+    Check(f.Send(Pkt(Rpc::UnbindKey).Str("M").U8(0).w), "UNBIND_KEY up leaves the down bind");
+    f.Pump();
+    Check(Script::KeyBindsServerBound("m", true), "a different state is not removed");
+
+    Script::KeyBindsTakeServerEvents();
+    Script::KeyBindsQueueKey("m", true);
+    Script::KeyBindsQueueKey("m", false);
+    Script::KeyBindsQueueKey("n", true);
+    f.Pump();
+    f.vm.pumpDx(false);
+    {
+        const auto events = Script::KeyBindsTakeServerEvents();
+        Check(events.size() == 1 && events[0].name == "m" && events[0].down && !events[0].control,
+              "one KEY_BIND event for the down press only");
+    }
+    Check(f.Send(Pkt(Rpc::UnbindKey).Str("m").U8(1).w), "UNBIND_KEY down");
+    f.Pump();
+    Check(!Script::KeyBindsServerBound("m", true), "removed");
+    Script::KeyBindsQueueKey("m", true);
+    f.vm.pumpDx(false);
+    Check(Script::KeyBindsTakeServerEvents().empty(), "an unbound key sends nothing");
+
+    // A control name is stored too (CInputRPCs.cpp:55-62), but a key press never reports it.
+    Check(f.Send(Pkt(Rpc::BindKey).Str("fire").U8(1).w), "BIND_KEY for a control");
+    f.Send(Pkt(Rpc::BindKey).Str("not_a_key").U8(1).w);
+    f.Pump();
+    Check(Script::KeyBindsServerBound("fire", true), "control bind stored");
+    Check(!Script::KeyBindsServerBound("not_a_key", true), "an unknown name is ignored");
+
+    Check(!f.Send(Pkt(Rpc::BindKey).U8(5).U8('a').w), "BIND_KEY with a short key is malformed");
+    Check(!f.Send(Pkt(Rpc::BindKey).Str("m").w), "BIND_KEY without the state is malformed");
+    Check(!f.Send(Pkt(Rpc::UnbindKey).w), "UNBIND_KEY without a length is malformed");
+
+    // BIND_COMMAND: key, hit state char (0 down, 1 up, 3 both, else down), command, arguments, resource.
+    Check(f.Send(Pkt(Rpc::BindCommand).Str("x").U8(3).Str("say").Str("hello").Str("res").w), "BIND_COMMAND both");
+    Check(f.Send(Pkt(Rpc::BindCommand).Str("y").U8(9).Str("jump").Str("").Str("res").w), "BIND_COMMAND bad state is down");
+    Check(f.Send(Pkt(Rpc::BindCommand).Str("not_a_key").U8(0).Str("a").Str("").Str("res").w), "unknown key consumed");
+    f.Pump();
+    f.Lua("local d = getCommandsBoundToKey('x', 'down'); local u = getCommandsBoundToKey('x', 'up'); "
+          "assert(d.say == 'hello' and u.say == 'hello', 'both states'); "
+          "assert(getCommandsBoundToKey('y', 'down').jump == '' and next(getCommandsBoundToKey('y', 'up')) == nil, 'down only'); "
+          "assert(getKeyBoundToCommand('a') == false)");
+    Script::KeyBindsTakeServerEvents();
+    Script::KeyBindsQueueKey("x", true);
+    f.vm.pumpDx(false);
+    Check(Script::KeyBindsTakeServerEvents().empty(), "a command bind goes as a command, not as KEY_BIND");
+    Check(f.Send(Pkt(Rpc::UnbindCommand).Str("x").U8(0).Str("say").Str("other").w), "UNBIND_COMMAND of another resource");
+    f.Pump();
+    f.Lua("assert(getCommandsBoundToKey('x', 'down').say == 'hello', 'a different resource keeps the bind')");
+    Check(f.Send(Pkt(Rpc::UnbindCommand).Str("x").U8(0).Str("say").Str("res").w), "UNBIND_COMMAND down");
+    f.Pump();
+    f.Lua("assert(next(getCommandsBoundToKey('x', 'down')) == nil and getCommandsBoundToKey('x', 'up').say == 'hello')");
+    Check(!f.Send(Pkt(Rpc::BindCommand).Str("x").U8(0).Str("say").w), "a short BIND_COMMAND is malformed");
+    Check(!f.Send(Pkt(Rpc::UnbindCommand).Str("x").w), "a short UNBIND_COMMAND is malformed");
+
+    // A new session forgets every server bind.
+    ServerWorld::ResetSession();
+    Check(!Script::KeyBindsServerBound("fire", true), "ResetSession drops the server binds");
+
+    Check(f.Send(Pkt(Rpc::SetControlState).Str("forwards").U8(1).w), "SET_CONTROL_STATE");
+    Check(f.Send(Pkt(Rpc::SetControlState).Str("").U8(1).w), "an empty control is ignored");
+    Check(!f.Send(Pkt(Rpc::SetControlState).Str("jump").w), "SET_CONTROL_STATE without state is malformed");
+
+    // SHOW_CURSOR: show, resource net id (u16), toggle controls. An unknown resource is ignored.
+    Check(f.Send(Pkt(Rpc::ShowCursor).U8(1).U16(777).U8(1).w), "SHOW_CURSOR with an unknown resource is consumed");
+    f.Pump();
+    f.Lua("assert(isCursorShowing() == false)");
+    Check(!f.Send(Pkt(Rpc::ShowCursor).U8(1).U16(777).w), "SHOW_CURSOR without the toggle is malformed");
+}
+
 void QueueAndSession() {
     Fixture f;
     for (int i = 0; i < 600; ++i) f.Send(Pkt(Rpc::SetPlayerMoney).I32(i).w);
@@ -337,6 +418,7 @@ int main() {
     World();
     Camera();
     PlayerHudChat();
+    Input();
     QueueAndSession();
     std::printf("server RPC tests passed (%u checks)\n", checks);
     return 0;

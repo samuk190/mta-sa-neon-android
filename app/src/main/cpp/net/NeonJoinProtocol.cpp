@@ -1502,6 +1502,20 @@ bool SendGamePacketHighPriority(BitStreamWriter& body) {
         PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
 }
 
+bool SendKeyBind(bool control, bool down, const std::string& name) {
+    if (name.empty() || name.size() > 255) return false;
+    if (!g_joinedNet || !g_joinedNet->IsConnected()) return false;
+    BitStreamWriter w;
+    w.Write(static_cast<uint8_t>(NeonPacketID::RPC));
+    w.Write(static_cast<uint8_t>(NeonServerRPC::KEY_BIND));
+    WriteBit(w, control);
+    WriteBit(w, down);
+    w.WriteBits(reinterpret_cast<const uint8_t*>(name.data()), name.size() * 8);
+    // CNetAPI::RPC (CNetAPI.cpp:2102): PACKET_PRIORITY_HIGH, PACKET_RELIABILITY_RELIABLE_ORDERED.
+    return g_joinedNet->SendPacket(static_cast<uint8_t>(PacketID::USER_PACKET_ENUM), w,
+                                   PacketPriority::HIGH, PacketReliability::RELIABLE_ORDERED);
+}
+
 // VEHICLE_INOUT replies for the local ped, called by PacketHandler on the net thread (game packet 58).
 // action is a client NOTIFY value: 1 = VEHICLE_NOTIFY_IN, 4 = VEHICLE_NOTIFY_OUT (CClientGame.h:175, 178).
 // Desktop sends ped, vehicle, action(4) only (CClientPed.cpp:10319-10324 notify out, 10369-10389 notify in).

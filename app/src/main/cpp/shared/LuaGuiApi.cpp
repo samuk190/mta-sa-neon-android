@@ -579,6 +579,13 @@ std::string CursorKey(const std::string& owner, uint32_t generation) {
     return owner + "#" + std::to_string(generation);
 }
 
+void GuiServerShowCursor(const std::string& owner, uint32_t generation, bool show, bool toggleControls) {
+    // CResource::ShowCursor (CResource.cpp:1707-1741), as the Lua showCursor does. DIAG: bToggleControls drives
+    // CKeyBinds::SetAllControlsEnabled(false, true, false) on desktop; player-control toggling from a cursor is not wired.
+    (void)toggleControls;
+    SetCursorHold(CursorKey(owner, generation), show);
+}
+
 void GuiDropResource(const std::string& owner, uint16_t netId, uint32_t generation) {
     if (owner.empty()) return;
     // CResource's destructor calls ShowCursor(false) (CResource.cpp:220) before it
