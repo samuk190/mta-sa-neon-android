@@ -220,8 +220,7 @@ public:
     void StopNetwork();
     // PC Network: netc is still loading or its RakNet has not connected yet.
     bool IsTransportStarting() const;
-    // True while the session runs through PC Network (emulated netc). The
-    // server then sees a desktop client and writes desktop packet layouts.
+    // True while the session runs through PC Network (emulated netc).
     bool IsPcNetwork() const;
     // Decrypts a luac.mtasa.com encrypted script through the PC Network netc,
     // as desktop MTA does (CNet::DeobfuscateScript). False off PC Network.

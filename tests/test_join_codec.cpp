@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <thread>
 #include <string>
 #include <vector>
 #define private public
@@ -390,6 +391,39 @@ static void TestTransportFailureEndsAttempt() {
     CHECK(failures == 3 && join.Info().lastError == DisconnectMessages::TransportFailure(DisconnectMessages::ClassifyTransport("Connection lost"), true).text, "session loss still reaches UI");
 }
 
+static void TestPcTransportErrorDispatch() {
+    RakNetWrapper net;
+    NeonJoinClient join;
+    std::string popup;
+    join.SetStateCallback([&](JoinState state, const char* detail) {
+        if (state == JoinState::Failed) popup = detail;
+    });
+    net.SetConnectionStateCallback([&](bool connected, const char* reason) {
+        if (!connected) join.OnTransportFailure(reason);
+    });
+    CHECK(join.Begin(net, "Tester", ""), "start PC loss scenario");
+    join.pImpl_->state = JoinState::Complete;
+    CHECK(net.StartPcNetwork("localhost", 1, "fixture", "", ""), "load host PC error fixture");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (popup.empty() && std::chrono::steady_clock::now() < deadline) {
+        net.DoPulse();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(popup == DisconnectMessages::Pack({"Error [CD16]", "Disconnected: connection to the server was lost"}),
+          "PC module loss 20 reaches the joined client's popup as CD16");
+
+    CHECK(join.Begin(net, "Tester", ""), "start explicit server refusal scenario");
+    BitStreamWriter refusal;
+    const uint8_t type = DisconnectMessages::GENERAL_REFUSED;
+    refusal.WriteBits(&type, 5);
+    WriteStringRaw(refusal, "Test refusal");
+    WriteStringRaw(refusal, "");
+    join.ProcessGamePacket(static_cast<uint8_t>(NeonPacketID::SERVER_DISCONNECTED),
+                           refusal.GetData(), refusal.GetByteLength(), refusal.GetBitLength());
+    CHECK(popup == DisconnectMessages::Pack({"Disconnected [CD43]", "Disconnected: Server refused the connection: Test refusal"}),
+          "a server-issued refusal keeps the server's reason and CD43");
+}
+
 static void TestNetworkJoinEnvelope() {
     BitStreamWriter game, envelope;
     const std::string serial = "0123456789ABCDEF0123456789ABCDEF";
@@ -590,6 +624,7 @@ int main() {
     TestModNameRequiredAuthRefused();
     TestInGameNoticeIgnoresPureSync();
     TestTransportFailureEndsAttempt();
+    TestPcTransportErrorDispatch();
     if (g_failures == 0) {
         printf("ALL JOIN CODEC WIRE TESTS PASSED\n");
         return 0;

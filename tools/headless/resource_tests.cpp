@@ -304,6 +304,85 @@ void WriteTestBits(WorldRPG::Net::BitStreamWriter& w, uint32_t value, size_t cou
     w.WriteBits(bytes, count);
 }
 
+// Exercise the UPE entry point and the Lua callback reached before the Android overlay.
+void CheckChatEchoPackets(WorldRPG::Script::LuaVMStub& vm) {
+    using namespace WorldRPG;
+    Sync::PacketHandler handler;
+    RunLua(vm, "chat-echo-capture", R"LUA(
+        function captureEcho(text, r, g, b, messageType)
+            assert(r == 18 and g == 52 and b == 86, "chat RGB")
+            lastEcho, lastEchoType, lastEchoSource = text, messageType, source.id
+        end
+        addEventHandler("onClientChatMessage", root, captureEcho)
+    )LUA");
+    auto echo = [&](const std::string& message, bool desktop, bool rounded,
+                    uint32_t speaker = 0x1FFFF, uint8_t type = 0) {
+        Net::BitStreamWriter packet;
+        packet.Write(uint8_t(43));
+        for (uint8_t color : {18, 52, 86}) packet.Write(color);
+        WriteTestBits(packet, 1, 1);
+        if (desktop) {
+            WriteTestBits(packet, speaker, 17);
+            packet.Write(type);
+        }
+        packet.WriteBytes(reinterpret_cast<const uint8_t*>(message.data()), message.size());
+        const auto bits = rounded ? packet.GetByteLength() * 8 : packet.GetBitLength();
+        CHECK(handler.handlePacket(99, packet.GetData(), packet.GetByteLength(), bits));
+        auto* L = Script::ActiveVmState();
+        lua_getglobal(L, "lastEcho");
+        size_t length = 0;
+        const char* text = lua_tolstring(L, -1, &length);
+        CHECK(text && std::string_view(text, length) == message);
+        lua_pop(L, 1);
+        lua_getglobal(L, "lastEchoType");
+        CHECK(lua_tointeger(L, -1) == (desktop ? type : 0));
+        lua_pop(L, 1);
+        lua_getglobal(L, "lastEchoSource");
+        const uint32_t source = desktop && ServerWorld::IsKnownPlayer(speaker) ? speaker : Script::ClientRootElement();
+        CHECK(lua_tointeger(L, -1) == source);
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        lua_setglobal(L, "lastEcho");
+    };
+    for (bool desktop : {false, true})
+        for (bool rounded : {false, true})
+            for (const char* text : {"!", "ok", "Doors open now", "[TEST] ação no coração", "#33FF99Olá", "中文", "😀"})
+                echo(text, desktop, rounded);
+    // The ID's low two bytes spell ASCII. Before inspecting the header,
+    // stripping its control bytes could make the wrong candidate look readable.
+    echo("ação", true, true, 0x4142, 2);
+    // This compact prefix can also encode a high desktop source ID and type 0.
+    // Both wire encodings below are byte-for-byte identical once rounded.
+    // Only the second dispatch knows 0x1c461 as a player.
+    echo("aĀ !", false, true);
+    ServerWorld::NotePlayerSeen(0x1c461);
+    echo("@B", true, true, 0x1c461);
+    ServerWorld::OnPlayerQuit(0x1c461);
+    echo(std::string(256, 'z'), false, true);
+    echo(std::string(256, 'z'), true, true);
+    Net::BitStreamWriter truncated;
+    truncated.Write(uint8_t(43));
+    truncated.Write(uint8_t(18));
+    CHECK(!handler.handlePacket(99, truncated.GetData(), truncated.GetByteLength(), truncated.GetBitLength()));
+    for (const std::string& invalid : {std::string{}, std::string(257, 'a')}) {
+        for (bool desktop : {false, true}) {
+            Net::BitStreamWriter packet;
+            packet.Write(uint8_t(43));
+            WriteTestBits(packet, 0, 24);
+            WriteTestBits(packet, 0, 1);
+            if (desktop) {
+                WriteTestBits(packet, 0x1FFFF, 17);
+                packet.Write(uint8_t(0));
+            }
+            packet.WriteBytes(reinterpret_cast<const uint8_t*>(invalid.data()), invalid.size());
+            for (size_t bits : {packet.GetBitLength(), packet.GetByteLength() * 8})
+                CHECK(!handler.handlePacket(99, packet.GetData(), packet.GetByteLength(), bits));
+        }
+    }
+    RunLua(vm, "chat-echo-no-delivery", "assert(lastEcho == nil)");
+    RunLua(vm, "chat-echo-release", "assert(removeEventHandler('onClientChatMessage', root, captureEcho))");
+}
+
 void WriteWeaponBody(WorldRPG::Net::BitStreamWriter& w, uint8_t targetType, int targetKind = -1,
                      uint32_t owner = 903, bool changed = true) {
     auto bits = [&](uint32_t v, size_t n) { WriteTestBits(w, v, n); };
@@ -5448,6 +5527,7 @@ int main(int argc, char** argv) {
     CheckMemoInput(vm);
     CheckGuiClicks(vm);
     CheckMtaWindow(vm);
+    CheckChatEchoPackets(vm);
     CheckCoreClientCalls(vm);
     CheckDxDrawing(vm);
     CheckSvg(vm);

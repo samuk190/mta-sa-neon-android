@@ -1,5 +1,6 @@
 #include "PacketHandler.h"
 #include "SyncTypes.h"
+#include "Utf8.h"
 #include "NativeTaskSync.h"
 #include "MtaIds.h"
 #include "ConnectionLoading.h"
@@ -52,60 +53,67 @@ bool ReadElementId(WorldRPG::Net::BitStreamReader& reader, uint32_t& out) {
     return true;
 }
 
-int ReadableScore(const std::string& text) {
-    int score = 0;
-    for (unsigned char ch : text) {
-        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
-            ++score;
-    }
-    return score;
-}
-
-std::string ReadChatText(WorldRPG::Net::BitStreamReader& reader) {
-    const size_t chars = reader.GetRemainingBits() / 8;
-    if (chars == 0 || chars > 256) return {};
-    std::vector<uint8_t> raw(chars);
-    if (!reader.ReadBits(raw.data(), chars * 8)) return {};
-    std::string text;
-    text.reserve(chars);
-    for (unsigned char ch : raw) {
-        if (ch >= 0x20) text.push_back(static_cast<char>(ch));
-    }
-    while (!text.empty() && text.back() == ' ') text.pop_back();
+std::string ReadChatBytes(WorldRPG::Net::BitStreamReader& reader) {
+    const size_t count = reader.GetRemainingBits() / 8;
+    if (!count || count > 256) return {};
+    std::string text(count, '\0');
+    if (!reader.ReadBits(reinterpret_cast<uint8_t*>(text.data()), count * 8)) return {};
     return text;
 }
 
-// The network the packet handlers were registered with (PacketHandler::registerAll).
-const WorldRPG::Net::RakNetWrapper* g_packetNetwork = nullptr;
+bool IsPrintableChatText(const std::string& text) {
+    if (text.empty() || std::any_of(text.begin(), text.end(), [](unsigned char c) { return c < 0x20; }))
+        return false;
+    return WorldRPG::Utf8::FromUtf16(WorldRPG::Utf8::ToUtf16(text)) == text;
+}
 
 bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
-    // The standard header has 50 bits. The shortened mobile header has 25.
-    // When a caller has only whole bytes, retain its legacy layout fallback.
-    WorldRPG::Net::BitStreamReader mobile(body, length, bits);
-    uint8_t red = 0, green = 0, blue = 0, coded = 0;
-    if (!mobile.Read(red) || !mobile.Read(green) || !mobile.Read(blue) || !mobile.ReadBits(&coded, 1))
-        return false;
-    std::string text = ReadChatText(mobile);
-    // Through PC Network the server writes the desktop header (it sees a
-    // desktop bitstream version), and netc reports whole bytes, so the
-    // bit-length test below cannot tell.
-    const bool standardHeader = (bits % 8 == 2) || (g_packetNetwork && g_packetNetwork->IsPcNetwork());
-    if (standardHeader || (bits % 8 == 0 && ReadableScore(text) < 2)) {
-        WorldRPG::Net::BitStreamReader desktop(body, length, bits);
-        uint8_t ignored = 0;
-        uint32_t speaker = 0;
-        if (desktop.Read(red) && desktop.Read(green) && desktop.Read(blue) &&
-            desktop.ReadBits(&coded, 1) && ReadElementId(desktop, speaker) &&
-            desktop.Read(ignored)) {
-            const std::string other = ReadChatText(desktop);
-            if (standardHeader || ReadableScore(other) > ReadableScore(text)) text = other;
+    // CChatEchoPacket::Write: mixed servers omit source and type for Android's
+    // advertised 0x0030. Classic servers write both, even over the same netc.
+    // An exact length identifies the header: 25 or 50 bits plus whole UTF-8 bytes.
+    if (length < 4 || bits < 25) return false;
+    const size_t remainder = bits % 8;
+    if (remainder != 0 && remainder != 1 && remainder != 2) return false;
+
+    const uint8_t red = body[0], green = body[1], blue = body[2];
+    WorldRPG::Net::BitStreamReader payload(body + 3, length - 3, bits - 24);
+    uint8_t coded;
+    payload.ReadBits(&coded, 1);
+    uint32_t speaker = 0xFFFFFFFFu;
+    uint8_t messageType = 0;
+    std::string text;
+    if (remainder != 2) text = ReadChatBytes(payload);
+
+    if (remainder != 1) {
+        payload.Reset();
+        payload.ReadBits(&coded, 1);
+        uint32_t candidateSpeaker;
+        uint8_t candidateType;
+        const bool hasHeader = ReadElementId(payload, candidateSpeaker) && payload.Read(candidateType);
+        if (!hasHeader && remainder == 2) return false;
+        if (hasHeader && (remainder == 2 || candidateType <= 4)) {
+            // netc can round the length to bytes. Check the desktop writer's
+            // eMessageType (0..4) before treating UTF-8 as a desktop header.
+            auto desktop = ReadChatBytes(payload);
+            // Both interpretations can be printable. A desktop chat source is
+            // either INVALID_ELEMENT_ID (system) or the player who spoke.
+            const bool knownSource = candidateSpeaker == 0xFFFFFFFFu ||
+                                     (candidateSpeaker && candidateSpeaker == WorldRPG::ServerWorld::LocalPlayer()) ||
+                                     WorldRPG::ServerWorld::IsKnownPlayer(candidateSpeaker);
+            if (remainder == 2 || !IsPrintableChatText(text) || (knownSource && IsPrintableChatText(desktop))) {
+                text = std::move(desktop);
+                speaker = knownSource ? candidateSpeaker : 0xFFFFFFFFu;
+                messageType = candidateType;
+            }
         }
     }
+    text.erase(std::remove_if(text.begin(), text.end(), [](unsigned char c) { return c < 0x20; }), text.end());
+    while (!text.empty() && text.back() == ' ') text.pop_back();
     if (text.empty()) return false;
     char colored[400];
     std::snprintf(colored, sizeof(colored), "#%02X%02X%02X%s", red, green, blue, text.c_str());
     PKT_LOGI("ChatEcho: %s", colored);
-    const bool notCancelled = WorldRPG::Script::ActiveVmOnChat(text.c_str(), red, green, blue);
+    const bool notCancelled = WorldRPG::Script::ActiveVmOnChat(text.c_str(), red, green, blue, speaker, messageType);
     if (notCancelled)
         WorldRPG::JniBridge::PostGameLine(0, colored);
     return true;
@@ -1547,7 +1555,6 @@ void PacketHandler::registerAll(Net::RakNetWrapper& network) {
         PKT_LOGE("PacketHandler::registerAll: not initialized");
         return;
     }
-    g_packetNetwork = &network;
 
     // Register built-in handlers
     registerHandler(MTAPacketID::ELEMENT_CREATE, [this](const uint8_t* data, size_t len) -> bool {

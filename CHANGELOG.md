@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Android chat with PC Network on mixed servers (2026-11-27)
+
+- World RPG writes a 25-bit chat header for Android Standard (bitstream 0x0030). Alpha.6 assumed 50 bits on PC Network and rendered invalid UTF-8. The client now reads both headers. Exact bit counts identify the layout. For byte-rounded packets it checks the desktop message type, text and source. When both interpretations are printable, a recognized desktop source selects the desktop layout.
+- Desktop chat retains the source and message type for resource callbacks, following `CPacketHandler::Packet_ChatEcho` (desktop CPacketHandler.cpp 1474–1542). Short headers use the root and normal message type.
+
 ### Added — physical mouse and keyboard support (2026-11-25)
 
 - Physical keyboards use GTA's control mappings and MTA keybinds. A gameplay mouse click captures relative camera input, buttons and scroll. Escape, chat and script interfaces release capture and held controls.

@@ -1,6 +1,7 @@
 #include "PcNetworkTransport.h"
 
 #include "netemu/NetEmuApi.h"
+#include "raknet/RakNetWrapper.h"
 
 #include <dlfcn.h>
 
@@ -182,7 +183,10 @@ PcNetworkTransport::Status PcNetworkTransport::Pulse(std::string* error) {
     // Disconnects after that arrive as game packets.
     if (const uint8_t code = s.api->get_connection_error(s.handle)) {
         PCNET_LOGE("PC network: connection error %u", code);
-        if (error) *error = "Connection failed (PC network error " + std::to_string(code) + ")";
+        if (error) {
+            if (code == static_cast<uint8_t>(PacketID::CONNECTION_LOST)) *error = "Connection lost";
+            else *error = "Connection failed (PC network error " + std::to_string(code) + ")";
+        }
         return Status::Failed;
     }
     if (!connected_) {
