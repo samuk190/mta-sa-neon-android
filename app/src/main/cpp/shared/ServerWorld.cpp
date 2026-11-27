@@ -1,3 +1,4 @@
+#include "ControlToggles.h"
 #include "ServerWorld.h"
 #include "WorldObjectFeed.h"
 #include "PedQueries.h"
@@ -307,6 +308,8 @@ void ForgetElementReferences(uint32_t id) {
 
 void ResetSession() {
     Combat::ResetBulletSync();
+    // CClientGame.cpp:586 (shutdown) and ResetMapInfo (6429) enable every control again.
+    Controls::ResetAll();
     std::vector<uint32_t> peds;
     {
         std::lock_guard<std::mutex> lock(g_lock);

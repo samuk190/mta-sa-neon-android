@@ -1,5 +1,6 @@
 #include "PlayerPedPort.h"
 #include "GameEngine.h"
+#include "../shared/ControlToggles.h"
 #include "../shared/DebugFlags.h"
 #include "../shared/LuaVMStub.h"
 #include "../shared/ServerWorld.h"
@@ -578,6 +579,7 @@ uintptr_t drivebyButtonCaller = 0;
 void* drivebyButtonPed = nullptr;
 bool drivebyButtonHeld = false;
 bool drivebyButtonPressed = false;
+thread_local uintptr_t g_weaponGateCaller = 0;
 bool CameraIsTargeting(void* camera) {
     if (g_remoteContext) return (g_remoteHeld & PlayerWeaponSync::kAim) != 0;
     return originalTargeting(camera);
@@ -682,7 +684,8 @@ bool ProcessWeaponTask(void* task, void* ped) {
 
 bool RemoteTargetButton(void* pad, bool checkCamera) {
     if (g_remoteContext) return (g_remoteHeld & PlayerWeaponSync::kAim) != 0;
-    const bool held = g_originalTargetButton && g_originalTargetButton(pad, checkCamera);
+    const bool raw = g_originalTargetButton && g_originalTargetButton(pad, checkCamera);
+    const bool held = Controls::MaskGetter(Controls::Getter::Target, raw ? 1 : 0) != 0;
     localTargetHeld = held;
     lastLocalTargetButton = std::chrono::steady_clock::now();
     return held;
@@ -690,8 +693,12 @@ bool RemoteTargetButton(void* pad, bool checkCamera) {
 
 int RemoteWeaponHeld(void* pad, void* ped, bool targeting) {
     if (g_remoteContext) return (g_remoteHeld & PlayerWeaponSync::kFire) ? 255 : 0;
-    const int value = g_originalWeaponHeld ? g_originalWeaponHeld(pad, ped, targeting) : 0;
-    if (reinterpret_cast<uintptr_t>(__builtin_return_address(0)) == drivebyButtonCaller &&
+    const int raw = g_originalWeaponHeld ? g_originalWeaponHeld(pad, ped, targeting) : 0;
+    const int value = Controls::MaskGetter(Controls::Getter::Weapon, raw);
+    const uintptr_t caller = g_weaponGateCaller
+        ? g_weaponGateCaller
+        : reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    if (caller == drivebyButtonCaller &&
         ped && g_controlFindPlayerPed && ped == g_controlFindPlayerPed(-1)) {
         drivebyButtonPressed |= value != 0 && (drivebyButtonPed != ped || !drivebyButtonHeld);
         drivebyButtonHeld = value != 0;
@@ -1407,6 +1414,21 @@ bool InRemoteControlContext() {
     return g_remoteContext;
 #else
     return false;
+#endif
+}
+
+ScopedWeaponGateCaller::ScopedWeaponGateCaller(uintptr_t caller) {
+#ifdef __ANDROID__
+    previous = g_weaponGateCaller;
+    g_weaponGateCaller = caller;
+#else
+    (void)caller;
+#endif
+}
+
+ScopedWeaponGateCaller::~ScopedWeaponGateCaller() {
+#ifdef __ANDROID__
+    g_weaponGateCaller = previous;
 #endif
 }
 

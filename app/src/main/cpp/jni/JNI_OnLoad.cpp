@@ -1,3 +1,4 @@
+#include "../shared/ControlToggles.h"
 #include "../shared/ConnectionLoading.h"
 #include <jni.h>
 #include <cstring>
@@ -14,6 +15,7 @@
 #include "../net/RemoteCalls.h"
 #include "../net/CNet.cpp" // CNetAdapter (included for singleton access)
 #include "../gtasa/HardwareMouse.h"
+#include "../gtasa/ControlMask.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/GameHeap.h"
 #include "../gtasa/RemoteVehicle.h"
@@ -424,6 +426,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     WorldRPG::Game::InstallStreamingCapacities();
     WorldRPG::Game::InstallServerSessionHook();
     WorldRPG::Game::InstallHardwareMouse();
+    WorldRPG::Game::InstallControlMask();
     return JNI_VERSION_1_6;
 }
 
@@ -533,6 +536,7 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
             // Desktop ~CClientGame / CCore::RemoveMessageBox path: never leave the screen over an error.
             WorldRPG::ConnectionLoading::End();
             WorldRPG::ConnectionLoading::Flush();
+            WorldRPG::Controls::ResetAll();
             PostConnectionState(false, detail);
         }
     });
@@ -1098,6 +1102,7 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIE
     // so a later Retry starts a clean session.
     g_state->join->ForceConnectionLost();
     g_state->network->StopNetwork();
+    WorldRPG::Controls::ResetAll();
     JNI_LOGI("nativeDropConnection: transport stopped for /disconnect");
 }
 

@@ -4,6 +4,7 @@
 #include "LuaGuiApi.h"
 #include "LuaJsonApi.h"
 #include "LuaVMStub.h"
+#include "ControlToggles.h"
 #include "ServerWorld.h"
 #include "../gtasa/GameEngine.h"
 #include "../net/RemoteCalls.h"
@@ -118,24 +119,8 @@ int IsChatVisible(lua_State* L) {
     return 1;
 }
 
-// toggleControl(control, enabled) / isControlEnabled(control). The state is kept for every name;
-// only "radar" acts on the phone: F11 is bound to the "radar" control (desktop CKeyBinds.cpp:238),
-// and the player map opens on F11 only while that control is enabled. Kind 20 tells the activity.
+// Control enable state: shared/ControlToggles.cpp (CKeyBinds::SetControlEnabled and friends).
 static std::mutex g_controlsMutex;
-static std::set<std::string> g_disabledControls;
-static bool g_allMtaControlsEnabled = true;
-
-static const char* const kAllGtaControls[] = {
-    "fire", "next_weapon", "previous_weapon", "forwards", "backwards", "left", "right",
-    "zoom_in", "zoom_out", "enter_exit", "change_camera", "jump", "sprint", "look_behind",
-    "crouch", "action", "walk", "vehicle_fire", "vehicle_secondary_fire", "vehicle_left",
-    "vehicle_right", "steer_forward", "steer_back", "accelerate", "brake_reverse",
-    "radio_next", "radio_previous", "radio_user_track_skip", "horn", "sub_mission",
-    "handbrake", "vehicle_look_left", "vehicle_look_right", "vehicle_look_behind",
-    "vehicle_mouse_look", "special_control_left", "special_control_right",
-    "special_control_down", "special_control_up", "aim_weapon", "conversation_yes",
-    "conversation_no", "group_control_forwards", "group_control_back", "radar"
-};
 
 static const char* const kAnalogControls[] = {
     "left", "right", "forwards", "backwards",
@@ -171,70 +156,72 @@ static const char* AnalogOppositeControl(const char* canonical) {
 
 static std::unordered_map<std::string, float> g_analogOverrides;
 
+// CScriptArgReader::ReadString accepts a string or a number.
+static bool ReadControlName(lua_State* L, const char* function, const char*& out) {
+    const int type = lua_type(L, 1);
+    if (type != LUA_TSTRING && type != LUA_TNUMBER) {
+        LUA_LOGE("Bad argument @ '%s' [Expected string at argument 1]", function);
+        return false;
+    }
+    out = lua_tostring(L, 1);
+    return out != nullptr;
+}
+
+// CScriptArgReader::ReadBool: a boolean or, with a default, none or nil.
+static bool ReadBoolArg(lua_State* L, const char* function, int index, bool defaultValue, bool hasDefault, bool& out) {
+    const int type = lua_type(L, index);
+    if (type == LUA_TBOOLEAN) {
+        out = lua_toboolean(L, index) != 0;
+        return true;
+    }
+    if (hasDefault && (type == LUA_TNONE || type == LUA_TNIL)) {
+        out = defaultValue;
+        return true;
+    }
+    LUA_LOGE("Bad argument @ '%s' [Expected bool at argument %d]", function, index);
+    return false;
+}
+
+// CLuaFunctionDefs.Input.cpp:657-678, CStaticFunctionDefinitions.cpp:7516-7526 and CKeyBinds::SetControlEnabled
+// (CKeyBinds.cpp:1252-1278). False on an argument error or for an unknown or
+// unchanged control.
 int ToggleControl(lua_State* L) {
-    const char* control = luaL_checkstring(L, 1);
-    luaL_checktype(L, 2, LUA_TBOOLEAN);
-    const bool enabled = lua_toboolean(L, 2) != 0;
-    {
-        std::lock_guard<std::mutex> lock(g_controlsMutex);
-        if (enabled) g_disabledControls.erase(control);
-        else g_disabledControls.insert(control);
-    }
-    if (std::strcmp(control, "radar") == 0) {
-        LUA_LOGI("toggleControl radar %d", enabled ? 1 : 0);
-        WorldRPG::JniBridge::PostGameLine(20, enabled ? "radar|1" : "radar|0");
-    }
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
-int IsControlEnabled(lua_State* L) {
-    const char* control = luaL_checkstring(L, 1);
-    std::lock_guard<std::mutex> lock(g_controlsMutex);
-    lua_pushboolean(L, g_disabledControls.count(control) == 0 ? 1 : 0);
-    return 1;
-}
-
-// CLuaFunctionDefs.Input.cpp:680-702 and CKeyBinds.cpp:1280-1309.
-int ToggleAllControls(lua_State* L) {
-    if (lua_type(L, 1) != LUA_TBOOLEAN) {
-        LUA_LOGE("Bad argument @ 'toggleAllControls' [Expected bool at argument 1]");
+    const char* control = nullptr;
+    bool enabled = false;
+    if (!ReadControlName(L, "toggleControl", control) || !ReadBoolArg(L, "toggleControl", 2, false, false, enabled)) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const bool enabled = lua_toboolean(L, 1) != 0;
-    bool gtaControls = true;
-    if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
-        if (lua_type(L, 2) != LUA_TBOOLEAN) {
-            LUA_LOGE("Bad argument @ 'toggleAllControls' [Expected bool at argument 2]");
-            lua_pushboolean(L, 0);
-            return 1;
-        }
-        gtaControls = lua_toboolean(L, 2) != 0;
+    lua_pushboolean(L, WorldRPG::Controls::SetControlEnabled(control, enabled) ? 1 : 0);
+    return 1;
+}
+
+// CLuaFunctionDefs.Input.cpp:341-361 and CStaticFunctionDefinitions.cpp:7454-7466: GTA controls only.
+int IsControlEnabled(lua_State* L) {
+    const char* control = nullptr;
+    if (!ReadControlName(L, "isControlEnabled", control)) {
+        lua_pushboolean(L, 0);
+        return 1;
     }
-    bool mtaControls = true;
-    if (lua_gettop(L) >= 3 && !lua_isnil(L, 3)) {
-        if (lua_type(L, 3) != LUA_TBOOLEAN) {
-            LUA_LOGE("Bad argument @ 'toggleAllControls' [Expected bool at argument 3]");
-            lua_pushboolean(L, 0);
-            return 1;
-        }
-        mtaControls = lua_toboolean(L, 3) != 0;
+    bool enabled = false;
+    if (!WorldRPG::Controls::GetScriptControlEnabled(control, enabled)) {
+        lua_pushboolean(L, 0);
+        return 1;
     }
-    if (gtaControls) {
-        std::lock_guard<std::mutex> lock(g_controlsMutex);
-        if (!enabled) {
-            for (const char* ctrl : kAllGtaControls) {
-                g_disabledControls.insert(ctrl);
-            }
-        } else {
-            g_disabledControls.clear();
-        }
-        WorldRPG::JniBridge::PostGameLine(20, enabled ? "radar|1" : "radar|0");
+    lua_pushboolean(L, enabled ? 1 : 0);
+    return 1;
+}
+
+// CLuaFunctionDefs.Input.cpp:680-702, CStaticFunctionDefinitions.cpp:7528-7534 and CKeyBinds.cpp:1280-1309. Returns true once the arguments are valid.
+int ToggleAllControls(lua_State* L) {
+    bool enabled = false, gtaControls = true, mtaControls = true;
+    if (!ReadBoolArg(L, "toggleAllControls", 1, false, false, enabled) ||
+        !ReadBoolArg(L, "toggleAllControls", 2, true, true, gtaControls) ||
+        !ReadBoolArg(L, "toggleAllControls", 3, true, true, mtaControls)) {
+        lua_pushboolean(L, 0);
+        return 1;
     }
-    if (mtaControls) {
-        g_allMtaControlsEnabled = enabled;
-    }
+    WorldRPG::Controls::SetAllControlsEnabled(gtaControls, mtaControls, enabled);
     lua_pushboolean(L, 1);
     return 1;
 }
