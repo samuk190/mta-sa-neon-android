@@ -1,3 +1,4 @@
+#include "../shared/ControlToggles.h"
 #include "../shared/ConnectionLoading.h"
 #include <jni.h>
 #include <cstring>
@@ -1098,6 +1099,7 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeDropConnection(JNIE
     // so a later Retry starts a clean session.
     g_state->join->ForceConnectionLost();
     g_state->network->StopNetwork();
+    WorldRPG::Controls::ResetAll();
     JNI_LOGI("nativeDropConnection: transport stopped for /disconnect");
 }
 

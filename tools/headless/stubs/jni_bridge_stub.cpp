@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
+#include <utility>
 #include "test_bitmaps.h"
 
 namespace WorldRPG::JniBridge {
@@ -14,10 +16,24 @@ namespace {
 struct Bitmap { std::vector<uint32_t> pixels;unsigned width,height; };
 std::map<std::string,Bitmap> bitmaps;
 bool testBitmaps=false;
+std::mutex gameLinesMutex;
+std::vector<std::pair<int,std::string>> gameLines;
+}
+// Every kind-20 control line since the last call, for the control toggle tests.
+std::vector<std::string> TakeControlLines(){
+    std::lock_guard<std::mutex> lock(gameLinesMutex);
+    std::vector<std::string> out;
+    for(auto& line:gameLines) if(line.first==20) out.push_back(line.second);
+    gameLines.clear();
+    return out;
 }
 void EnableTestBitmaps(bool enabled){testBitmaps=enabled;bitmaps.clear();}
 size_t TestBitmapCount(){return bitmaps.size();}
 void PostGameLine(int kind, const char* text) {
+    if (text && kind == 20) {
+        std::lock_guard<std::mutex> lock(gameLinesMutex);
+        if (gameLines.size() < 256) gameLines.emplace_back(kind, text);
+    }
     if (text && *text) std::printf("[GAMELINE kind=%d] %s\n", kind, text);
 }
 // No Activity on the host: the caller falls back to its fixed-width estimate.

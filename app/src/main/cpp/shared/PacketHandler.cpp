@@ -10,6 +10,7 @@
 #include "PerformanceProfiler.h"
 #include "DebugFlags.h"
 #include "LuaVMStub.h"
+#include "ControlToggles.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
 #include "VehicleSync.h"
@@ -611,6 +612,26 @@ bool HandleLuaRPC(const uint8_t* body, size_t length, size_t bits) {
     if (!reader.Read(funcId)) return false;
     // SHOW_CHAT is 119 in rpc_enums.h (compiled, shared/MtaIds.h) and arrives on PACKET_ID_LUA (76); the device log
     // showed packet 76 with function 119. The old match was 120 on packet 68 (RCON_BAN), which never fired.
+    // CInputRPCs::ToggleControl (CInputRPCs.cpp:180-196): uchar name length, the name bytes, uchar enabled; an empty
+    // name is ignored and enabled counts only when it is exactly 1.
+    if (funcId == WorldRPG::MtaIds::Rpc::ToggleControlAbility) {
+        uint8_t nameLength = 0;
+        if (!reader.Read(nameLength)) return false;
+        std::string name(nameLength, '\0');
+        uint8_t enabled = 0;
+        if ((nameLength && !reader.ReadBits(reinterpret_cast<uint8_t*>(name.data()), nameLength * 8u)) ||
+            !reader.Read(enabled)) return false;
+        name.resize(std::strlen(name.c_str()));
+        if (!name.empty()) WorldRPG::Controls::SetControlEnabled(name.c_str(), enabled == 1);
+        return true;
+    }
+    // CInputRPCs::ToggleAllControls (CInputRPCs.cpp:198-206): uchar gta, uchar mta, uchar enabled.
+    if (funcId == WorldRPG::MtaIds::Rpc::ToggleAllControlAbility) {
+        uint8_t gta = 0, mta = 0, enabled = 0;
+        if (!reader.Read(gta) || !reader.Read(mta) || !reader.Read(enabled)) return false;
+        WorldRPG::Controls::SetAllControlsEnabled(gta == 1, mta == 1, enabled == 1);
+        return true;
+    }
     if (funcId == WorldRPG::MtaIds::Rpc::ShowChat) {
         uint8_t show = 1;
         if (reader.Read(show)) {

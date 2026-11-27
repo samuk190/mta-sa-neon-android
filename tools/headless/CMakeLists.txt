@@ -40,6 +40,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/ResourceLoader.cpp"
     "${NATIVE_DIR}/shared/ResourcePackets.cpp"
     "${NATIVE_DIR}/shared/LuaApiExtra.cpp"
+    "${NATIVE_DIR}/shared/ControlToggles.cpp"
     "${NATIVE_DIR}/shared/LuaGuiApi.cpp"
     "${NATIVE_DIR}/shared/LuaJsonApi.cpp"
     "${NATIVE_DIR}/shared/LuaElementApi.cpp"
@@ -233,12 +234,13 @@ add_executable(neon_resource_tests "${HEADLESS_DIR}/resource_tests.cpp" $<TARGET
 add_executable(neon_dx_conversion_tests "${HEADLESS_DIR}/dx_conversion_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_ped_query_tests "${HEADLESS_DIR}/ped_query_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_spatial_tests "${HEADLESS_DIR}/spatial_tests.cpp" $<TARGET_OBJECTS:neon_core>)
+add_executable(neon_control_toggle_tests "${HEADLESS_DIR}/control_toggle_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_join_codec_tests "${HEADLESS_DIR}/../../tests/test_join_codec.cpp"
     $<FILTER:$<TARGET_OBJECTS:neon_core>,EXCLUDE,NeonJoinProtocol[.]cpp[.]o$>)
 target_link_options(neon_dx_conversion_tests PRIVATE
     "-Wl,--wrap=eglCreatePbufferSurface" "-Wl,--wrap=eglMakeCurrent")
 
-foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tests neon_ped_query_tests neon_spatial_tests neon_join_codec_tests)
+foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tests neon_ped_query_tests neon_spatial_tests neon_control_toggle_tests neon_join_codec_tests)
     target_include_directories(${headless_target} PRIVATE ${HEADLESS_INCLUDE_DIRS})
     target_link_options(${headless_target} PRIVATE
         "-Wl,--wrap=_ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE")
