@@ -536,6 +536,7 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
             // Desktop ~CClientGame / CCore::RemoveMessageBox path: never leave the screen over an error.
             WorldRPG::ConnectionLoading::End();
             WorldRPG::ConnectionLoading::Flush();
+            WorldRPG::Controls::ResetAll();
             PostConnectionState(false, detail);
         }
     });

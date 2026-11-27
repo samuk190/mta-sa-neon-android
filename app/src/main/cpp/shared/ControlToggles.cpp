@@ -39,6 +39,7 @@ constexpr std::array<const char*, kModCommandCount> kModNames = {
 };
 
 std::mutex g_mutex;
+std::mutex g_publishMutex;
 std::array<bool, kModCommandCount> g_modEnabled = [] {
     std::array<bool, kModCommandCount> all{};
     all.fill(true);
@@ -58,6 +59,7 @@ int FindMod(const char* name) {
 // The activity owns the chat input and the F11 player map, so it is told after every change (game line kind 20,
 // "name|0/1"). Every other mod command has no phone consumer yet and is state only.
 void PublishToActivity() {
+    std::lock_guard<std::mutex> publishLock(g_publishMutex);
     bool chat, radar;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -164,10 +166,13 @@ bool IsModCommandEnabled(const char* name) {
 
 bool SetControlEnabled(const char* name, bool enabled) {
     const Gta gta = FindGtaControl(name);
-    if (gta != Gta::Count && IsGtaControlDisabled(gta) == enabled) {
-        if (enabled) g_gtaDisabled.fetch_and(~Bit(gta));
-        else g_gtaDisabled.fetch_or(Bit(gta));
-        return true;
+    if (gta != Gta::Count) {
+        const uint64_t bit = Bit(gta);
+        const uint64_t prev = enabled
+            ? g_gtaDisabled.fetch_and(~bit, std::memory_order_acq_rel)
+            : g_gtaDisabled.fetch_or(bit, std::memory_order_acq_rel);
+        const bool wasDisabled = (prev & bit) != 0;
+        if (wasDisabled == enabled) return true;
     }
     const int mod = FindMod(name);
     if (mod < 0) return false;
