@@ -20,6 +20,13 @@ suite_headless() {
         echo "== $(basename "$t")"
         "$t" || rc=1
     done
+    # Pure Java checks exist only when cmake found a JDK.
+    local help; help="$(cmake --build "$build/headless" --target help 2>/dev/null)"
+    for t in neon_dx_text_tests neon_dx_state_tests neon_control_toggle_state_tests; do
+        grep -q "\\b$t\\b" <<<"$help" || continue
+        echo "== $t"
+        cmake --build "$build/headless" --target "$t" || rc=1
+    done
     return $rc
 }
 

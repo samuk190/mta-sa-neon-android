@@ -202,6 +202,14 @@ if(Java_FOUND)
         COMMAND "${Java_JAVA_EXECUTABLE}" -cp "${CMAKE_CURRENT_BINARY_DIR}/dx-text-java"
             com.saonline.neonlauncher.game.DxTextLayoutTest
         VERBATIM)
+    add_custom_target(neon_control_toggle_state_tests
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/control-toggle-java"
+        COMMAND "${Java_JAVAC_EXECUTABLE}" -d "${CMAKE_CURRENT_BINARY_DIR}/control-toggle-java"
+            "${NATIVE_DIR}/../java/com/saonline/neonlauncher/game/ControlToggleState.java"
+            "${HEADLESS_DIR}/java/ControlToggleStateTest.java"
+        COMMAND "${Java_JAVA_EXECUTABLE}" -cp "${CMAKE_CURRENT_BINARY_DIR}/control-toggle-java"
+            com.saonline.neonlauncher.game.ControlToggleStateTest
+        VERBATIM)
     add_custom_target(neon_dx_state_tests
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/dx-state-java"
         COMMAND "${Java_JAVAC_EXECUTABLE}" -d "${CMAKE_CURRENT_BINARY_DIR}/dx-state-java"

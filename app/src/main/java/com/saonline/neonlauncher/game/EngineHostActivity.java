@@ -210,8 +210,9 @@ public final class EngineHostActivity extends GTASA {
     private LinearLayout keysRow;
     private View keysPanel;
     private boolean keyListAvailable;
-    // F11 opens the player map only while the "radar" control is enabled (toggleControl, kind 20).
-    private boolean radarControlEnabled = true;
+    // F11 opens the player map only while the "radar" control is enabled, and T, "/" and the Chat button open the
+    // chat input only while "chatbox" is (toggleControl / toggleAllControls, kind 20).
+    private final ControlToggleState controlToggles = new ControlToggleState();
     // Script-drawn radar (setMobileRadarArea, kind 21). A tap inside acts like F11.
     private View radarZone;
     private GameSettingsView settingsView;
@@ -941,7 +942,7 @@ public final class EngineHostActivity extends GTASA {
     }
 
     private void openChatInput() {
-        if (chatInputBar == null || chatInput == null) return;
+        if (chatInputBar == null || chatInput == null || !controlToggles.chatboxEnabled()) return;
         scriptKeyboardSuppressed = true;
         scriptKeyboardShown = false;
         hideScriptKeyboard();
@@ -1038,7 +1039,7 @@ public final class EngineHostActivity extends GTASA {
                     refreshHardwareInput();
                 }
                 setKeyListAvailable(false);
-                radarControlEnabled = true;
+                controlToggles.reset();
                 setRadarArea("");
                 // Native sends the desktop error box as "title<0x1F>text" (net/DisconnectMessages).
                 String title = getString(R.string.disconnected);
@@ -1241,7 +1242,7 @@ public final class EngineHostActivity extends GTASA {
                 return;
             }
             if (kind == 20) {
-                if (text.startsWith("radar|")) radarControlEnabled = !text.endsWith("|0");
+                controlToggles.apply(text);
                 return;
             }
             if (kind == 21) {
@@ -1589,12 +1590,12 @@ public final class EngineHostActivity extends GTASA {
     // control and binds F11 itself. The radar tap, the pause-menu Map button and the hardware F11
     // all come here.
     private void pressMapKey() {
-        Log.i(TAG, "map key: clientReady=" + clientReady + " radarControl=" + radarControlEnabled);
+        Log.i(TAG, "map key: clientReady=" + clientReady + " radarControl=" + controlToggles.radarEnabled());
         if (clientReady) {
             nativeKeyEvent("F11", true);
             mapHandler.postDelayed(() -> nativeKeyEvent("F11", false), 80);
         }
-        if (radarControlEnabled) showPlayerMap(!isPlayerMapShowing());
+        if (controlToggles.radarEnabled()) showPlayerMap(!isPlayerMapShowing());
     }
 
     private boolean isPlayerMapShowing() {
@@ -2035,7 +2036,7 @@ public final class EngineHostActivity extends GTASA {
             return true;
         }
         boolean firstPress = down && event.getRepeatCount() == 0;
-        if (!hardwareInputBlocked && firstPress && event.hasNoModifiers()
+        if (!hardwareInputBlocked && firstPress && event.hasNoModifiers() && controlToggles.chatboxEnabled()
                 && (code == KeyEvent.KEYCODE_T || code == KeyEvent.KEYCODE_SLASH)) {
             openChatInput();
             if (code == KeyEvent.KEYCODE_SLASH && chatInput != null) {
@@ -2047,7 +2048,7 @@ public final class EngineHostActivity extends GTASA {
         String key = mtaKeyName(code);
         if (key == null) return super.dispatchKeyEvent(event);
         if (firstPress && physicalKeys.get(code) == null) {
-            boolean mapShortcut = code == KeyEvent.KEYCODE_F11 && radarControlEnabled
+            boolean mapShortcut = code == KeyEvent.KEYCODE_F11 && controlToggles.radarEnabled()
                     && (!hardwareInputBlocked || isPlayerMapShowing());
             boolean sendToGame = !hardwareInputBlocked && !mapShortcut;
             physicalKeys.put(code, new PhysicalKey(event, sendToGame));
