@@ -1,12 +1,14 @@
 #include "CorePackets.h"
 
 #include "LuaApiExtra.h"
+#include "LuaAudioApi.h"
 #include "LuaVMStub.h"
 #include "LuaWorldObjectApi.h"
 #include "MtaIds.h"
 #include "ServerRpc.h"
 #include "ServerWorld.h"
 #include "VehicleColors.h"
+#include "VoiceRuntime.h"
 #include "entity/EntityAddTypes.h"
 #include "entity/EntitySyncReaders.h"
 #include "../gtasa/GameEngine.h"
@@ -16,11 +18,17 @@
 
 #include "lua.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
+#include <string>
 #include <vector>
+
+namespace WorldRPG::JniBridge { void PostGameLine(int kind, const char* text); }
 
 namespace WorldRPG::CorePackets {
 namespace {
@@ -554,11 +562,7 @@ bool HandlePickupHitConfirm(const uint8_t* body, size_t length, size_t bits) {
     // Desktop CPacketHandler.cpp:4633 literally passes bHide to pPickup->SetVisible(bHide).
     ServerWorld::NotePickupVisible(pickupId, hide);
     if (playSound) {
-        static int diagCount = 0;
-        if (diagCount < 4) {
-            ++diagCount;
-            LUA_LOGI("DIAG PICKUP_HIT_CONFIRM: CAudioEngine::PlayFrontEndSound(40) is not hooked");
-        }
+        Script::AudioPlayFrontEndSound(40);
     }
     return true;
 }
@@ -918,9 +922,280 @@ bool HandlePedTask(const uint8_t* body, size_t length, size_t bits) {
     return true;
 }
 
+struct ServerTextItem {
+    uint32_t id = 0;
+    float x = 0.f;
+    float y = 0.f;
+    float scale = 1.f;
+    uint8_t r = 255, g = 255, b = 255, a = 255;
+    uint8_t format = 0;
+    uint8_t shadowAlpha = 0;
+    std::string text;
+};
+
+std::mutex g_textMutex;
+std::map<uint32_t, ServerTextItem> g_textItems;
+
+std::string ReadRemainingString(BitStreamReader& reader, size_t maxBytes) {
+    const size_t avail = reader.GetRemainingBits() / 8;
+    const size_t n = std::min(avail, maxBytes);
+    if (n == 0) return {};
+    std::string out(n, '\0');
+    if (!reader.ReadBytes(reinterpret_cast<uint8_t*>(out.data()), n)) return {};
+    const size_t nul = out.find('\0');
+    if (nul != std::string::npos) out.resize(nul);
+    return out;
+}
+
+std::string SanitizeSingleLine(const std::string& input) {
+    std::string out;
+    out.reserve(input.size());
+    for (unsigned char c : input) {
+        if (c == '\r') continue;
+        if (c == '\n') out.push_back(' ');
+        else if (c >= 0x20 || c == '\t') out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
+// CPacketHandler::Packet_PlayerChangeNick (CPacketHandler.cpp:1100-1142).
+bool HandlePlayerChangeNick(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t playerId = kInvalidElementId;
+    if (!ReadElementId(reader, playerId)) return false;
+    std::string newNick = ReadRemainingString(reader, 22);
+    if (newNick.empty()) return false;
+
+    std::string oldNick;
+    ServerWorld::CopyPlayerNick(playerId, oldNick);
+    ServerWorld::NotePlayerNick(playerId, newNick);
+
+    ServerRpc::Enqueue([playerId, oldNick, newNick] {
+        lua_State* L = Script::ActiveVmState();
+        if (!L) return;
+        lua_pushlstring(L, oldNick.data(), oldNick.size());
+        lua_pushlstring(L, newNick.data(), newNick.size());
+        Script::ActiveVmFireElementEvent(L, "onClientPlayerChangeNick", playerId, 2);
+    });
+    return true;
+}
+
+// CPacketHandler::Packet_PlayerStats (CPacketHandler.cpp:2772-2807).
+bool HandlePlayerStats(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t playerId = kInvalidElementId;
+    uint32_t count = 0;
+    if (!ReadElementId(reader, playerId) || !ReadCompressed(reader, 2, count)) return false;
+    if (count > 256) return false;
+    std::vector<std::pair<uint16_t, float>> updates;
+    updates.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint16_t stat = 0;
+        float value = 0.f;
+        if (!reader.Read(stat) || !reader.Read(value)) return false;
+        if (!std::isfinite(value)) continue;
+        updates.emplace_back(stat, value);
+    }
+    ServerRpc::Enqueue([playerId, updates = std::move(updates)] {
+        for (const auto& [stat, value] : updates) {
+            Script::RpcSetPedStat(playerId, stat, value);
+        }
+    });
+    return true;
+}
+
+// CPacketHandler::Packet_DetonateSatchels (CPacketHandler.cpp:5131-5158).
+bool HandleDetonateSatchels(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t playerId = kInvalidElementId;
+    uint32_t latency = 0;
+    if (!ReadElementId(reader, playerId)) return false;
+    if (reader.GetRemainingBits() >= 8) ReadCompressed(reader, 2, latency);
+    LUA_LOGI("DETONATE_SATCHELS player=%u latency=%u", playerId, latency);
+    return true;
+}
+
+// CPacketHandler::Packet_DestroySatchels (CPacketHandler.cpp:5160-5176).
+bool HandleDestroySatchels(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t playerId = kInvalidElementId;
+    if (!ReadElementId(reader, playerId)) return false;
+    LUA_LOGI("DESTROY_SATCHELS player=%u", playerId);
+    return true;
+}
+
+// CPacketHandler::Packet_ConsoleEcho (CPacketHandler.cpp:1221-1244).
+bool HandleConsoleEcho(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    const std::string text = SanitizeSingleLine(ReadRemainingString(reader, 1024));
+    LUA_LOGI("CONSOLE: %s", text.c_str());
+    ServerRpc::Enqueue([text] {
+        lua_State* L = Script::ActiveVmState();
+        if (!L) return;
+        lua_pushlstring(L, text.data(), text.size());
+        Script::ActiveVmFireElementEvent(L, "onClientConsole", Script::ClientRootElement(), 1);
+    });
+    return true;
+}
+
+// CPacketHandler::Packet_DebugEcho (CPacketHandler.cpp:1246-1275).
+bool HandleDebugEcho(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint8_t level = 0;
+    if (!reader.Read(level)) return false;
+    uint8_t r = 255, g = 255, b = 255;
+    if (level == 0 || level == 4) {
+        if (!reader.Read(r) || !reader.Read(g) || !reader.Read(b)) return false;
+    } else if (level == 1) {
+        r = 255; g = 0; b = 0;
+    } else if (level == 2) {
+        r = 255; g = 128; b = 0;
+    } else if (level == 3) {
+        r = 0; g = 255; b = 0;
+    }
+    const std::string text = SanitizeSingleLine(ReadRemainingString(reader, 1024));
+    LUA_LOGI("DEBUG[%u]: %s", static_cast<unsigned>(level), text.c_str());
+    ServerRpc::Enqueue([text, level, r, g, b] {
+        lua_State* L = Script::ActiveVmState();
+        if (!L) return;
+        lua_pushlstring(L, text.data(), text.size());
+        lua_pushinteger(L, level);
+        lua_pushstring(L, "");
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, r);
+        lua_pushinteger(L, g);
+        lua_pushinteger(L, b);
+        Script::ActiveVmFireElementEvent(L, "onClientDebugMessage", Script::ClientRootElement(), 7);
+    });
+    return true;
+}
+
+// CPacketHandler::Packet_VoiceEnd (CPacketHandler.cpp:5824-5843).
+bool HandleVoiceEnd(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t playerId = kInvalidElementId;
+    if (!ReadElementId(reader, playerId)) return false;
+    WorldRPG::Audio::VoiceRuntime::OnVoiceEnd(playerId);
+    return true;
+}
+
+// CPacketHandler::Packet_TextItem (CPacketHandler.cpp:5266-5325).
+bool HandleTextItem(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint32_t id = 0;
+    bool del = false;
+    if (!ReadCompressed(reader, 4, id) || !ReadFlag(reader, del)) return false;
+    if (del) {
+        std::lock_guard<std::mutex> lock(g_textMutex);
+        g_textItems.erase(id);
+        return true;
+    }
+    ServerTextItem item;
+    item.id = id;
+    uint32_t len = 0;
+    if (!reader.Read(item.x) || !reader.Read(item.y) || !reader.Read(item.scale)) return false;
+    if (!std::isfinite(item.x) || !std::isfinite(item.y) || !std::isfinite(item.scale)) return false;
+    if (!reader.Read(item.r) || !reader.Read(item.g) || !reader.Read(item.b) || !reader.Read(item.a)) return false;
+    if (!reader.Read(item.format) || !reader.Read(item.shadowAlpha)) return false;
+    if (!ReadCompressed(reader, 2, len) || len > 1024) return false;
+    if (len > 0) {
+        std::string raw(len, '\0');
+        if (!reader.ReadBytes(reinterpret_cast<uint8_t*>(raw.data()), len)) return false;
+        item.text = SanitizeSingleLine(raw);
+    }
+    std::lock_guard<std::mutex> lock(g_textMutex);
+    g_textItems[id] = std::move(item);
+    return true;
+}
+
+// CPacketHandler::Packet_ChatClear (CPacketHandler.cpp:1215-1219).
+bool HandleChatClear(const uint8_t* body, size_t length, size_t bits) {
+    (void)body;
+    (void)length;
+    (void)bits;
+    WorldRPG::JniBridge::PostGameLine(8, "");
+    return true;
+}
+
+// CPacketHandler::Packet_ServerInfoSync (CPacketHandler.cpp:5937-5956).
+bool HandleServerInfoSync(const uint8_t* body, size_t length, size_t bits) {
+    BitStreamReader reader(body, length, bits);
+    uint8_t flags = 0;
+    if (!reader.Read(flags)) return false;
+    if (flags & 1u) {
+        uint32_t maxPlayers = 0;
+        if (!reader.Read(maxPlayers)) return false;
+        ServerWorld::SetMaxPlayers(maxPlayers);
+    }
+    return true;
+}
+
+void AppendServerTextItems(std::string& frame, int screenW, int screenH) {
+    if (screenW <= 0 || screenH <= 0) return;
+    std::lock_guard<std::mutex> lock(g_textMutex);
+    if (g_textItems.empty()) return;
+    char hdr[160];
+    for (const auto& [id, item] : g_textItems) {
+        (void)id;
+        if (item.text.empty() || item.a == 0) continue;
+        const float px = item.x * static_cast<float>(screenW);
+        const float py = item.y * static_cast<float>(screenH);
+        const float scale = std::clamp(item.scale, 0.25f, 10.f);
+        const float boxH = std::max(24.f, 24.f * scale);
+        float left = px;
+        float right = static_cast<float>(screenW);
+        if (item.format & 1u) {  // DT_CENTER
+            const float halfW = std::min(px, static_cast<float>(screenW) - px);
+            left = std::max(0.f, px - std::max(halfW, 120.f));
+            right = std::min(static_cast<float>(screenW), px + std::max(halfW, 120.f));
+        } else if (item.format & 2u) {  // DT_RIGHT
+            left = 0.f;
+            right = std::max(1.f, px);
+        }
+        float top = py;
+        float bottom = std::min(static_cast<float>(screenH), py + boxH * 3.f);
+        if (item.format & 4u) {  // DT_VCENTER
+            top = std::max(0.f, py - boxH * 0.5f);
+            bottom = std::min(static_cast<float>(screenH), py + boxH * 0.5f);
+        } else if (item.format & 8u) {  // DT_BOTTOM
+            top = std::max(0.f, py - boxH);
+            bottom = std::max(top + 1.f, py);
+        }
+        if (right <= left || bottom <= top) continue;
+        if (item.shadowAlpha > 0) {
+            const uint32_t shadowArgb = static_cast<uint32_t>(item.shadowAlpha) << 24;
+            std::snprintf(hdr, sizeof(hdr), "T %.1f %.1f %.1f %.1f %.3f %u 0 ",
+                          left + 1.f, top + 1.f, right + 1.f, bottom + 1.f, scale, shadowArgb);
+            frame += hdr;
+            frame += item.text;
+            frame.push_back('\n');
+        }
+        const uint32_t argb = (static_cast<uint32_t>(item.a) << 24) |
+                              (static_cast<uint32_t>(item.r) << 16) |
+                              (static_cast<uint32_t>(item.g) << 8) |
+                              static_cast<uint32_t>(item.b);
+        std::snprintf(hdr, sizeof(hdr), "T %.1f %.1f %.1f %.1f %.3f %u 0 ",
+                      left, top, right, bottom, scale, argb);
+        frame += hdr;
+        frame += item.text;
+        frame.push_back('\n');
+    }
+}
+
+size_t ServerTextItemCount() {
+    std::lock_guard<std::mutex> lock(g_textMutex);
+    return g_textItems.size();
+}
+
 void ResetSession() {
-    std::lock_guard<std::mutex> lock(g_latentMutex);
-    g_latentRx = LatentReceiveState{};
+    {
+        std::lock_guard<std::mutex> lock(g_latentMutex);
+        g_latentRx = LatentReceiveState{};
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_textMutex);
+        g_textItems.clear();
+    }
 }
 
 }  // namespace WorldRPG::CorePackets

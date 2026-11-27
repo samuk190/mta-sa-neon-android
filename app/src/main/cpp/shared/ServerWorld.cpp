@@ -48,6 +48,7 @@ std::unordered_map<uint32_t, uint64_t> g_luaHandleGenerations;
 // CClientGame::SetAllDimensions: the local player's dimension (PLAYER_SPAWN, PLAYER_LIST, SET_ELEMENT_DIMENSION).
 std::atomic<uint16_t> g_localDimension{0};
 std::atomic<uint8_t> g_localInterior{0};
+std::atomic<uint32_t> g_maxPlayers{0};
 uint32_t g_resourceRoot = 0;
 std::unordered_map<uint32_t, Visual> g_visuals;
 std::vector<uint32_t> g_teamOrder;
@@ -339,6 +340,7 @@ void ResetSession() {
     }
     g_localDimension = 0;
     g_localInterior = 0;
+    g_maxPlayers = 0;
     // Hosted and observer ped state is keyed by ElementID, which the new session reuses.
     for (uint32_t id : peds) {
         WorldRPG::Sync::PedSyncState::Forget(id);
@@ -663,6 +665,157 @@ bool CopyRadarFields(uint32_t id, RadarFields& out) {
     out.a = visual.a;
     out.flashing = visual.radarFlashing;
     return true;
+}
+
+bool CopyBlipFields(uint32_t id, BlipFields& out) {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 5) return false;
+    const auto& visual = found->second;
+    out = {};
+    out.x = visual.x;
+    out.y = visual.y;
+    out.z = visual.z;
+    out.icon = visual.icon;
+    out.size = static_cast<int>(visual.size);
+    out.r = visual.r;
+    out.g = visual.g;
+    out.b = visual.b;
+    out.a = visual.a;
+    out.ordering = visual.blipOrdering;
+    out.visibleDistance = visual.blipVisibleDistance;
+    out.attached = visual.attached;
+    return true;
+}
+
+void SetMaxPlayers(uint32_t maxPlayers) { g_maxPlayers.store(maxPlayers, std::memory_order_relaxed); }
+uint32_t MaxPlayers() { return g_maxPlayers.load(std::memory_order_relaxed); }
+
+void UpdateBlip(uint32_t id, const int* icon, const int* size, const uint8_t* rgba4,
+                const int16_t* ordering, const uint16_t* visibleDistance) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 5) return;
+    Visual& v = found->second;
+    if (icon) v.icon = *icon;
+    if (size) v.size = static_cast<float>(*size);
+    if (rgba4) { v.r = rgba4[0]; v.g = rgba4[1]; v.b = rgba4[2]; v.a = rgba4[3]; }
+    if (ordering) v.blipOrdering = *ordering;
+    if (visibleDistance) v.blipVisibleDistance = *visibleDistance;
+    if (v.blipLive) {
+        g_staleBlips.push_back(v.blipHandle);
+        v.blipLive = false;
+    }
+}
+
+void UpdateRadarArea(uint32_t id, const float* sizeXY, const uint8_t* rgba4, const bool* flashing) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 7) return;
+    Visual& v = found->second;
+    if (sizeXY) { v.w = sizeXY[0]; v.h = sizeXY[1]; }
+    if (rgba4) { v.r = rgba4[0]; v.g = rgba4[1]; v.b = rgba4[2]; v.a = rgba4[3]; }
+    if (flashing) v.radarFlashing = *flashing;
+}
+
+void UpdateMarker(uint32_t id, const int* type, const uint8_t* rgba4, const float* size,
+                  const int* icon, const bool* hasTarget, const float* targetXYZ) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 4) return;
+    Visual& v = found->second;
+    if (type) v.markerType = *type;
+    if (rgba4) { v.r = rgba4[0]; v.g = rgba4[1]; v.b = rgba4[2]; v.a = rgba4[3]; }
+    if (size) v.size = *size;
+    if (icon) v.icon = *icon;
+    if (hasTarget) {
+        v.markerHasTarget = *hasTarget;
+        if (*hasTarget && targetXYZ) {
+            v.markerTargetX = targetXYZ[0];
+            v.markerTargetY = targetXYZ[1];
+            v.markerTargetZ = targetXYZ[2];
+        }
+    }
+}
+
+void UpdatePickupType(uint32_t id, uint8_t type, float amount, uint8_t weapon, uint16_t ammo, uint16_t model) {
+    (void)type;
+    (void)amount;
+    (void)weapon;
+    (void)ammo;
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 6) return;
+    if (model != 0) found->second.model = model;
+}
+
+void UpdateTeam(uint32_t id, const std::string* name, const uint8_t* rgb3, const bool* friendlyFire) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto found = g_visuals.find(id);
+    if (found == g_visuals.end() || found->second.kind != 13) return;
+    Visual& v = found->second;
+    auto updated = v.team ? std::make_shared<Entity::TeamSpawn>(*v.team) : std::make_shared<Entity::TeamSpawn>();
+    if (name) updated->name = *name;
+    if (friendlyFire) updated->friendlyFire = *friendlyFire;
+    if (rgb3) { v.r = rgb3[0]; v.g = rgb3[1]; v.b = rgb3[2]; }
+    v.team = updated;
+}
+
+void NotePlayerTeam(uint32_t playerId, uint32_t teamId) {
+    if (playerId == 0 || playerId == 0xFFFFFFFFu) return;
+    std::lock_guard<std::mutex> lock(g_lock);
+    for (auto& [id, v] : g_visuals) {
+        if (v.kind != 13 || !v.team) continue;
+        auto it = std::find(v.team->players.begin(), v.team->players.end(), playerId);
+        if (it != v.team->players.end()) {
+            auto updated = std::make_shared<Entity::TeamSpawn>(*v.team);
+            updated->players.erase(std::remove(updated->players.begin(), updated->players.end(), playerId),
+                                   updated->players.end());
+            v.team = updated;
+        }
+    }
+    if (teamId == 0 || teamId == 0xFFFFFFFFu) return;
+    auto found = g_visuals.find(teamId);
+    if (found == g_visuals.end() || found->second.kind != 13) return;
+    auto updated = found->second.team ? std::make_shared<Entity::TeamSpawn>(*found->second.team)
+                                      : std::make_shared<Entity::TeamSpawn>();
+    if (std::find(updated->players.begin(), updated->players.end(), playerId) == updated->players.end()) {
+        updated->players.push_back(playerId);
+    }
+    found->second.team = updated;
+}
+
+void DestroyAllOfKind(int kind) {
+    std::vector<uint32_t> removed;
+    LifecycleHooks hooks;
+    {
+        std::lock_guard<std::mutex> lock(g_lock);
+        hooks = g_hooks;
+        for (const auto& [id, v] : g_visuals) {
+            if (v.kind == kind) removed.push_back(id);
+        }
+    }
+    if (hooks.elementDestroy) {
+        for (uint32_t id : removed) hooks.elementDestroy(id);
+    }
+    std::lock_guard<std::mutex> lock(g_lock);
+    for (uint32_t id : removed) {
+        auto it = g_visuals.find(id);
+        if (it != g_visuals.end()) {
+            if (it->second.blipLive) g_staleBlips.push_back(it->second.blipHandle);
+            g_visuals.erase(it);
+        }
+        g_data.erase(id);
+        g_attachments.erase(id);
+        g_attachmentOrder.erase(std::remove(g_attachmentOrder.begin(), g_attachmentOrder.end(), id),
+                                g_attachmentOrder.end());
+        g_teamOrder.erase(std::remove(g_teamOrder.begin(), g_teamOrder.end(), id), g_teamOrder.end());
+    }
 }
 
 int CountKind(int kind) {

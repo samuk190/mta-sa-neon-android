@@ -1602,6 +1602,8 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         }
         // Real ePacketID values from Shared/sdk/net/Packets.h.
         if (gameId == 43) return HandleChatEcho(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::PlayerChangeNick) return CorePackets::HandlePlayerChangeNick(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::PlayerStats) return CorePackets::HandlePlayerStats(body, bodyLength, bodyBits);
         if (gameId == 31) return HandleKeySync(body, bodyLength, bodyBits);
         if (gameId == 32) return HandlePlayerPureSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Lightsync) return CorePackets::HandleLightSync(body, bodyLength, bodyBits);
@@ -1609,11 +1611,17 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
         if (gameId == MtaIds::Packet::Explosion) return CorePackets::HandleExplosion(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Fire) return CorePackets::HandleFire(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::Projectile) return CorePackets::HandleProjectile(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::DetonateSatchels) return CorePackets::HandleDetonateSatchels(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::DestroySatchels) return CorePackets::HandleDestroySatchels(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ConsoleEcho) return CorePackets::HandleConsoleEcho(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::DebugEcho) return CorePackets::HandleDebugEcho(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PickupHideShow) return CorePackets::HandlePickupHideShow(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PickupHitConfirm) return CorePackets::HandlePickupHitConfirm(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::VehicleSpawn) return CorePackets::HandleVehicleSpawn(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::VehicleDamageSync) return CorePackets::HandleVehicleDamageSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::VehicleTrailer) return CorePackets::HandleVehicleTrailer(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::VoiceEnd) return CorePackets::HandleVoiceEnd(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::TextItem) return CorePackets::HandleTextItem(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ObjectStartSync) return CorePackets::HandleObjectStartSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ObjectStopSync) return CorePackets::HandleObjectStopSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::ObjectSync) return CorePackets::HandleObjectSync(body, bodyLength, bodyBits);
@@ -1625,6 +1633,8 @@ bool PacketHandler::handleGamePacket(uint8_t gameId, const uint8_t* body, size_t
                 });
         }
         if (gameId == MtaIds::Packet::PedTask) return CorePackets::HandlePedTask(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ChatClear) return CorePackets::HandleChatClear(body, bodyLength, bodyBits);
+        if (gameId == MtaIds::Packet::ServerInfoSync) return CorePackets::HandleServerInfoSync(body, bodyLength, bodyBits);
         if (gameId == MtaIds::Packet::PlayerNetworkStatus) {
             Net::BitStreamReader reader(body, bodyLength, bodyBits);
             uint8_t type = 0;

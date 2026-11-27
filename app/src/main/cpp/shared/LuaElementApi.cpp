@@ -1408,6 +1408,39 @@ void InstallElementBindings(lua_State* L) {
     InstallElementTreeLua(L);
 }
 
+void RpcSetElementParent(uint32_t id, uint32_t parent) {
+    if (id == 0 || id == parent) return;
+    EnsureRoot();
+    if (!Find(id)) {
+        Node node;
+        node.id = id;
+        node.serverElement = true;
+        g_nodes.emplace(id, std::move(node));
+    }
+    if (parent != 0 && !Find(parent)) {
+        Node pnode;
+        pnode.id = parent;
+        pnode.serverElement = true;
+        g_nodes.emplace(parent, std::move(pnode));
+    }
+    if (parent != 0 && IsAncestorOrSelf(parent, id)) return;
+    Link(id, parent);
+}
+
+void RpcSetElementName(uint32_t id, const std::string& name) {
+    if (id == 0) return;
+    EnsureRoot();
+    if (Node* node = Find(id)) {
+        node->name = name;
+    } else {
+        Node created;
+        created.id = id;
+        created.serverElement = true;
+        created.name = name;
+        g_nodes.emplace(id, std::move(created));
+    }
+}
+
 }  // namespace WorldRPG::Script
 
 extern "C" void InstallElementLua(lua_State* L) {

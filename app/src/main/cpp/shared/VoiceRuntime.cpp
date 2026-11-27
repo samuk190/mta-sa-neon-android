@@ -193,6 +193,16 @@ bool OnVoicePacket(uint32_t playerId, const uint8_t* data, size_t length) {
     return true;
 }
 
+void OnVoiceEnd(uint32_t playerId) {
+    if (playerId == 0) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto it = g_players.find(playerId);
+    if (it != g_players.end() && it->second.active) {
+        it->second.active = false;
+        g_events.push_back(QueuedEvent{"onClientPlayerVoiceStop", playerId});
+    }
+}
+
 void SetTransmitActive(bool active) {
     bool sendEnd = false;
     {

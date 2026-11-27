@@ -455,6 +455,25 @@ void Register(lua_State* L) {
 
 void WaterRelease(uint32_t id) { g_water.erase(id); }
 
+void RpcSetWorldWaterLevel(float level, bool includeWorldNonSeaLevel, bool includeAllWaterElements,
+                           bool includeWorldSeaLevel, bool includeOutsideWorldLevel) {
+    (void)includeWorldNonSeaLevel;
+    (void)includeWorldSeaLevel;
+    if (includeAllWaterElements) {
+        for (auto& [id, water] : g_water) {
+            (void)id;
+            if (KnownClientElement(water.id)) SetPolyLevel(water, level);
+        }
+    }
+    g_worldLevel = level;
+    if (includeOutsideWorldLevel) g_outsideLevel = level;
+}
+
+void RpcResetWorldWaterLevel() {
+    g_worldLevel = 0.f;
+    g_outsideLevel = 0.f;
+}
+
 void InstallWaterLua(lua_State* L) { Register(L); }
 
 }  // namespace WorldRPG::Script

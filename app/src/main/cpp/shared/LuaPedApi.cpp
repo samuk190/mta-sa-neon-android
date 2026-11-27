@@ -46,6 +46,7 @@ struct Nametag {
 
 std::unordered_map<uint32_t, Nametag> g_nametags;
 std::unordered_map<uint32_t, std::unordered_map<unsigned, float>> g_stats;
+uint8_t g_wantedLevel = 0;
 
 bool IsPlayer(lua_State* L, int index, uint32_t& id) {
     if (!lua_istable(L, index)) return false;
@@ -477,30 +478,56 @@ int GetPlayerPing(lua_State* L) {
     return 1;
 }
 
+bool FindTeamOfPlayer(uint32_t playerId, ServerWorld::TeamFields& out) {
+    std::vector<ServerWorld::TeamFields> teams;
+    ServerWorld::CopyTeams(teams);
+    for (const auto& team : teams) {
+        for (uint32_t pid : team.players) {
+            if (pid == playerId) {
+                out = team;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Desktop CLuaPlayerDefs::GetPlayerTeam (CLuaPlayerDefs.cpp 475-499).
-// OnPlayerList reads a team id and drops it, so no player has a team element.
 int GetPlayerTeam(lua_State* L) {
     uint32_t id = 0;
     if (!IsPlayer(L, 1, id)) return Fail(L, "getPlayerTeam", "expected a player");
-    (void)id;
-    lua_pushboolean(L, 0);
+    ServerWorld::TeamFields team;
+    if (!FindTeamOfPlayer(id, team)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    PushElement(L, team.id);
     return 1;
 }
 
 // Desktop CLuaPlayerDefs::GetPlayerNametagColor (CLuaPlayerDefs.cpp:404-429).
 // CClientPlayer::GetNametagColor (CClientPlayer.cpp:142-166): the override, otherwise
-// the team color, otherwise white. No team is stored, so the middle branch is white.
+// the team color, otherwise white.
 int GetPlayerNametagColor(lua_State* L) {
     uint32_t id = 0;
     if (!IsPlayer(L, 1, id)) return Fail(L, "getPlayerNametagColor", "expected a player");
     const auto found = g_nametags.find(id);
-    const bool overridden = found != g_nametags.end() && found->second.colorOverride;
-    const unsigned char red = overridden ? found->second.red : 255;
-    const unsigned char green = overridden ? found->second.green : 255;
-    const unsigned char blue = overridden ? found->second.blue : 255;
-    lua_pushnumber(L, red);
-    lua_pushnumber(L, green);
-    lua_pushnumber(L, blue);
+    if (found != g_nametags.end() && found->second.colorOverride) {
+        lua_pushnumber(L, found->second.red);
+        lua_pushnumber(L, found->second.green);
+        lua_pushnumber(L, found->second.blue);
+        return 3;
+    }
+    ServerWorld::TeamFields team;
+    if (FindTeamOfPlayer(id, team)) {
+        lua_pushnumber(L, static_cast<unsigned char>(team.r));
+        lua_pushnumber(L, static_cast<unsigned char>(team.g));
+        lua_pushnumber(L, static_cast<unsigned char>(team.b));
+        return 3;
+    }
+    lua_pushnumber(L, 255);
+    lua_pushnumber(L, 255);
+    lua_pushnumber(L, 255);
     return 3;
 }
 
@@ -2011,11 +2038,9 @@ int TakePlayerMoney(lua_State* L) {
     return 1;
 }
 
-// CLuaPlayerDefs.cpp:514-523. CWanted::GetWantedLevel is not read, so the stars stay 0.
+// CLuaPlayerDefs.cpp:514-523. Updated via CPlayerRPCs::SetWantedLevel (RPC 113).
 int GetPlayerWantedLevel(lua_State* L) {
-    static bool once = false;
-    DiagOnce(once, "DIAG getPlayerWantedLevel: CWanted::GetWantedLevel is not read");
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, g_wantedLevel);
     return 1;
 }
 
@@ -3972,6 +3997,7 @@ int RemovePedFromVehicle(lua_State* L) {
 void BindPedLua(lua_State* L) {
     g_nametags.clear();
     g_stats.clear();
+    g_wantedLevel = 0;
     g_voice.clear();
     g_analog.clear();
     ResetPedBody();
@@ -4249,6 +4275,45 @@ void RpcSetPlayerMoney(int32_t amount, bool instant) {
 }
 
 long long ScriptPlayerMoney() { return g_money; }
+
+void RpcSetPedStat(uint32_t id, uint16_t stat, float value) {
+    if (id != 0) g_stats[id][stat] = value;
+}
+
+void RpcSetPlayerNametagText(uint32_t id, const std::string& text, bool clear) {
+    if (id == 0) return;
+    Nametag& tag = TagFor(id);
+    if (clear) {
+        tag.textOverride = false;
+        tag.text.clear();
+    } else {
+        tag.textOverride = true;
+        tag.text = text;
+    }
+}
+
+void RpcSetPlayerNametagColor(uint32_t id, uint8_t r, uint8_t g, uint8_t b) {
+    if (id == 0) return;
+    Nametag& tag = TagFor(id);
+    tag.colorOverride = true;
+    tag.red = r;
+    tag.green = g;
+    tag.blue = b;
+}
+
+void RpcRemovePlayerNametagColor(uint32_t id) {
+    if (id == 0) return;
+    TagFor(id).colorOverride = false;
+}
+
+void RpcSetPlayerNametagShowing(uint32_t id, bool showing) {
+    if (id == 0) return;
+    TagFor(id).showing = showing;
+}
+
+void RpcSetWantedLevel(uint8_t level) {
+    g_wantedLevel = level > 6 ? 6 : level;
+}
 
 }  // namespace WorldRPG::Script
 

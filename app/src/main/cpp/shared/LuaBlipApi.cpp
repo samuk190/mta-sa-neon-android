@@ -5,6 +5,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
+#include "ServerWorld.h"
 
 #include "lua.hpp"
 
@@ -99,6 +100,25 @@ bool OptionalInt(lua_State* L, const char* function, int index, int min, int max
 }
 
 Blip* Find(uint32_t id) {
+    if (id == 0) return nullptr;
+    ServerWorld::BlipFields server;
+    if (ServerWorld::CopyBlipFields(id, server)) {
+        Blip& cached = g_blips[id];
+        cached.id = id;
+        cached.x = server.x;
+        cached.y = server.y;
+        cached.z = server.z;
+        cached.icon = server.icon;
+        cached.size = server.size;
+        cached.r = server.r;
+        cached.g = server.g;
+        cached.b = server.b;
+        cached.a = server.a;
+        cached.ordering = server.ordering;
+        cached.distance = server.visibleDistance;
+        cached.attached = server.attached == 0xFFFFFFFFu ? 0 : server.attached;
+        return &cached;
+    }
     auto found = g_blips.find(id);
     if (found == g_blips.end()) return nullptr;
     if (!KnownClientElement(id)) {

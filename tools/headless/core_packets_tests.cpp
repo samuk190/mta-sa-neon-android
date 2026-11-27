@@ -65,6 +65,9 @@ struct Pkt {
     Pkt& U16(uint16_t v) { w.Write(v); return *this; }
     Pkt& U32(uint32_t v) { w.Write(v); return *this; }
     Pkt& F(float v) { w.Write(v); return *this; }
+    Pkt& F32(float v) { return F(v); }
+    Pkt& Compressed16(uint16_t v) { return Compressed(v, 2); }
+    Pkt& Compressed32(uint32_t v) { return Compressed(v, 4); }
     Pkt& Bit(bool v) {
         const uint8_t b = v ? 1u : 0u;
         w.WriteBits(&b, 1);
@@ -834,6 +837,82 @@ void TestLocalWastedAndGuiFixes() {
     fs::remove_all(cacheDir, ec);
 }
 
+void TestRemainingPacketsAndTextItems() {
+    Fixture f;
+    ServerWorld::NotePlayerNick(700, "OldName");
+    f.Lua("nickEvents = {}; consoleEvents = {}; debugEvents = {}\n"
+          "addEventHandler('onClientPlayerChangeNick', root, function(oldN, newN) nickEvents[#nickEvents + 1] = oldN .. '->' .. newN end)\n"
+          "addEventHandler('onClientConsole', root, function(txt) consoleEvents[#consoleEvents + 1] = txt end)\n"
+          "addEventHandler('onClientDebugMessage', root, function(msg, lvl, file, line, r, g, b) "
+          "debugEvents[#debugEvents + 1] = lvl .. ':' .. r .. ',' .. g .. ',' .. b .. ':' .. msg end)");
+
+    // 1. PACKET_ID_PLAYER_CHANGE_NICK (28)
+    Pkt nick(PktId::PlayerChangeNick);
+    nick.Id(700).Bytes(reinterpret_cast<const uint8_t*>("NewName"), 7);
+    Check(f.Send(nick), "PLAYER_CHANGE_NICK accepted");
+    f.Pump();
+    std::string storedNick;
+    Check(ServerWorld::CopyPlayerNick(700, storedNick) && storedNick == "NewName", "PLAYER_CHANGE_NICK updated ServerWorld nick");
+    f.Lua("assert(#nickEvents == 1 and nickEvents[1] == 'OldName->NewName', 'onClientPlayerChangeNick fired')");
+
+    // 2. PACKET_ID_PLAYER_STATS (29)
+    Pkt stats(PktId::PlayerStats);
+    stats.Id(ServerWorld::LocalPlayer()).Compressed16(1).U16(24).F32(569.0f);
+    Check(f.Send(stats), "PLAYER_STATS accepted");
+    f.Pump();
+    f.Lua("assert(math.abs(getPedStat(localPlayer, 24) - 569.0) < 0.01, 'getPedStat updated from PLAYER_STATS')");
+
+    // 3. DETONATE_SATCHELS (40) & DESTROY_SATCHELS (41)
+    Pkt det(PktId::DetonateSatchels);
+    det.Id(700).Compressed16(25);
+    Check(f.Send(det), "DETONATE_SATCHELS accepted");
+    Pkt des(PktId::DestroySatchels);
+    des.Id(700);
+    Check(f.Send(des), "DESTROY_SATCHELS accepted");
+
+    // 4. CONSOLE_ECHO (44) & DEBUG_ECHO (45)
+    Pkt con(PktId::ConsoleEcho);
+    con.Bytes(reinterpret_cast<const uint8_t*>("Server notice"), 13);
+    Check(f.Send(con), "CONSOLE_ECHO accepted");
+    Pkt dbg(PktId::DebugEcho);
+    dbg.U8(0).U8(10).U8(20).U8(30).Bytes(reinterpret_cast<const uint8_t*>("Custom debug"), 12);
+    Check(f.Send(dbg), "DEBUG_ECHO accepted");
+    f.Pump();
+    f.Lua("assert(#consoleEvents == 1 and consoleEvents[1] == 'Server notice', 'onClientConsole fired')");
+    f.Lua("assert(#debugEvents == 1 and debugEvents[1] == '0:10,20,30:Custom debug', 'onClientDebugMessage fired')");
+
+    // 5. VOICE_END (72)
+    Pkt ve(PktId::VoiceEnd);
+    ve.Id(700);
+    Check(f.Send(ve), "VOICE_END accepted");
+
+    // 6. TEXT_ITEM (78): create + DX render + delete
+    Pkt ti(PktId::TextItem);
+    ti.Compressed32(42).Bit(false)
+        .F32(0.5f).F32(0.25f).F32(2.0f)
+        .U8(255).U8(200).U8(50).U8(255)
+        .U8(1).U8(180)
+        .Compressed16(11)
+        .Bytes(reinterpret_cast<const uint8_t*>("ROUND START"), 11);
+    Check(f.Send(ti), "TEXT_ITEM create accepted");
+    Check(CorePackets::ServerTextItemCount() == 1, "TEXT_ITEM stored");
+    const std::string dxFrame = Script::ActiveVmPump(true);
+    Check(dxFrame.find("ROUND START") != std::string::npos, "TEXT_ITEM emitted into DX frame");
+
+    Pkt tiDel(PktId::TextItem);
+    tiDel.Compressed32(42).Bit(true);
+    Check(f.Send(tiDel), "TEXT_ITEM delete accepted");
+    Check(CorePackets::ServerTextItemCount() == 0, "TEXT_ITEM deleted");
+
+    // 7. CHAT_CLEAR (105) & SERVER_INFO_SYNC (106)
+    Pkt cc(PktId::ChatClear);
+    Check(f.Send(cc), "CHAT_CLEAR accepted");
+    Pkt sis(PktId::ServerInfoSync);
+    sis.U8(1).U32(256);
+    Check(f.Send(sis), "SERVER_INFO_SYNC accepted");
+    Check(ServerWorld::MaxPlayers() == 256, "SERVER_INFO_SYNC updated MaxPlayers");
+}
+
 }  // namespace
 
 int main() {
@@ -847,6 +926,7 @@ int main() {
     TestObjectSync();
     TestLatentTransferAndPedTask();
     TestLocalWastedAndGuiFixes();
+    TestRemainingPacketsAndTextItems();
     std::printf("core_packets_tests: %u checks passed\n", checks);
     return 0;
 }

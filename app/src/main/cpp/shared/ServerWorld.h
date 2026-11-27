@@ -120,6 +120,16 @@ struct RadarFields {
     bool flashing = false;
 };
 bool CopyRadarFields(uint32_t id, RadarFields& out);
+struct BlipFields {
+    float x = 0, y = 0, z = 0;
+    int icon = 0;
+    int size = 2;
+    int r = 255, g = 0, b = 0, a = 255;
+    int16_t ordering = 0;
+    uint16_t visibleDistance = 16383;
+    uint32_t attached = 0xFFFFFFFFu;
+};
+bool CopyBlipFields(uint32_t id, BlipFields& out);
 struct TeamFields {
     uint32_t id = 0;
     std::string name;
@@ -212,6 +222,20 @@ uint16_t DimensionOf(uint32_t id);
 uint8_t InteriorOf(uint32_t id);
 void SetLocalDimension(uint16_t dimension);
 uint16_t LocalDimension();
+
+// Server info sync (PACKET_ID_SERVER_INFO_SYNC = 106) and entity RPC updates (CBlipRPCs, CRadarRPCs,
+// CMarkerRPCs, CPickupRPCs, CTeamRPCs, CVehicleRPCs/CObjectRPCs DestroyAll*).
+void SetMaxPlayers(uint32_t maxPlayers);
+uint32_t MaxPlayers();
+void UpdateBlip(uint32_t id, const int* icon, const int* size, const uint8_t* rgba4,
+                const int16_t* ordering, const uint16_t* visibleDistance);
+void UpdateRadarArea(uint32_t id, const float* sizeXY, const uint8_t* rgba4, const bool* flashing);
+void UpdateMarker(uint32_t id, const int* type, const uint8_t* rgba4, const float* size,
+                  const int* icon, const bool* hasTarget, const float* targetXYZ);
+void UpdatePickupType(uint32_t id, uint8_t type, float amount, uint8_t weapon, uint16_t ammo, uint16_t model);
+void UpdateTeam(uint32_t id, const std::string* name, const uint8_t* rgb3, const bool* friendlyFire);
+void NotePlayerTeam(uint32_t playerId, uint32_t teamId);
+void DestroyAllOfKind(int kind);
 
 // Radar blips and the F11 snapshot. Call on the game thread.
 void Tick(float playerX, float playerY, float playerZ);

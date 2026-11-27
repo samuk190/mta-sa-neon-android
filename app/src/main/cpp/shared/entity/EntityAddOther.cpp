@@ -54,9 +54,9 @@ bool ReadBlip(Net::BitStreamReader& reader, const EntityCommon& common, Visual& 
     visual.g = color[1];
     visual.b = color[2];
     visual.a = color[3];
+    visual.blipOrdering = static_cast<int16_t>(ordering);
+    visual.blipVisibleDistance = static_cast<uint16_t>(visibleDistance);
     if (common.attached) visual.attached = common.parent;  // as before this stage
-    (void)ordering;
-    (void)visibleDistance;
     return true;
 }
 

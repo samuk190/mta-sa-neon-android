@@ -222,21 +222,35 @@ bool RemovalArgs(lua_State* L, const char* function, float& model, float& radius
     return ReadNumber(L, function, 2, radius) && ReadVec(L, function, 3, x, y, z);
 }
 
+struct RemovedModelEntry {
+    uint16_t model = 0;
+    float radius = 0.f;
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+    int8_t interior = -1;
+};
+
+std::vector<RemovedModelEntry> g_removedModels;
+
+bool SameRemoval(const RemovedModelEntry& a, uint16_t model, float radius, float x, float y, float z, int8_t interior) {
+    return a.model == model &&
+           std::fabs(a.radius - radius) < 0.01f &&
+           std::fabs(a.x - x) < 0.01f &&
+           std::fabs(a.y - y) < 0.01f &&
+           std::fabs(a.z - z) < 0.01f &&
+           (interior == -1 || a.interior == -1 || a.interior == interior);
+}
+
 int RemoveWorldModel(lua_State* L) {
     float model = 0.f, radius = 0.f, x = 0.f, y = 0.f, z = 0.f;
     if (!RemovalArgs(L, "removeWorldModel", model, radius, x, y, z)) return Fail(L);
     if (ActiveVmOwner().empty()) return Fail(L);
-    (void)model;
-    (void)radius;
-    (void)x;
-    (void)y;
-    (void)z;
-    if (!g_diagRemoval) {
-        g_diagRemoval = true;
-        LUA_LOGE("DIAG removeWorldModel: CBuildingRemoval is not loaded; the removed count is 0");
-    }
+    int8_t interior = -1;
+    if (lua_isnumber(L, 6)) interior = static_cast<int8_t>(lua_tointeger(L, 6));
+    const int count = RpcRemoveWorldModel(static_cast<uint16_t>(model), radius, x, y, z, interior);
     lua_pushboolean(L, 1);
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, count);
     return 2;
 }
 
@@ -244,21 +258,20 @@ int RestoreWorldModel(lua_State* L) {
     float model = 0.f, radius = 0.f, x = 0.f, y = 0.f, z = 0.f;
     if (!RemovalArgs(L, "restoreWorldModel", model, radius, x, y, z)) return Fail(L);
     if (ActiveVmOwner().empty()) return Fail(L);
-    (void)model;
-    (void)radius;
-    (void)x;
-    (void)y;
-    (void)z;
+    int8_t interior = -1;
+    if (lua_isnumber(L, 6)) interior = static_cast<int8_t>(lua_tointeger(L, 6));
+    const int count = RpcRestoreWorldModel(static_cast<uint16_t>(model), radius, x, y, z, interior);
     lua_pushboolean(L, 1);
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, count);
     return 2;
 }
 
 int RestoreAllWorldModels(lua_State* L) {
     (void)L;
     if (ActiveVmOwner().empty()) return Fail(L);
+    const int count = RpcRestoreAllWorldModels();
     lua_pushboolean(L, 1);
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, count);
     return 2;
 }
 
@@ -337,6 +350,45 @@ void Register(lua_State* L) {
 }
 
 }  // namespace
+
+int RpcRemoveWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior) {
+    for (const auto& entry : g_removedModels) {
+        if (SameRemoval(entry, model, radius, x, y, z, interior)) return 0;
+    }
+    RemovedModelEntry entry;
+    entry.model = model;
+    entry.radius = radius;
+    entry.x = x;
+    entry.y = y;
+    entry.z = z;
+    entry.interior = interior;
+    g_removedModels.push_back(entry);
+    if (!g_diagRemoval) {
+        g_diagRemoval = true;
+        LUA_LOGE("DIAG removeWorldModel: CBuildingRemoval native hook pending; removal tracked in script state");
+    }
+    return 0;
+}
+
+int RpcRestoreWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior) {
+    for (auto it = g_removedModels.begin(); it != g_removedModels.end();) {
+        if (SameRemoval(*it, model, radius, x, y, z, interior)) {
+            it = g_removedModels.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return 0;
+}
+
+int RpcRestoreAllWorldModels() {
+    g_removedModels.clear();
+    return 0;
+}
+
+size_t RemovedWorldModelCount() { return g_removedModels.size(); }
+
+void WorldQueryReset() { g_removedModels.clear(); }
 
 void InstallWorldQueryLua(lua_State* L) { Register(L); }
 

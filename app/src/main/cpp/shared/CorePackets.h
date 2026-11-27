@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
 
 namespace WorldRPG::CorePackets {
 
@@ -58,7 +59,41 @@ bool HandleLatentTransfer(const uint8_t* body, size_t length, size_t bits, const
 // PACKET_ID_PED_TASK (101): CPacketHandler::Packet_PedTask (CPacketHandler.cpp:5893-5935).
 bool HandlePedTask(const uint8_t* body, size_t length, size_t bits);
 
-// Clears per-session latent transfer reassembly state (called from ServerWorld::ResetSession).
+// PACKET_ID_PLAYER_CHANGE_NICK (28): CPacketHandler::Packet_PlayerChangeNick (CPacketHandler.cpp:1100-1142).
+bool HandlePlayerChangeNick(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_PLAYER_STATS (29): CPacketHandler::Packet_PlayerStats (CPacketHandler.cpp:2772-2807).
+bool HandlePlayerStats(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_DETONATE_SATCHELS (40): CPacketHandler::Packet_DetonateSatchels (CPacketHandler.cpp:5131-5158).
+bool HandleDetonateSatchels(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_DESTROY_SATCHELS (41): CPacketHandler::Packet_DestroySatchels (CPacketHandler.cpp:5160-5176).
+bool HandleDestroySatchels(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_CONSOLE_ECHO (44): CPacketHandler::Packet_ConsoleEcho (CPacketHandler.cpp:1221-1244).
+bool HandleConsoleEcho(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_DEBUG_ECHO (45): CPacketHandler::Packet_DebugEcho (CPacketHandler.cpp:1246-1275).
+bool HandleDebugEcho(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_VOICE_END (72): CPacketHandler::Packet_VoiceEnd (CPacketHandler.cpp:5824-5843).
+bool HandleVoiceEnd(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_TEXT_ITEM (78): CPacketHandler::Packet_TextItem (CPacketHandler.cpp:5266-5325).
+bool HandleTextItem(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_CHAT_CLEAR (105): CPacketHandler::Packet_ChatClear (CPacketHandler.cpp:1215-1219).
+bool HandleChatClear(const uint8_t* body, size_t length, size_t bits);
+
+// PACKET_ID_SERVER_INFO_SYNC (106): CPacketHandler::Packet_ServerInfoSync (CPacketHandler.cpp:5937-5956).
+bool HandleServerInfoSync(const uint8_t* body, size_t length, size_t bits);
+
+// Appends active server text display items (PACKET_ID_TEXT_ITEM) as DX draw lines for the current frame.
+void AppendServerTextItems(std::string& frame, int screenW, int screenH);
+size_t ServerTextItemCount();
+
+// Clears per-session latent transfer reassembly state and server text items (called from ServerWorld::ResetSession).
 void ResetSession();
 
 }  // namespace WorldRPG::CorePackets

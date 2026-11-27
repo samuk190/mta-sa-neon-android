@@ -119,6 +119,8 @@ struct Visual {
     uint32_t attached = 0xFFFFFFFFu;
     int blipHandle = -1;
     bool blipLive = false;
+    int16_t blipOrdering = 0;
+    uint16_t blipVisibleDistance = 16383;
     // Peds (kind 14) only: the rest of the ENTITY_ADD ped body. Shared so copies of Visual stay cheap.
     std::shared_ptr<const PedSpawn> ped;
     std::shared_ptr<const WeaponSpawn> weapon;

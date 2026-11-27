@@ -51,6 +51,7 @@ extern "C" {
 #include "ResourceLoader.h"
 #include "ResourcePackets.h"
 #include "ServerWorld.h"
+#include "CorePackets.h"
 #include "ServerRpc.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/ProjectileEngine.h"
@@ -3176,6 +3177,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     DxEndRender(g_dx.frame);
     GuiAppendDraws(g_dx.frame);
     g_dx.frame += g_dx.postGuiFrame;
+    WorldRPG::CorePackets::AppendServerTextItems(g_dx.frame, g_dx.screenW, g_dx.screenH);
     // "C" line: the cursor is showing, so the Android overlay takes touches (MtaDxView).
     // "K" line: a gui-edit has focus, or a script called guiSetInputEnabled(true), so the
     // activity opens the soft keyboard. EngineHostActivity reads that line.

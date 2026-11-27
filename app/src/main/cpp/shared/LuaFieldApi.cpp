@@ -1897,4 +1897,72 @@ void RpcSetJetpackMaxHeight(float height) {
     Diag(g_diagWorld, "DIAG SET_JETPACK_MAXHEIGHT: CWorld::SetJetpackMaxHeight is not hooked; the value is stored");
 }
 
+void RpcSetSkyGradient(uint8_t topR, uint8_t topG, uint8_t topB, uint8_t bottomR, uint8_t bottomG, uint8_t bottomB) {
+    g_sky[0] = topR;
+    g_sky[1] = topG;
+    g_sky[2] = topB;
+    g_sky[3] = bottomR;
+    g_sky[4] = bottomG;
+    g_sky[5] = bottomB;
+    g_skySet = true;
+}
+
+void RpcResetSkyGradient() {
+    for (int& v : g_sky) v = 0;
+    g_skySet = false;
+}
+
+void RpcSetHeatHaze(uint8_t intensity, uint8_t randomShift, uint16_t speedMin, uint16_t speedMax,
+                    int16_t scanSizeX, int16_t scanSizeY, uint16_t renderSizeX, uint16_t renderSizeY,
+                    bool showInside) {
+    g_heat[0] = intensity;
+    g_heat[1] = randomShift;
+    g_heat[2] = speedMin;
+    g_heat[3] = speedMax;
+    g_heat[4] = scanSizeX;
+    g_heat[5] = scanSizeY;
+    g_heat[6] = renderSizeX;
+    g_heat[7] = renderSizeY;
+    g_heatInside = showInside;
+}
+
+void RpcResetHeatHaze() {
+    const int def[8] = {0, 0, 12, 18, 75, 80, 80, 85};
+    for (int i = 0; i < 8; ++i) g_heat[i] = def[i];
+    g_heatInside = false;
+}
+
+void RpcSetFpsLimit(uint16_t fps) { g_fps = fps; }
+
+void RpcSetGarageOpen(uint8_t garageId, bool open) {
+    if (garageId < 50) g_garage[garageId] = open;
+}
+
+void RpcSetGlitchEnabled(uint8_t glitchId, bool enabled) {
+    (void)glitchId;
+    (void)enabled;
+}
+
+void RpcSetTrafficLightState(uint8_t state, bool forced) {
+    if (forced || !g_trafficLocked) g_traffic = state;
+}
+
+void RpcSetWaterColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    g_water[0] = r;
+    g_water[1] = g;
+    g_water[2] = b;
+    g_water[3] = a;
+    g_waterSet = true;
+}
+
+void RpcResetWaterColor() {
+    g_water[0] = g_water[1] = g_water[2] = 0;
+    g_water[3] = 200;
+    g_waterSet = false;
+}
+
+void RpcSetElementDoubleSided(uint32_t id, bool doubleSided) {
+    if (id != 0) g_fields[id].doubleSided = doubleSided;
+}
+
 }  // namespace WorldRPG::Script

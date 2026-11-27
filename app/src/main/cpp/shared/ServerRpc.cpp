@@ -1,7 +1,10 @@
 #include "ServerRpc.h"
 
 #include "LuaApiExtra.h"
+#include "LuaAudioApi.h"
 #include "LuaWorldObjectApi.h"
+#include "LuaWorldQueryApi.h"
+#include "LuaWaterApi.h"
 #include "LuaCameraApi.h"
 #include "LuaFieldApi.h"
 #include "LuaGuiApi.h"
@@ -66,6 +69,30 @@ template <typename Apply>
 Result ResetRpc(Apply apply) {
     Enqueue([apply] { apply(); });
     return Result::Handled;
+}
+
+bool ReadU16String(BitStreamReader& reader, std::string& out, size_t maxBytes = 1024) {
+    uint16_t length = 0;
+    out.clear();
+    if (!reader.Read(length)) return false;
+    if (length > maxBytes || static_cast<size_t>(length) * 8 > reader.GetRemainingBits()) return false;
+    if (length == 0) return true;
+    out.resize(length);
+    return reader.ReadBytes(reinterpret_cast<uint8_t*>(out.data()), length);
+}
+
+template <int Bits, typename T>
+bool ReadRangeBits(BitStreamReader& reader, T& out, T low, T hi) {
+    uint32_t raw = 0;
+    uint8_t bytes[4] = {};
+    if (!reader.ReadBits(bytes, Bits)) return false;
+    for (int i = 0; i < (Bits + 7) / 8; ++i) raw |= static_cast<uint32_t>(bytes[i]) << (i * 8);
+    if constexpr (Bits < 32) raw &= ((1u << Bits) - 1u);
+    const int64_t val = static_cast<int64_t>(raw) + static_cast<int64_t>(low);
+    if (val < low) out = low;
+    else if (val > hi) out = hi;
+    else out = static_cast<T>(val);
+    return true;
 }
 
 // CWorldRPCs.cpp:72-345 and 564-621.
@@ -172,6 +199,121 @@ Result HandleWorld(uint8_t func, BitStreamReader& reader) {
         case Rpc::ResetFarClipDistance: return ResetRpc([] { Script::RpcResetFarClipDistance(); });
         case Rpc::ResetFogDistance: return ResetRpc([] { Script::RpcResetFogDistance(); });
         case Rpc::ResetMoonSize: return ResetRpc([] { Script::RpcResetMoonSize(); });
+        case Rpc::SetWantedLevel: {
+            uint8_t level = 0;
+            if (!reader.Read(level)) return Result::Malformed;
+            Enqueue([level] { Script::RpcSetWantedLevel(level); });
+            return Result::Handled;
+        }
+        case Rpc::SetSkyGradient: {
+            uint8_t tr = 0, tg = 0, tb = 0, br = 0, bg = 0, bb = 0;
+            if (!reader.Read(tr) || !reader.Read(tg) || !reader.Read(tb) ||
+                !reader.Read(br) || !reader.Read(bg) || !reader.Read(bb))
+                return Result::Malformed;
+            Enqueue([tr, tg, tb, br, bg, bb] { Script::RpcSetSkyGradient(tr, tg, tb, br, bg, bb); });
+            return Result::Handled;
+        }
+        case Rpc::ResetSkyGradient: return ResetRpc([] { Script::RpcResetSkyGradient(); });
+        case Rpc::SetHeatHaze: {
+            uint8_t intensity = 0, randomShift = 0;
+            uint16_t speedMin = 0, speedMax = 0, renderX = 0, renderY = 0;
+            int16_t scanX = 0, scanY = 0;
+            bool inside = false;
+            if (!reader.Read(intensity) || !reader.Read(randomShift) ||
+                !ReadRangeBits<10, uint16_t>(reader, speedMin, 0, 1000) ||
+                !ReadRangeBits<10, uint16_t>(reader, speedMax, 0, 1000) ||
+                !ReadRangeBits<11, int16_t>(reader, scanX, -1000, 1000) ||
+                !ReadRangeBits<11, int16_t>(reader, scanY, -1000, 1000) ||
+                !ReadRangeBits<10, uint16_t>(reader, renderX, 0, 1000) ||
+                !ReadRangeBits<10, uint16_t>(reader, renderY, 0, 1000) ||
+                !ReadBit(reader, inside))
+                return Result::Malformed;
+            Enqueue([=] {
+                Script::RpcSetHeatHaze(intensity, randomShift, speedMin, speedMax, scanX, scanY, renderX, renderY,
+                                       inside);
+            });
+            return Result::Handled;
+        }
+        case Rpc::ResetHeatHaze: return ResetRpc([] { Script::RpcResetHeatHaze(); });
+        case Rpc::SetFpsLimit: {
+            uint16_t fps = 0;
+            if (!reader.Read(fps)) return Result::Malformed;
+            Enqueue([fps] { Script::RpcSetFpsLimit(fps); });
+            return Result::Handled;
+        }
+        case Rpc::SetGarageOpen: {
+            uint8_t garageId = 0, open = 0;
+            if (!reader.Read(garageId) || !reader.Read(open)) return Result::Malformed;
+            Enqueue([garageId, open] { Script::RpcSetGarageOpen(garageId, open == 1); });
+            return Result::Handled;
+        }
+        case Rpc::SetGlitchEnabled: {
+            uint8_t glitch = 0, enabled = 0;
+            if (!reader.Read(glitch) || !reader.Read(enabled)) return Result::Malformed;
+            Enqueue([glitch, enabled] { Script::RpcSetGlitchEnabled(glitch, enabled == 1); });
+            return Result::Handled;
+        }
+        case Rpc::SetTrafficLightState: {
+            uint8_t state = 0;
+            if (!reader.ReadBits(&state, 4)) return Result::Malformed;
+            bool forced = false;
+            if (reader.GetRemainingBits() >= 1) ReadBit(reader, forced);
+            const uint8_t st = state & 0x0Fu;
+            Enqueue([st, forced] { Script::RpcSetTrafficLightState(st, forced); });
+            return Result::Handled;
+        }
+        case Rpc::SetWaterColor: {
+            uint8_t r = 0, g = 0, b = 0, a = 0;
+            if (!reader.Read(r) || !reader.Read(g) || !reader.Read(b) || !reader.Read(a)) return Result::Malformed;
+            Enqueue([r, g, b, a] { Script::RpcSetWaterColor(r, g, b, a); });
+            return Result::Handled;
+        }
+        case Rpc::ResetWaterColor: return ResetRpc([] { Script::RpcResetWaterColor(); });
+        case Rpc::SetWorldWaterLevel: {
+            float level = 0.f;
+            bool nonSea = true, sea = true, outside = false;
+            if (!ReadFiniteFloat(reader, level) || !ReadBit(reader, nonSea)) return Result::Malformed;
+            if (reader.GetRemainingBits() >= 1) ReadBit(reader, sea);
+            if (reader.GetRemainingBits() >= 1) ReadBit(reader, outside);
+            Enqueue([level, nonSea, sea, outside] {
+                Script::RpcSetWorldWaterLevel(level, nonSea, true, sea, outside);
+            });
+            return Result::Handled;
+        }
+        case Rpc::ResetWorldWaterLevel: return ResetRpc([] { Script::RpcResetWorldWaterLevel(); });
+        case Rpc::RemoveWorldModel: {
+            uint16_t model = 0;
+            float radius = 0.f, x = 0.f, y = 0.f, z = 0.f;
+            uint8_t interiorByte = 0xFF;
+            if (!reader.Read(model) || !ReadFiniteFloat(reader, radius) || !ReadFiniteFloat(reader, x) ||
+                !ReadFiniteFloat(reader, y) || !ReadFiniteFloat(reader, z) || !reader.Read(interiorByte))
+                return Result::Malformed;
+            const int8_t interior = static_cast<int8_t>(interiorByte);
+            Enqueue([model, radius, x, y, z, interior] {
+                Script::RpcRemoveWorldModel(model, radius, x, y, z, interior);
+            });
+            return Result::Handled;
+        }
+        case Rpc::RestoreWorldModel: {
+            uint16_t model = 0;
+            float radius = 0.f, x = 0.f, y = 0.f, z = 0.f;
+            uint8_t interiorByte = 0xFF;
+            if (!reader.Read(model) || !ReadFiniteFloat(reader, radius) || !ReadFiniteFloat(reader, x) ||
+                !ReadFiniteFloat(reader, y) || !ReadFiniteFloat(reader, z) || !reader.Read(interiorByte))
+                return Result::Malformed;
+            const int8_t interior = static_cast<int8_t>(interiorByte);
+            Enqueue([model, radius, x, y, z, interior] {
+                Script::RpcRestoreWorldModel(model, radius, x, y, z, interior);
+            });
+            return Result::Handled;
+        }
+        case Rpc::RestoreAllWorldModels: return ResetRpc([] { Script::RpcRestoreAllWorldModels(); });
+        case Rpc::DestroyAllVehicles: ServerWorld::DestroyAllOfKind(2); return Result::Handled;
+        case Rpc::DestroyAllObjects: ServerWorld::DestroyAllOfKind(3); return Result::Handled;
+        case Rpc::DestroyAllMarkers: ServerWorld::DestroyAllOfKind(4); return Result::Handled;
+        case Rpc::DestroyAllBlips: ServerWorld::DestroyAllOfKind(5); return Result::Handled;
+        case Rpc::DestroyAllPickups: ServerWorld::DestroyAllOfKind(6); return Result::Handled;
+        case Rpc::DestroyAllRadarAreas: ServerWorld::DestroyAllOfKind(7); return Result::Handled;
         default:
             return Result::NotHandled;
     }
@@ -285,12 +427,10 @@ Result HandlePlayer(uint8_t func, BitStreamReader& reader) {
 
 Result HandleAudio(uint8_t func, BitStreamReader& reader) {
     if (func != Rpc::PlaySound) return Result::NotHandled;
-    // CAudioRPCs::PlaySound (CAudioRPCs.cpp:20-27): SIntegerSync<uchar, 7>, then PlayFrontEndSound. The other sound
-    // types in that function are commented out on desktop.
+    // CAudioRPCs::PlaySound (CAudioRPCs.cpp:20-27): SIntegerSync<uchar, 7>, then PlayFrontEndSound.
     uint8_t sound = 0;
     if (!reader.ReadBits(&sound, 7)) return Result::Malformed;
-    // DIAG: CAudioEngine::PlayFrontEndSound is not hooked (see playSoundFrontEnd in LuaAudioApi.cpp).
-    LUA_LOGI("DIAG PLAY_SOUND %u: CAudioEngine::PlayFrontEndSound is not hooked", sound);
+    Script::AudioPlayFrontEndSound(sound);
     return Result::Handled;
 }
 
@@ -619,6 +759,200 @@ Result HandleObject(uint8_t func, uint32_t id, BitStreamReader& reader) {
     }
 }
 
+// CElementRPCs, CPlayerRPCs, CTeamRPCs, CBlipRPCs, CRadarRPCs, CMarkerRPCs, CPickupRPCs element handlers.
+Result HandleEntityMisc(uint8_t func, uint32_t id, BitStreamReader& reader) {
+    switch (func) {
+        case Rpc::SetElementParent: {
+            uint32_t parentId = 0;
+            if (!Entity::ReadElementId(reader, parentId)) return Result::Malformed;
+            Enqueue([id, parentId] { Script::RpcSetElementParent(id, parentId); });
+            return Result::Handled;
+        }
+        case Rpc::SetElementName: {
+            std::string name;
+            if (!ReadU16String(reader, name)) return Result::Malformed;
+            Enqueue([id, name] { Script::RpcSetElementName(id, name); });
+            return Result::Handled;
+        }
+        case Rpc::SetElementDoubleSided: {
+            bool ds = false;
+            if (!ReadBit(reader, ds)) return Result::Malformed;
+            Enqueue([id, ds] { Script::RpcSetElementDoubleSided(id, ds); });
+            return Result::Handled;
+        }
+        case Rpc::SetPlayerNametagText: {
+            std::string text;
+            if (!ReadU16String(reader, text)) return Result::Malformed;
+            const bool clear = text.empty();
+            Enqueue([id, text, clear] { Script::RpcSetPlayerNametagText(id, text, clear); });
+            return Result::Handled;
+        }
+        case Rpc::SetPlayerNametagColor: {
+            uint8_t r = 0, g = 0, b = 0;
+            if (!reader.Read(r) || !reader.Read(g) || !reader.Read(b)) return Result::Malformed;
+            Enqueue([id, r, g, b] { Script::RpcSetPlayerNametagColor(id, r, g, b); });
+            return Result::Handled;
+        }
+        case Rpc::RemovePlayerNametagColor:
+            Enqueue([id] { Script::RpcRemovePlayerNametagColor(id); });
+            return Result::Handled;
+        case Rpc::SetPlayerNametagShowing: {
+            uint8_t showing = 0;
+            if (!reader.Read(showing)) return Result::Malformed;
+            Enqueue([id, showing] { Script::RpcSetPlayerNametagShowing(id, showing == 1); });
+            return Result::Handled;
+        }
+        case Rpc::SetPlayerTeam: {
+            uint32_t teamId = 0;
+            if (!Entity::ReadElementId(reader, teamId)) return Result::Malformed;
+            ServerWorld::NotePlayerTeam(id, teamId);
+            return Result::Handled;
+        }
+        case Rpc::SetTeamName: {
+            std::string name;
+            if (!ReadU16String(reader, name)) return Result::Malformed;
+            ServerWorld::UpdateTeam(id, &name, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetTeamColor: {
+            uint8_t rgb[3] = {};
+            if (!reader.Read(rgb[0]) || !reader.Read(rgb[1]) || !reader.Read(rgb[2])) return Result::Malformed;
+            ServerWorld::UpdateTeam(id, nullptr, rgb, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetTeamFriendlyFire: {
+            bool ff = false;
+            if (!ReadBit(reader, ff)) return Result::Malformed;
+            ServerWorld::UpdateTeam(id, nullptr, nullptr, &ff);
+            return Result::Handled;
+        }
+        case Rpc::SetBlipIcon: {
+            uint8_t raw = 0;
+            if (!reader.ReadBits(&raw, 6)) return Result::Malformed;
+            const int icon = raw & 0x3Fu;
+            if (icon <= 63) ServerWorld::UpdateBlip(id, &icon, nullptr, nullptr, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetBlipSize: {
+            uint8_t raw = 0;
+            if (!reader.ReadBits(&raw, 5)) return Result::Malformed;
+            const int sz = std::min<int>(raw & 0x1Fu, 25);
+            ServerWorld::UpdateBlip(id, nullptr, &sz, nullptr, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetBlipColor: {
+            uint8_t rgba[4] = {};
+            if (!reader.ReadBits(rgba, 32)) return Result::Malformed;
+            ServerWorld::UpdateBlip(id, nullptr, nullptr, rgba, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetBlipOrdering: {
+            uint32_t raw = 0;
+            if (!Entity::ReadCompressed(reader, 2, raw)) return Result::Malformed;
+            const int16_t ord = static_cast<int16_t>(raw);
+            ServerWorld::UpdateBlip(id, nullptr, nullptr, nullptr, &ord, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetBlipVisibleDistance: {
+            uint8_t bytes[2] = {};
+            if (!reader.ReadBits(bytes, 14)) return Result::Malformed;
+            const uint16_t dist = static_cast<uint16_t>((bytes[0] | (static_cast<uint16_t>(bytes[1]) << 8)) & 0x3FFFu);
+            ServerWorld::UpdateBlip(id, nullptr, nullptr, nullptr, nullptr, &dist);
+            return Result::Handled;
+        }
+        case Rpc::SetRadarAreaSize: {
+            float sz[2] = {};
+            if (!ReadFiniteFloat(reader, sz[0]) || !ReadFiniteFloat(reader, sz[1])) return Result::Malformed;
+            ServerWorld::UpdateRadarArea(id, sz, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetRadarAreaColor: {
+            uint8_t rgba[4] = {};
+            if (!reader.Read(rgba[0]) || !reader.Read(rgba[1]) || !reader.Read(rgba[2]) || !reader.Read(rgba[3]))
+                return Result::Malformed;
+            ServerWorld::UpdateRadarArea(id, nullptr, rgba, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetRadarAreaFlashing: {
+            bool flashing = false;
+            if (!ReadBit(reader, flashing)) return Result::Malformed;
+            ServerWorld::UpdateRadarArea(id, nullptr, nullptr, &flashing);
+            return Result::Handled;
+        }
+        case Rpc::SetMarkerType: {
+            uint8_t type = 0;
+            if (!reader.Read(type)) return Result::Malformed;
+            const int t = type;
+            ServerWorld::UpdateMarker(id, &t, nullptr, nullptr, nullptr, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetMarkerColor: {
+            // Desktop CMarkerRPCs.cpp:45 reads B, G, R, A.
+            uint8_t b = 0, g = 0, r = 0, a = 0;
+            if (!reader.Read(b) || !reader.Read(g) || !reader.Read(r) || !reader.Read(a)) return Result::Malformed;
+            const uint8_t rgba[4] = {r, g, b, a};
+            ServerWorld::UpdateMarker(id, nullptr, rgba, nullptr, nullptr, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetMarkerSize: {
+            float sz = 0.f;
+            if (!ReadFiniteFloat(reader, sz)) return Result::Malformed;
+            ServerWorld::UpdateMarker(id, nullptr, nullptr, &sz, nullptr, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetMarkerTarget: {
+            uint8_t mode = 0;
+            if (!reader.Read(mode)) return Result::Malformed;
+            if (mode == 0) {
+                const bool has = false;
+                const int icon = 0;
+                ServerWorld::UpdateMarker(id, nullptr, nullptr, nullptr, &icon, &has, nullptr);
+            } else if (mode == 1) {
+                float pos[3] = {};
+                if (!ReadFiniteFloat(reader, pos[0]) || !ReadFiniteFloat(reader, pos[1]) ||
+                    !ReadFiniteFloat(reader, pos[2]))
+                    return Result::Malformed;
+                const bool has = true;
+                const int icon = 1;
+                ServerWorld::UpdateMarker(id, nullptr, nullptr, nullptr, &icon, &has, pos);
+            }
+            return Result::Handled;
+        }
+        case Rpc::SetMarkerIcon: {
+            uint8_t icon = 0;
+            if (!reader.Read(icon)) return Result::Malformed;
+            const int ic = icon;
+            ServerWorld::UpdateMarker(id, nullptr, nullptr, nullptr, &ic, nullptr, nullptr);
+            return Result::Handled;
+        }
+        case Rpc::SetPickupType: {
+            uint8_t type = 0;
+            if (!reader.Read(type)) return Result::Malformed;
+            float amount = 0.f;
+            uint8_t weapon = 0;
+            uint16_t ammo = 0, model = 0;
+            if (type == 0 || type == 1) {
+                if (!ReadFiniteFloat(reader, amount)) return Result::Malformed;
+                model = (type == 0) ? 1240 : 1242;
+            } else if (type == 2) {
+                if (!reader.Read(weapon) || !reader.Read(ammo)) return Result::Malformed;
+            } else if (type == 3) {
+                if (!reader.Read(model)) return Result::Malformed;
+            }
+            ServerWorld::UpdatePickupType(id, type, amount, weapon, ammo, model);
+            return Result::Handled;
+        }
+        case Rpc::SetPickupVisible: {
+            uint8_t visible = 0;
+            if (!reader.Read(visible)) return Result::Malformed;
+            ServerWorld::NotePickupVisible(id, visible != 0);
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
 }  // namespace
 
 Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
@@ -646,7 +980,7 @@ Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
         case Rpc::MoveObject:
         case Rpc::StopObject:
         case Rpc::SetObjectScale: return HandleObject(func, id, reader);
-        default: return Result::NotHandled;
+        default: return HandleEntityMisc(func, id, reader);
     }
 }
 
@@ -682,6 +1016,7 @@ void ResetSession() {
     g_cameraContext.store(0);
     g_dropped.store(0);
     Script::KeyBindsServerReset();
+    Script::WorldQueryReset();
 }
 
 uint8_t CameraSyncTimeContext() { return g_cameraContext; }

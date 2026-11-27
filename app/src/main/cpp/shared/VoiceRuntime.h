@@ -30,6 +30,10 @@ VoiceConfig CurrentConfig();
 /// Safe to call from the network thread.
 bool OnVoicePacket(uint32_t playerId, const uint8_t* data, size_t length);
 
+/// Handle incoming PACKET_ID_VOICE_END (72) for a player element.
+/// Safe to call from the network thread.
+void OnVoiceEnd(uint32_t playerId);
+
 /// Enable/disable push-to-talk capture. Stopping after active transmission sends PACKET_ID_VOICE_END (72).
 void SetTransmitActive(bool active);
 bool IsTransmitActive();

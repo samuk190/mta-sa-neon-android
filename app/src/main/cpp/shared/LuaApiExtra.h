@@ -6,6 +6,7 @@
 // binding here replaces a core binding or an "unimplemented" stub of the same name.
 
 #include <cstdint>
+#include <string>
 
 struct lua_State;
 
@@ -31,6 +32,18 @@ long long ScriptPlayerMoney();
 
 // CInputRPCs::ShowChat (CInputRPCs.cpp:293-304): the state isChatVisible reports and the chat view. VM thread only.
 void RpcSetChatVisible(bool visible, bool inputBlocked);
+
+// CElementRPCs: element parent and name updates. VM thread only.
+void RpcSetElementParent(uint32_t id, uint32_t parent);
+void RpcSetElementName(uint32_t id, const std::string& name);
+
+// CPacketHandler::Packet_PlayerStats & CPlayerRPCs: stats, nametag, wanted level. VM thread only.
+void RpcSetPedStat(uint32_t id, uint16_t stat, float value);
+void RpcSetPlayerNametagText(uint32_t id, const std::string& text, bool clear);
+void RpcSetPlayerNametagColor(uint32_t id, uint8_t r, uint8_t g, uint8_t b);
+void RpcRemovePlayerNametagColor(uint32_t id);
+void RpcSetPlayerNametagShowing(uint32_t id, bool showing);
+void RpcSetWantedLevel(uint8_t level);
 
 // Thread-safe vehicle flag updates from server sync packets (VEHICLE_RESYNC, VEHICLE_SPAWN,
 // VEHICLE_DAMAGE_SYNC, VEHICLE_TRAILER, EXPLOSION). Backed by LuaVehicleApi.cpp's locked g_vehicleFlags.

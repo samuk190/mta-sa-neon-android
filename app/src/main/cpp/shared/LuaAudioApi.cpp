@@ -2010,6 +2010,22 @@ std::vector<SoundLifecycleEvent> AudioCollectEvents() {
     return out;
 }
 
+void AudioPlayFrontEndSound(int soundId) {
+    if (soundId < 0 || soundId > 101) return;
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.reportFrontend) {
+        WorldRPG::GameTasks::Run([soundId]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.reportFrontend) {
+                g_nativeAudio.reportFrontend(g_nativeAudio.audioEngine, soundId, 0.0f, 1.0f);
+            }
+        });
+        return;
+    }
+#endif
+    (void)soundId;
+}
+
 void AudioSetNativeBackendForTests(bool enabled) {
     g_hostNativeAudioMock.store(enabled, std::memory_order_relaxed);
 }

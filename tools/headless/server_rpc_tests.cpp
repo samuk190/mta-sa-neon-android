@@ -697,6 +697,154 @@ void QueueAndSession() {
     Check(ServerRpc::Pending() == 0, "a new session drops the queued operations");
     Check(ServerRpc::CameraSyncTimeContext() == 0, "a new session resets camera sync context");
 }
+
+void ExtendedGlobalAndElementRpcs() {
+    Fixture f;
+    // Global world & player RPCs
+    Check(f.Send(Pkt(Rpc::SetWantedLevel).U8(4).w), "SET_WANTED_LEVEL");
+    Check(f.Send(Pkt(Rpc::SetSkyGradient).U8(10).U8(20).U8(30).U8(40).U8(50).U8(60).w), "SET_SKY_GRADIENT");
+    Check(f.Send(Pkt(Rpc::SetFpsLimit).U16(60).w), "SET_FPS_LIMIT");
+    Check(f.Send(Pkt(Rpc::SetGarageOpen).U8(5).U8(1).w), "SET_GARAGE_OPEN");
+    Check(f.Send(Pkt(Rpc::SetWaterColor).U8(11).U8(22).U8(33).U8(144).w), "SET_WATER_COLOR");
+    {
+        Pkt p(Rpc::SetTrafficLightState);
+        uint8_t st = 3;
+        p.w.WriteBits(&st, 4);
+        p.Bit(true);
+        Check(f.Send(p.w), "SET_TRAFFIC_LIGHT_STATE");
+    }
+    {
+        Pkt p(Rpc::SetWorldWaterLevel);
+        p.F(12.5f).Bit(true).Bit(true).Bit(false);
+        Check(f.Send(p.w), "SET_WORLD_WATER_LEVEL");
+    }
+    {
+        Pkt p(Rpc::RemoveWorldModel);
+        p.U16(1234).F(50.f).F(100.f).F(200.f).F(15.f).U8(0);
+        Check(f.Send(p.w), "REMOVE_WORLD_MODEL");
+    }
+    f.Pump();
+
+    Check(LuaNumber(f, "getPlayerWantedLevel()") == 4, "wanted level applied");
+    f.Lua("local tr, tg, tb, br, bg, bb = getSkyGradient() assert(tr == 10 and tg == 20 and tb == 30 and br == 40 and bg == 50 and bb == 60)");
+    Check(LuaNumber(f, "getFPSLimit()") == 60, "fps limit applied");
+    f.Lua("assert(isGarageOpen(5) == true, 'garage opened')");
+    f.Lua("local r, g, b, a = getWaterColor() assert(r == 11 and g == 22 and b == 33 and a == 144)");
+    Check(LuaNumber(f, "getTrafficLightState()") == 3, "traffic light state applied");
+
+    Check(f.Send(Pkt(Rpc::ResetSkyGradient).w), "RESET_SKY_GRADIENT");
+    Check(f.Send(Pkt(Rpc::ResetWaterColor).w), "RESET_WATER_COLOR");
+    Check(f.Send(Pkt(Rpc::ResetWorldWaterLevel).w), "RESET_WORLD_WATER_LEVEL");
+    Check(f.Send(Pkt(Rpc::RestoreAllWorldModels).w), "RESTORE_ALL_WORLD_MODELS");
+    f.Pump();
+
+    // Element nametag & name/parent RPCs on local player
+    ServerWorld::SetLocalPlayer(10);
+    const uint32_t local = ServerWorld::LocalPlayer();
+    SetGlobalElement("lp", local);
+    {
+        EPkt p(Rpc::SetPlayerNametagText, local);
+        EasingString(p, "HeroTag");
+        Check(f.Send(p.w), "SET_PLAYER_NAMETAG_TEXT");
+    }
+    Check(f.Send(EPkt(Rpc::SetPlayerNametagColor, local).U8(99).U8(88).U8(77).w), "SET_PLAYER_NAMETAG_COLOR");
+    Check(f.Send(EPkt(Rpc::SetPlayerNametagShowing, local).U8(0).w), "SET_PLAYER_NAMETAG_SHOWING");
+    {
+        EPkt p(Rpc::SetElementName, local);
+        EasingString(p, "hero_elem");
+        Check(f.Send(p.w), "SET_ELEMENT_NAME");
+    }
+    f.Pump();
+    f.Lua("assert(getPlayerNametagText(lp) == 'HeroTag', 'nametag text')");
+    f.Lua("local r, g, b = getPlayerNametagColor(lp) assert(r == 99 and g == 88 and b == 77, 'nametag color')");
+    f.Lua("assert(isPlayerNametagShowing(lp) == false, 'nametag showing false')");
+    f.Lua("assert(getElementID(lp) == 'hero_elem', 'element name updated')");
+
+    // Element RPCs for blip, radar area, marker, team
+    {
+        auto addSimple = [&](uint32_t id, uint8_t type, auto writeBody) {
+            WorldRPG::Net::BitStreamWriter w;
+            w.WriteCompressed(1u, 4);
+            Bits(w, id, 17);
+            w.Write(type);
+            Bits(w, 0, 17);
+            w.Write(uint8_t(0));
+            w.WriteCompressed(0u, 2);
+            Bits(w, 0, 1);  // not attached
+            Bits(w, 1, 1);  // collisions
+            w.WriteCompressed(0u, 2);  // customData count = 0
+            w.WriteCompressed(0u, 2);  // name length = 0
+            writeBody(w);
+            ServerWorld::OnEntityAdd(w.GetData(), w.GetByteLength(), w.GetBitLength());
+        };
+        addSimple(3100, 5, [](WorldRPG::Net::BitStreamWriter& w) {
+            // Blip: SPositionSync (24,24,f32), ordering compressed(2), visibleDistance (14), icon(6), size(5), color(32)
+            Bits(w, 1024, 24); Bits(w, 2048, 24); w.Write(5.f);
+            w.WriteCompressed(0u, 2);
+            Bits(w, 500, 14);
+            Bits(w, 1, 6);
+            Bits(w, 2, 5);
+            w.Write(uint8_t(255)); w.Write(uint8_t(0)); w.Write(uint8_t(0)); w.Write(uint8_t(255));
+        });
+        addSimple(3101, 7, [](WorldRPG::Net::BitStreamWriter& w) {
+            w.Write(10.f); w.Write(20.f); w.Write(30.f); w.Write(40.f);
+            w.Write(uint8_t(1)); w.Write(uint8_t(2)); w.Write(uint8_t(3)); w.Write(uint8_t(4));
+            Bits(w, 0, 1);
+        });
+        addSimple(3103, 13, [](WorldRPG::Net::BitStreamWriter& w) {
+            w.WriteCompressed(4u, 2);
+            w.WriteBits(reinterpret_cast<const uint8_t*>("Blue"), 32);
+            w.Write(uint8_t(0)); w.Write(uint8_t(0)); w.Write(uint8_t(255));
+            Bits(w, 0, 1);
+            w.Write(uint32_t(0));
+        });
+    }
+    SetGlobalElement("bl", 3100);
+    SetGlobalElement("ra", 3101);
+    SetGlobalElement("tm", 3103);
+    Check(f.Send(EPkt(Rpc::SetBlipIcon, 3100).Bits(12, 6).w), "SET_BLIP_ICON");
+    Check(f.Send(EPkt(Rpc::SetBlipSize, 3100).Bits(4, 5).w), "SET_BLIP_SIZE");
+    Check(f.Send(EPkt(Rpc::SetBlipColor, 3100).U8(10).U8(20).U8(30).U8(240).w), "SET_BLIP_COLOR");
+    {
+        EPkt p(Rpc::SetBlipOrdering, 3100);
+        p.w.WriteCompressed(7u, 2);
+        Check(f.Send(p.w), "SET_BLIP_ORDERING");
+    }
+    {
+        EPkt p(Rpc::SetBlipVisibleDistance, 3100);
+        Bits(p.w, 1234, 14);
+        Check(f.Send(p.w), "SET_BLIP_VISIBLE_DISTANCE");
+    }
+    Check(f.Send(EPkt(Rpc::SetRadarAreaSize, 3101).F(55.f).F(66.f).w), "SET_RADAR_AREA_SIZE");
+    Check(f.Send(EPkt(Rpc::SetRadarAreaColor, 3101).U8(9).U8(8).U8(7).U8(200).w), "SET_RADAR_AREA_COLOR");
+    Check(f.Send(EPkt(Rpc::SetRadarAreaFlashing, 3101).Bit(true).w), "SET_RADAR_AREA_FLASHING");
+    {
+        EPkt p(Rpc::SetTeamName, 3103);
+        EasingString(p, "Gold");
+        Check(f.Send(p.w), "SET_TEAM_NAME");
+    }
+    Check(f.Send(EPkt(Rpc::SetTeamColor, 3103).U8(255).U8(215).U8(0).w), "SET_TEAM_COLOR");
+    Check(f.Send(EPkt(Rpc::SetTeamFriendlyFire, 3103).Bit(true).w), "SET_TEAM_FRIENDLY_FIRE");
+    Check(f.Send(EPkt(Rpc::SetPlayerTeam, local).Id(3103).w), "SET_PLAYER_TEAM");
+    f.Pump();
+
+    f.Lua("assert(getBlipIcon(bl) == 12 and getBlipSize(bl) == 4, 'blip icon/size')");
+    f.Lua("local r, g, b, a = getBlipColor(bl) assert(r == 10 and g == 20 and b == 30 and a == 240, 'blip color')");
+    f.Lua("assert(getBlipOrdering(bl) == 7 and getBlipVisibleDistance(bl) == 1234, 'blip ordering/distance')");
+    f.Lua("local w, h = getRadarAreaSize(ra) assert(w == 55 and h == 66, 'radar size')");
+    f.Lua("local r, g, b, a = getRadarAreaColor(ra) assert(r == 9 and g == 8 and b == 7 and a == 200, 'radar color')");
+    f.Lua("assert(isRadarAreaFlashing(ra) == true, 'radar flashing')");
+    f.Lua("assert(getTeamName(tm) == 'Gold', 'team name')");
+    f.Lua("local r, g, b = getTeamColor(tm) assert(r == 255 and g == 215 and b == 0, 'team color')");
+    f.Lua("assert(getTeamFriendlyFire(tm) == true, 'team friendly fire')");
+    f.Lua("assert(getPlayerTeam(lp) == tm, 'player team set')");
+
+    Check(f.Send(Pkt(Rpc::DestroyAllBlips).w), "DESTROY_ALL_BLIPS");
+    Check(f.Send(Pkt(Rpc::DestroyAllRadarAreas).w), "DESTROY_ALL_RADAR_AREAS");
+    f.Pump();
+    Check(ServerWorld::CountKind(5) == 0, "all blips destroyed");
+    Check(ServerWorld::CountKind(7) == 0, "all radar areas destroyed");
+}
 }  // namespace
 
 int main() {
@@ -708,6 +856,7 @@ int main() {
     Vehicle();
     Objects();
     QueueAndSession();
+    ExtendedGlobalAndElementRpcs();
     std::printf("server RPC tests passed (%u checks)\n", checks);
     return 0;
 }

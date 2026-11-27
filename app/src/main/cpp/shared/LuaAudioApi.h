@@ -39,6 +39,7 @@ void AudioResetSession();
 void AudioStopOwnedSounds(const std::string* owner = nullptr, uint16_t netId = 0, uint32_t generation = 0);
 std::vector<uint32_t> AudioCollectEndedSounds();
 std::vector<SoundLifecycleEvent> AudioCollectEvents();
+void AudioPlayFrontEndSound(int soundId);
 void AudioSetNativeBackendForTests(bool enabled);
 
 }  // namespace WorldRPG::Script

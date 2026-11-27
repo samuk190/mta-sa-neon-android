@@ -38,6 +38,19 @@ void RpcSetOcclusionsEnabled(bool enabled);
 void RpcSetAircraftMaxHeight(float height);
 void RpcSetAircraftMaxVelocity(float velocity);
 void RpcSetJetpackMaxHeight(float height);
+void RpcSetSkyGradient(uint8_t topR, uint8_t topG, uint8_t topB, uint8_t bottomR, uint8_t bottomG, uint8_t bottomB);
+void RpcResetSkyGradient();
+void RpcSetHeatHaze(uint8_t intensity, uint8_t randomShift, uint16_t speedMin, uint16_t speedMax,
+                    int16_t scanSizeX, int16_t scanSizeY, uint16_t renderSizeX, uint16_t renderSizeY,
+                    bool showInside);
+void RpcResetHeatHaze();
+void RpcSetFpsLimit(uint16_t fps);
+void RpcSetGarageOpen(uint8_t garageId, bool open);
+void RpcSetGlitchEnabled(uint8_t glitchId, bool enabled);
+void RpcSetTrafficLightState(uint8_t state, bool forced);
+void RpcSetWaterColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+void RpcResetWaterColor();
+void RpcSetElementDoubleSided(uint32_t id, bool doubleSided);
 // The corona colour setSunColor does not keep in g_sunR..B (Android getSunColor has four slots).
 void RpcCopySunCorona(uint8_t& r, uint8_t& g, uint8_t& b);
 }
