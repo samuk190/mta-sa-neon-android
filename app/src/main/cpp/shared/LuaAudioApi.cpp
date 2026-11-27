@@ -243,7 +243,7 @@ float ComputeEffectiveSpeed(const SoundSlot& slot) {
 void PostSoundSpeedLine(uint32_t id, float speed) {
     char line[64];
     std::snprintf(line, sizeof(line), "%u|%.4f", id, std::clamp(speed, 0.1f, 4.0f));
-    ::WorldRPG::JniBridge::PostGameLine(19, line);
+    ::WorldRPG::JniBridge::PostGameLine(22, line);
 }
 
 void ComputeSpatial3DMix(const SoundSlot& slot, float lx, float ly, float lz,

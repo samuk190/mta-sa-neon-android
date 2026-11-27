@@ -3,6 +3,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaGuiApi.h"
+#include "LuaBrowserApi.h"
 #include "LuaSvgApi.h"
 #include "ModelEffects.h"
 #include "LuaDx3DApi.h"
@@ -776,7 +777,10 @@ int DxGetMaterialSize(lua_State* L) {
     if (!texture) {
         std::string bitmap;
         unsigned width = 0, height = 0;
-        if (!lua_istable(L, 1) || (!SvgInfo(ElementIdOf(L, 1), bitmap, width, height) && !DxShader::Size(ElementIdOf(L,1),width,height)))
+        if (!lua_istable(L, 1) ||
+            (!SvgInfo(ElementIdOf(L, 1), bitmap, width, height) &&
+             !BrowserInfo(ElementIdOf(L, 1), bitmap, width, height) &&
+             !DxShader::Size(ElementIdOf(L, 1), width, height)))
             return Fail(L, "dxGetMaterialSize", "material", 1);
         lua_pushinteger(L, width);
         lua_pushinteger(L, height);
@@ -907,7 +911,8 @@ int DxGetTexturePixels(lua_State* L) {
     Texture svgTexture;
     const Texture* texture = lua_istable(L, index) ? FindTexture(ElementIdOf(L, index)) : nullptr;
     if (!texture && lua_istable(L, index) &&
-        SvgInfo(ElementIdOf(L, index), svgTexture.file, svgTexture.width, svgTexture.height))
+        (SvgInfo(ElementIdOf(L, index), svgTexture.file, svgTexture.width, svgTexture.height) ||
+         BrowserInfo(ElementIdOf(L, index), svgTexture.file, svgTexture.width, svgTexture.height)))
         texture = &svgTexture;
     if (!texture) return Fail(L, "dxGetTexturePixels", "texture", index);
     ++index;
@@ -1315,17 +1320,18 @@ const char* DxElementType(uint32_t id) {
     std::string bitmap;
     unsigned width = 0, height = 0;
     if (SvgInfo(id, bitmap, width, height)) return "svg";
+    if (BrowserInfo(id, bitmap, width, height)) return "browser";
     return nullptr;
 }
 
-// An svg element is a texture too (desktop CClientVectorGraphic is a CClientTexture).
+// An svg or browser element is a texture too (desktop CClientVectorGraphic / CClientBrowser inherit CClientTexture).
 bool DxTextureFile(uint32_t id, std::string& file) {
     if (const Texture* texture = FindTexture(id)) {
         file = texture->file;
         return true;
     }
     unsigned width = 0, height = 0;
-    return SvgInfo(id, file, width, height);
+    return SvgInfo(id, file, width, height) || BrowserInfo(id, file, width, height);
 }
 
 bool DxResolveMaterial(lua_State* L,int index,std::string& file,unsigned& width,unsigned& height) {
@@ -1334,7 +1340,7 @@ bool DxResolveMaterial(lua_State* L,int index,std::string& file,unsigned& width,
         if (const Texture* texture=FindTexture(id)) {
             file=texture->file; width=texture->width; height=texture->height; return true;
         }
-        return SvgInfo(id,file,width,height);
+        return SvgInfo(id,file,width,height) || BrowserInfo(id,file,width,height);
     }
     if (lua_type(L,index)!=LUA_TSTRING) return false;
     size_t length=0; const char* path=lua_tolstring(L,index,&length);
@@ -1365,7 +1371,7 @@ bool DxElementRelease(uint32_t id) {
         g_fonts.erase(it);
         return true;
     }
-    return SvgRelease(ActiveVmState(), id);
+    return SvgRelease(ActiveVmState(), id) || BrowserDestroy(id);
 }
 
 void DxDropResource(const std::string& owner, uint16_t netId, uint32_t generation) {
@@ -1393,6 +1399,7 @@ void DxDropResource(const std::string& owner, uint16_t netId, uint32_t generatio
         it = g_fonts.erase(it);
     }
     SvgDropResource(ActiveVmState(), owner, netId, generation);
+    BrowserDropResource(ActiveVmState(), owner, netId, generation);
 }
 
 // MixedReadDxFontString (CLuaFunctionParseHelpers.cpp:1119-1134): a dx-font element, else a
@@ -1549,6 +1556,7 @@ void DxReset() {
     Dx3D::Reset();
     ModelEffects::Reset();
     SvgReset(ActiveVmState());
+    BrowserReset(ActiveVmState());
     g_blendMode = 0;
     g_allowAspectRatioAdjustment = false;
     g_aspectRatioAdjustmentEnabled = false;

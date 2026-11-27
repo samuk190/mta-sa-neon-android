@@ -3148,6 +3148,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     ApplyKeyEvents();
     ApplyChatCommands();
     PumpEndedSounds();
+    BrowserPumpEvents(g_dx.L);
     RunDeviceSelfTest();
     ApplySvgUpdates();
     g_dx.frame.clear();

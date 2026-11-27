@@ -16,6 +16,7 @@
 #include <fstream>
 #include "LuaEventRegistry.h"
 #include "LuaAudioApi.h"
+#include "LuaBrowserApi.h"
 #include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
@@ -1757,14 +1758,19 @@ void CheckCompatibilityAliases(WorldRPG::Script::LuaVMStub& vm) {
         assert(setPlayerSkin(me, 74) == false and getPlayerSkin(me) == 7, 'invalid ped model')
         assert(setVehicleModel(me) == false, 'player is not a vehicle')
         local settings = getBrowserSettings()
-        assert(settings.RemoteEnabled == false and settings.RemoteJavascript == false and settings.PluginsEnabled == false, 'no web core')
-        assert(createBrowser(1, 1, true) == false and isBrowserGPUEnabled() == false, 'create needs a web core')
+        assert(settings.RemoteEnabled == true and settings.RemoteJavascript == true and settings.PluginsEnabled == false, 'webview settings')
+        local b0 = createBrowser(1, 1, true)
+        assert(isElement(b0) and getElementType(b0) == 'browser' and isBrowserGPUEnabled() == true, 'webview create')
+        assert(destroyElement(b0) == true)
         local ok, err = pcall(createBrowser, 0, 1, true)
         assert(not ok and err:find('at least 1x1'), 'browser size: ' .. tostring(err))
-        ok, err = pcall(guiCreateBrowser, 0, 0, 8, 8, true, false, false)
-        assert(not ok and err:find('Failed to create browser'), 'local gui browser: ' .. tostring(err))
-        assert(guiCreateBrowser(0, 0, 8, 8, false, false, false) == false, 'remote gui browser')
-        assert(isBrowserDomainBlocked('example.com') == nil, 'domain check needs web core')
+        local gbLocal = guiCreateBrowser(0, 0, 8, 8, true, false, false)
+        assert(isElement(gbLocal) and getElementType(gbLocal) == 'gui-browser' and isElement(guiGetBrowser(gbLocal)), 'local gui browser')
+        assert(destroyElement(gbLocal) == true)
+        local gbRemote = guiCreateBrowser(0, 0, 8, 8, false, false, false)
+        assert(isElement(gbRemote) and isElement(guiGetBrowser(gbRemote)), 'remote gui browser')
+        assert(destroyElement(gbRemote) == true)
+        assert(isBrowserDomainBlocked('example.com') == true, 'unlisted domain blocked by default')
         assert(setDiscordApplicationID('1234') == false and isDiscordRichPresenceConnected() == false, 'discord off')
         assert(getDiscordRichPresenceUserID() == '', 'no discord user')
         ok, err = pcall(setDiscordRichPresenceState, string.rep('a', 129))
@@ -6507,6 +6513,116 @@ int main(int argc, char** argv) {
             CHECK(effPan > 0.9f);
             RunLua(vm, "p2-2-audio-stop", "assert(stopSound(_G._s3d) == true)");
             WorldRPG::Script::AudioSetNativeBackendForTests(false);
+        }
+
+        // P2-4: Android WebView browser engine (CLuaBrowserDefs + GUI + DX texture bridge)
+        {
+            RunLua(vm, "p2-4-browser-setup", R"LUA(
+                _G._bEvents = {}
+                _G._b = createBrowser(640, 360, false, true)
+                assert(isElement(_G._b) and getElementType(_G._b) == "browser", "createBrowser element")
+                local mw, mh = dxGetMaterialSize(_G._b)
+                assert(mw == 640 and mh == 360, "browser material size: " .. tostring(mw) .. "x" .. tostring(mh))
+                assert(dxDrawImage(0, 0, 320, 180, _G._b) == true, "dxDrawImage accepts browser")
+
+                addEventHandler("onClientBrowserCreated", _G._b, function()
+                    table.insert(_G._bEvents, "created")
+                end)
+                addEventHandler("onClientBrowserNavigate", _G._b, function(url, blocked, main)
+                    table.insert(_G._bEvents, "nav:" .. tostring(url) .. ":" .. tostring(blocked) .. ":" .. tostring(main))
+                end)
+                addEventHandler("onClientBrowserLoadingStart", _G._b, function(url, main)
+                    table.insert(_G._bEvents, "start:" .. tostring(url) .. ":" .. tostring(main))
+                end)
+                addEventHandler("onClientBrowserDocumentReady", _G._b, function(url)
+                    table.insert(_G._bEvents, "ready:" .. tostring(url))
+                end)
+                addEventHandler("onClientBrowserLoadingFailed", _G._b, function(url, code, desc)
+                    table.insert(_G._bEvents, "fail:" .. tostring(code) .. ":" .. tostring(desc))
+                end)
+                addEventHandler("onClientBrowserWhitelistChange", root, function(list)
+                    table.insert(_G._bEvents, "wl:" .. tostring(#list))
+                end)
+
+                -- Blocked remote domain fails loadBrowserURL until requested
+                assert(isBrowserDomainBlocked("worldrpg.example") == true, "remote blocked initially")
+                assert(loadBrowserURL(_G._b, "https://worldrpg.example/hud") == false, "blocked remote rejected")
+                assert(isBrowserDomainBlocked("https://mta/local/index.html") == false, "local mta URL unblocked")
+
+                _G._cbAccepted, _G._cbList = nil, nil
+                assert(requestBrowserDomains({"worldrpg.example"}, false, function(accepted, domains)
+                    _G._cbAccepted = accepted
+                    _G._cbList = domains
+                end) == true, "requestBrowserDomains")
+                assert(isBrowserDomainBlocked("worldrpg.example") == false, "whitelisted domain allowed")
+                assert(loadBrowserURL(_G._b, "https://worldrpg.example/hud") == true, "whitelisted URL loads")
+                assert(isBrowserLoading(_G._b) == true, "browser loading flag")
+                assert(getBrowserURL(_G._b) == "https://worldrpg.example/hud", "browser URL")
+
+                -- Input, rendering pause, volume, focus, properties, resize, JS, source
+                assert(injectBrowserMouseMove(_G._b, 120, 80) == true)
+                assert(injectBrowserMouseDown(_G._b, "left") == true)
+                assert(injectBrowserMouseUp(_G._b, "left") == true)
+                assert(injectBrowserMouseWheel(_G._b, -120, 0) == true)
+                assert(setBrowserRenderingPaused(_G._b, true) == true and isBrowserRenderingPaused(_G._b) == true)
+                assert(setBrowserRenderingPaused(_G._b, false) == true and isBrowserRenderingPaused(_G._b) == false)
+                assert(setBrowserVolume(_G._b, 0.4) == true and math.abs(getBrowserVolume(_G._b) - 0.4) < 0.01)
+                assert(setBrowserVolume(0.75) == true)
+                assert(focusBrowser(_G._b) == true and isBrowserFocused(_G._b) == true)
+                assert(focusBrowser(nil) == true and isBrowserFocused(_G._b) == false)
+                assert(setBrowserProperty(_G._b, "mobile", "1") == true and getBrowserProperty(_G._b, "mobile") == "1")
+                assert(resizeBrowser(_G._b, 800, 480) == true)
+                local rw, rh = dxGetMaterialSize(_G._b)
+                assert(rw == 800 and rh == 480, "resized browser material size")
+                assert(executeBrowserJavascript(_G._b, "window.__neon = 1;") == true)
+                assert(openExternalURL("https://discord.gg/gtabust") == true)
+                assert(openExternalURL("https://untrusted.example/wiki") == false)
+                assert(openExternalURL("http://insecure.example") == false)
+                assert(setBrowserAjaxHandler(_G._b, "api/ping", function() return "pong" end) == false)
+
+                _G._bSource = nil
+                assert(getBrowserSource(_G._b, function(code) _G._bSource = code end) == true)
+            )LUA");
+
+            lua_State* BL = WorldRPG::Script::ActiveVmState();
+            lua_getglobal(BL, "_b");
+            lua_getfield(BL, -1, "id");
+            const uint32_t browserId = static_cast<uint32_t>(lua_tointeger(BL, -1));
+            lua_pop(BL, 2);
+
+            WorldRPG::Script::BrowserNoteLoadingStart(browserId, "https://worldrpg.example/hud", true);
+            WorldRPG::Script::BrowserNoteDocumentReady(browserId, "https://worldrpg.example/hud", "Neon HUD", true, false);
+            WorldRPG::Script::BrowserNoteSource(browserId, "<html><body>Neon</body></html>");
+            WorldRPG::Script::BrowserNoteLoadingFailed(browserId, "https://worldrpg.example/missing", 404, "Not Found");
+            WorldRPG::Script::ActiveVmPump();
+
+            RunLua(vm, "p2-4-browser-verify", R"LUA(
+                assert(_G._cbAccepted == true and type(_G._cbList) == "table" and _G._cbList[1] == "worldrpg.example", "whitelist callback")
+                assert(isBrowserLoading(_G._b) == false, "loading cleared on document ready")
+                assert(getBrowserTitle(_G._b) == "Neon HUD", "browser title updated")
+                assert(canBrowserNavigateBack(_G._b) == true and canBrowserNavigateForward(_G._b) == false, "history flags")
+                assert(navigateBrowserBack(_G._b) == true and reloadBrowserPage(_G._b) == true, "history nav")
+                assert(_G._bSource == "<html><body>Neon</body></html>", "getBrowserSource callback delivered")
+
+                local hasCreated, hasReady, hasWl, hasFail = false, false, false, false
+                for _, ev in ipairs(_G._bEvents) do
+                    if ev == "created" then hasCreated = true end
+                    if ev == "ready:https://worldrpg.example/hud" then hasReady = true end
+                    if ev == "wl:1" then hasWl = true end
+                    if ev == "fail:404:Not Found" then hasFail = true end
+                end
+                assert(hasCreated and hasReady and hasWl and hasFail, "all browser events fired")
+
+                -- GUI browser host + destruction cleanup
+                local gb = guiCreateBrowser(10, 20, 400, 250, true, false, false)
+                assert(isElement(gb) and getElementType(gb) == "gui-browser", "guiCreateBrowser")
+                local inner = guiGetBrowser(gb)
+                assert(isElement(inner) and getElementType(inner) == "browser", "guiGetBrowser")
+                assert(setBrowserAjaxHandler(inner, "api/ping", function() return "pong" end) == true, "local browser ajax handler")
+                assert(destroyElement(gb) == true)
+                assert(isElement(inner) == false, "destroying gui-browser destroys linked browser")
+                assert(destroyElement(_G._b) == true and isElement(_G._b) == false, "destroyBrowser")
+            )LUA");
         }
     }
 

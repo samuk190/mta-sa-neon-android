@@ -363,6 +363,22 @@ public final class MtaDxView extends View {
         }
     }
 
+    /** Publishes an offscreen-rendered bitmap (e.g. WebView browser frame) for dxDrawImage. */
+    public static void putMemoryBitmap(String name, Bitmap bitmap) {
+        if (name == null || bitmap == null) return;
+        synchronized (MEMORY) {
+            MEMORY.put(name, bitmap);
+        }
+    }
+
+    /** Removes a dynamic memory bitmap entry without recycling an in-flight frame. */
+    public static void removeMemoryBitmap(String name) {
+        if (name == null) return;
+        synchronized (MEMORY) {
+            MEMORY.remove(name);
+        }
+    }
+
     // Screen sources with a copy in flight, so a script that updates every frame queues one at a time.
     private static final java.util.HashSet<String> COPYING = new java.util.HashSet<>();
 

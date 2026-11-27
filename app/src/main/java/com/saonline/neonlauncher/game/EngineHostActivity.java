@@ -194,6 +194,11 @@ public final class EngineHostActivity extends GTASA {
     private native void nativeVoiceSetTransmit(boolean active);
     private native void nativeVoiceMicPcm(short[] samples, int count);
     private VoiceAudioEngine voiceAudioEngine;
+    private native void nativeBrowserLoadingStart(int id, String url, boolean isMainFrame);
+    private native void nativeBrowserDocumentReady(int id, String url, String title, boolean canBack, boolean canForward);
+    private native void nativeBrowserLoadingFailed(int id, String url, int errorCode, String description);
+    private native void nativeBrowserSource(int id, String html);
+    private BrowserEngine browserEngine;
     private native boolean nativeHardwareMouseReady();
     private native void nativeHardwareMouse(float x, float y, int buttons, float wheel, boolean captured);
     private static final class PhysicalKey {
@@ -1384,8 +1389,47 @@ public final class EngineHostActivity extends GTASA {
                 panUrlSound(text);
                 return;
             }
-            if (kind == 19) {
+            if (kind == 22) {
                 speedUrlSound(text);
+                return;
+            }
+            if (kind == 23) {
+                if (browserEngine == null) {
+                    browserEngine = new BrowserEngine(
+                            this,
+                            new java.io.File(getFilesDir(), "mta_resource_cache"),
+                            new BrowserEngine.Callbacks() {
+                                @Override
+                                public void onLoadingStart(int id, String url, boolean mainFrame) {
+                                    nativeBrowserLoadingStart(id, url, mainFrame);
+                                }
+
+                                @Override
+                                public void onDocumentReady(int id, String url, String title, boolean canBack, boolean canForward) {
+                                    nativeBrowserDocumentReady(id, url, title, canBack, canForward);
+                                }
+
+                                @Override
+                                public void onLoadingFailed(int id, String url, int errorCode, String description) {
+                                    nativeBrowserLoadingFailed(id, url, errorCode, description);
+                                }
+
+                                @Override
+                                public void onSourceReady(int id, String html) {
+                                    nativeBrowserSource(id, html);
+                                }
+                            });
+                }
+                browserEngine.handleCommand(text);
+                return;
+            }
+            if (kind == 24) {
+                if (text != null && text.startsWith("https://")) {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(text)));
+                    } catch (Exception ignored) {
+                    }
+                }
                 return;
             }
             if (kind == 10) {
@@ -2003,6 +2047,10 @@ public final class EngineHostActivity extends GTASA {
         if (voiceAudioEngine != null) {
             voiceAudioEngine.release();
             voiceAudioEngine = null;
+        }
+        if (browserEngine != null) {
+            browserEngine.release();
+            browserEngine = null;
         }
         if (disconnectDialog != null) {
             disconnectDialog.dismiss();

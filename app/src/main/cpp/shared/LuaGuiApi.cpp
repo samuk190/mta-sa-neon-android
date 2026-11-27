@@ -1,4 +1,5 @@
 #include "LuaGuiApi.h"
+#include "LuaBrowserApi.h"
 #include "LuaVmSet.h"
 
 #include "LuaApiExtra.h"
@@ -60,7 +61,8 @@ struct GuiElement {
     bool relPos = false;
     bool relSize = false;
     std::string text;               // window title, label, button text, or staticimage raw path
-    std::string imageFile;          // resolved cached image path for gui-staticimage
+    std::string imageFile;          // resolved cached image path for gui-staticimage / tx:<id> for gui-browser
+    uint32_t browserId = 0;         // linked browser element id for gui-browser
     bool visible = true;
     bool enabled = true;
     double alpha = 1.0;
@@ -552,7 +554,10 @@ bool GuiDestroy(uint32_t id) {
         if (g_focused == gone) GuiSetFocused(0);
     }
     for (uint32_t gone : doomed) {
-        if (GuiElement* element = Find(gone)) ReleaseGridData(*element);
+        if (GuiElement* element = Find(gone)) {
+            if (element->browserId) BrowserDestroy(element->browserId);
+            ReleaseGridData(*element);
+        }
         g_elements.erase(gone);
     }
     return true;
@@ -803,7 +808,7 @@ static void DrawElement(std::string& out, uint32_t id, const GuiElement& element
                 x += w;
             }
         }
-    } else if (element.type == "gui-staticimage") {
+    } else if (element.type == "gui-staticimage" || element.type == "gui-browser") {
         // Emit the same MtaDxView "I" bitmap draw line used by dxDrawImage.
         if (!element.imageFile.empty() && box.w > 0.0 && box.h > 0.0) {
             char head[256];
@@ -3173,9 +3178,14 @@ static int GuiGridListGetSelectionMode(lua_State* L) {
 void GuiHandleClick(uint32_t id, double x, double y) {
     GuiElement* element = Find(id);
     if (!element || !EffectivelyVisible(*element) || !EffectivelyEnabled(*element)) return;
-    if (element->type != "gui-gridlist" || element->columns.empty()) return;
     const Box box = ScreenBox(id);
     if (x < box.x || x > box.x + box.w || y < box.y || y > box.y + box.h) return;
+    if (element->type == "gui-browser" && element->browserId) {
+        BrowserInjectGuiClick(element->browserId,
+                              static_cast<int>(x - box.x), static_cast<int>(y - box.y));
+        return;
+    }
+    if (element->type != "gui-gridlist" || element->columns.empty()) return;
 
     const double headerHeight = 16.0;
     int clickedCol = 0;
@@ -3456,6 +3466,28 @@ static void RegisterGuiExtensions(lua_State* L) {
         lua_setglobal(L, bind.name);
     }
     InstallDestroyElement(L);
+}
+
+uint32_t GuiCreateBrowserHost(double x, double y, double w, double h, bool relative, uint32_t parentId,
+                              uint32_t browserId) {
+    GuiElement element;
+    element.type = "gui-browser";
+    element.x = x;
+    element.y = y;
+    element.w = w;
+    element.h = h;
+    element.relPos = relative;
+    element.relSize = relative;
+    element.parent = (parentId && Find(parentId)) ? parentId : 0;
+    element.browserId = browserId;
+    element.imageFile = "tx:" + std::to_string(browserId);
+    return Emplace(std::move(element));
+}
+
+uint32_t GuiGetBrowserId(uint32_t guiId) {
+    const GuiElement* element = Find(guiId);
+    if (!element || element->type != "gui-browser") return 0;
+    return element->browserId;
 }
 
 } // namespace WorldRPG::Script

@@ -62,6 +62,11 @@ bool DxPlainSize(const char* data, size_t size, uint32_t& width, uint32_t& heigh
 uint32_t GuiPick(double x, double y);
 // Applies widget-local mouse-down interactions (e.g. gui-gridlist column header sort and row click).
 void GuiHandleClick(uint32_t id, double x, double y);
+// Creates a gui-browser widget linked to browserId and returns its GUI element id.
+uint32_t GuiCreateBrowserHost(double x, double y, double w, double h, bool relative, uint32_t parentId,
+                              uint32_t browserId);
+// Returns the linked browser element id for a gui-browser widget, or 0.
+uint32_t GuiGetBrowserId(uint32_t guiId);
 // True when id is a visible, enabled gui-edit or gui-memo (accepts keyboard input).
 bool GuiIsEdit(uint32_t id);
 // The focused edit/memo when it is still visible and enabled, otherwise 0.

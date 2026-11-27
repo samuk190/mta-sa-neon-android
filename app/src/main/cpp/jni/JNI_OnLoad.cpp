@@ -1,6 +1,7 @@
 #include "../shared/ControlToggles.h"
 #include "../shared/ConnectionLoading.h"
 #include "../shared/VoiceRuntime.h"
+#include "../shared/LuaBrowserApi.h"
 #include <jni.h>
 #include <cstring>
 #include <string>
@@ -1176,6 +1177,72 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeVoiceMicPcm(
     std::vector<int16_t> pcm(static_cast<size_t>(toCopy));
     env->GetShortArrayRegion(samples, 0, toCopy, reinterpret_cast<jshort*>(pcm.data()));
     WorldRPG::Audio::VoiceRuntime::OnMicPcm(pcm.data(), pcm.size());
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBrowserLoadingStart(
+    JNIEnv* env, jobject, jint id, jstring url, jboolean isMainFrame) {
+    std::string urlStr;
+    if (url) {
+        if (const char* raw = env->GetStringUTFChars(url, nullptr)) {
+            urlStr = raw;
+            env->ReleaseStringUTFChars(url, raw);
+        }
+    }
+    WorldRPG::Script::BrowserNoteLoadingStart(static_cast<uint32_t>(id), urlStr.c_str(), isMainFrame == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBrowserDocumentReady(
+    JNIEnv* env, jobject, jint id, jstring url, jstring title, jboolean canBack, jboolean canForward) {
+    std::string urlStr, titleStr;
+    if (url) {
+        if (const char* raw = env->GetStringUTFChars(url, nullptr)) {
+            urlStr = raw;
+            env->ReleaseStringUTFChars(url, raw);
+        }
+    }
+    if (title) {
+        if (const char* raw = env->GetStringUTFChars(title, nullptr)) {
+            titleStr = raw;
+            env->ReleaseStringUTFChars(title, raw);
+        }
+    }
+    WorldRPG::Script::BrowserNoteDocumentReady(
+        static_cast<uint32_t>(id), urlStr.c_str(), titleStr.c_str(), canBack == JNI_TRUE, canForward == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBrowserLoadingFailed(
+    JNIEnv* env, jobject, jint id, jstring url, jint errorCode, jstring description) {
+    std::string urlStr, descStr;
+    if (url) {
+        if (const char* raw = env->GetStringUTFChars(url, nullptr)) {
+            urlStr = raw;
+            env->ReleaseStringUTFChars(url, raw);
+        }
+    }
+    if (description) {
+        if (const char* raw = env->GetStringUTFChars(description, nullptr)) {
+            descStr = raw;
+            env->ReleaseStringUTFChars(description, raw);
+        }
+    }
+    WorldRPG::Script::BrowserNoteLoadingFailed(
+        static_cast<uint32_t>(id), urlStr.c_str(), static_cast<int>(errorCode), descStr.c_str());
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeBrowserSource(
+    JNIEnv* env, jobject, jint id, jstring html) {
+    std::string htmlStr;
+    if (html) {
+        if (const char* raw = env->GetStringUTFChars(html, nullptr)) {
+            htmlStr = raw;
+            env->ReleaseStringUTFChars(html, raw);
+        }
+    }
+    WorldRPG::Script::BrowserNoteSource(static_cast<uint32_t>(id), htmlStr.c_str());
 }
 
 JNIEXPORT jboolean JNICALL
