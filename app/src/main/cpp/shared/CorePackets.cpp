@@ -3,6 +3,7 @@
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "LuaWorldObjectApi.h"
+#include "MtaIds.h"
 #include "ServerRpc.h"
 #include "ServerWorld.h"
 #include "VehicleColors.h"
@@ -363,6 +364,7 @@ bool HandleExplosion(const uint8_t* body, size_t length, size_t bits) {
             if (blowWithoutExplosion) cancel = true;
             Script::VehicleApplyBlownState(resolvedOrigin, true);
             Game::RpcSetVehicleHealth(resolvedOrigin, 0.f);
+            ServerWorld::NoteVehiclePose(resolvedOrigin, false, nullptr, false, nullptr, true, 0.f);
             if (L) {
                 lua_pushboolean(L, !cancel ? 1 : 0);
                 Script::ActiveVmFireElementEvent(L, "onClientVehicleExplode", resolvedOrigin, 1);
@@ -880,8 +882,8 @@ bool HandleLatentTransfer(const uint8_t* body, size_t length, size_t bits, const
     }
 
     if (!dispatch) return true;
-    if (g_latentDepth >= 2) {
-        LUA_LOGE("DIAG LATENT_TRANSFER: nested recursion limit reached");
+    if (innerPacketId == MtaIds::Packet::LatentTransfer || g_latentDepth >= 1) {
+        LUA_LOGE("DIAG LATENT_TRANSFER: nested latent transfer rejected (depth=%d)", g_latentDepth);
         return false;
     }
     struct DepthGuard {

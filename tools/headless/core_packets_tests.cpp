@@ -421,7 +421,8 @@ void TestExplosionFireProjectile() {
     f.Lua("assert(#expLog == 2, 'dim-mismatch suppressed third explosion')\n"
           "assert(expLog[1][1] == 20 and math.abs(expLog[1][2] - 15) < 0.1 and math.abs(expLog[1][3] - 25) < 0.1)\n"
           "assert(#vehExpLog == 1 and vehExpLog[1][1] == 500 and vehExpLog[1][2] == false)\n"
-          "assert(isVehicleBlown({id=500, element=true}) == true)");
+          "assert(isVehicleBlown({id=500, element=true}) == true)\n"
+          "assert(getElementHealth({id=500, element=true}) == 0)");
 
     // FIRE (38): valid and malformed.
     Pkt fire(PktId::Fire);
@@ -662,6 +663,50 @@ void TestLatentTransferAndPedTask() {
     Pkt huge(PktId::LatentTransfer);
     huge.Bits(78, 15).Bit(true).U8(0).U16(1).U32(200u * 1024u * 1024u).U32(5000).U16(0xFFFFu).AlignByte().U16(0);
     Check(!f.Send(huge), "LATENT_TRANSFER rejects >100MB finalSize");
+
+    // Nested LATENT_TRANSFER inside LATENT_TRANSFER is rejected cleanly.
+    Pkt innerLatent;
+    innerLatent.Bits(99, 15).Bit(true).U8(0).U16(1).U32(10).U32(5000).U16(0xFFFFu).AlignByte().U16(0);
+    const uint32_t nestedBits = static_cast<uint32_t>(innerLatent.w.GetBitLength());
+    std::vector<uint8_t> nestedPayload;
+    nestedPayload.push_back(PktId::LatentTransfer);
+    nestedPayload.resize(5);
+    std::memcpy(nestedPayload.data() + 1, &nestedBits, 4);
+    nestedPayload.insert(nestedPayload.end(), innerLatent.w.GetData(),
+                         innerLatent.w.GetData() + innerLatent.w.GetByteLength());
+    Pkt nestHead(PktId::LatentTransfer);
+    nestHead.Bits(79, 15).Bit(true).U8(0).U16(1)
+        .U32(static_cast<uint32_t>(nestedPayload.size())).U32(5000).U16(0xFFFFu)
+        .AlignByte().U16(0);
+    Check(f.Send(nestHead), "LATENT_TRANSFER nested outer HEAD");
+    Pkt nestTail(PktId::LatentTransfer);
+    nestTail.Bits(79, 15).Bit(true).U8(1).AlignByte()
+        .U16(static_cast<uint16_t>(nestedPayload.size()))
+        .Bytes(nestedPayload.data(), nestedPayload.size());
+    Check(!f.Send(nestTail), "LATENT_TRANSFER rejects nested inner LATENT_TRANSFER");
+
+    // Mismatched id and bitSize mismatch are rejected cleanly.
+    Pkt badBits;
+    badBits.Id(900).Bit(true).Bit(false);
+    const uint32_t wrongBitLen = static_cast<uint32_t>(badBits.w.GetBitLength()) + 16u;
+    std::vector<uint8_t> badPayload;
+    badPayload.push_back(PktId::PickupHitConfirm);
+    badPayload.resize(5);
+    std::memcpy(badPayload.data() + 1, &wrongBitLen, 4);
+    badPayload.insert(badPayload.end(), badBits.w.GetData(), badBits.w.GetData() + badBits.w.GetByteLength());
+    Pkt badHead(PktId::LatentTransfer);
+    badHead.Bits(80, 15).Bit(true).U8(0).U16(1)
+        .U32(static_cast<uint32_t>(badPayload.size())).U32(5000).U16(0xFFFFu)
+        .AlignByte().U16(0);
+    Check(f.Send(badHead), "LATENT_TRANSFER bad-bits HEAD");
+    Pkt wrongIdMid(PktId::LatentTransfer);
+    wrongIdMid.Bits(81, 15).Bit(false).AlignByte().U16(0);
+    Check(!f.Send(wrongIdMid), "LATENT_TRANSFER rejects wrong transfer id");
+    Pkt badTail(PktId::LatentTransfer);
+    badTail.Bits(80, 15).Bit(true).U8(1).AlignByte()
+        .U16(static_cast<uint16_t>(badPayload.size()))
+        .Bytes(badPayload.data(), badPayload.size());
+    Check(!f.Send(badTail), "LATENT_TRANSFER rejects bitsUsed/buffer mismatch");
 
     // PED_TASK (101): TASK_SIMPLE_BE_HIT (1008) valid and truncated.
     Pkt task(PktId::PedTask);
