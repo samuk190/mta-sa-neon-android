@@ -18,7 +18,9 @@
 #include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
+#include "LuaApiExtra.h"
 #include "LuaMtaWindowApi.h"
+#include "LuaRocketSoccerApi.h"
 #include "LuaVMStub.h"
 #include "WorldShaderMatches.h"
 #include "DesktopLuaString.h"
@@ -4962,7 +4964,7 @@ void CheckEngineModelNames(WorldRPG::Script::LuaVMStub& vm) {
         assert(renderer.visibleEntityCapacity == 8192 and renderer.visibleLodCapacity == 8192 and renderer.streamingRwObjectCapacity == 30000)
         assert(renderer.visibleEntities == 0)
         assert(engineResetRendererStats() == true)
-        assert(engineGetRadarMapStats().hooksInstalled == false)
+        assert(engineGetRadarMapStats().hooksInstalled == true)
         assert(engineResetRadarMapTile(40, 0) == false)
         assert(engineResetRadarMapTile(0, 0) == false)
         streamOk, streamErr = pcall(engineSetDistantLightsEnabled)
@@ -5642,6 +5644,382 @@ int main(int argc, char** argv) {
         WorldRPG::Game::HostSetRoofTest(false, 0.f);
         WorldRPG::Game::HostSetLosTest(false, false, mockHit);
         WorldRPG::Game::HostSetViewMatrixTest(false, nullptr);
+
+        // P1-5: rocketSimGamepad JNI bridge (disconnected -> connected -> axes/buttons -> disconnected)
+        {
+            using namespace WorldRPG::Script;
+            RocketGamepadInput off{};
+            off.connected = false;
+            RocketSoccerSetGamepad(off);
+            RunLua(vm, "p1-gamepad-off", "assert(rocketSimGamepad() == false, 'disconnected gamepad returns false')");
+
+            RocketGamepadInput pad{};
+            pad.connected = true;
+            pad.index = 0;
+            pad.axes[0] = 0.75f; pad.axes[1] = -0.5f; pad.axes[2] = -0.25f; pad.axes[3] = 1.0f;
+            pad.axes[4] = 0.6f; pad.axes[5] = 0.9f;
+            pad.warButtons = (1u << 0) | (1u << 8);  // BIT_A | BIT_DPAD_UP
+            RocketSoccerSetGamepad(pad);
+            RunLua(vm, "p1-gamepad-on", R"LUA(
+                local g = rocketSimGamepad()
+                assert(type(g) == 'table' and g.connected == true and g.index == 0 and g.backend == 'Android', 'gamepad header')
+                assert(math.abs(g.axes[1] - 0.75) < 1e-4 and math.abs(g.axes[2] + 0.5) < 1e-4, 'left stick')
+                assert(math.abs(g.axes[3] + 0.25) < 1e-4 and math.abs(g.axes[4] - 1.0) < 1e-4, 'right stick')
+                assert(g.buttons[1].pressed == true and g.buttons[1].value == 1, 'A button')
+                assert(g.buttons[2].pressed == false and g.buttons[2].value == 0, 'B button')
+                assert(g.buttons[7].pressed == true and math.abs(g.buttons[7].value - 0.6) < 1e-4, 'LT trigger')
+                assert(g.buttons[8].pressed == true and math.abs(g.buttons[8].value - 0.9) < 1e-4, 'RT trigger')
+                assert(g.buttons[13].pressed == true, 'dpad up')
+                assert(#g.buttons == 17, '17 W3C buttons')
+            )LUA");
+            RocketSoccerSetGamepad(off);
+            RunLua(vm, "p1-gamepad-off-again", "assert(rocketSimGamepad() == false, 'gamepad disconnected again')");
+        }
+
+        // P1-3: CEGUI gui-gridlist column header sorting & row click selection
+        {
+            RunLua(vm, "p1-gridlist-setup", R"LUA(
+                local gl = guiCreateGridList(10, 20, 300, 200, false)
+                assert(isElement(gl), 'gridlist created')
+                local cName = guiGridListAddColumn(gl, 'Name', 0.5)
+                local cScore = guiGridListAddColumn(gl, 'Score', 0.4)
+                assert(cName == 1 and cScore == 2)
+                local r0 = guiGridListAddRow(gl, 'Charlie', '10')
+                local r1 = guiGridListAddRow(gl, 'Alpha', '2')
+                local r2 = guiGridListAddRow(gl, 'Bravo', '100')
+                assert(r0 == 0 and r1 == 1 and r2 == 2)
+                -- Mark Score column cells as numeric so sort compares 2 < 10 < 100
+                guiGridListSetItemText(gl, 0, cScore, '10', false, true)
+                guiGridListSetItemText(gl, 1, cScore, '2', false, true)
+                guiGridListSetItemText(gl, 2, cScore, '100', false, true)
+                _G._p1Grid = gl
+                _G._p1GridId = gl.id
+            )LUA");
+            lua_State* Lgrid = WorldRPG::Script::ActiveVmState();
+            lua_getglobal(Lgrid, "_p1GridId");
+            const uint32_t glId = static_cast<uint32_t>(lua_tointeger(Lgrid, -1));
+            lua_pop(Lgrid, 1);
+            CHECK(glId != 0);
+            // Click column 1 header (Name): x=40 inside [10..160], y=28 inside header [20..42]
+            WorldRPG::Script::GuiHandleClick(glId, 40.0, 28.0);
+            RunLua(vm, "p1-gridlist-sort-asc", R"LUA(
+                local gl = _G._p1Grid
+                assert(guiGridListGetItemText(gl, 0, 1) == 'Alpha', 'asc row 0')
+                assert(guiGridListGetItemText(gl, 1, 1) == 'Bravo', 'asc row 1')
+                assert(guiGridListGetItemText(gl, 2, 1) == 'Charlie', 'asc row 2')
+                -- Adding a new row while sorted inserts in sorted position and returns final index
+                local rNew = guiGridListAddRow(gl, 'Aaron', '5')
+                assert(rNew == 0 and guiGridListGetItemText(gl, 0, 1) == 'Aaron', 'sorted addRow index')
+            )LUA");
+            // Click column 1 header again -> descending
+            WorldRPG::Script::GuiHandleClick(glId, 40.0, 28.0);
+            RunLua(vm, "p1-gridlist-sort-desc", R"LUA(
+                local gl = _G._p1Grid
+                assert(guiGridListGetItemText(gl, 0, 1) == 'Charlie', 'desc row 0')
+                assert(guiGridListGetItemText(gl, 3, 1) == 'Aaron', 'desc row 3')
+            )LUA");
+            // Click column 2 header (Score, x=200 inside [160..280], y=28) -> numeric ascending
+            RunLua(vm, "p1-gridlist-num-aaron", "guiGridListSetItemText(_G._p1Grid, 3, 2, '5', false, true)");
+            WorldRPG::Script::GuiHandleClick(glId, 200.0, 28.0);
+            RunLua(vm, "p1-gridlist-sort-num", R"LUA(
+                local gl = _G._p1Grid
+                assert(guiGridListGetItemText(gl, 0, 2) == '2', 'num row 0')
+                assert(guiGridListGetItemText(gl, 1, 2) == '5', 'num row 1')
+                assert(guiGridListGetItemText(gl, 2, 2) == '10', 'num row 2')
+                assert(guiGridListGetItemText(gl, 3, 2) == '100', 'num row 3')
+            )LUA");
+            // Click data row 1 (y = 20 + 22 + 1*20 + 5 = 67) -> selects row 1
+            WorldRPG::Script::GuiHandleClick(glId, 40.0, 67.0);
+            RunLua(vm, "p1-gridlist-click-select", R"LUA(
+                local gl = _G._p1Grid
+                local sr, sc = guiGridListGetSelectedItem(gl)
+                assert(sr == 1 and sc == 1, 'click selected row 1 col 1, got ' .. tostring(sr) .. ',' .. tostring(sc))
+                guiGridListSetSortingEnabled(gl, false)
+            )LUA");
+            // Clicking header while sorting disabled must not change order
+            WorldRPG::Script::GuiHandleClick(glId, 40.0, 28.0);
+            RunLua(vm, "p1-gridlist-sort-disabled", R"LUA(
+                local gl = _G._p1Grid
+                assert(guiGridListGetItemText(gl, 0, 2) == '2', 'sorting disabled keeps order')
+                destroyElement(gl)
+                _G._p1Grid = nil
+            )LUA");
+        }
+
+        // P1-3: Extended native radar map tile registry (set, stock protection, cross-resource ownership, TXD destroy, resource stop)
+        {
+            using namespace WorldRPG;
+            // Build a minimal valid RenderWare TXD (matching resource_tests.cpp:4007)
+            Net::BitStreamWriter txdW;
+            const auto rwChunk = [&](uint32_t type, uint32_t size) {
+                txdW.Write(type);
+                txdW.Write(size);
+                txdW.Write(uint32_t{0x1803ffff});
+            };
+            rwChunk(0x16, 152);
+            rwChunk(1, 4);
+            txdW.Write(uint16_t{1});
+            txdW.Write(uint16_t{2});
+            rwChunk(0x15, 112);
+            rwChunk(1, 100);
+            std::array<uint8_t, 100> raster{};
+            raster[0] = 9;
+            raster[8] = 'a';
+            raster[76] = 'D'; raster[77] = 'X'; raster[78] = 'T'; raster[79] = '1';
+            raster[80] = 4; raster[82] = 4; raster[84] = 4; raster[85] = 1;
+            raster[86] = 4; raster[87] = 8; raster[88] = 8;
+            txdW.WriteBytes(raster.data(), raster.size());
+            rwChunk(3, 0);
+            lua_State* Ltxd = Script::ActiveVmState();
+            lua_pushlstring(Ltxd, reinterpret_cast<const char*>(txdW.GetData()), txdW.GetByteLength());
+            lua_setglobal(Ltxd, "_p1ValidTxd");
+
+            Net::ResourceStartInfo rA;
+            rA.name = "p1_radar_a";
+            rA.resourceId = 201;
+            rA.entityId = 0x3CA0;
+            rA.dynamicEntityId = 0x3CA1;
+            rA.noClientCacheScripts = 1;
+            rA.startCounter = 1;
+            Script::ActiveVmOnResourceStart(rA);
+            const std::vector<uint8_t> bodyA = NoCacheScriptBody(201, R"LUA(
+                local stats0 = engineGetRadarMapStats()
+                assert(stats0.hooksInstalled == true and stats0.registeredTiles == 0, 'initial radar stats')
+                local rawTxd = _G._p1ValidTxd
+                local txd = engineLoadTXD(rawTxd)
+                assert(isElement(txd) and getElementType(txd) == 'txd', 'mock txd loaded')
+                -- Protected stock tiles 14..25 x 14..25 and out-of-bounds must be rejected
+                assert(engineSetRadarMapTile(14, 14, txd) == false, 'stock min rejected')
+                assert(engineSetRadarMapTile(25, 25, txd) == false, 'stock max rejected')
+                assert(engineSetRadarMapTile(-1, 0, txd) == false, 'oob negative rejected')
+                assert(engineSetRadarMapTile(40, 0, txd) == false, 'oob 40 rejected')
+                -- Valid outer tiles succeed
+                assert(engineSetRadarMapTile(0, 0, txd) == true, 'tile 0,0 registered')
+                assert(engineSetRadarMapTile(39, 39, txd) == true, 'tile 39,39 registered')
+                local stats1 = engineGetRadarMapStats()
+                assert(stats1.registeredTiles == 2 and stats1.loadedTiles == 2 and stats1.sourceBytes == #rawTxd * 2, '2 tiles stats')
+                -- Reset one tile explicitly
+                assert(engineResetRadarMapTile(39, 39) == true, 'reset 39,39')
+                local stats2 = engineGetRadarMapStats()
+                assert(stats2.registeredTiles == 1 and stats2.loadedTiles == 1, '1 tile after reset')
+                _G._p1RadarTxdA = txd
+                _G._p1RadarOkA = true
+            )LUA");
+            CHECK(Script::ActiveVmFeedScripts(bodyA.data(), bodyA.size(), bodyA.size() * 8));
+            Script::ActiveVmPulseResources();
+            RunLua(vm, "p1-radar-a-verify", "assert(_G._p1RadarOkA == true, 'radar A')");
+
+            // Second resource cannot overwrite or reset resource A's tile (0,0), but can register (1,0)
+            Net::ResourceStartInfo rB;
+            rB.name = "p1_radar_b";
+            rB.resourceId = 202;
+            rB.entityId = 0x3CB0;
+            rB.dynamicEntityId = 0x3CB1;
+            rB.noClientCacheScripts = 1;
+            rB.startCounter = 1;
+            Script::ActiveVmOnResourceStart(rB);
+            const std::vector<uint8_t> bodyB = NoCacheScriptBody(202, R"LUA(
+                local txdB = engineLoadTXD(_G._p1ValidTxd)
+                assert(isElement(txdB))
+                assert(engineSetRadarMapTile(0, 0, txdB) == false, 'cross-resource overwrite blocked')
+                assert(engineResetRadarMapTile(0, 0) == false, 'cross-resource reset blocked')
+                assert(engineSetRadarMapTile(1, 0, txdB) == true, 'resource B tile 1,0 ok')
+                assert(engineGetRadarMapStats().registeredTiles == 2, 'total 2 tiles across A+B')
+                _G._p1RadarOkB = true
+            )LUA");
+            CHECK(Script::ActiveVmFeedScripts(bodyB.data(), bodyB.size(), bodyB.size() * 8));
+            Script::ActiveVmPulseResources();
+            RunLua(vm, "p1-radar-b-verify", "assert(_G._p1RadarOkB == true, 'radar B')");
+
+            // Stopping resource B drops only B's tile (1,0); destroying A's TXD drops A's tile (0,0)
+            Net::BitStreamWriter stopB;
+            stopB.Write(static_cast<uint16_t>(202));
+            Script::ActiveVmOnResourceStop(stopB.GetData(), stopB.GetByteLength(), stopB.GetBitLength());
+            RunLua(vm, "p1-radar-after-stop-b", R"LUA(
+                assert(engineGetRadarMapStats().registeredTiles == 1, 'stop B dropped only B tile')
+                assert(destroyElement(_G._p1RadarTxdA) == true, 'destroy TXD A')
+                assert(engineGetRadarMapStats().registeredTiles == 0, 'destroy TXD dropped A tile')
+                _G._p1RadarTxdA = nil
+            )LUA");
+            Net::BitStreamWriter stopA;
+            stopA.Write(static_cast<uint16_t>(201));
+            Script::ActiveVmOnResourceStop(stopA.GetData(), stopA.GetByteLength(), stopA.GetBitLength());
+        }
+
+        // P1-2: High-frequency client events (model/interior/dimension/streamIn/streamOut + vehicle start enter/exit)
+        {
+            const uint32_t vehId = 0x3DF0;
+            WorldRPG::ServerWorld::NoteVehicle(vehId, 411);
+            lua_State* Lev = WorldRPG::Script::ActiveVmState();
+            WorldRPG::Script::PushElement(Lev, vehId);
+            lua_setglobal(Lev, "_p1SrvVeh");
+            RunLua(vm, "p1-element-state-events", R"LUA(
+                local veh = _G._p1SrvVeh
+                assert(isElement(veh) and getElementType(veh) == 'vehicle', 'server vehicle present')
+                local pdim = getElementDimension(localPlayer)
+                setElementDimension(veh, pdim)
+                local modelOld, modelNew = nil, nil
+                local intOld, intNew = nil, nil
+                local dimOld, dimNew = nil, nil
+                local streamOuts, streamIns = 0, 0
+                local startEnters, startExits = 0, 0
+                addEventHandler('onClientElementModelChange', veh, function(o, n) modelOld, modelNew = o, n end)
+                addEventHandler('onClientElementInteriorChange', veh, function(o, n) intOld, intNew = o, n end)
+                addEventHandler('onClientElementDimensionChange', veh, function(o, n) dimOld, dimNew = o, n end)
+                addEventHandler('onClientElementStreamOut', veh, function() streamOuts = streamOuts + 1 end)
+                addEventHandler('onClientElementStreamIn', veh, function() streamIns = streamIns + 1 end)
+                addEventHandler('onClientVehicleStartEnter', veh, function(who, seat, door)
+                    if who == localPlayer and seat == 0 and door == 2 then startEnters = startEnters + 1 end
+                end)
+                addEventHandler('onClientVehicleStartExit', veh, function(who, seat, door)
+                    if who == localPlayer and seat == 0 and door == 2 then startExits = startExits + 1 end
+                end)
+                assert(setElementModel(veh, 560) == true, 'setElementModel veh')
+                assert(modelOld == 411 and modelNew == 560, 'model change event')
+                assert(setElementInterior(veh, 3) == true, 'setElementInterior veh')
+                assert(intOld == 0 and intNew == 3, 'interior change event')
+                assert(setElementDimension(veh, pdim + 5) == true, 'setElementDimension leave')
+                assert(dimOld == pdim and dimNew == pdim + 5, 'dim change event')
+                assert(streamOuts == 1 and streamIns == 0, 'stream out on dim leave')
+                assert(setElementDimension(veh, pdim) == true, 'setElementDimension return')
+                assert(streamIns == 1, 'stream in on dim return')
+                _G._p1CheckVehStart = function()
+                    assert(startEnters == 1 and startExits == 1, 'vehicle start enter/exit: ' .. startEnters .. ',' .. startExits)
+                    _G._p1SrvVeh = nil
+                end
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFireVehicleStartInOut(true, WorldRPG::ServerWorld::LocalPlayer(), vehId, 0, 2));
+            CHECK(WorldRPG::Script::ActiveVmFireVehicleStartInOut(false, WorldRPG::ServerWorld::LocalPlayer(), vehId, 0, 2));
+            RunLua(vm, "p1-veh-start-verify", "_G._p1CheckVehStart(); _G._p1CheckVehStart = nil");
+        }
+
+        // P1-4: Lua OOP class layer (Vector2/3/4, Matrix, Element/Ped/GUI/Camera/Resource/Timer) + per-resource isOOPEnabled() in BOTH Lua 5.3 and Lua 5.1
+        {
+            using namespace WorldRPG;
+            const std::string oopTestScript = R"LUA(
+                assert(isOOPEnabled() == true, 'isOOPEnabled true in OOP resource')
+                -- Vector2 / Vector3 / Vector4 / Matrix math
+                local v2 = Vector2(3, 4)
+                assert(v2.x == 3 and v2.y == 4 and math.abs(v2:getLength() - 5) < 1e-5, 'Vector2 length')
+                local v3a = Vector3(1, 2, 3)
+                local v3b = Vector3(4, 5, 6)
+                local v3sum = v3a + v3b
+                assert(v3sum.x == 5 and v3sum.y == 7 and v3sum.z == 9, 'Vector3 add')
+                assert(v3a:dot(v3b) == 32, 'Vector3 dot')
+                local cross = Vector3(1, 0, 0):cross(Vector3(0, 1, 0))
+                assert(cross.x == 0 and cross.y == 0 and cross.z == 1, 'Vector3 cross')
+                local hit = Vector3.intersectsSegmentTriangle(
+                    Vector3(0.25, 0.25, 5), Vector3(0.25, 0.25, -5),
+                    Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0))
+                assert(hit == true, 'Vector3.intersectsSegmentTriangle hit')
+                local miss = Vector3.intersectsSegmentTriangle(
+                    Vector3(5, 5, 5), Vector3(5, 5, -5),
+                    Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0))
+                assert(miss == false, 'Vector3.intersectsSegmentTriangle miss')
+                local v4 = Vector4(1, 2, 3, 4)
+                assert(v4.w == 4 and math.abs(v4:getSquaredLength() - 30) < 1e-5, 'Vector4')
+                local mat = Matrix(Vector3(10, 20, 30), Vector3(0, 0, 90))
+                local tp = mat:transformPosition(Vector3(1, 0, 0))
+                assert(math.abs(tp.x - 10) < 1e-3 and math.abs(tp.y - 21) < 1e-3 and math.abs(tp.z - 30) < 1e-3, 'Matrix transformPosition')
+                local inv = mat:inverse()
+                local back = inv:transformPosition(tp)
+                assert(math.abs(back.x - 1) < 1e-3 and math.abs(back.y) < 1e-3 and math.abs(back.z) < 1e-3, 'Matrix inverse')
+                -- Element / Ped / Marker / Object / GuiWindow OOP constructors, methods & properties
+                local ped = Ped(0, 1, 2, 3)
+                assert(isElement(ped) and ped.type == 'ped' and ped.model == 0, 'Ped OOP ctor/props')
+                ped.interior = 2
+                ped.dimension = 7
+                assert(ped:getInterior() == 2 and ped:getDimension() == 7, 'Ped int/dim OOP')
+                ped:destroy()
+                local obj = Object(1337, 1, 2, 3)
+                assert(isElement(obj) and obj.type == 'object', 'Object OOP ctor')
+                obj.position = Vector3(50, 60, 70)
+                local op = obj.position
+                assert(math.abs(op.x - 50) < 1e-3 and math.abs(op.y - 60) < 1e-3 and math.abs(op.z - 70) < 1e-3, 'Object position prop')
+                obj:destroy()
+                local mk = Marker(5, 6, 7, 'cylinder', 2.0)
+                assert(isElement(mk) and mk.type == 'marker', 'Marker OOP ctor')
+                mk.size = 4.5
+                assert(math.abs(mk:getSize() - 4.5) < 1e-3, 'Marker size prop')
+                mk:destroy()
+                local win = GuiWindow(10, 10, 200, 150, 'OOP Win', false)
+                assert(isElement(win) and win.text == 'OOP Win', 'GuiWindow OOP')
+                win.text = 'Renamed'
+                assert(win:getText() == 'Renamed', 'GuiWindow text setter')
+                win:destroy()
+                -- Camera static class
+                assert(Camera.setMatrix(1, 2, 3, 4, 5, 6) == true, 'Camera.setMatrix')
+                local cp = Camera.position
+                assert(math.abs(cp.x - 1) < 1e-3 and math.abs(cp.y - 2) < 1e-3 and math.abs(cp.z - 3) < 1e-3, 'Camera.position')
+                -- Resource & Timer OOP
+                local me = Resource.getThis()
+                assert(me and type(me:getName()) == 'string', 'Resource.getThis()')
+                local t = Timer(function() end, 500, 1)
+                assert(t and t:isValid() == true, 'Timer OOP ctor')
+                assert(t:destroy() == true and t:isValid() == false, 'Timer OOP destroy')
+            )LUA";
+
+            // Run in Lua 5.3 resource with oopEnabled=true
+            Net::ResourceStartInfo oop53;
+            oop53.name = "p1_oop_53";
+            oop53.resourceId = 203;
+            oop53.entityId = 0x3CC0;
+            oop53.dynamicEntityId = 0x3CC1;
+            oop53.noClientCacheScripts = 1;
+            oop53.startCounter = 1;
+            oop53.oopEnabled = true;
+            Script::ActiveVmOnResourceStart(oop53);
+            const std::vector<uint8_t> body53 = NoCacheScriptBody(203, oopTestScript + "\n_G._p1Oop53Ok = true\n");
+            CHECK(Script::ActiveVmFeedScripts(body53.data(), body53.size(), body53.size() * 8));
+            Script::ActiveVmPulseResources();
+            RunLua(vm, "p1-oop-53-verify", "assert(_G._p1Oop53Ok == true, 'OOP in Lua 5.3')");
+
+            // Switch resource Lua mode to Automatic (0) so pure Lua 5.1 script runs in the Lua 5.1 VM
+            Script::ActiveVmSetResourceLua(0);
+            Net::ResourceStartInfo oop51;
+            oop51.name = "p1_oop_51";
+            oop51.resourceId = 204;
+            oop51.entityId = 0x3CD0;
+            oop51.dynamicEntityId = 0x3CD1;
+            oop51.noClientCacheScripts = 1;
+            oop51.startCounter = 1;
+            oop51.oopEnabled = true;
+            Script::ActiveVmOnResourceStart(oop51);
+            const std::vector<uint8_t> body51 = NoCacheScriptBody(
+                204, oopTestScript + "\nassert(_VERSION == 'Lua 5.1', 'expected 5.1')\n_G._p1Oop51Ok = true\n");
+            CHECK(Script::ActiveVmFeedScripts(body51.data(), body51.size(), body51.size() * 8));
+            Script::ActiveVmPulseResources();
+            Script::ActiveVmSetResourceLua(1);
+            // Verify inside the 5.1 VM via LuaVmSet!
+            lua_State* L51 = Script::Vms::Lua51();
+            CHECK(L51 != nullptr);
+            if (L51) {
+                lua_getglobal(L51, "_p1Oop51Ok");
+                CHECK(lua_toboolean(L51, -1) != 0);
+                lua_pop(L51, 1);
+            }
+
+            // Non-OOP resource sees isOOPEnabled() == false
+            Net::ResourceStartInfo noOop;
+            noOop.name = "p1_no_oop";
+            noOop.resourceId = 205;
+            noOop.entityId = 0x3CE0;
+            noOop.dynamicEntityId = 0x3CE1;
+            noOop.noClientCacheScripts = 1;
+            noOop.startCounter = 1;
+            noOop.oopEnabled = false;
+            Script::ActiveVmOnResourceStart(noOop);
+            const std::vector<uint8_t> bodyNo = NoCacheScriptBody(205, "assert(isOOPEnabled() == false, 'non-OOP resource'); _G._p1NoOopOk = true");
+            CHECK(Script::ActiveVmFeedScripts(bodyNo.data(), bodyNo.size(), bodyNo.size() * 8));
+            Script::ActiveVmPulseResources();
+            RunLua(vm, "p1-no-oop-verify", "assert(_G._p1NoOopOk == true, 'non-OOP resource check')");
+
+            for (uint16_t rid : {uint16_t{203}, uint16_t{204}, uint16_t{205}}) {
+                Net::BitStreamWriter stop;
+                stop.Write(rid);
+                Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+            }
+        }
     }
 
     if (argc > 1) {

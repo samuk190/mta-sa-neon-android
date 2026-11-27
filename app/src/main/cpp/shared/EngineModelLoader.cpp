@@ -626,7 +626,11 @@ bool NativeFreeModel(int id) {
 
 namespace WorldRPG::Script {
 
-void* NativeLoadTXD(std::span<const std::uint8_t>, bool) { return nullptr; }
+void* NativeLoadTXD(std::span<const std::uint8_t> bytes, bool) {
+    // On host builds without RenderWare, return a non-null sentinel for validated TXD payloads
+    // so engineLoadTXD / engineSetRadarMapTile / TXD lifecycle tests run end-to-end.
+    return bytes.empty() ? nullptr : reinterpret_cast<void*>(static_cast<uintptr_t>(1));
+}
 bool NativeImportTXD(std::uint16_t, std::uint64_t, void*) { return false; }
 bool NativeReplaceDFF(std::uint16_t, std::uint64_t, const DffSource&, bool) { return false; }
 bool NativeRestoreDFF(std::uint16_t) { return false; }

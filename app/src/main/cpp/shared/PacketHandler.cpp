@@ -1379,6 +1379,10 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
         PKT_LOGI("VehInOut: %s ped=%u veh=%u seat=%u door=%u reason=%u", name, pedId, vehicleId,
                  static_cast<unsigned>(seat), static_cast<unsigned>(door), static_cast<unsigned>(reason));
         ApplyRemoteVehicleInOut(action, pedId, vehicleId, seat);
+        if (action == 0)
+            WorldRPG::Script::ActiveVmFireVehicleStartInOut(true, pedId, vehicleId, seat, door);
+        else if (action == 3)
+            WorldRPG::Script::ActiveVmFireVehicleStartInOut(false, pedId, vehicleId, seat, door);
         if (action == 1 || action == 4 || action == 6)
             WorldRPG::Script::ActiveVmFireVehicleSeat(action == 1, pedId, vehicleId, seat);
         return true;
@@ -1405,10 +1409,12 @@ bool HandleVehicleInOut(const uint8_t* body, size_t length, size_t bits) {
     }
     switch (action) {
         case 0:  // REQUEST_IN_CONFIRMED: the server allows the entry, so send NOTIFY_IN (1)
+            WorldRPG::Script::ActiveVmFireVehicleStartInOut(true, pedId, vehicleId, seat, door);
             if (WorldRPG::Net::SendVehicleInOutNotify(pedId, vehicleId, 1))
                 WorldRPG::RemoteVehicle::SetOccupant(pedId, vehicleId, seat);
             break;
         case 3: {  // REQUEST_OUT_CONFIRMED
+            WorldRPG::Script::ActiveVmFireVehicleStartInOut(false, pedId, vehicleId, seat, door);
             uint32_t confirmedVehicle = 0;
             uint8_t confirmedSeat = 0;
             if (WorldRPG::RemoteVehicle::FindOccupant(pedId, confirmedVehicle, confirmedSeat) &&

@@ -1,5 +1,7 @@
 #include "EngineRenderer.h"
 
+#include "EngineAssets.h"
+#include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 
 extern "C" {
@@ -7,9 +9,12 @@ extern "C" {
 #include "lua.h"
 }
 
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <vector>
 
 namespace WorldRPG::Models {
 namespace {
@@ -174,19 +179,85 @@ int ResetRendererStats(lua_State* L) {
     return 1;
 }
 
+constexpr int kRadarGridSize = 40;
+constexpr int kRadarStockMin = 14;
+constexpr int kRadarStockMax = 25;
+
+struct RadarMapTile {
+    uint32_t ownerGeneration = 0;
+    uint32_t sourceTxdId = 0;
+    std::vector<uint8_t> data;
+    bool filteringEnabled = true;
+
+    void Clear() {
+        ownerGeneration = 0;
+        sourceTxdId = 0;
+        data.clear();
+        data.shrink_to_fit();
+        filteringEnabled = true;
+    }
+};
+
+std::mutex g_radarMutex;
+std::array<RadarMapTile, kRadarGridSize * kRadarGridSize> g_radarTiles;
+uint32_t g_radarRevision = 0;
+
+bool IsRegisterableRadarTile(int column, int row) {
+    if (column < 0 || column >= kRadarGridSize || row < 0 || row >= kRadarGridSize) return false;
+    if (column >= kRadarStockMin && column <= kRadarStockMax &&
+        row >= kRadarStockMin && row <= kRadarStockMax) {
+        return false;
+    }
+    return true;
+}
+
+size_t RadarTileIndex(int column, int row) {
+    return static_cast<size_t>(row * kRadarGridSize + column);
+}
+
+// Desktop CLuaEngineDefs::EngineSetRadarMapTile (CLuaEngineDefs.cpp:788-834) +
+// CRadarSA::SetMapTile (CRadarSA.cpp:628-645).
 int SetRadarTile(lua_State* L) {
     lua_Number column = 0;
     lua_Number row = 0;
     std::string error;
     if (!ReadNumber(L, 1, "engineSetRadarMapTile", column, error)) return luaL_error(L, "%s", error.c_str());
     if (!ReadNumber(L, 2, "engineSetRadarMapTile", row, error)) return luaL_error(L, "%s", error.c_str());
-    if (lua_type(L, 3) != LUA_TUSERDATA) return luaL_error(L, "%s", Bad("engineSetRadarMapTile", "txd", 3, Got(L, 3)).c_str());
-    (void)column;
-    (void)row;
-    lua_pushboolean(L, 0);
+    const uint32_t txdId = ElementIdOf(L, 3);
+    const bool isTxd = txdId != 0 && KnownClientElement(txdId) && ClientElementTypeName(txdId) == "txd";
+    if (!isTxd) return luaL_error(L, "%s", Bad("engineSetRadarMapTile", "txd", 3, Got(L, 3)).c_str());
+
+    const int columnInt = static_cast<int>(column);
+    const int rowInt = static_cast<int>(row);
+    const uint32_t ownerGen = ActiveVmOwnerGeneration();
+    if (!IsRegisterableRadarTile(columnInt, rowInt) || ownerGen == 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    std::vector<uint8_t> data;
+    bool filtering = true;
+    if (!CopyTxdDataForRadar(txdId, ownerGen, data, filtering) || data.empty()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    std::lock_guard<std::mutex> lock(g_radarMutex);
+    RadarMapTile& tile = g_radarTiles[RadarTileIndex(columnInt, rowInt)];
+    if (tile.ownerGeneration != 0 && tile.ownerGeneration != ownerGen) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    tile.ownerGeneration = ownerGen;
+    tile.sourceTxdId = txdId;
+    tile.data = std::move(data);
+    tile.filteringEnabled = filtering;
+    ++g_radarRevision;
+    lua_pushboolean(L, 1);
     return 1;
 }
 
+// Desktop CLuaEngineDefs::EngineResetRadarMapTile (CLuaEngineDefs.cpp:836-858) +
+// CRadarSA::ResetMapTile (CRadarSA.cpp:647-659).
 int ResetRadarTile(lua_State* L) {
     lua_Number column = 0;
     lua_Number row = 0;
@@ -195,31 +266,88 @@ int ResetRadarTile(lua_State* L) {
     if (!ReadNumber(L, 2, "engineResetRadarMapTile", row, error)) return luaL_error(L, "%s", error.c_str());
     const int columnInt = static_cast<int>(column);
     const int rowInt = static_cast<int>(row);
-    if (columnInt < 0 || columnInt >= 40 || rowInt < 0 || rowInt >= 40) {
+    const uint32_t ownerGen = ActiveVmOwnerGeneration();
+    if (!IsRegisterableRadarTile(columnInt, rowInt) || ownerGen == 0) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    LUA_LOGI("DIAG engineResetRadarMapTile: the radar tile registry is not hooked");
-    lua_pushboolean(L, 0);
+    std::lock_guard<std::mutex> lock(g_radarMutex);
+    RadarMapTile& tile = g_radarTiles[RadarTileIndex(columnInt, rowInt)];
+    if (tile.ownerGeneration != ownerGen) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    tile.Clear();
+    ++g_radarRevision;
+    lua_pushboolean(L, 1);
     return 1;
 }
 
+// Desktop CLuaEngineDefs::EngineGetRadarMapStats (CLuaEngineDefs.cpp:860-876).
 int GetRadarStats(lua_State* L) {
+    uint32_t registered = 0;
+    size_t sourceBytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_radarMutex);
+        for (const RadarMapTile& tile : g_radarTiles) {
+            if (tile.ownerGeneration != 0) {
+                ++registered;
+                sourceBytes += tile.data.size();
+            }
+        }
+    }
     lua_newtable(L);
-    lua_pushboolean(L, 0);
+    lua_pushboolean(L, 1);
     lua_setfield(L, -2, "hooksInstalled");
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, static_cast<lua_Number>(registered));
     lua_setfield(L, -2, "registeredTiles");
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, static_cast<lua_Number>(registered));
     lua_setfield(L, -2, "loadedTiles");
     lua_pushnumber(L, 0);
     lua_setfield(L, -2, "failedTiles");
-    lua_pushnumber(L, 0);
+    lua_pushnumber(L, static_cast<lua_Number>(sourceBytes));
     lua_setfield(L, -2, "sourceBytes");
     return 1;
 }
 
 }  // namespace
+
+void RemoveRadarMapTilesForSource(uint32_t txdId) {
+    if (txdId == 0) return;
+    std::lock_guard<std::mutex> lock(g_radarMutex);
+    bool removed = false;
+    for (RadarMapTile& tile : g_radarTiles) {
+        if (tile.sourceTxdId == txdId) {
+            tile.Clear();
+            removed = true;
+        }
+    }
+    if (removed) ++g_radarRevision;
+}
+
+void RemoveRadarMapTilesForOwner(uint32_t ownerGeneration) {
+    if (ownerGeneration == 0) return;
+    std::lock_guard<std::mutex> lock(g_radarMutex);
+    bool removed = false;
+    for (RadarMapTile& tile : g_radarTiles) {
+        if (tile.ownerGeneration == ownerGeneration) {
+            tile.Clear();
+            removed = true;
+        }
+    }
+    if (removed) ++g_radarRevision;
+}
+
+void ResetRadarMapTiles() {
+    std::lock_guard<std::mutex> lock(g_radarMutex);
+    for (RadarMapTile& tile : g_radarTiles) tile.Clear();
+    ++g_radarRevision;
+}
+
+uint32_t GetRadarMapRevision() {
+    std::lock_guard<std::mutex> lock(g_radarMutex);
+    return g_radarRevision;
+}
 
 void BindEngineRendererLua(lua_State* L) {
     const struct { const char* name; lua_CFunction fn; } binds[] = {

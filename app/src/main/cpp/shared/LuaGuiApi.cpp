@@ -101,6 +101,8 @@ struct GuiElement {
     std::vector<std::vector<GridCell>> gridRows;
     int gridMode = 0;
     bool gridSort = true;
+    int gridSortColumn = 0;  // 1-based active sort column; 0 = unsorted
+    int gridSortDir = 0;     // 0 = none, 1 = ascending, 2 = descending
 };
 
 // Ordered by id. Draw order among siblings is z, not id (guiBringToFront).
@@ -775,10 +777,16 @@ static void DrawElement(std::string& out, uint32_t id, const GuiElement& element
         AppendRect(out, box, kFieldBackground, alpha);
         double x = box.x;
         const double header = 16.0;
-        for (const GuiElement::GridColumn& column : element.columns) {
+        for (size_t colIdx = 0; colIdx < element.columns.size(); ++colIdx) {
+            const GuiElement::GridColumn& column = element.columns[colIdx];
             const double w = std::max(8.0, box.w * column.width);
             AppendRect(out, Box{x, box.y, w, header}, kButtonBackground, alpha);
-            AppendText(out, x + 2, box.y, x + w, box.y + header, textColor, alpha, OneLine(column.title.c_str(), column.title.size()));
+            std::string title = OneLine(column.title.c_str(), column.title.size());
+            if (element.gridSort && element.gridSortColumn == static_cast<int>(colIdx + 1)) {
+                if (element.gridSortDir == 1) title += " ^";
+                else if (element.gridSortDir == 2) title += " v";
+            }
+            AppendText(out, x + 2, box.y, x + w, box.y + header, textColor, alpha, title);
             x += w;
         }
         for (size_t row = 0; row < element.gridRows.size() && row < 8; ++row) {
@@ -2622,6 +2630,84 @@ static int CountGridSelection(const GuiElement& grid) {
     return count;
 }
 
+static bool GridRowIsSection(const std::vector<GuiElement::GridCell>& row) {
+    for (const auto& cell : row) {
+        if (cell.section) return true;
+    }
+    return false;
+}
+
+static bool GridCellLess(const GuiElement::GridCell* a, const GuiElement::GridCell* b) {
+    const std::string empty;
+    const std::string& ta = a ? a->text : empty;
+    const std::string& tb = b ? b->text : empty;
+    if (a && b && a->number && b->number) {
+        char* endA = nullptr;
+        char* endB = nullptr;
+        const double va = std::strtod(ta.c_str(), &endA);
+        const double vb = std::strtod(tb.c_str(), &endB);
+        if (endA != ta.c_str() && endB != tb.c_str() && std::isfinite(va) && std::isfinite(vb)) {
+            if (va != vb) return va < vb;
+        }
+    }
+    return ta < tb;
+}
+
+// Desktop CGUIGridList_Impl::Sort (CGUIGridList_Impl.cpp:780-797): sorts rows by the active
+// 1-based column (ascending/descending), preserving section rows as group boundaries.
+static void SortGridRows(GuiElement& grid, int* trackedRow = nullptr) {
+    if (!grid.gridSort || grid.gridSortDir == 0) return;
+    const int colIndex = grid.gridSortColumn - 1;
+    if (colIndex < 0 || colIndex >= static_cast<int>(grid.columns.size())) return;
+    const size_t n = grid.gridRows.size();
+    if (n <= 1) return;
+
+    struct IndexedRow {
+        size_t origIndex;
+        std::vector<GuiElement::GridCell> cells;
+    };
+    std::vector<IndexedRow> rows;
+    rows.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        rows.push_back(IndexedRow{i, std::move(grid.gridRows[i])});
+    }
+    const bool descending = (grid.gridSortDir == 2);
+    auto cmp = [colIndex, descending](const IndexedRow& lhs, const IndexedRow& rhs) {
+        const GuiElement::GridCell* ca =
+            static_cast<size_t>(colIndex) < lhs.cells.size() ? &lhs.cells[static_cast<size_t>(colIndex)] : nullptr;
+        const GuiElement::GridCell* cb =
+            static_cast<size_t>(colIndex) < rhs.cells.size() ? &rhs.cells[static_cast<size_t>(colIndex)] : nullptr;
+        return descending ? GridCellLess(cb, ca) : GridCellLess(ca, cb);
+    };
+
+    // Sort contiguous non-section runs so section header rows keep their grouping.
+    size_t runStart = 0;
+    while (runStart < rows.size()) {
+        if (GridRowIsSection(rows[runStart].cells)) {
+            ++runStart;
+            continue;
+        }
+        size_t runEnd = runStart + 1;
+        while (runEnd < rows.size() && !GridRowIsSection(rows[runEnd].cells)) ++runEnd;
+        if (runEnd - runStart > 1) {
+            std::stable_sort(rows.begin() + static_cast<std::ptrdiff_t>(runStart),
+                             rows.begin() + static_cast<std::ptrdiff_t>(runEnd), cmp);
+        }
+        runStart = runEnd;
+    }
+
+    int updatedTracked = trackedRow ? *trackedRow : -1;
+    grid.gridRows.clear();
+    grid.gridRows.reserve(rows.size());
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (trackedRow && *trackedRow >= 0 && rows[i].origIndex == static_cast<size_t>(*trackedRow)) {
+            updatedTracked = static_cast<int>(i);
+        }
+        grid.gridRows.push_back(std::move(rows[i].cells));
+    }
+    if (trackedRow) *trackedRow = updatedTracked;
+}
+
 static void ReleaseCell(lua_State* L, GuiElement::GridCell& cell) {
     if (cell.dataRef != LUA_NOREF) {
         (void)L;
@@ -2668,6 +2754,12 @@ static int GuiGridListRemoveColumn(lua_State* L) {
     const int index = column - 1;
     if (grid && index >= 0 && index < static_cast<int>(grid->columns.size())) {
         grid->columns.erase(grid->columns.begin() + index);
+        if (grid->gridSortColumn == column) {
+            grid->gridSortColumn = 0;
+            grid->gridSortDir = 0;
+        } else if (grid->gridSortColumn > column) {
+            --grid->gridSortColumn;
+        }
         for (auto& row : grid->gridRows) {
             if (index < static_cast<int>(row.size())) {
                 ReleaseCell(L, row[static_cast<size_t>(index)]);
@@ -2799,8 +2891,11 @@ static int GuiGridListAddRow(lua_State* L) {
         return 1;
     }
     grid->gridRows.emplace_back();
-    const int row = static_cast<int>(grid->gridRows.size()) - 1;
+    int row = static_cast<int>(grid->gridRows.size()) - 1;
     FillRowText(L, *grid, row, 2);
+    if (grid->gridSort && grid->gridSortColumn > 0 && grid->gridSortDir != 0) {
+        SortGridRows(*grid, &row);
+    }
     lua_pushinteger(L, row);
     return 1;
 }
@@ -2867,6 +2962,9 @@ static int GuiGridListSetItemText(lua_State* L) {
         cell->text = std::move(text);
         cell->section = section;
         cell->number = number;
+        if (grid->gridSort && grid->gridSortColumn == column && grid->gridSortDir != 0) {
+            SortGridRows(*grid);
+        }
     }
     lua_pushboolean(L, grid ? 1 : 0);
     return 1;
@@ -3072,15 +3170,62 @@ static int GuiGridListGetSelectionMode(lua_State* L) {
     return 1;
 }
 
+void GuiHandleClick(uint32_t id, double x, double y) {
+    GuiElement* element = Find(id);
+    if (!element || !EffectivelyVisible(*element) || !EffectivelyEnabled(*element)) return;
+    if (element->type != "gui-gridlist" || element->columns.empty()) return;
+    const Box box = ScreenBox(id);
+    if (x < box.x || x > box.x + box.w || y < box.y || y > box.y + box.h) return;
+
+    const double headerHeight = 16.0;
+    int clickedCol = 0;
+    double cx = box.x;
+    for (size_t i = 0; i < element->columns.size(); ++i) {
+        const double w = std::max(8.0, box.w * element->columns[i].width);
+        if (x >= cx && x < cx + w) {
+            clickedCol = static_cast<int>(i + 1);
+            break;
+        }
+        cx += w;
+    }
+    if (clickedCol <= 0) return;
+
+    // Header click: toggle ascending/descending sort when sorting is enabled (CGUIGridList_Impl::Sort).
+    if (y < box.y + headerHeight) {
+        if (!element->gridSort) return;
+        if (element->gridSortColumn == clickedCol && element->gridSortDir == 1) {
+            element->gridSortDir = 2;
+        } else {
+            element->gridSortColumn = clickedCol;
+            element->gridSortDir = 1;
+        }
+        SortGridRows(*element);
+        return;
+    }
+
+    // Data row click: select clicked row/cell unless it is a section row.
+    const int clickedRow = static_cast<int>(std::floor((y - (box.y + headerHeight)) / 16.0));
+    if (clickedRow < 0 || clickedRow >= static_cast<int>(element->gridRows.size())) return;
+    if (GridRowIsSection(element->gridRows[static_cast<size_t>(clickedRow)])) return;
+    if (SingleGridMode(element->gridMode)) ClearGridSelection(*element);
+    MarkGridSelection(*element, clickedRow, clickedCol);
+}
+
 static int GuiGridListSetSortingEnabled(lua_State* L) {
     Args args{L};
     uint32_t id = 0;
     bool enabled = false;
     if (!args.gui(id, "gui-gridlist") || !args.flag(enabled, false, false))
         return Reject(L, "guiGridListSetSortingEnabled", args, false);
-    // The flag is stored. Rows stay in insertion order: CEGUI's sort would change the
-    // index addRow returned (CGUIGridList_Impl::Sort, 780-797), and that reorder is not hooked.
-    if (GuiElement* grid = Find(id)) grid->gridSort = enabled;
+    if (GuiElement* grid = Find(id)) {
+        grid->gridSort = enabled;
+        if (!enabled) {
+            grid->gridSortColumn = 0;
+            grid->gridSortDir = 0;
+        } else if (grid->gridSortColumn > 0 && grid->gridSortDir != 0) {
+            SortGridRows(*grid);
+        }
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

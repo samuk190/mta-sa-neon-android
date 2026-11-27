@@ -42,6 +42,7 @@ extern "C" {
 #include "LuaWorldQueryApi.h"
 #include "LuaSightApi.h"
 #include "LuaAmbientApi.h"
+#include "LuaOopApi.h"
 #include "DxShader.h"
 #include "LuaSvgApi.h"
 #include "LuaApiExtra.h"
@@ -2269,6 +2270,9 @@ static void installDxBindings(lua_State* L) {
     lua_setglobal(L, "getNetworkStats");
     lua_pushcfunction(L, l_getNetworkUsageData);
     lua_setglobal(L, "getNetworkUsageData");
+    // Install MTA OOP class metatables and Vector2/Vector3/Vector4/Matrix constructors last
+    // so every procedural MTA global they wrap is already registered.
+    InstallOopLua(L);
 }
 
 static void refreshLocalPlayer(lua_State* L) {
@@ -2971,6 +2975,7 @@ static void ApplyGuiMouse(const CursorEvent& ev) {
     if (ev.action == 0) {
         g_guiPressed = hit;
         if (!hit) return;
+        GuiHandleClick(hit, ev.x, ev.y);
         const uint64_t now = DxNow();
         const bool doubleClick = hit == g_guiLastPress && now - g_guiLastPressMs <= kGuiDoubleClickMs;
         g_guiLastPress = doubleClick ? 0 : hit;
@@ -3411,6 +3416,34 @@ void ActiveVmFireVehicleSeat(bool entered, uint32_t ped, uint32_t vehicle, uint8
         dispatch(player ? "onClientPlayerVehicleExit" : "onClientPedVehicleExit", ped, vehicle);
         dispatch("onClientVehicleExit", vehicle, ped);
     }
+}
+
+bool ActiveVmFireVehicleStartInOut(bool entering, uint32_t ped, uint32_t vehicle, uint8_t seat, uint8_t door) {
+    if (!g_dx.L || !ped || !vehicle) return true;
+    lua_State* L = g_dx.L;
+    const uint32_t local = ServerWorld::LocalPlayer();
+    refreshLocalPlayer(L);
+    lua_getglobal(L, "source");
+    PushElement(L, vehicle);
+    lua_setglobal(L, "source");
+    if (ped == local) l_getLocalPlayer(L);
+    else PushElement(L, ped);
+    lua_pushnumber(L, seat);
+    lua_pushnumber(L, door);
+    const bool allowed = fireHandlers(entering ? "onClientVehicleStartEnter" : "onClientVehicleStartExit",
+                                      3, vehicle, nullptr, true);
+    lua_setglobal(L, "source");
+    return allowed;
+}
+
+void ActiveVmFireElementStream(uint32_t id, bool streamedIn) {
+    if (!g_dx.L || !id) return;
+    lua_State* L = g_dx.L;
+    lua_getglobal(L, "source");
+    PushElement(L, id);
+    lua_setglobal(L, "source");
+    fireHandlers(streamedIn ? "onClientElementStreamIn" : "onClientElementStreamOut", 0, id, nullptr, true);
+    lua_setglobal(L, "source");
 }
 
 void ActiveVmFireSpatialEvent(const char* name,uint32_t source,uint32_t other,bool matching) {

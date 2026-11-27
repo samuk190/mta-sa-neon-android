@@ -44,4 +44,9 @@ void ResetRendererStats();
 
 namespace WorldRPG::Script {
 void BindEngineRendererLua(lua_State* L);
+// Extended radar tile registry lifecycle (desktop CRadarSA.cpp:628-696).
+void RemoveRadarMapTilesForSource(uint32_t txdId);
+void RemoveRadarMapTilesForOwner(uint32_t ownerGeneration);
+void ResetRadarMapTiles();
+uint32_t GetRadarMapRevision();
 }

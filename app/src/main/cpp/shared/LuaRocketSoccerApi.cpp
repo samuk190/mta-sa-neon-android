@@ -15,6 +15,7 @@
 
 #include "lua.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -382,13 +384,77 @@ int CameraStep(lua_State* vm) {
     return 1;
 }
 
+std::mutex g_gamepadMutex;
+RocketGamepadInput g_gamepadState{};
+
+float ClampUnitSigned(float v) { return std::isfinite(v) ? std::clamp(v, -1.0f, 1.0f) : 0.0f; }
+float ClampUnitUnsigned(float v) { return std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : 0.0f; }
+
+// CLuaRocketSoccerDefs::Gamepad (CLuaRocketSoccerDefs.cpp:445-499) + CRocketSoccerGamepad.h:19-30.
 int Gamepad(lua_State* vm) {
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
-        ROCKET_LOGI("DIAG rocketSimGamepad: no gamepad hook on this client (desktop reads XInput / Sony HID)");
+    RocketGamepadInput snap{};
+    {
+        std::lock_guard<std::mutex> lock(g_gamepadMutex);
+        snap = g_gamepadState;
     }
-    lua_pushboolean(vm, 0);
+    if (!snap.connected) {
+        lua_pushboolean(vm, 0);
+        return 1;
+    }
+    lua_createtable(vm, 0, 5);
+    lua_pushboolean(vm, 1);
+    lua_setfield(vm, -2, "connected");
+    lua_pushinteger(vm, snap.index);
+    lua_setfield(vm, -2, "index");
+    lua_pushstring(vm, "Android");
+    lua_setfield(vm, -2, "backend");
+
+    lua_createtable(vm, 4, 0);
+    for (int i = 0; i < 4; ++i) {
+        lua_pushnumber(vm, ClampUnitSigned(snap.axes[i]));
+        lua_rawseti(vm, -2, i + 1);
+    }
+    lua_setfield(vm, -2, "axes");
+
+    // W3C Gamepad / CRocketSoccerGamepad.h order:
+    // 0:A, 1:B, 2:X, 3:Y, 4:L1, 5:R1, 6:LT, 7:RT, 8:Select, 9:Start,
+    // 10:L3, 11:R3, 12:DPadUp, 13:DPadDown, 14:DPadLeft, 15:DPadRight, 16:Guide.
+    static constexpr std::array<uint16_t, 17> kWarBits = {
+        1u << 0,  // A
+        1u << 1,  // B
+        1u << 2,  // X
+        1u << 3,  // Y
+        1u << 6,  // L1
+        1u << 7,  // R1
+        0u,       // LT (analog axes[4])
+        0u,       // RT (analog axes[5])
+        1u << 5,  // Select
+        1u << 4,  // Start
+        1u << 12, // L3
+        1u << 13, // R3
+        1u << 8,  // DPad Up
+        1u << 9,  // DPad Down
+        1u << 10, // DPad Left
+        1u << 11, // DPad Right
+        0u        // Guide
+    };
+    std::array<float, 17> buttons{};
+    for (size_t i = 0; i < kWarBits.size(); ++i) {
+        buttons[i] = (snap.warButtons & kWarBits[i]) ? 1.0f : 0.0f;
+    }
+    buttons[6] = ClampUnitUnsigned(snap.axes[4]);
+    buttons[7] = ClampUnitUnsigned(snap.axes[5]);
+
+    lua_createtable(vm, 17, 0);
+    for (int i = 0; i < 17; ++i) {
+        lua_createtable(vm, 0, 2);
+        lua_pushnumber(vm, buttons[i]);
+        lua_setfield(vm, -2, "value");
+        lua_pushboolean(vm, buttons[i] > 0.5f ? 1 : 0);
+        lua_setfield(vm, -2, "pressed");
+        lua_rawseti(vm, -2, i + 1);
+    }
+    lua_setfield(vm, -2, "buttons");
     return 1;
 }
 
@@ -468,9 +534,16 @@ void RocketSoccerDropResource(uint32_t generation) {
     }
 }
 
+void RocketSoccerSetGamepad(const RocketGamepadInput& input) {
+    std::lock_guard<std::mutex> lock(g_gamepadMutex);
+    g_gamepadState = input;
+}
+
 void RocketSoccerReset() {
     // The VMs are reset with the session, so their registry references go with them.
     g_scenes.clear();
+    std::lock_guard<std::mutex> lock(g_gamepadMutex);
+    g_gamepadState = {};
 }
 
 }  // namespace WorldRPG::Script

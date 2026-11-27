@@ -68,10 +68,28 @@ public class WarGamepad extends com.wardrumstudios.utils.WarBilling {
         return -1;
     }
 
+    protected void onGamepadStateChanged(
+            boolean connected, int index, int buttons,
+            float lx, float ly, float rx, float ry, float lt, float rt) {
+    }
+
+    private void notifyPrimaryGamepadLocked() {
+        boolean connected = gamepadDeviceIds[0] != -1;
+        int buttons = connected ? gamepadButtons[0] : 0;
+        float lx = connected ? gamepadAxes[0][0] : 0.0f;
+        float ly = connected ? gamepadAxes[0][1] : 0.0f;
+        float rx = connected ? gamepadAxes[0][2] : 0.0f;
+        float ry = connected ? gamepadAxes[0][3] : 0.0f;
+        float lt = connected ? gamepadAxes[0][4] : 0.0f;
+        float rt = connected ? gamepadAxes[0][5] : 0.0f;
+        onGamepadStateChanged(connected, 0, buttons, lx, ly, rx, ry, lt, rt);
+    }
+
     private void scanConnectedGamepadsLocked() {
         long now = android.os.SystemClock.uptimeMillis();
         if (now - lastDeviceScanMs < 1000L) return;
         lastDeviceScanMs = now;
+        int prevPrimary = gamepadDeviceIds[0];
         for (int i = 0; i < MAX_GAMEPADS; i++) {
             if (gamepadDeviceIds[i] != -1 && InputDevice.getDevice(gamepadDeviceIds[i]) == null) {
                 gamepadDeviceIds[i] = -1;
@@ -80,12 +98,16 @@ public class WarGamepad extends com.wardrumstudios.utils.WarBilling {
             }
         }
         int[] ids = InputDevice.getDeviceIds();
-        if (ids == null) return;
-        for (int id : ids) {
-            InputDevice dev = InputDevice.getDevice(id);
-            if (isGamepadDevice(dev)) {
-                findOrRegisterSlotLocked(id);
+        if (ids != null) {
+            for (int id : ids) {
+                InputDevice dev = InputDevice.getDevice(id);
+                if (isGamepadDevice(dev)) {
+                    findOrRegisterSlotLocked(id);
+                }
             }
+        }
+        if (gamepadDeviceIds[0] != prevPrimary) {
+            notifyPrimaryGamepadLocked();
         }
     }
 
@@ -127,6 +149,7 @@ public class WarGamepad extends com.wardrumstudios.utils.WarBilling {
             } else if (triggerAxis >= 0) {
                 gamepadAxes[slot][triggerAxis] = down ? 1.0f : 0.0f;
             }
+            if (slot == 0) notifyPrimaryGamepadLocked();
         }
         return true;
     }
@@ -156,6 +179,7 @@ public class WarGamepad extends com.wardrumstudios.utils.WarBilling {
             if (hatY < -0.5f) hatBits |= BIT_DPAD_UP;
             else if (hatY > 0.5f) hatBits |= BIT_DPAD_DOWN;
             gamepadButtons[slot] = (gamepadButtons[slot] & ~dpadMask) | hatBits;
+            if (slot == 0) notifyPrimaryGamepadLocked();
         }
         return true;
     }

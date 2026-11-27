@@ -911,6 +911,11 @@ bool g_oopEnabled = false;
 
 int l_isOOPEnabled(lua_State* L) {
     (void)L;
+    ResourceLoader::ResourceView caller;
+    if (ResourceLoader::CopyCallerResource(ActiveVmOwnerNet(), ActiveVmOwnerGeneration(), ActiveVmOwner(), caller)) {
+        lua_pushboolean(L, caller.oopEnabled ? 1 : 0);
+        return 1;
+    }
     lua_pushboolean(L, g_oopEnabled ? 1 : 0);
     return 1;
 }

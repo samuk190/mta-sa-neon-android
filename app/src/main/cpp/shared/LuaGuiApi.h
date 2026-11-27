@@ -60,6 +60,8 @@ bool DxPlainSize(const char* data, size_t size, uint32_t& width, uint32_t& heigh
 
 // Topmost visible, enabled GUI element under this screen point, or 0.
 uint32_t GuiPick(double x, double y);
+// Applies widget-local mouse-down interactions (e.g. gui-gridlist column header sort and row click).
+void GuiHandleClick(uint32_t id, double x, double y);
 // True when id is a visible, enabled gui-edit or gui-memo (accepts keyboard input).
 bool GuiIsEdit(uint32_t id);
 // The focused edit/memo when it is still visible and enabled, otherwise 0.

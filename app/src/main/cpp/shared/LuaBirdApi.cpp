@@ -145,7 +145,7 @@ void PushVector(lua_State* L, const Vec& value) {
     lua_pushnumber(L, value.x);
     lua_pushnumber(L, value.y);
     lua_pushnumber(L, value.z);
-    if (!lua_isfunction(L, -4) || lua_pcall(L, 3, 1, 0) != 0) {
+    if (lua_pcall(L, 3, 1, 0) != 0) {
         lua_pop(L, 1);
         lua_pushboolean(L, 0);
     }

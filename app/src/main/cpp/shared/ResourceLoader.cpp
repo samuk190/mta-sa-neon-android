@@ -59,6 +59,7 @@ struct Entry {
     std::string minClientRequirement;           // meta.xml min_mta_version client
     uint32_t startCounter = 0;                  // PLAYER_RESOURCE_START value
     bool startCounterFromWire = false;          // false: stripped by the mobile shim, assumed
+    bool oopEnabled = false;
     uint32_t generation = 0;                    // unique for every RESOURCE_START, even when the net id is reused
 };
 
@@ -80,6 +81,7 @@ ResourceView ViewOf(const Entry& entry) {
     view.state = StateOf(entry);
     view.exports = entry.exports;
     view.minClientRequirement = entry.minClientRequirement;
+    view.oopEnabled = entry.oopEnabled;
     return view;
 }
 
@@ -189,6 +191,7 @@ void OnResourceStart(const WorldRPG::Net::ResourceStartInfo& info) {
     // will not match and the server then ignores the packet.
     entry.startCounterFromWire = info.layout == WorldRPG::Net::ResourceStartLayout::Desktop;
     entry.startCounter = entry.startCounterFromWire ? info.startCounter : ResourcePackets::kFirstStartCounter;
+    entry.oopEnabled = info.oopEnabled;
     entry.generation = g_nextGeneration++;
 
     size_t automatic = 0;
@@ -330,6 +333,7 @@ std::vector<ResourceLoadJob> Pump(std::vector<FileDownloadEvent>& events) {
         job.rootElement = entry.root;
         job.startCounter = entry.startCounter;
         job.startCounterFromWire = entry.startCounterFromWire;
+        job.oopEnabled = entry.oopEnabled;
         job.generation = entry.generation;
         unsigned index = 0;
         for (NoCacheItem& item : entry.noCache) {

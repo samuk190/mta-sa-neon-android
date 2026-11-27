@@ -184,6 +184,8 @@ public final class EngineHostActivity extends GTASA {
     private native boolean nativeSendChat(String text);
     private native void nativeChatInputActive(boolean active);
     private native void nativeKeyEvent(String key, boolean down);
+    private native void nativeGamepadState(boolean connected, int index, int buttons,
+                                           float lx, float ly, float rx, float ry, float lt, float rt);
     private native boolean nativeHardwareMouseReady();
     private native void nativeHardwareMouse(float x, float y, int buttons, float wheel, boolean captured);
     private static final class PhysicalKey {
@@ -2010,6 +2012,15 @@ public final class EngineHostActivity extends GTASA {
         }
         nativeHardwareMouse(x, y, buttons, wheel, true);
         return true;
+    }
+
+    @Override
+    protected void onGamepadStateChanged(
+            boolean connected, int index, int buttons,
+            float lx, float ly, float rx, float ry, float lt, float rt) {
+        if (clientReady) {
+            nativeGamepadState(connected, index, buttons, lx, ly, rx, ry, lt, rt);
+        }
     }
 
     @Override

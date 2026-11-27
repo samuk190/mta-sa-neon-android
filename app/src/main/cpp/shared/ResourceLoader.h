@@ -37,6 +37,7 @@ struct ResourceLoadJob {
     uint32_t rootElement = 0;       // RESOURCE_START entity id (resource root)
     uint32_t startCounter = 0;      // echoed in PLAYER_RESOURCE_START
     bool startCounterFromWire = false;  // false: the mobile shim stripped it, startCounter is assumed
+    bool oopEnabled = false;            // meta.xml <oop>true</oop> (RESOURCE_START OOP flag)
     uint32_t generation = 0;            // unique for this RESOURCE_START
     std::vector<ResourceScript> noCacheScripts;  // packet 95 order
     std::vector<ResourceScript> clientScripts;   // RESOURCE_START file list order
@@ -97,6 +98,7 @@ struct ResourceView {
     std::string state;
     std::vector<std::string> exports;
     std::string minClientRequirement;  // RESOURCE_START min client version (CResource::GetMinClientReq)
+    bool oopEnabled = false;
 };
 
 // RESOURCE_START order. CopyResource returns the newest entry for a name.

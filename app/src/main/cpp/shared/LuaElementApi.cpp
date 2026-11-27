@@ -1185,10 +1185,13 @@ int SetElementModel(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    lua_pushinteger(L, current);
+    lua_pushinteger(L, static_cast<lua_Integer>(model));
+    ActiveVmFireElementEvent(L, "onClientElementModelChange", id, 2);
     static bool once = false;
     if (!once) {
         once = true;
-        LUA_LOGI("DIAG setElementModel: CPed/CVehicle::SetModel and onClientElementModelChange are not run");
+        LUA_LOGI("DIAG setElementModel: CPed/CVehicle::SetModel native rebuild is not run");
     }
     lua_pushboolean(L, 1);
     return 1;

@@ -8,6 +8,7 @@
 #include "WorldShaderMatches.h"
 #include "EngineAssets.h"
 #include "EngineModelLoader.h"
+#include "EngineRenderer.h"
 #include "LuaApiExtra.h"
 #include "LuaFileApi.h"
 
@@ -46,6 +47,8 @@ struct ModelAsset {
     uint32_t generation;
     DffSource dff;
     void* txd;
+    std::vector<std::uint8_t> txdBytes;
+    bool txdFiltering = true;
 };
 
 std::unordered_map<uint32_t, ModelAsset> g_assets;
@@ -306,6 +309,8 @@ int LoadRenderWareAsset(lua_State* L, bool dff, bool filtering = true) {
         asset.txd = NativeLoadTXD(data, filtering);
         if (!asset.txd) return FailFalse(L, Usage(function, "Error reading RenderWare texture dictionary",
                                                 filename.empty() ? "raw data" : input), true);
+        asset.txdBytes.assign(data.begin(), data.end());
+        asset.txdFiltering = filtering;
     }
     const uint32_t id = CreateResourceElement(dff ? "dff" : "txd");
     if (!id) {
@@ -798,7 +803,17 @@ int ModelTextures(lua_State* L) {
 
 }  // namespace
 
+bool CopyTxdDataForRadar(uint32_t id, uint32_t expectedGeneration, std::vector<uint8_t>& outBytes, bool& outFiltering) {
+    const auto it = g_assets.find(id);
+    if (it == g_assets.end() || !it->second.txd || it->second.txdBytes.empty()) return false;
+    if (expectedGeneration == 0 || it->second.generation != expectedGeneration) return false;
+    outBytes = it->second.txdBytes;
+    outFiltering = it->second.txdFiltering;
+    return true;
+}
+
 void ReleaseModelAsset(uint32_t id) {
+    RemoveRadarMapTilesForSource(id);
     const auto it = g_assets.find(id);
     if (it == g_assets.end()) return;
     NativeReleaseModelAsset(it->second.serial, it->second.txd);
@@ -806,6 +821,7 @@ void ReleaseModelAsset(uint32_t id) {
 }
 
 void DropResourceModelAssets(uint32_t generation) {
+    RemoveRadarMapTilesForOwner(generation);
     std::vector<uint32_t> owned;
     for (const auto& [id, asset] : g_assets)
         if (asset.generation == generation) owned.push_back(id);
@@ -825,6 +841,7 @@ void DropResourceModelAssets(uint32_t generation) {
 bool CustomModelAllocated(uint32_t model) { return g_customModels.count(static_cast<int>(model)) > 0; }
 
 void ResetModelAssets() {
+    ResetRadarMapTiles();
     for (const auto& [id, asset] : g_assets) NativeReleaseModelAsset(asset.serial, asset.txd);
     g_assets.clear();
     for (const auto& [id, generation] : g_customModels)

@@ -93,6 +93,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/LuaWorldQueryApi.cpp"
     "${NATIVE_DIR}/shared/LuaSightApi.cpp"
     "${NATIVE_DIR}/shared/LuaAmbientApi.cpp"
+    "${NATIVE_DIR}/shared/LuaOopApi.cpp"
     "${NATIVE_DIR}/shared/LuaClothesApi.cpp"
     "${NATIVE_DIR}/shared/LuaWeaponApi.cpp"
     "${NATIVE_DIR}/shared/LuaProjectileApi.cpp"

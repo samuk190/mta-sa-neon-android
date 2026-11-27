@@ -3,6 +3,7 @@
 
 #include "LuaGuiApi.h"
 #include "LuaJsonApi.h"
+#include "LuaOopApi.h"
 #include "LuaVMStub.h"
 #include "ControlToggles.h"
 #include "ServerWorld.h"
@@ -820,6 +821,7 @@ void PushElement(lua_State* L, uint32_t id) {
     lua_setfield(L, -2, "id");
     lua_pushboolean(L, 1);
     lua_setfield(L, -2, "element");
+    AttachElementOopMetatable(L);
 }
 
 uint32_t ElementIdOf(lua_State* L, int index) {

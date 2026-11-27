@@ -8,6 +8,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaGuiApi.h"
+#include "LuaOopApi.h"
 #include "LuaVMStub.h"
 #include "ResourceLoader.h"
 
@@ -59,6 +60,7 @@ void PushResource(lua_State* L, const ResourceLoader::ResourceView& view) {
     lua_setfield(L, -2, "start");
     lua_pushinteger(L, view.generation);
     lua_setfield(L, -2, "gen");
+    AttachResourceOopMetatable(L);
     lua_pushvalue(L, -1);
     lua_rawseti(L, -3, view.netId);
     lua_remove(L, -2);

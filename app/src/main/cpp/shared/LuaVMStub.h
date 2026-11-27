@@ -172,6 +172,8 @@ void CopyClientChildren(uint32_t id, std::vector<uint32_t>& out);
 bool ClientCallPropagationEnabled(uint32_t id);
 void ActiveVmFirePlayerNetworkStatus(uint32_t player, uint8_t type, uint32_t ticks);
 void ActiveVmFireVehicleSeat(bool entered, uint32_t ped, uint32_t vehicle, uint8_t seat);
+bool ActiveVmFireVehicleStartInOut(bool entering, uint32_t ped, uint32_t vehicle, uint8_t seat, uint8_t door);
+void ActiveVmFireElementStream(uint32_t id, bool streamedIn);
 // Fires name on source with the nargs values on top of L (popped), the source's
 // parents and children called (CClientEntity::CallEvent bCallOnChildren). Sets
 // and restores `source`. Returns false when a handler cancelled it.

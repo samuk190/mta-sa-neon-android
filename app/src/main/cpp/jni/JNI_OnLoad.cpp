@@ -31,6 +31,7 @@
 #include "../shared/Utf8.h"
 #include "../shared/LuaMtaWindowApi.h"
 #include "../shared/LuaKeyBindApi.h"
+#include "../shared/LuaRocketSoccerApi.h"
 #include "../shared/LuaWeaponApi.h"
 #include "../shared/ServerWorld.h"
 #include "../shared/ResourceLoader.h"
@@ -1053,6 +1054,23 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeKeyEvent(JNIEnv* en
     if (!name) return;
     WorldRPG::Script::KeyBindsQueueKey(name, down == JNI_TRUE);
     env->ReleaseStringUTFChars(key, name);
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeGamepadState(
+    JNIEnv*, jobject, jboolean connected, jint index, jint buttons,
+    jfloat lx, jfloat ly, jfloat rx, jfloat ry, jfloat lt, jfloat rt) {
+    WorldRPG::Script::RocketGamepadInput state{};
+    state.connected = connected == JNI_TRUE;
+    state.index = index >= 0 ? index : 0;
+    state.warButtons = static_cast<uint16_t>(buttons & 0xFFFF);
+    state.axes[0] = lx;
+    state.axes[1] = ly;
+    state.axes[2] = rx;
+    state.axes[3] = ry;
+    state.axes[4] = lt;
+    state.axes[5] = rt;
+    WorldRPG::Script::RocketSoccerSetGamepad(state);
 }
 
 JNIEXPORT jboolean JNICALL
