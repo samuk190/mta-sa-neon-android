@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include "LuaEventRegistry.h"
+#include "LuaAudioApi.h"
 #include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
@@ -6365,6 +6366,147 @@ int main(int argc, char** argv) {
             Net::BitStreamWriter stopAssets;
             stopAssets.Write(static_cast<uint16_t>(207));
             Script::ActiveVmOnResourceStop(stopAssets.GetData(), stopAssets.GetByteLength(), stopAssets.GetBitLength());
+        }
+
+        // P2-2: 3D spatial audio attenuation/panning, speed/pitch, live FFT/wave/level analysis,
+        // lifecycle events, playSFX/playSFX3D, mission audio, and frontend/radio bindings.
+        {
+            WorldRPG::Script::AudioSetNativeBackendForTests(true);
+            RunLua(vm, "p2-2-audio-spatial-setup", R"LUA(
+                _G._p2AudioEvents = {}
+                addEventHandler("onClientSoundStarted", root, function(reason)
+                    table.insert(_G._p2AudioEvents, "started:" .. tostring(reason))
+                end)
+                addEventHandler("onClientSoundStream", root, function(ok, len, name)
+                    table.insert(_G._p2AudioEvents, "stream:" .. tostring(ok) .. ":" .. tostring(len) .. ":" .. tostring(name))
+                end)
+                addEventHandler("onClientSoundStopped", root, function(reason)
+                    table.insert(_G._p2AudioEvents, "stopped:" .. tostring(reason))
+                end)
+
+                _G._s3d = playSound3D("https://example.invalid/engine.ogg", 10, 0, 0, true)
+                assert(isElement(_G._s3d), "playSound3D returns sound element")
+                local sx, sy, sz = getElementPosition(_G._s3d)
+                assert(math.abs(sx - 10) < 0.01 and math.abs(sy) < 0.01 and math.abs(sz) < 0.01, "getElementPosition on 3D sound")
+                assert(setSoundMinDistance(_G._s3d, 5) == true and setSoundMaxDistance(_G._s3d, 25) == true)
+                assert(setSoundVolume(_G._s3d, 1.0) == true)
+                assert(setSoundSpeed(_G._s3d, 1.5) == true and math.abs(getSoundSpeed(_G._s3d) - 1.5) < 0.001)
+                assert(setSoundProperties(_G._s3d, 44100, 10, 2, false) == true)
+                local sr, tempo, pitch, rev = getSoundProperties(_G._s3d)
+                assert(sr == 44100 and tempo == 10 and pitch == 2 and rev == false)
+            )LUA");
+
+            lua_State* L = WorldRPG::Script::ActiveVmState();
+            lua_getglobal(L, "_s3d");
+            lua_getfield(L, -1, "id");
+            const uint32_t s3dId = static_cast<uint32_t>(lua_tointeger(L, -1));
+            lua_pop(L, 2);
+
+            // Listener at origin facing +Y (right vector = +X): sound at (10,0,0) is directly right, dist=10 in [5..25].
+            WorldRPG::Script::AudioUpdateSpatial3D(0, 0, 0, 1, 0, 0);
+            float effVol = 0.0f, effPan = 0.0f;
+            CHECK(WorldRPG::Script::AudioGetEffectiveMix(s3dId, effVol, effPan));
+            CHECK(effVol > 0.2f && effVol < 0.8f);
+            CHECK(effPan > 0.9f);
+
+            // Move 3D sound to (-3, 0, 0) via setElementPosition: inside minDistance=5 -> full gain, left pan (-1).
+            RunLua(vm, "p2-2-audio-move-left", "assert(setElementPosition(_G._s3d, -3, 0, 0) == true)");
+            WorldRPG::Script::AudioUpdateSpatial3D(0, 0, 0, 1, 0, 0);
+            CHECK(WorldRPG::Script::AudioGetEffectiveMix(s3dId, effVol, effPan));
+            CHECK(std::fabs(effVol - 1.0f) < 0.01f);
+            CHECK(effPan < -0.9f);
+
+            // Disable 3D panning -> effective pan drops to 0.
+            RunLua(vm, "p2-2-audio-pan-off", "assert(setSoundPanningEnabled(_G._s3d, false) == true)");
+            WorldRPG::Script::AudioUpdateSpatial3D(0, 0, 0, 1, 0, 0);
+            CHECK(WorldRPG::Script::AudioGetEffectiveMix(s3dId, effVol, effPan));
+            CHECK(std::fabs(effPan) < 0.01f);
+
+            // Move sound beyond maxDistance=25 -> effective volume drops to 0.
+            RunLua(vm, "p2-2-audio-far", "assert(setElementPosition(_G._s3d, 40, 0, 0) == true)");
+            WorldRPG::Script::AudioUpdateSpatial3D(0, 0, 0, 1, 0, 0);
+            CHECK(WorldRPG::Script::AudioGetEffectiveMix(s3dId, effVol, effPan));
+            CHECK(effVol < 0.001f);
+
+            // Bring back close and feed live Visualizer FFT / waveform / level samples.
+            RunLua(vm, "p2-2-audio-near", "assert(setElementPosition(_G._s3d, 2, 0, 0) == true)");
+            WorldRPG::Script::AudioUpdateSpatial3D(0, 0, 0, 1, 0, 0);
+            const float sampleFft[4] = {0.2f, 0.4f, 0.8f, 0.6f};
+            const float sampleWave[4] = {-0.5f, 0.25f, 0.75f, -0.25f};
+            WorldRPG::Script::ActiveVmNoteSoundAnalysis(s3dId, 20000, 18000, sampleFft, 4, sampleWave, 4);
+            WorldRPG::Script::ActiveVmNoteSoundStream(s3dId, true, 42.5, "NeonRadio", "");
+            WorldRPG::Script::ActiveVmNoteSoundStarted(s3dId, "play");
+            WorldRPG::Script::ActiveVmPump();
+
+            const uint32_t vehId = 0x4401u;
+            WorldRPG::ServerWorld::NoteVehicle(vehId, 411);
+            WorldRPG::ServerWorld::NoteElementPosition(vehId, 15.0f, 0.0f, 0.0f);
+            WorldRPG::Script::PushElement(L, vehId);
+            lua_setglobal(L, "_p2AudioVeh");
+
+            RunLua(vm, "p2-2-audio-analysis-and-native", R"LUA(
+                local fft = getSoundFFTData(_G._s3d, 256, 4)
+                assert(type(fft) == "table" and math.abs(fft[2] - 0.8) < 0.01, "live FFT data")
+                local wave = getSoundWaveData(_G._s3d, 4)
+                assert(type(wave) == "table" and math.abs(wave[2] - 0.75) < 0.01, "live wave data")
+                local lLvl, rLvl = getSoundLevelData(_G._s3d)
+                assert(lLvl == 20000 and rLvl == 18000, "live stereo level data")
+                assert(getSoundMetaTags(_G._s3d, "stream_name") == "NeonRadio", "stream_name meta tag")
+                assert(math.abs(getSoundLength(_G._s3d) - 42.5) < 0.01, "stream length updated")
+
+                -- Lifecycle events
+                local gotStream, gotStarted = false, false
+                for _, e in ipairs(_G._p2AudioEvents) do
+                    if e == "stream:true:42.5:NeonRadio" then gotStream = true end
+                    if e == "started:play" then gotStarted = true end
+                end
+                assert(gotStream and gotStarted, "onClientSoundStream + onClientSoundStarted fired")
+
+                -- Attach 3D sound to vehicle at (15,0,0) and verify spatial mix follows parent
+                assert(attachElements(_G._s3d, _G._p2AudioVeh, 0, 0, 0) == true, "attach 3D sound to vehicle")
+                assert(setSoundPanningEnabled(_G._s3d, true) == true)
+
+                -- SFX & Mission Audio with native backend enabled
+                assert(getSFXStatus("genrl") == true and getSFXStatus("invalid_sfx") == nil, "getSFXStatus active")
+                local sfx2d = playSFX("genrl", 52, 6, false)
+                assert(isElement(sfx2d), "playSFX element")
+                assert(stopSound(sfx2d) == true, "stop SFX element")
+                local sfxRadio = playSFX("radio", "ds", 1, false)
+                assert(isElement(sfxRadio), "playSFX radio station string")
+                assert(stopSound(sfxRadio) == true)
+                local sfx3d = playSFX3D("script", 1, 2, 5, 6, 7, true)
+                assert(isElement(sfx3d), "playSFX3D element")
+                local x, y, z = getElementPosition(sfx3d)
+                assert(x == 5 and y == 6 and z == 7, "playSFX3D position")
+                assert(stopSound(sfx3d) == true)
+                assert(playSFX("bad_container", 1, 1) == false, "invalid SFX container rejected")
+
+                assert(playMissionPassedTune(1) == true and playMissionPassedTune(2) == true and playMissionPassedTune(3) == false)
+                local mh1 = requestMissionAudio(2001)
+                local mh2 = requestMissionAudio(1805, 4)
+                assert(type(mh1) == "number" and type(mh2) == "number" and mh1 ~= mh2, "mission audio handles")
+                assert(requestMissionAudio(1805, 4) == false, "busy preferred slot rejected")
+                assert(requestMissionAudio(999) == false, "out-of-range mission audio event rejected")
+                assert(isMissionAudioLoaded(mh1) == true, "mission audio loaded")
+                assert(playMissionAudio(mh1) == true, "play mission audio")
+                assert(isMissionAudioFinished(mh1) == true, "mission audio finished")
+                assert(releaseMissionAudio(mh1) == true and releaseMissionAudio(mh1) == false, "release mission audio")
+                assert(releaseMissionAudio(mh2) == true)
+
+                assert(reportPositionMissionAudioEvent(10, 20, 30, 1050) == true)
+                assert(reportPositionMissionAudioEvent(10, 20, 30, 999) == false)
+                assert(reportVehicleMissionAudioEvent(_G._p2AudioVeh, 1050) == true)
+                assert(reportVehicleMissionAudioEvent(_G._p2AudioVeh, 1200) == false)
+                assert(reportVehicleMissionAudioEvent(localPlayer, 1050) == false, "non-vehicle rejected")
+                assert(setRadioChannel(3) == true and getRadioChannel() == 3)
+                assert(setRadioChannel(0) == true and getRadioChannel() == 0)
+            )LUA");
+            WorldRPG::Script::AudioUpdateSpatial3D(0, 0, 0, 1, 0, 0);
+            CHECK(WorldRPG::Script::AudioGetEffectiveMix(s3dId, effVol, effPan));
+            CHECK(effVol > 0.05f && effVol < 0.5f);
+            CHECK(effPan > 0.9f);
+            RunLua(vm, "p2-2-audio-stop", "assert(stopSound(_G._s3d) == true)");
+            WorldRPG::Script::AudioSetNativeBackendForTests(false);
         }
     }
 

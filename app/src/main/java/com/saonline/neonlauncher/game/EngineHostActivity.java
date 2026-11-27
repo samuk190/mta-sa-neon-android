@@ -176,11 +176,16 @@ public final class EngineHostActivity extends GTASA {
     private native void nativeScriptInput(String text, int backspaces, String key);
     private native void nativeSoundEnded(int id);
     private native void nativeSoundLength(int id, double seconds);
+    private native void nativeSoundStarted(int id, String reason);
+    private native void nativeSoundStream(int id, boolean success, double length, String streamName, String errorMsg);
+    private native void nativeSoundAnalysis(int id, int leftLevel, int rightLevel, float[] fft, float[] wave);
     private final java.util.HashMap<Integer, MediaPlayer> sounds = new java.util.HashMap<>();
     private final java.util.HashMap<Integer, Float> soundVolume = new java.util.HashMap<>();
     private final java.util.HashMap<Integer, Float> soundPan = new java.util.HashMap<>();
+    private final java.util.HashMap<Integer, Float> soundSpeed = new java.util.HashMap<>();
     private final java.util.HashMap<Integer, Boolean> soundLoop = new java.util.HashMap<>();
     private final java.util.HashMap<Integer, Boolean> soundPaused = new java.util.HashMap<>();
+    private final java.util.HashMap<Integer, android.media.audiofx.Visualizer> soundVisualizers = new java.util.HashMap<>();
     private native boolean nativeSendChat(String text);
     private native void nativeChatInputActive(boolean active);
     private native void nativeKeyEvent(String key, boolean down);
@@ -1080,17 +1085,23 @@ public final class EngineHostActivity extends GTASA {
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build());
+        final boolean isStream = url.startsWith("http://") || url.startsWith("https://");
         try {
             player.setDataSource(url);
             player.setLooping(loop);
             player.setOnPreparedListener(ready -> {
                 if (sounds.get(id) != ready) return;
-                nativeSoundLength(id, Math.max(0, ready.getDuration()) / 1000.0);
+                double durationSec = Math.max(0, ready.getDuration()) / 1000.0;
+                nativeSoundLength(id, durationSec);
                 applySoundGains(id, ready);
+                applySoundSpeed(id, ready);
                 Boolean looped = soundLoop.get(id);
                 if (looped != null) ready.setLooping(looped);
+                if (isStream) nativeSoundStream(id, true, durationSec, "", "");
                 if (Boolean.TRUE.equals(soundPaused.get(id))) return;
                 ready.start();
+                attachSoundVisualizer(id, ready);
+                nativeSoundStarted(id, "play");
             });
             player.setOnCompletionListener(done -> {
                 if (sounds.get(id) != done) return;
@@ -1099,6 +1110,7 @@ public final class EngineHostActivity extends GTASA {
             });
             player.setOnErrorListener((failed, what, extra) -> {
                 if (sounds.get(id) == failed) {
+                    if (isStream) nativeSoundStream(id, false, 0.0, "", "MediaPlayer error " + what + "/" + extra);
                     stopUrlSound(Integer.toString(id));
                     nativeSoundEnded(id);
                 }
@@ -1107,9 +1119,86 @@ public final class EngineHostActivity extends GTASA {
             sounds.put(id, player);
             player.prepareAsync();
         } catch (Exception error) {
+            if (isStream) nativeSoundStream(id, false, 0.0, "", error.getMessage() != null ? error.getMessage() : "load failed");
             if (sounds.get(id) == player) stopUrlSound(Integer.toString(id));
             else player.release();
             nativeSoundEnded(id);
+        }
+    }
+
+    private void applySoundSpeed(int id, MediaPlayer player) {
+        Float speed = soundSpeed.get(id);
+        if (speed == null) return;
+        float clamped = Math.max(0.1f, Math.min(4.0f, speed));
+        try {
+            android.media.PlaybackParams params = player.getPlaybackParams();
+            params.setSpeed(clamped);
+            player.setPlaybackParams(params);
+        } catch (Exception ignored) {}
+    }
+
+    private void speedUrlSound(String body) {
+        int bar = body.indexOf('|');
+        if (bar <= 0) return;
+        int id;
+        float speed;
+        try {
+            id = Integer.parseInt(body.substring(0, bar));
+            speed = Float.parseFloat(body.substring(bar + 1));
+        } catch (NumberFormatException error) { return; }
+        if (!Float.isFinite(speed) || speed <= 0f) return;
+        soundSpeed.put(id, Math.max(0.1f, Math.min(4.0f, speed)));
+        MediaPlayer player = sounds.get(id);
+        if (player != null) applySoundSpeed(id, player);
+    }
+
+    private void attachSoundVisualizer(int id, MediaPlayer player) {
+        android.media.audiofx.Visualizer prev = soundVisualizers.remove(id);
+        if (prev != null) {
+            try { prev.setEnabled(false); prev.release(); } catch (Exception ignored) {}
+        }
+        try {
+            int sessionId = player.getAudioSessionId();
+            if (sessionId <= 0) return;
+            android.media.audiofx.Visualizer vis = new android.media.audiofx.Visualizer(sessionId);
+            int[] range = android.media.audiofx.Visualizer.getCaptureSizeRange();
+            int captureSize = Math.min(256, Math.max(range[0], Math.min(range[1], 256)));
+            vis.setCaptureSize(captureSize);
+            int rate = Math.min(android.media.audiofx.Visualizer.getMaxCaptureRate(), 15000);
+            vis.setDataCaptureListener(new android.media.audiofx.Visualizer.OnDataCaptureListener() {
+                @Override
+                public void onWaveFormDataCapture(android.media.audiofx.Visualizer v, byte[] waveform, int samplingRate) {
+                    if (waveform == null || waveform.length == 0) return;
+                    float[] wave = new float[waveform.length];
+                    float peak = 0f;
+                    for (int i = 0; i < waveform.length; ++i) {
+                        float s = ((waveform[i] & 0xFF) - 128) / 128.0f;
+                        wave[i] = s;
+                        float a = Math.abs(s);
+                        if (a > peak) peak = a;
+                    }
+                    int level = Math.min(32768, Math.round(peak * 32768.0f));
+                    nativeSoundAnalysis(id, level, level, null, wave);
+                }
+
+                @Override
+                public void onFftDataCapture(android.media.audiofx.Visualizer v, byte[] fftBytes, int samplingRate) {
+                    if (fftBytes == null || fftBytes.length < 2) return;
+                    int bins = fftBytes.length / 2;
+                    float[] fft = new float[bins];
+                    fft[0] = Math.abs(fftBytes[0]) / 128.0f;
+                    for (int i = 1; i < bins; ++i) {
+                        float re = fftBytes[i * 2];
+                        float im = fftBytes[i * 2 + 1];
+                        fft[i] = (float) Math.hypot(re, im) / 128.0f;
+                    }
+                    nativeSoundAnalysis(id, -1, -1, fft, null);
+                }
+            }, rate, true, true);
+            vis.setEnabled(true);
+            soundVisualizers.put(id, vis);
+        } catch (Exception ignored) {
+            // Visualizer requires RECORD_AUDIO or audio session support on some devices; playback still proceeds.
         }
     }
 
@@ -1119,8 +1208,13 @@ public final class EngineHostActivity extends GTASA {
         catch (NumberFormatException error) { return; }
         soundVolume.remove(id);
         soundPan.remove(id);
+        soundSpeed.remove(id);
         soundLoop.remove(id);
         soundPaused.remove(id);
+        android.media.audiofx.Visualizer vis = soundVisualizers.remove(id);
+        if (vis != null) {
+            try { vis.setEnabled(false); vis.release(); } catch (Exception ignored) {}
+        }
         MediaPlayer player = sounds.remove(id);
         if (player == null) return;
         player.setOnCompletionListener(null);
@@ -1288,6 +1382,10 @@ public final class EngineHostActivity extends GTASA {
             }
             if (kind == 18) {
                 panUrlSound(text);
+                return;
+            }
+            if (kind == 19) {
+                speedUrlSound(text);
                 return;
             }
             if (kind == 10) {
@@ -1894,6 +1992,14 @@ public final class EngineHostActivity extends GTASA {
     @Override
     public void onDestroy() {
         releaseHardwareInput();
+        for (android.media.audiofx.Visualizer vis : soundVisualizers.values()) {
+            try { vis.setEnabled(false); vis.release(); } catch (Exception ignored) {}
+        }
+        soundVisualizers.clear();
+        for (MediaPlayer mp : sounds.values()) {
+            try { mp.stop(); mp.release(); } catch (Exception ignored) {}
+        }
+        sounds.clear();
         if (voiceAudioEngine != null) {
             voiceAudioEngine.release();
             voiceAudioEngine = null;

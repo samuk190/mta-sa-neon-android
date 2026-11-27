@@ -130,6 +130,13 @@ void ActiveVmFireTransferVisibility(bool visible);
 void ActiveVmNoteSoundEnded(uint32_t id);
 // MediaPlayer prepared a sound. Seconds are zero while duration is unknown (streams).
 void ActiveVmNoteSoundLength(uint32_t id, double seconds);
+// MediaPlayer started/prepared/failed a sound or stream, or Visualizer delivered live analysis. Any thread.
+void ActiveVmNoteSoundStarted(uint32_t id, const char* reason = "play");
+void ActiveVmNoteSoundStream(uint32_t id, bool success, double length, const char* streamName = "",
+                             const char* errorMsg = "");
+void ActiveVmNoteSoundAnalysis(uint32_t id, int leftLevel, int rightLevel,
+                               const float* fft, int fftCount,
+                               const float* wave, int waveCount);
 // True while that playSound id still has a player. isElement uses this, because the
 // element-tree isElement binding runs after the sound binding and would otherwise
 // say the login track is already gone.

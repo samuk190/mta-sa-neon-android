@@ -681,12 +681,47 @@ bool SoundElementAlive(uint32_t id) { return AudioSoundAlive(id); }
 
 static void PumpEndedSounds() {
     if (!g_dx.L) return;
-    for (uint32_t id : AudioCollectEndedSounds()) {
+    // Update 3D spatial sound attenuation & stereo panning from camera view matrix or local player pose.
+    float lx = 0.0f, ly = 0.0f, lz = 0.0f;
+    float rx = 1.0f, ry = 0.0f, rz = 0.0f;
+    float viewM[16];
+    if (Game::CopyCameraViewMatrix(viewM)) {
+        // Row-major view matrix: camera right vector is column 0; camera world pos is -t * R^T.
+        rx = viewM[0];
+        ry = viewM[4];
+        rz = viewM[8];
+        lx = -(viewM[12] * viewM[0] + viewM[13] * viewM[1] + viewM[14] * viewM[2]);
+        ly = -(viewM[12] * viewM[4] + viewM[13] * viewM[5] + viewM[14] * viewM[6]);
+        lz = -(viewM[12] * viewM[8] + viewM[13] * viewM[9] + viewM[14] * viewM[10]);
+    } else {
+        const uint32_t lp = WorldRPG::ServerWorld::LocalPlayer();
+        if (lp != 0 && lp != 0xFFFFFFFFu) {
+            WorldRPG::ServerWorld::ElementPose(lp, lx, ly, lz);
+        }
+    }
+    AudioUpdateSpatial3D(lx, ly, lz, rx, ry, rz);
+
+    for (const auto& ev : AudioCollectEvents()) {
         lua_getglobal(g_dx.L, "source");
-        PushElement(g_dx.L, id);
+        PushElement(g_dx.L, ev.id);
         lua_setglobal(g_dx.L, "source");
-        lua_pushstring(g_dx.L, "finished");
-        fireHandlers("onClientSoundStopped", 1, id);
+        if (ev.kind == SoundLifecycleEvent::Kind::Started) {
+            lua_pushstring(g_dx.L, ev.reasonOrName.c_str());
+            fireHandlers("onClientSoundStarted", 1, ev.id);
+        } else if (ev.kind == SoundLifecycleEvent::Kind::Stream) {
+            lua_pushboolean(g_dx.L, ev.success ? 1 : 0);
+            lua_pushnumber(g_dx.L, ev.length);
+            lua_pushstring(g_dx.L, ev.reasonOrName.c_str());
+            if (!ev.success && !ev.errorMessage.empty()) {
+                lua_pushstring(g_dx.L, ev.errorMessage.c_str());
+                fireHandlers("onClientSoundStream", 4, ev.id);
+            } else {
+                fireHandlers("onClientSoundStream", 3, ev.id);
+            }
+        } else {
+            lua_pushstring(g_dx.L, ev.reasonOrName.empty() ? "finished" : ev.reasonOrName.c_str());
+            fireHandlers("onClientSoundStopped", 1, ev.id);
+        }
         lua_setglobal(g_dx.L, "source");
     }
 }
@@ -3788,6 +3823,18 @@ void ActiveVmFireTransferVisibility(bool visible) {
 void ActiveVmNoteSoundEnded(uint32_t id) { AudioNoteSoundEnded(id); }
 
 void ActiveVmNoteSoundLength(uint32_t id, double seconds) { AudioNoteSoundLength(id, seconds); }
+
+void ActiveVmNoteSoundStarted(uint32_t id, const char* reason) { AudioNoteSoundStarted(id, reason); }
+
+void ActiveVmNoteSoundStream(uint32_t id, bool success, double length, const char* streamName, const char* errorMsg) {
+    AudioNoteSoundStream(id, success, length, streamName, errorMsg);
+}
+
+void ActiveVmNoteSoundAnalysis(uint32_t id, int leftLevel, int rightLevel,
+                               const float* fft, int fftCount,
+                               const float* wave, int waveCount) {
+    AudioNoteSoundAnalysis(id, leftLevel, rightLevel, fft, fftCount, wave, waveCount);
+}
 
 void ActiveVmQueueScriptInput(const char* text, int backspaces, const char* key) {
     ScriptInput ev;

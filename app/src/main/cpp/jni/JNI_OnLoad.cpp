@@ -927,6 +927,57 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSoundLength(
 }
 
 JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSoundStarted(
+    JNIEnv* env, jobject, jint id, jstring reason) {
+    std::string reasonStr = "play";
+    if (reason) {
+        const char* chars = env->GetStringUTFChars(reason, nullptr);
+        if (chars) {
+            reasonStr = chars;
+            env->ReleaseStringUTFChars(reason, chars);
+        }
+    }
+    WorldRPG::Script::ActiveVmNoteSoundStarted(static_cast<uint32_t>(id), reasonStr.c_str());
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSoundStream(
+    JNIEnv* env, jobject, jint id, jboolean success, jdouble length, jstring streamName, jstring errorMsg) {
+    std::string nameStr;
+    if (streamName) {
+        const char* chars = env->GetStringUTFChars(streamName, nullptr);
+        if (chars) {
+            nameStr = chars;
+            env->ReleaseStringUTFChars(streamName, chars);
+        }
+    }
+    std::string errStr;
+    if (errorMsg) {
+        const char* chars = env->GetStringUTFChars(errorMsg, nullptr);
+        if (chars) {
+            errStr = chars;
+            env->ReleaseStringUTFChars(errorMsg, chars);
+        }
+    }
+    WorldRPG::Script::ActiveVmNoteSoundStream(
+        static_cast<uint32_t>(id), success != JNI_FALSE, length, nameStr.c_str(), errStr.c_str());
+}
+
+JNIEXPORT void JNICALL
+Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeSoundAnalysis(
+    JNIEnv* env, jobject, jint id, jint leftLevel, jint rightLevel, jfloatArray fft, jfloatArray wave) {
+    jfloat* fftPtr = fft ? env->GetFloatArrayElements(fft, nullptr) : nullptr;
+    const jsize fftLen = fft ? env->GetArrayLength(fft) : 0;
+    jfloat* wavePtr = wave ? env->GetFloatArrayElements(wave, nullptr) : nullptr;
+    const jsize waveLen = wave ? env->GetArrayLength(wave) : 0;
+    WorldRPG::Script::ActiveVmNoteSoundAnalysis(
+        static_cast<uint32_t>(id), static_cast<int>(leftLevel), static_cast<int>(rightLevel),
+        fftPtr, static_cast<int>(fftLen), wavePtr, static_cast<int>(waveLen));
+    if (fftPtr) env->ReleaseFloatArrayElements(fft, fftPtr, JNI_ABORT);
+    if (wavePtr) env->ReleaseFloatArrayElements(wave, wavePtr, JNI_ABORT);
+}
+
+JNIEXPORT void JNICALL
 Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeScriptInput(
     JNIEnv* env, jobject, jstring text, jint backspaces, jstring key) {
     std::string utf8;

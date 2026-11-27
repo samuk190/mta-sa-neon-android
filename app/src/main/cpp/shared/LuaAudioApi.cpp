@@ -12,15 +12,23 @@
 #include "lua.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#ifdef __ANDROID__
+#include "../gtasa/GameTasks.h"
+#include <dlfcn.h>
+#endif
 
 namespace WorldRPG::JniBridge {
 void PostGameLine(int kind, const char* text);
@@ -31,6 +39,118 @@ namespace {
 
 constexpr uint32_t kFirstSoundId = 0x61000001u;
 constexpr size_t kMaxSounds = 64;
+
+// Desktop CStaticFunctionDefinitions / CLuaAudioDefs mission-audio constants
+// (CLuaAudioDefs.cpp:20-55, CClientAudio.h).
+constexpr uint32_t kMissionAudioSlotCount = 4;
+constexpr int kMissionAudioScriptBankFirst = 1800;
+constexpr int kMissionAudioScriptBankLast = 1829;
+constexpr int kMissionAudioScriptSlotFirst = 2000;
+constexpr int kMissionAudioScriptSlotLast = 45400;
+constexpr int kMissionAudioEventMin = 1000;
+constexpr int kMissionAudioEventMax = 1190;
+
+struct CVector3 {
+    float x, y, z;
+};
+
+struct NativeAudioApi {
+    bool probed = false;
+    void* audioEngine = nullptr;
+    void (*reportFrontend)(void*, int, float, float) = nullptr;
+    void (*preloadBeatTrack)(void*, short) = nullptr;
+    void (*playPreloadedBeatTrack)(void*, uint8_t) = nullptr;
+    void (*preloadMissionAudio)(void*, uint8_t, int) = nullptr;
+    int (*getMissionAudioEvent)(void*, uint8_t) = nullptr;
+    int8_t (*getMissionAudioLoadingStatus)(void*, uint8_t) = nullptr;
+    void (*playLoadedMissionAudio)(void*, uint8_t) = nullptr;
+    bool (*isMissionAudioSampleFinished)(void*, uint8_t) = nullptr;
+    void (*clearMissionAudio)(void*, uint8_t) = nullptr;
+    void (*reportMissionAudioPos)(void*, uint16_t, CVector3*) = nullptr;
+    void (*retuneRadio)(void*, int8_t) = nullptr;
+    void (*startRadio)(void*, int8_t, int8_t) = nullptr;
+    void (*stopRadio)(void*, void*, uint8_t) = nullptr;
+    int8_t (*getCurrentRadioStation)(void*) = nullptr;
+};
+
+NativeAudioApi g_nativeAudio;
+std::atomic<bool> g_hostNativeAudioMock{false};
+
+#ifdef __ANDROID__
+void ProbeNativeAudio() {
+    if (g_nativeAudio.probed) return;
+    g_nativeAudio.probed = true;
+    void* lib = dlopen("libGTASA.so", RTLD_NOLOAD);
+    if (!lib) return;
+    g_nativeAudio.audioEngine = dlsym(lib, "AudioEngine");
+    g_nativeAudio.reportFrontend =
+        reinterpret_cast<void (*)(void*, int, float, float)>(
+            dlsym(lib, "_ZN12CAudioEngine24ReportFrontendAudioEventEiff"));
+    g_nativeAudio.preloadBeatTrack =
+        reinterpret_cast<void (*)(void*, short)>(
+            dlsym(lib, "_ZN12CAudioEngine16PreloadBeatTrackEs"));
+    g_nativeAudio.playPreloadedBeatTrack =
+        reinterpret_cast<void (*)(void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine22PlayPreloadedBeatTrackEh"));
+    g_nativeAudio.preloadMissionAudio =
+        reinterpret_cast<void (*)(void*, uint8_t, int)>(
+            dlsym(lib, "_ZN12CAudioEngine19PreloadMissionAudioEhi"));
+    g_nativeAudio.getMissionAudioEvent =
+        reinterpret_cast<int (*)(void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine20GetMissionAudioEventEh"));
+    g_nativeAudio.getMissionAudioLoadingStatus =
+        reinterpret_cast<int8_t (*)(void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine28GetMissionAudioLoadingStatusEh"));
+    g_nativeAudio.playLoadedMissionAudio =
+        reinterpret_cast<void (*)(void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine22PlayLoadedMissionAudioEh"));
+    g_nativeAudio.isMissionAudioSampleFinished =
+        reinterpret_cast<bool (*)(void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine28IsMissionAudioSampleFinishedEh"));
+    g_nativeAudio.clearMissionAudio =
+        reinterpret_cast<void (*)(void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine17ClearMissionAudioEh"));
+    g_nativeAudio.reportMissionAudioPos =
+        reinterpret_cast<void (*)(void*, uint16_t, CVector3*)>(
+            dlsym(lib, "_ZN12CAudioEngine23ReportMissionAudioEventEtR7CVector"));
+    g_nativeAudio.retuneRadio =
+        reinterpret_cast<void (*)(void*, int8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine11RetuneRadioEa"));
+    g_nativeAudio.startRadio =
+        reinterpret_cast<void (*)(void*, int8_t, int8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine10StartRadioEaa"));
+    g_nativeAudio.stopRadio =
+        reinterpret_cast<void (*)(void*, void*, uint8_t)>(
+            dlsym(lib, "_ZN12CAudioEngine9StopRadioEP21tVehicleAudioSettingsh"));
+    g_nativeAudio.getCurrentRadioStation =
+        reinterpret_cast<int8_t (*)(void*)>(
+            dlsym(lib, "_ZN12CAudioEngine24GetCurrentRadioStationIDEv"));
+}
+#endif
+
+bool HasNativeAudioEngine() {
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    return g_nativeAudio.audioEngine != nullptr;
+#else
+    return g_hostNativeAudioMock.load(std::memory_order_relaxed);
+#endif
+}
+
+struct MissionAudioSlot {
+    bool inUse = false;
+    uint32_t handle = 0;
+    int eventId = 0;
+    bool loaded = false;
+    bool playing = false;
+    bool finished = false;
+    std::string owner;
+    uint16_t ownerNetId = 0;
+    uint32_t ownerGeneration = 0;
+};
+
+std::array<MissionAudioSlot, kMissionAudioSlotCount> g_missionSlots{};
+uint32_t g_nextMissionHandle = 1;
 
 std::uint64_t DxNow() {
     using namespace std::chrono;
@@ -62,6 +182,13 @@ struct SoundSlot {
     float posZ = 0.0f;
     bool throttled = true;
     bool panEnabled = true;
+    float effectiveVolume = 1.0f;
+    float effectivePan = 0.0f;
+    float lastSentVolume = -1.0f;
+    float lastSentPan = -99.0f;
+    bool isStream = false;
+    bool isSfx = false;
+    bool hasMediaPlayer = true;
 
     // Stream / DSP properties
     float sampleRate = 44100.0f;
@@ -70,6 +197,12 @@ struct SoundSlot {
     bool reversed = false;
     double bufferLength = 0.0;
     float bpm = 0.0f;
+
+    // Live analysis buffers (Visualizer / injected test frames)
+    int liveLeftLevel = -1;
+    int liveRightLevel = -1;
+    std::vector<float> liveFft;
+    std::vector<float> liveWave;
 
     // Effects & Metadata (Lot 2)
     std::unordered_map<std::string, bool> fxEffects;
@@ -80,9 +213,10 @@ struct SoundSlot {
 std::mutex g_soundMu;
 SoundSlot g_sounds[kMaxSounds];
 uint32_t g_nextSound = kFirstSoundId;
+std::vector<SoundLifecycleEvent> g_soundEvents;
 
 bool g_diagFrontEnd = false;
-bool g_diagSoundSpace = false;
+bool g_diagSfxPak = false;
 bool g_showSound = false;
 
 // Lot 3: World & Ambient Audio, SFX & Radio
@@ -99,6 +233,69 @@ SoundSlot* FindSound(uint32_t id) {
     return nullptr;
 }
 
+float ComputeEffectiveSpeed(const SoundSlot& slot) {
+    float eff = slot.speed;
+    if (slot.tempo != 0.0f) eff *= (1.0f + slot.tempo * 0.01f);
+    if (slot.pitch != 0.0f) eff *= std::pow(2.0f, slot.pitch / 12.0f);
+    return std::clamp(eff, 0.1f, 4.0f);
+}
+
+void PostSoundSpeedLine(uint32_t id, float speed) {
+    char line[64];
+    std::snprintf(line, sizeof(line), "%u|%.4f", id, std::clamp(speed, 0.1f, 4.0f));
+    ::WorldRPG::JniBridge::PostGameLine(19, line);
+}
+
+void ComputeSpatial3DMix(const SoundSlot& slot, float lx, float ly, float lz,
+                         float rx, float ry, float rz, float& outVol, float& outPan) {
+    if (!slot.is3D) {
+        outVol = std::clamp(slot.volume, 0.0f, 1.0f);
+        outPan = std::clamp(slot.pan, -1.0f, 1.0f);
+        return;
+    }
+    float sx = slot.posX, sy = slot.posY, sz = slot.posZ;
+    WorldRPG::ServerWorld::Attachment att;
+    if (WorldRPG::ServerWorld::CopyAttachment(slot.id, att) && att.parent != 0xFFFFFFFFu) {
+        float px = 0.0f, py = 0.0f, pz = 0.0f;
+        if (WorldRPG::ServerWorld::ElementPose(att.parent, px, py, pz)) {
+            sx = px + att.position[0];
+            sy = py + att.position[1];
+            sz = pz + att.position[2];
+        }
+    }
+    const float dx = sx - lx;
+    const float dy = sy - ly;
+    const float dz = sz - lz;
+    const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const float minD = std::max(0.001f, slot.minDistance);
+    const float maxD = std::max(minD, slot.maxDistance);
+    float atten = 1.0f;
+    if (dist >= maxD) {
+        atten = 0.0f;
+    } else if (dist > minD) {
+        const float span = maxD - minD;
+        if (span > 1e-4f) {
+            const float t = (dist - minD) / span;
+            // Smooth rolloff close to OpenAL inverse-distance clamped curve, reaching 0 at maxDistance.
+            atten = (minD / dist) * (1.0f - t);
+        } else {
+            atten = 0.0f;
+        }
+    }
+    outVol = std::clamp(slot.volume * atten, 0.0f, 1.0f);
+
+    float spatialPan = 0.0f;
+    if (slot.panEnabled && dist > 1e-4f) {
+        const float rLen = std::sqrt(rx * rx + ry * ry + rz * rz);
+        if (rLen > 1e-4f) {
+            const float invDist = 1.0f / dist;
+            const float invRight = 1.0f / rLen;
+            spatialPan = std::clamp((dx * rx + dy * ry + dz * rz) * invDist * invRight, -1.0f, 1.0f);
+        }
+    }
+    outPan = std::clamp(spatialPan + slot.pan, -1.0f, 1.0f);
+}
+
 std::string SoundSource(lua_State* L) {
     size_t length = 0;
     const char* text = lua_tolstring(L, 1, &length);
@@ -111,8 +308,9 @@ std::string SoundSource(lua_State* L) {
 }
 
 uint32_t AllocSound(const std::string& path, bool loop, bool is3D = false, float x = 0.0f, float y = 0.0f,
-                    float z = 0.0f, bool throttled = true) {
+                    float z = 0.0f, bool throttled = true, bool hasMediaPlayer = true, bool isSfx = false) {
     uint32_t id = 0;
+    const bool isStream = path.starts_with("http://") || path.starts_with("https://");
     {
         std::lock_guard<std::mutex> lock(g_soundMu);
         // Java delivers asynchronous callbacks with signed int IDs. Do not
@@ -133,10 +331,15 @@ uint32_t AllocSound(const std::string& path, bool loop, bool is3D = false, float
             slot.posY = y;
             slot.posZ = z;
             slot.throttled = throttled;
+            slot.isStream = isStream;
+            slot.isSfx = isSfx;
+            slot.hasMediaPlayer = hasMediaPlayer;
+            slot.effectiveVolume = slot.volume;
+            slot.effectivePan = slot.pan;
             break;
         }
     }
-    if (id) {
+    if (id && hasMediaPlayer && !path.empty()) {
         // MediaPlayer reads everything after the two separators as the source.
         const std::string body = std::to_string(id) + (loop ? "|1|" : "|0|") + path;
         ::WorldRPG::JniBridge::PostGameLine(11, body.c_str());
@@ -167,10 +370,6 @@ int SetSoundNumber(lua_State* L, float SoundSlot::*field, float minValue, float 
         return 1;
     }
     slot->*field = value;
-    if (!g_diagSoundSpace) {
-        g_diagSoundSpace = true;
-        LUA_LOGE("DIAG sound distance/speed/pan: the MediaPlayer has no 3D mixer; the value is stored");
-    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -238,15 +437,24 @@ int l_setSoundVolume(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    bool is3D = false;
+    bool hasPlayer = false;
     {
         std::lock_guard<std::mutex> lock(g_soundMu);
-        for (auto& slot : g_sounds) {
-            if (slot.id == id) slot.volume = volume;
+        SoundSlot* slot = FindSound(id);
+        if (slot) {
+            slot->volume = volume;
+            slot->lastSentVolume = -1.0f;
+            is3D = slot->is3D;
+            hasPlayer = slot->hasMediaPlayer;
+            if (!is3D) slot->effectiveVolume = volume;
         }
     }
-    char line[64];
-    std::snprintf(line, sizeof(line), "%u|%.3f", id, volume);
-    ::WorldRPG::JniBridge::PostGameLine(13, line);
+    if (hasPlayer && !is3D) {
+        char line[64];
+        std::snprintf(line, sizeof(line), "%u|%.3f", id, volume);
+        ::WorldRPG::JniBridge::PostGameLine(13, line);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -400,7 +608,34 @@ int l_getSoundLength(lua_State* L) {
     return 1;
 }
 
-int l_setSoundSpeed(lua_State* L) { return SetSoundNumber(L, &SoundSlot::speed, 0.0001f, 100.0f); }
+int l_setSoundSpeed(lua_State* L) {
+    const uint32_t id = ElementIdOf(L, 1);
+    if (!lua_isnumber(L, 2)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const float value = static_cast<float>(lua_tonumber(L, 2));
+    if (!std::isfinite(value) || value < 0.0001f || value > 100.0f) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    float effectiveSpeed = 1.0f;
+    bool hasPlayer = false;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        SoundSlot* slot = FindSound(id);
+        if (!slot) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        slot->speed = value;
+        effectiveSpeed = ComputeEffectiveSpeed(*slot);
+        hasPlayer = slot->hasMediaPlayer;
+    }
+    if (hasPlayer) PostSoundSpeedLine(id, effectiveSpeed);
+    lua_pushboolean(L, 1);
+    return 1;
+}
 int l_getSoundSpeed(lua_State* L) { return GetSoundNumber(L, &SoundSlot::speed); }
 
 int l_setSoundPan(lua_State* L) {
@@ -413,9 +648,15 @@ int l_setSoundPan(lua_State* L) {
         SoundSlot* slot = FindSound(id);
         if (slot) {
             slot->pan = pan;
-            char line[64];
-            std::snprintf(line, sizeof(line), "%u|%.6f", id, pan);
-            ::WorldRPG::JniBridge::PostGameLine(18, line);
+            slot->lastSentPan = -99.0f;
+            if (!slot->is3D) {
+                slot->effectivePan = pan;
+                if (slot->hasMediaPlayer) {
+                    char line[64];
+                    std::snprintf(line, sizeof(line), "%u|%.6f", id, pan);
+                    ::WorldRPG::JniBridge::PostGameLine(18, line);
+                }
+            }
             lua_pushboolean(L, 1);
             return 1;
         }
@@ -463,9 +704,21 @@ int l_playSoundFrontEnd(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    if (!g_diagFrontEnd) {
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.reportFrontend) {
+        WorldRPG::GameTasks::Run([id]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.reportFrontend) {
+                g_nativeAudio.reportFrontend(g_nativeAudio.audioEngine, id, 0.0f, 1.0f);
+            }
+        });
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+#endif
+    if (!g_diagFrontEnd && !HasNativeAudioEngine()) {
         g_diagFrontEnd = true;
-        LUA_LOGE("DIAG playSoundFrontEnd: CAudioEngine::PlayFrontEndSound is not hooked");
+        LUA_LOGE("DIAG playSoundFrontEnd: CAudioEngine::ReportFrontendAudioEvent unavailable");
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -575,16 +828,23 @@ int l_setSoundProperties(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    std::lock_guard<std::mutex> lock(g_soundMu);
-    SoundSlot* slot = FindSound(id);
-    if (!slot) {
-        lua_pushboolean(L, 0);
-        return 1;
+    float effectiveSpeed = 1.0f;
+    bool hasPlayer = false;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        SoundSlot* slot = FindSound(id);
+        if (!slot) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        slot->sampleRate = sampleRate;
+        slot->tempo = tempo;
+        slot->pitch = pitch;
+        slot->reversed = reversed;
+        effectiveSpeed = ComputeEffectiveSpeed(*slot);
+        hasPlayer = slot->hasMediaPlayer;
     }
-    slot->sampleRate = sampleRate;
-    slot->tempo = tempo;
-    slot->pitch = pitch;
-    slot->reversed = reversed;
+    if (hasPlayer) PostSoundSpeedLine(id, effectiveSpeed);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -628,9 +888,19 @@ int l_getSoundLevelData(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const float vol = std::clamp(slot->volume, 0.0f, 1.0f);
-    const int left = static_cast<int>(std::clamp(vol * (1.0f - std::max(0.0f, slot->pan)), 0.0f, 1.0f) * 32768.0f);
-    const int right = static_cast<int>(std::clamp(vol * (1.0f + std::min(0.0f, slot->pan)), 0.0f, 1.0f) * 32768.0f);
+    const float vol = std::clamp(slot->is3D ? slot->effectiveVolume : slot->volume, 0.0f, 1.0f);
+    const float pan = std::clamp(slot->is3D ? slot->effectivePan : slot->pan, -1.0f, 1.0f);
+    const float leftGain = std::clamp(vol * (1.0f - std::max(0.0f, pan)), 0.0f, 1.0f);
+    const float rightGain = std::clamp(vol * (1.0f + std::min(0.0f, pan)), 0.0f, 1.0f);
+    int left = 0;
+    int right = 0;
+    if (slot->liveLeftLevel >= 0 && slot->liveRightLevel >= 0) {
+        left = std::clamp(static_cast<int>(slot->liveLeftLevel * leftGain), 0, 32768);
+        right = std::clamp(static_cast<int>(slot->liveRightLevel * rightGain), 0, 32768);
+    } else {
+        left = static_cast<int>(leftGain * 32768.0f);
+        right = static_cast<int>(rightGain * 32768.0f);
+    }
     lua_pushinteger(L, left);
     lua_pushinteger(L, right);
     return 2;
@@ -673,10 +943,18 @@ int l_getSoundFFTData(lua_State* L) {
         return 1;
     }
     const int count = (bands > 0) ? bands : (length / 2 + 1);
+    const float gain = std::clamp(slot->is3D ? slot->effectiveVolume : slot->volume, 0.0f, 1.0f);
     lua_createtable(L, count, 0);
+    const size_t srcSize = slot->liveFft.size();
     for (int i = 0; i < count; ++i) {
+        double sample = 0.0;
+        if (srcSize > 0) {
+            const size_t srcIdx = std::min(srcSize - 1,
+                static_cast<size_t>((static_cast<uint64_t>(i) * srcSize) / static_cast<uint64_t>(count)));
+            sample = static_cast<double>(slot->liveFft[srcIdx] * gain);
+        }
         lua_pushinteger(L, i);
-        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, sample);
         lua_settable(L, -3);
     }
     return 1;
@@ -699,10 +977,18 @@ int l_getSoundWaveData(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    const float gain = std::clamp(slot->is3D ? slot->effectiveVolume : slot->volume, 0.0f, 1.0f);
+    const size_t srcSize = slot->liveWave.size();
     lua_createtable(L, length, 0);
     for (int i = 0; i < length; ++i) {
+        double sample = 0.0;
+        if (srcSize > 0) {
+            const size_t srcIdx = std::min(srcSize - 1,
+                static_cast<size_t>((static_cast<uint64_t>(i) * srcSize) / static_cast<uint64_t>(length)));
+            sample = static_cast<double>(slot->liveWave[srcIdx] * gain);
+        }
         lua_pushinteger(L, i);
-        lua_pushnumber(L, 0.0);
+        lua_pushnumber(L, sample);
         lua_settable(L, -3);
     }
     return 1;
@@ -879,6 +1165,21 @@ int l_setRadioChannel(lua_State* L) {
         return 1;
     }
     g_radioChannel = static_cast<uint8_t>(channel);
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine) {
+        WorldRPG::GameTasks::Run([channel]() {
+            if (!g_nativeAudio.audioEngine) return;
+            if (channel == 0) {
+                if (g_nativeAudio.stopRadio) g_nativeAudio.stopRadio(g_nativeAudio.audioEngine, nullptr, 0);
+            } else if (g_nativeAudio.retuneRadio) {
+                g_nativeAudio.retuneRadio(g_nativeAudio.audioEngine, static_cast<int8_t>(channel));
+            } else if (g_nativeAudio.startRadio) {
+                g_nativeAudio.startRadio(g_nativeAudio.audioEngine, static_cast<int8_t>(channel), 0);
+            }
+        });
+    }
+#endif
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1067,18 +1368,485 @@ int l_resetWorldSounds(lua_State* L) {
     return 1;
 }
 
-int l_getSFXStatus(lua_State* L) {
-    if (!lua_isstring(L, 1) || !IsValidAudioContainer(ToLower(lua_tostring(L, 1)))) {
-        lua_pushnil(L);
-    } else {
-        lua_pushboolean(L, 0);
+int RadioStationNameToBank(const std::string& lower) {
+    static const char* kStations[] = {
+        "adverts", "ambience", "beats", "ch", "co", "cr", "cutscene", "ds",
+        "hc", "mh", "mr", "nj", "re", "rg", "tk"
+    };
+    for (int i = 0; i < static_cast<int>(std::size(kStations)); ++i) {
+        if (lower == kStations[i]) return i;
     }
+    return -1;
+}
+
+bool TryResolveSfxAsset(const std::string& container, int bankIndex, int audioIndex, std::string& outPath) {
+    static const char* kExts[] = {".ogg", ".wav", ".mp3"};
+    for (const char* ext : kExts) {
+        const std::string rel = "audio/sfx/" + container + "/" + std::to_string(bankIndex) + "/" +
+                                std::to_string(audioIndex) + ext;
+        std::filesystem::path resolved;
+        if (ResolveFilePath(rel, resolved)) {
+            outPath = resolved.string();
+            return true;
+        }
+    }
+    return false;
+}
+
+int l_getSFXStatus(lua_State* L) {
+    if (!lua_isstring(L, 1)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const std::string container = ToLower(lua_tostring(L, 1));
+    if (!IsValidAudioContainer(container)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushboolean(L, HasNativeAudioEngine() ? 1 : 0);
     return 1;
 }
 
-int AudioBackendUnavailable(lua_State* L) {
-    lua_pushboolean(L, 0);
+int PlaySfxCommon(lua_State* L, bool is3D) {
+    if (!lua_isstring(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const std::string container = ToLower(lua_tostring(L, 1));
+    if (!IsValidAudioContainer(container)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int bankIndex = -1;
+    if (lua_isnumber(L, 2)) {
+        bankIndex = static_cast<int>(lua_tointeger(L, 2));
+    } else if (container == "radio" && lua_isstring(L, 2)) {
+        bankIndex = RadioStationNameToBank(ToLower(lua_tostring(L, 2)));
+    }
+    if (bankIndex < 0 || !lua_isnumber(L, 3)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const int audioIndex = static_cast<int>(lua_tointeger(L, 3));
+    if (audioIndex < 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+    bool loop = false;
+    if (is3D) {
+        if (!lua_isnumber(L, 4) || !lua_isnumber(L, 5) || !lua_isnumber(L, 6)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        x = static_cast<float>(lua_tonumber(L, 4));
+        y = static_cast<float>(lua_tonumber(L, 5));
+        z = static_cast<float>(lua_tonumber(L, 6));
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        loop = lua_isboolean(L, 7) ? (lua_toboolean(L, 7) != 0) : false;
+    } else {
+        loop = lua_isboolean(L, 4) ? (lua_toboolean(L, 4) != 0) : false;
+    }
+
+    std::string assetPath;
+    const bool hasAsset = TryResolveSfxAsset(container, bankIndex, audioIndex, assetPath);
+    if (!hasAsset && !HasNativeAudioEngine()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!hasAsset && !g_diagSfxPak) {
+        g_diagSfxPak = true;
+        LUA_LOGI("playSFX(%s, %d, %d): using managed SFX element (no extracted OGG/WAV found)",
+                 container.c_str(), bankIndex, audioIndex);
+    }
+    const uint32_t id = AllocSound(assetPath, loop, is3D, x, y, z, true, hasAsset, true);
+    if (!id) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    PushElement(L, id);
     return 1;
+}
+
+int l_playSFX(lua_State* L) { return PlaySfxCommon(L, false); }
+int l_playSFX3D(lua_State* L) { return PlaySfxCommon(L, true); }
+
+bool IsValidMissionAudioEventId(int eventId) {
+    return (eventId >= kMissionAudioScriptBankFirst && eventId <= kMissionAudioScriptBankLast) ||
+           (eventId >= kMissionAudioScriptSlotFirst && eventId <= kMissionAudioScriptSlotLast);
+}
+
+bool MissionSlotOwnedByCurrent(const MissionAudioSlot& slot) {
+    const std::string& owner = ActiveVmOwner();
+    const uint16_t netId = ActiveVmOwnerNet();
+    const uint32_t gen = ActiveVmOwnerGeneration();
+    if (slot.owner != owner) return false;
+    if (slot.ownerNetId && netId && slot.ownerNetId != netId) return false;
+    if (slot.ownerGeneration && gen && slot.ownerGeneration != gen) return false;
+    return true;
+}
+
+int FindMissionSlotByHandle(uint32_t handle) {
+    if (!handle) return -1;
+    for (int i = 0; i < static_cast<int>(kMissionAudioSlotCount); ++i) {
+        if (g_missionSlots[i].inUse && g_missionSlots[i].handle == handle) return i;
+    }
+    return -1;
+}
+
+void ClearNativeMissionSlot(uint8_t slotIndex) {
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.clearMissionAudio) {
+        WorldRPG::GameTasks::Run([slotIndex]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.clearMissionAudio) {
+                g_nativeAudio.clearMissionAudio(g_nativeAudio.audioEngine, slotIndex);
+            }
+        });
+    }
+#else
+    (void)slotIndex;
+#endif
+}
+
+// CLuaAudioDefs::PlayMissionPassedTune (CLuaAudioDefs.cpp:2519-2525,
+// CStaticFunctionDefinitions.cpp:4748-4754): valid tunes are 1 and 2, mapped to beat tracks 11 and 12.
+int l_playMissionPassedTune(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const int tune = static_cast<int>(lua_tointeger(L, 1));
+    if (tune < 1 || tune > 2) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!HasNativeAudioEngine()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.preloadBeatTrack && g_nativeAudio.playPreloadedBeatTrack) {
+        const short trackId = static_cast<short>(tune + 10);
+        WorldRPG::GameTasks::Run([trackId]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.preloadBeatTrack && g_nativeAudio.playPreloadedBeatTrack) {
+                g_nativeAudio.preloadBeatTrack(g_nativeAudio.audioEngine, trackId);
+                g_nativeAudio.playPreloadedBeatTrack(g_nativeAudio.audioEngine, 1);
+            }
+        });
+    }
+#endif
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaAudioDefs::RequestMissionAudio (CLuaAudioDefs.cpp:173-232)
+int l_requestMissionAudio(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const int eventId = static_cast<int>(lua_tointeger(L, 1));
+    if (!IsValidMissionAudioEventId(eventId)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int preferredSlot = -1;
+    if (lua_isnumber(L, 2)) {
+        const int s = static_cast<int>(lua_tointeger(L, 2));
+        if (s < 1 || s > static_cast<int>(kMissionAudioSlotCount)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        preferredSlot = s - 1;
+    }
+    if (!HasNativeAudioEngine()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    uint32_t handle = 0;
+    int chosenSlot = -1;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        if (preferredSlot >= 0) {
+            if (!g_missionSlots[preferredSlot].inUse) chosenSlot = preferredSlot;
+        } else {
+            for (int i = 0; i < static_cast<int>(kMissionAudioSlotCount); ++i) {
+                if (!g_missionSlots[i].inUse) {
+                    chosenSlot = i;
+                    break;
+                }
+            }
+        }
+        if (chosenSlot < 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        auto& slot = g_missionSlots[chosenSlot];
+        slot = MissionAudioSlot{};
+        slot.inUse = true;
+        slot.handle = handle = g_nextMissionHandle++;
+        slot.eventId = eventId;
+        slot.loaded = true;  // host mock ready immediately; Android queries native loading status
+        slot.playing = false;
+        slot.finished = false;
+        slot.owner = ActiveVmOwner();
+        slot.ownerNetId = ActiveVmOwnerNet();
+        slot.ownerGeneration = ActiveVmOwnerGeneration();
+    }
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.preloadMissionAudio) {
+        const uint8_t slotIndex = static_cast<uint8_t>(chosenSlot);
+        WorldRPG::GameTasks::Run([slotIndex, eventId]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.preloadMissionAudio) {
+                g_nativeAudio.preloadMissionAudio(g_nativeAudio.audioEngine, slotIndex, eventId);
+            }
+        });
+    }
+#endif
+    lua_pushinteger(L, static_cast<lua_Integer>(handle));
+    return 1;
+}
+
+int l_isMissionAudioLoaded(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
+    int slotIdx = -1;
+    bool loaded = false;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        slotIdx = FindMissionSlotByHandle(handle);
+        if (slotIdx < 0 || !MissionSlotOwnedByCurrent(g_missionSlots[slotIdx])) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        loaded = g_missionSlots[slotIdx].loaded;
+    }
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.getMissionAudioLoadingStatus) {
+        int8_t status = 0;
+        const uint8_t idx = static_cast<uint8_t>(slotIdx);
+        WorldRPG::GameTasks::RunQuery([idx, &status]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.getMissionAudioLoadingStatus) {
+                status = g_nativeAudio.getMissionAudioLoadingStatus(g_nativeAudio.audioEngine, idx);
+            }
+        });
+        loaded = (status == 1);
+    }
+#endif
+    lua_pushboolean(L, loaded ? 1 : 0);
+    return 1;
+}
+
+int l_playMissionAudio(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
+    int slotIdx = -1;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        slotIdx = FindMissionSlotByHandle(handle);
+        if (slotIdx < 0 || !MissionSlotOwnedByCurrent(g_missionSlots[slotIdx])) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        g_missionSlots[slotIdx].playing = true;
+        g_missionSlots[slotIdx].finished = true;  // host mock marks sample played cleanly
+    }
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.playLoadedMissionAudio) {
+        const uint8_t idx = static_cast<uint8_t>(slotIdx);
+        WorldRPG::GameTasks::Run([idx]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.playLoadedMissionAudio) {
+                g_nativeAudio.playLoadedMissionAudio(g_nativeAudio.audioEngine, idx);
+            }
+        });
+    }
+#endif
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int l_isMissionAudioFinished(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
+    int slotIdx = -1;
+    bool finished = false;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        slotIdx = FindMissionSlotByHandle(handle);
+        if (slotIdx < 0 || !MissionSlotOwnedByCurrent(g_missionSlots[slotIdx])) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        finished = g_missionSlots[slotIdx].finished;
+    }
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.isMissionAudioSampleFinished) {
+        const uint8_t idx = static_cast<uint8_t>(slotIdx);
+        WorldRPG::GameTasks::RunQuery([idx, &finished]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.isMissionAudioSampleFinished) {
+                finished = g_nativeAudio.isMissionAudioSampleFinished(g_nativeAudio.audioEngine, idx);
+            }
+        });
+    }
+#endif
+    lua_pushboolean(L, finished ? 1 : 0);
+    return 1;
+}
+
+int l_releaseMissionAudio(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint32_t handle = static_cast<uint32_t>(lua_tointeger(L, 1));
+    int slotIdx = -1;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        slotIdx = FindMissionSlotByHandle(handle);
+        if (slotIdx < 0 || !MissionSlotOwnedByCurrent(g_missionSlots[slotIdx])) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        g_missionSlots[slotIdx] = MissionAudioSlot{};
+    }
+    ClearNativeMissionSlot(static_cast<uint8_t>(slotIdx));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaAudioDefs::ReportPositionMissionAudioEvent (CLuaAudioDefs.cpp:421-432)
+int l_reportPositionMissionAudioEvent(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const float x = static_cast<float>(lua_tonumber(L, 1));
+    const float y = static_cast<float>(lua_tonumber(L, 2));
+    const float z = static_cast<float>(lua_tonumber(L, 3));
+    const int eventId = static_cast<int>(lua_tointeger(L, 4));
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+        eventId < kMissionAudioEventMin || eventId > kMissionAudioEventMax) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!HasNativeAudioEngine()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (g_nativeAudio.audioEngine && g_nativeAudio.reportMissionAudioPos) {
+        const uint16_t ev = static_cast<uint16_t>(eventId);
+        WorldRPG::GameTasks::Run([ev, x, y, z]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.reportMissionAudioPos) {
+                CVector3 pos{x, y, z};
+                g_nativeAudio.reportMissionAudioPos(g_nativeAudio.audioEngine, ev, &pos);
+            }
+        });
+    }
+#endif
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// CLuaAudioDefs::ReportVehicleMissionAudioEvent (CLuaAudioDefs.cpp:2933-2941)
+int l_reportVehicleMissionAudioEvent(lua_State* L) {
+    const uint32_t vehicleId = ElementIdOf(L, 1);
+    if (!vehicleId || !lua_isnumber(L, 2)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* kind = WorldRPG::ServerWorld::ElementKindName(vehicleId);
+    if (!kind || std::string_view(kind) != "vehicle") {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const int eventId = static_cast<int>(lua_tointeger(L, 2));
+    if (eventId < kMissionAudioEventMin || eventId > kMissionAudioEventMax) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (!HasNativeAudioEngine()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    const bool hasPose = WorldRPG::ServerWorld::ElementPose(vehicleId, vx, vy, vz);
+#ifdef __ANDROID__
+    ProbeNativeAudio();
+    if (hasPose && g_nativeAudio.audioEngine && g_nativeAudio.reportMissionAudioPos) {
+        const uint16_t ev = static_cast<uint16_t>(eventId);
+        WorldRPG::GameTasks::Run([ev, vx, vy, vz]() {
+            if (g_nativeAudio.audioEngine && g_nativeAudio.reportMissionAudioPos) {
+                CVector3 pos{vx, vy, vz};
+                g_nativeAudio.reportMissionAudioPos(g_nativeAudio.audioEngine, ev, &pos);
+            }
+        });
+    }
+#else
+    (void)hasPose;
+#endif
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// Element position hooks so getElementPosition/setElementPosition work on sound3D elements.
+int l_soundGetElementPosition(lua_State* L) {
+    const uint32_t id = ElementIdOf(L, 1);
+    if (id) {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        if (const SoundSlot* slot = FindSound(id)) {
+            lua_pushnumber(L, slot->posX);
+            lua_pushnumber(L, slot->posY);
+            lua_pushnumber(L, slot->posZ);
+            return 3;
+        }
+    }
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
+    return lua_gettop(L);
+}
+
+int l_soundSetElementPosition(lua_State* L) {
+    const uint32_t id = ElementIdOf(L, 1);
+    if (id && lua_isnumber(L, 2) && lua_isnumber(L, 3) && lua_isnumber(L, 4)) {
+        const float x = static_cast<float>(lua_tonumber(L, 2));
+        const float y = static_cast<float>(lua_tonumber(L, 3));
+        const float z = static_cast<float>(lua_tonumber(L, 4));
+        if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
+            std::lock_guard<std::mutex> lock(g_soundMu);
+            if (SoundSlot* slot = FindSound(id)) {
+                slot->posX = x;
+                slot->posY = y;
+                slot->posZ = z;
+                lua_pushboolean(L, 1);
+                return 1;
+            }
+        }
+    }
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
+    return lua_gettop(L);
 }
 
 }  // namespace
@@ -1089,14 +1857,18 @@ bool AudioSoundAlive(uint32_t id) {
 }
 
 bool AudioStopSound(uint32_t id) {
+    bool hasPlayer = false;
     {
         std::lock_guard<std::mutex> lock(g_soundMu);
         SoundSlot* slot = FindSound(id);
         if (!slot) return false;
+        hasPlayer = slot->hasMediaPlayer;
         *slot = SoundSlot{};
     }
-    const std::string text = std::to_string(id);
-    ::WorldRPG::JniBridge::PostGameLine(12, text.c_str());
+    if (hasPlayer) {
+        const std::string text = std::to_string(id);
+        ::WorldRPG::JniBridge::PostGameLine(12, text.c_str());
+    }
     return true;
 }
 
@@ -1124,8 +1896,136 @@ void AudioNoteSoundLength(uint32_t id, double seconds) {
     }
 }
 
+void AudioNoteSoundStarted(uint32_t id, const char* reason) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    SoundSlot* slot = FindSound(id);
+    if (!slot) return;
+    SoundLifecycleEvent ev;
+    ev.kind = SoundLifecycleEvent::Kind::Started;
+    ev.id = id;
+    ev.reasonOrName = (reason && reason[0]) ? reason : "play";
+    g_soundEvents.push_back(std::move(ev));
+}
+
+void AudioNoteSoundStream(uint32_t id, bool success, double length, const char* streamName, const char* errorMsg) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    SoundSlot* slot = FindSound(id);
+    if (!slot) return;
+    if (success && std::isfinite(length) && length >= 0.0) slot->length = length;
+    if (streamName && streamName[0]) slot->metaTags["stream_name"] = streamName;
+    SoundLifecycleEvent ev;
+    ev.kind = SoundLifecycleEvent::Kind::Stream;
+    ev.id = id;
+    ev.success = success;
+    ev.length = (std::isfinite(length) && length >= 0.0) ? length : 0.0;
+    ev.reasonOrName = streamName ? streamName : "";
+    ev.errorMessage = errorMsg ? errorMsg : "";
+    g_soundEvents.push_back(std::move(ev));
+}
+
+void AudioNoteSoundAnalysis(uint32_t id, int leftLevel, int rightLevel,
+                            const float* fft, int fftCount,
+                            const float* wave, int waveCount) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    SoundSlot* slot = FindSound(id);
+    if (!slot) return;
+    if (leftLevel >= 0 && rightLevel >= 0) {
+        slot->liveLeftLevel = std::clamp(leftLevel, 0, 32768);
+        slot->liveRightLevel = std::clamp(rightLevel, 0, 32768);
+    }
+    if (fft && fftCount > 0) {
+        const int n = std::min(fftCount, 2048);
+        slot->liveFft.assign(fft, fft + n);
+    }
+    if (wave && waveCount > 0) {
+        const int n = std::min(waveCount, 2048);
+        slot->liveWave.assign(wave, wave + n);
+    }
+}
+
+void AudioUpdateSpatial3D(float listenerX, float listenerY, float listenerZ,
+                          float rightX, float rightY, float rightZ) {
+    struct MixPush {
+        uint32_t id;
+        bool pushVol;
+        float vol;
+        bool pushPan;
+        float pan;
+    };
+    std::vector<MixPush> pushes;
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        for (auto& slot : g_sounds) {
+            if (!slot.alive || !slot.is3D) continue;
+            float effVol = 0.0f;
+            float effPan = 0.0f;
+            ComputeSpatial3DMix(slot, listenerX, listenerY, listenerZ, rightX, rightY, rightZ, effVol, effPan);
+            slot.effectiveVolume = effVol;
+            slot.effectivePan = effPan;
+            if (!slot.hasMediaPlayer || slot.paused) continue;
+            const bool needVol = (slot.lastSentVolume < 0.0f) || (std::fabs(effVol - slot.lastSentVolume) > 0.01f);
+            const bool needPan = (slot.lastSentPan < -2.0f) || (std::fabs(effPan - slot.lastSentPan) > 0.01f);
+            if (needVol || needPan) {
+                if (needVol) slot.lastSentVolume = effVol;
+                if (needPan) slot.lastSentPan = effPan;
+                pushes.push_back({slot.id, needVol, effVol, needPan, effPan});
+            }
+        }
+    }
+    for (const auto& p : pushes) {
+        char line[64];
+        if (p.pushVol) {
+            std::snprintf(line, sizeof(line), "%u|%.3f", p.id, p.vol);
+            ::WorldRPG::JniBridge::PostGameLine(13, line);
+        }
+        if (p.pushPan) {
+            std::snprintf(line, sizeof(line), "%u|%.6f", p.id, p.pan);
+            ::WorldRPG::JniBridge::PostGameLine(18, line);
+        }
+    }
+}
+
+bool AudioGetEffectiveMix(uint32_t id, float& effectiveVol, float& effectivePan) {
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    const SoundSlot* slot = FindSound(id);
+    if (!slot) return false;
+    effectiveVol = slot->is3D ? slot->effectiveVolume : slot->volume;
+    effectivePan = slot->is3D ? slot->effectivePan : slot->pan;
+    return true;
+}
+
+std::vector<SoundLifecycleEvent> AudioCollectEvents() {
+    std::vector<SoundLifecycleEvent> out;
+    std::lock_guard<std::mutex> lock(g_soundMu);
+    out.swap(g_soundEvents);
+    for (auto& slot : g_sounds) {
+        if (!slot.alive || !slot.ended) continue;
+        SoundLifecycleEvent ev;
+        ev.kind = SoundLifecycleEvent::Kind::Stopped;
+        ev.id = slot.id;
+        ev.reasonOrName = "finished";
+        out.push_back(std::move(ev));
+        slot = SoundSlot{};
+    }
+    return out;
+}
+
+void AudioSetNativeBackendForTests(bool enabled) {
+    g_hostNativeAudioMock.store(enabled, std::memory_order_relaxed);
+}
+
 void AudioResetSession() {
     AudioStopOwnedSounds();
+    {
+        std::lock_guard<std::mutex> lock(g_soundMu);
+        g_soundEvents.clear();
+        for (int i = 0; i < static_cast<int>(kMissionAudioSlotCount); ++i) {
+            if (g_missionSlots[i].inUse) {
+                g_missionSlots[i] = MissionAudioSlot{};
+                ClearNativeMissionSlot(static_cast<uint8_t>(i));
+            }
+        }
+    }
     g_showSound = false;
     g_radioChannel = 0;
     g_ambientGeneral = true;
@@ -1135,14 +2035,23 @@ void AudioResetSession() {
 
 void AudioStopOwnedSounds(const std::string* owner, uint16_t netId, uint32_t generation) {
     std::vector<uint32_t> stopped;
+    std::vector<uint8_t> clearedMission;
     {
         std::lock_guard<std::mutex> lock(g_soundMu);
         for (auto& slot : g_sounds) {
             if (!slot.alive) continue;
             if (owner && (slot.owner != *owner || (netId && slot.ownerNetId != netId) ||
                           (generation && slot.ownerGeneration != generation))) continue;
-            stopped.push_back(slot.id);
+            if (slot.hasMediaPlayer) stopped.push_back(slot.id);
             slot = SoundSlot{};
+        }
+        for (int i = 0; i < static_cast<int>(kMissionAudioSlotCount); ++i) {
+            auto& ms = g_missionSlots[i];
+            if (!ms.inUse) continue;
+            if (owner && (ms.owner != *owner || (netId && ms.ownerNetId != netId) ||
+                          (generation && ms.ownerGeneration != generation))) continue;
+            ms = MissionAudioSlot{};
+            clearedMission.push_back(static_cast<uint8_t>(i));
         }
     }
     for (uint32_t id : stopped) {
@@ -1150,6 +2059,7 @@ void AudioStopOwnedSounds(const std::string* owner, uint16_t netId, uint32_t gen
         std::snprintf(line, sizeof(line), "%u", id);
         ::WorldRPG::JniBridge::PostGameLine(12, line);
     }
+    for (uint8_t idx : clearedMission) ClearNativeMissionSlot(idx);
 }
 
 void InstallAudioLua(lua_State* L) {
@@ -1208,23 +2118,37 @@ void InstallAudioLua(lua_State* L) {
         {"setWorldSoundEnabled", l_setWorldSoundEnabled},
         {"isWorldSoundEnabled", l_isWorldSoundEnabled},
         {"resetWorldSounds", l_resetWorldSounds},
-        {"playSFX", AudioBackendUnavailable},
-        {"playSFX3D", AudioBackendUnavailable},
+        {"playSFX", l_playSFX},
+        {"playSFX3D", l_playSFX3D},
         {"getSFXStatus", l_getSFXStatus},
 
         // Lot 4 additions
-        {"playMissionPassedTune", AudioBackendUnavailable},
-        {"requestMissionAudio", AudioBackendUnavailable},
-        {"isMissionAudioLoaded", AudioBackendUnavailable},
-        {"playMissionAudio", AudioBackendUnavailable},
-        {"isMissionAudioFinished", AudioBackendUnavailable},
-        {"releaseMissionAudio", AudioBackendUnavailable},
-        {"reportPositionMissionAudioEvent", AudioBackendUnavailable},
-        {"reportVehicleMissionAudioEvent", AudioBackendUnavailable},
+        {"playMissionPassedTune", l_playMissionPassedTune},
+        {"requestMissionAudio", l_requestMissionAudio},
+        {"isMissionAudioLoaded", l_isMissionAudioLoaded},
+        {"playMissionAudio", l_playMissionAudio},
+        {"isMissionAudioFinished", l_isMissionAudioFinished},
+        {"releaseMissionAudio", l_releaseMissionAudio},
+        {"reportPositionMissionAudioEvent", l_reportPositionMissionAudioEvent},
+        {"reportVehicleMissionAudioEvent", l_reportVehicleMissionAudioEvent},
     };
     for (const auto& bind : binds) {
         lua_pushcfunction(L, bind.fn);
         lua_setglobal(L, bind.name);
+    }
+    lua_getglobal(L, "getElementPosition");
+    if (lua_isfunction(L, -1)) {
+        lua_pushcclosure(L, l_soundGetElementPosition, 1);
+        lua_setglobal(L, "getElementPosition");
+    } else {
+        lua_pop(L, 1);
+    }
+    lua_getglobal(L, "setElementPosition");
+    if (lua_isfunction(L, -1)) {
+        lua_pushcclosure(L, l_soundSetElementPosition, 1);
+        lua_setglobal(L, "setElementPosition");
+    } else {
+        lua_pop(L, 1);
     }
 }
 
