@@ -125,6 +125,7 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/VehicleSync.cpp"
     "${NATIVE_DIR}/shared/CombatSync.cpp"
     "${NATIVE_DIR}/shared/ServerWorld.cpp"
+    "${NATIVE_DIR}/shared/ServerRpc.cpp"
     "${NATIVE_DIR}/shared/ConnectionLoading.cpp"
     "${NATIVE_DIR}/shared/entity/EntityAddCore.cpp"
     "${NATIVE_DIR}/shared/entity/EntityAddDummy.cpp"
@@ -243,12 +244,13 @@ add_executable(neon_dx_conversion_tests "${HEADLESS_DIR}/dx_conversion_tests.cpp
 add_executable(neon_ped_query_tests "${HEADLESS_DIR}/ped_query_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_spatial_tests "${HEADLESS_DIR}/spatial_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_control_toggle_tests "${HEADLESS_DIR}/control_toggle_tests.cpp" $<TARGET_OBJECTS:neon_core>)
+add_executable(neon_server_rpc_tests "${HEADLESS_DIR}/server_rpc_tests.cpp" $<TARGET_OBJECTS:neon_core>)
 add_executable(neon_join_codec_tests "${HEADLESS_DIR}/../../tests/test_join_codec.cpp"
     $<FILTER:$<TARGET_OBJECTS:neon_core>,EXCLUDE,NeonJoinProtocol[.]cpp[.]o$>)
 target_link_options(neon_dx_conversion_tests PRIVATE
     "-Wl,--wrap=eglCreatePbufferSurface" "-Wl,--wrap=eglMakeCurrent")
 
-foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tests neon_ped_query_tests neon_spatial_tests neon_control_toggle_tests neon_join_codec_tests)
+foreach(headless_target neon_headless neon_resource_tests neon_dx_conversion_tests neon_ped_query_tests neon_spatial_tests neon_control_toggle_tests neon_server_rpc_tests neon_join_codec_tests)
     target_include_directories(${headless_target} PRIVATE ${HEADLESS_INCLUDE_DIRS})
     target_link_options(${headless_target} PRIVATE
         "-Wl,--wrap=_ZN8WorldRPG3Net13RakNetWrapper10SendPacketEhRKNS0_15BitStreamWriterENS0_14PacketPriorityENS0_17PacketReliabilityENS0_14PacketOrderingE")

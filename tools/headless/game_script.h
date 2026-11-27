@@ -18,6 +18,21 @@ void MarkJoined();
 // The server's VEHICLE_INOUT reply for the local ped (action as on the wire, 0..9). A jack or
 // attempt_failed reply to the driver's entry sends the driver back to pick another car.
 void NoteServerVehicleInOut(uint32_t vehicle, uint8_t action);
+// What the Game:: calls of the server RPCs reached on the host, for the server RPC tests. Reset before each check.
+struct ScriptProbe {
+    int cameraNotes = 0;
+    float camera[6] = {};
+    int cameraClears = 0;
+    bool timeSet = false;
+    int hour = -1, minute = -1;
+    bool weatherSet = false;
+    int weather = -1;
+    int vehicleHealthCalls = 0;
+    uint32_t vehicleHealthId = 0;
+    float vehicleHealth = -1.f;
+};
+ScriptProbe& Probe();
+void ResetProbe();
 // Seconds since process start; the timestamp used by every headless log line.
 double ElapsedSeconds();
 

@@ -27,10 +27,18 @@ std::vector<std::string> TakeControlLines(){
     gameLines.clear();
     return out;
 }
+// Every line of one kind since the last call (kind 10 is the chat visibility).
+std::vector<std::string> TakeGameLines(int kind){
+    std::lock_guard<std::mutex> lock(gameLinesMutex);
+    std::vector<std::string> out;
+    for(auto& line:gameLines) if(line.first==kind) out.push_back(line.second);
+    gameLines.clear();
+    return out;
+}
 void EnableTestBitmaps(bool enabled){testBitmaps=enabled;bitmaps.clear();}
 size_t TestBitmapCount(){return bitmaps.size();}
 void PostGameLine(int kind, const char* text) {
-    if (text && kind == 20) {
+    if (text && (kind == 20 || kind == 10)) {
         std::lock_guard<std::mutex> lock(gameLinesMutex);
         if (gameLines.size() < 256) gameLines.emplace_back(kind, text);
     }

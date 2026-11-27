@@ -25,4 +25,11 @@ void DropClientElementData(lua_State* L, uint32_t id);
 void PushElement(lua_State* L, uint32_t id);
 uint32_t ElementIdOf(lua_State* L, int index);
 
+// CPlayerRPCs::SetPlayerMoney (CPlayerRPCs.cpp:29-42): the value getPlayerMoney reports. VM thread only.
+void RpcSetPlayerMoney(int32_t amount, bool instant);
+long long ScriptPlayerMoney();
+
+// CInputRPCs::ShowChat (CInputRPCs.cpp:293-304): the state isChatVisible reports and the chat view. VM thread only.
+void RpcSetChatVisible(bool visible, bool inputBlocked);
+
 } // namespace WorldRPG::Script

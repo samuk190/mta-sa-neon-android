@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <map>
+#include <string>
 
 #ifdef __ANDROID__
 #include <dlfcn.h>
@@ -186,10 +188,21 @@ void ResetHudComponents() {
 }
 
 #else
-bool SetHudComponentVisible(const char*, bool) { return true; }
-bool IsHudComponentVisible(const char*) { return true; }
+// Host build: remembers what was set so tests can read it back. Every name is accepted.
+namespace {
+std::map<std::string, bool> g_hostVisible;
+}
+bool SetHudComponentVisible(const char* component, bool visible) {
+    if (!component || !*component) return false;
+    g_hostVisible[component] = visible;
+    return true;
+}
+bool IsHudComponentVisible(const char* component) {
+    const auto found = component ? g_hostVisible.find(component) : g_hostVisible.end();
+    return found == g_hostVisible.end() ? true : found->second;
+}
 bool GetMobileCrosshairPosition(float&, float&) { return false; }
-void ResetHudComponents() {}
+void ResetHudComponents() { g_hostVisible.clear(); }
 #endif
 
 }  // namespace WorldRPG::Game

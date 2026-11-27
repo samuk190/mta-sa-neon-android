@@ -49,6 +49,7 @@ extern "C" {
 #include "ResourceLoader.h"
 #include "ResourcePackets.h"
 #include "ServerWorld.h"
+#include "ServerRpc.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/ProjectileEngine.h"
 #include "../gtasa/HudComponents.h"
@@ -3030,6 +3031,7 @@ static void ApplyCursorEvent(const CursorEvent& ev) {
 std::string LuaVMStub::pumpDx(bool renderFrame) {
     if (!pImpl_->L) return {};
     PublishClientObjects();  // the game thread streams CObjects from this (WorldObjectFeed)
+    ServerRpc::Pump();       // server RPCs that write Lua-owned state (camera, world, binds, objects)
     // CClientGame::OnWindowFocusChange (CClientGame.cpp:8069-8078). One report per pump.
     bool windowFocused = false;
     if (MtaWindowTakeFocusChange(windowFocused)) {

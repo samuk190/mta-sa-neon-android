@@ -4241,6 +4241,15 @@ void BindPedLua(lua_State* L) {
     }
 }
 
+void RpcSetPlayerMoney(int32_t amount, bool instant) {
+    (void)instant;
+    g_money = amount;
+    static bool once = false;
+    DiagOnce(once, "DIAG SET_PLAYER_MONEY: CClientGame::SetMoney does not update the HUD");
+}
+
+long long ScriptPlayerMoney() { return g_money; }
+
 }  // namespace WorldRPG::Script
 
 extern "C" void InstallPedLua(lua_State* L) {
