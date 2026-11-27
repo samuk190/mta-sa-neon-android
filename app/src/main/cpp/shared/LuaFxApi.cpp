@@ -5,6 +5,7 @@
 #include "LuaFxApi.h"
 
 #include "LuaVMStub.h"
+#include "WorldNativeBridge.h"
 
 #include "lua.hpp"
 
@@ -95,7 +96,7 @@ struct Args {
         return true;
     }
 
-    bool Vec() {
+    bool Vec(float* ox = nullptr, float* oy = nullptr, float* oz = nullptr) {
         float x = 0.f, y = 0.f, z = 0.f;
         if (!ok) return false;
         const int type = lua_type(L, index);
@@ -103,10 +104,16 @@ struct Args {
             Type("vector3");
             return false;
         }
-        return TakeNumber(x, false, 0.f) && TakeNumber(y, false, 0.f) && TakeNumber(z, false, 0.f);
+        const bool res = TakeNumber(x, false, 0.f) && TakeNumber(y, false, 0.f) && TakeNumber(z, false, 0.f);
+        if (res) {
+            if (ox) *ox = x;
+            if (oy) *oy = y;
+            if (oz) *oz = z;
+        }
+        return res;
     }
 
-    bool VecDefault() {
+    bool VecDefault(float* ox = nullptr, float* oy = nullptr, float* oz = nullptr) {
         if (!ok) return false;
         const int type = lua_type(L, index);
         if (type == LUA_TNONE || type == LUA_TNIL) {
@@ -118,7 +125,13 @@ struct Args {
             return false;
         }
         float x = 0.f, y = 0.f, z = 0.f;
-        return TakeNumber(x, true, 0.f) && TakeNumber(y, true, 0.f) && TakeNumber(z, true, 0.f);
+        const bool res = TakeNumber(x, true, 0.f) && TakeNumber(y, true, 0.f) && TakeNumber(z, true, 0.f);
+        if (res) {
+            if (ox) *ox = x;
+            if (oy) *oy = y;
+            if (oz) *oz = z;
+        }
+        return res;
     }
 
     bool BoolDefault(bool& out, bool fallback) {
@@ -145,31 +158,42 @@ void Note() {
     LUA_LOGE("DIAG fxAdd: CFxManager particle calls are not hooked; a parsed call returns true");
 }
 
-int Done(lua_State* L, const Args& args) {
+int Done(lua_State* L, const Args& args, bool nativeInvoked = false) {
     if (!args.ok) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    Note();
+    if (!nativeInvoked) Note();
     lua_pushboolean(L, 1);
     return 1;
 }
 
-int BloodLike(lua_State* L, const char* name) {
+int BloodLike(lua_State* L, const char* name, bool wood) {
     Args args{L, name};
-    float count = 1.f, brightness = 1.f;
-    args.Vec();
-    args.Vec();
+    float x = 0.f, y = 0.f, z = 0.f, dx = 0.f, dy = 0.f, dz = 0.f, count = 1.f, brightness = 1.f;
+    args.Vec(&x, &y, &z);
+    args.Vec(&dx, &dy, &dz);
     args.TakeNumber(count, true, 1.f);
     args.TakeNumber(brightness, true, 1.f);
-    return Done(L, args);
+    bool ran = false;
+    if (args.ok) {
+        ran = wood ? WorldNative::FxAddWood(x, y, z, dx, dy, dz, static_cast<int>(count), brightness)
+                   : WorldNative::FxAddBlood(x, y, z, dx, dy, dz, static_cast<int>(count), brightness);
+    }
+    return Done(L, args, ran);
 }
 
-int DirOnly(lua_State* L, const char* name) {
+int DirOnly(lua_State* L, const char* name, int kind = 0) {
     Args args{L, name};
-    args.Vec();
-    args.Vec();
-    return Done(L, args);
+    float x = 0.f, y = 0.f, z = 0.f, dx = 0.f, dy = 0.f, dz = 0.f;
+    args.Vec(&x, &y, &z);
+    args.Vec(&dx, &dy, &dz);
+    bool ran = false;
+    if (args.ok) {
+        if (kind == 1) ran = WorldNative::FxAddTyreBurst(x, y, z, dx, dy, dz);
+        else if (kind == 2) ran = WorldNative::FxAddPunchImpact(x, y, z, dx, dy, dz);
+    }
+    return Done(L, args, ran);
 }
 
 int PosOnly(lua_State* L, const char* name) {
@@ -178,63 +202,68 @@ int PosOnly(lua_State* L, const char* name) {
     return Done(L, args);
 }
 
-int Colored(lua_State* L, const char* name) {
+int Colored(lua_State* L, const char* name, bool glass) {
     Args args{L, name};
-    float r = 0.f, g = 0.f, b = 0.f, a = 0.f, scale = 0.f, count = 0.f;
-    args.Vec();
+    float x = 0.f, y = 0.f, z = 0.f, r = 0.f, g = 0.f, b = 0.f, a = 0.f, scale = 0.f, count = 0.f;
+    args.Vec(&x, &y, &z);
     args.TakeNumber(r, true, 255.f);
     args.TakeNumber(g, true, 0.f);
     args.TakeNumber(b, true, 0.f);
     args.TakeNumber(a, true, 255.f);
     args.TakeNumber(scale, true, 1.f);
     args.TakeNumber(count, true, 1.f);
-    return Done(L, args);
+    bool ran = false;
+    if (args.ok) {
+        auto clampU8 = [](float v) -> uint8_t { return static_cast<uint8_t>(v < 0.f ? 0.f : (v > 255.f ? 255.f : v)); };
+        ran = glass ? WorldNative::FxAddGlass(x, y, z, clampU8(r), clampU8(g), clampU8(b), clampU8(a), scale, static_cast<int>(count))
+                    : WorldNative::FxAddDebris(x, y, z, clampU8(r), clampU8(g), clampU8(b), clampU8(a), scale, static_cast<int>(count));
+    }
+    return Done(L, args, ran);
 }
 
-int FxAddBlood(lua_State* L) { return BloodLike(L, "fxAddBlood"); }
-int FxAddWood(lua_State* L) { return BloodLike(L, "fxAddWood"); }
-int FxAddTyreBurst(lua_State* L) { return DirOnly(L, "fxAddTyreBurst"); }
-int FxAddPunchImpact(lua_State* L) { return DirOnly(L, "fxAddPunchImpact"); }
-int FxAddTankFire(lua_State* L) { return DirOnly(L, "fxAddTankFire"); }
+int FxAddBlood(lua_State* L) { return BloodLike(L, "fxAddBlood", false); }
+int FxAddWood(lua_State* L) { return BloodLike(L, "fxAddWood", true); }
+int FxAddTyreBurst(lua_State* L) { return DirOnly(L, "fxAddTyreBurst", 1); }
+int FxAddPunchImpact(lua_State* L) { return DirOnly(L, "fxAddPunchImpact", 2); }
+int FxAddTankFire(lua_State* L) { return DirOnly(L, "fxAddTankFire", 0); }
 int FxAddWaterHydrant(lua_State* L) { return PosOnly(L, "fxAddWaterHydrant"); }
 int FxAddWaterSplash(lua_State* L) { return PosOnly(L, "fxAddWaterSplash"); }
 int FxAddBulletSplash(lua_State* L) { return PosOnly(L, "fxAddBulletSplash"); }
 int FxAddFootSplash(lua_State* L) { return PosOnly(L, "fxAddFootSplash"); }
-int FxAddDebris(lua_State* L) { return Colored(L, "fxAddDebris"); }
-int FxAddGlass(lua_State* L) { return Colored(L, "fxAddGlass"); }
+int FxAddDebris(lua_State* L) { return Colored(L, "fxAddDebris", false); }
+int FxAddGlass(lua_State* L) { return Colored(L, "fxAddGlass", true); }
 
 int FxAddSparks(lua_State* L) {
     Args args{L, "fxAddSparks"};
+    float x = 0.f, y = 0.f, z = 0.f, dx = 0.f, dy = 0.f, dz = 0.f;
+    float ax = 0.f, ay = 0.f, az = 0.f;
     float force = 0.f, count = 0.f, spread = 0.f, life = 0.f;
     bool blur = false;
-    args.Vec();
-    args.Vec();
+    args.Vec(&x, &y, &z);
+    args.Vec(&dx, &dy, &dz);
     args.TakeNumber(force, true, 1.f);
     args.TakeNumber(count, true, 1.f);
-    args.VecDefault();
+    args.VecDefault(&ax, &ay, &az);
     args.BoolDefault(blur, false);
     args.TakeNumber(spread, true, 1.f);
     args.TakeNumber(life, true, 1.f);
-    (void)force;
-    (void)count;
-    (void)spread;
-    (void)life;
-    (void)blur;
-    return Done(L, args);
+    const bool ran = args.ok && WorldNative::FxAddSparks(x, y, z, dx, dy, dz, force, static_cast<int>(count),
+                                                         ax, ay, az, blur, spread, life);
+    return Done(L, args, ran);
 }
 
 int FxAddBulletImpact(lua_State* L) {
     Args args{L, "fxAddBulletImpact"};
+    float x = 0.f, y = 0.f, z = 0.f, dx = 0.f, dy = 0.f, dz = 0.f;
     float smoke = 0.f, sparks = 0.f, intensity = 0.f;
-    args.Vec();
-    args.Vec();
+    args.Vec(&x, &y, &z);
+    args.Vec(&dx, &dy, &dz);
     args.TakeNumber(smoke, true, 1.f);
     args.TakeNumber(sparks, true, 1.f);
     args.TakeNumber(intensity, true, 1.f);
-    (void)smoke;
-    (void)sparks;
-    (void)intensity;
-    return Done(L, args);
+    const bool ran = args.ok && WorldNative::FxAddBulletImpact(x, y, z, dx, dy, dz,
+                                                               static_cast<int>(smoke), static_cast<int>(sparks), intensity);
+    return Done(L, args, ran);
 }
 
 int FxAddGunshot(lua_State* L) {

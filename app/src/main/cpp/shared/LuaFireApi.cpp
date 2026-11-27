@@ -7,6 +7,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
+#include "WorldNativeBridge.h"
 
 #include "lua.hpp"
 
@@ -145,9 +146,12 @@ int CreateFire(lua_State* L) {
     if (!Finite(L, 1, x) || !Finite(L, 2, y) || !Finite(L, 3, z)) return Fail(L);
     if (!lua_istable(L, 4)) {
         if (!lua_isnoneornil(L, 4) && !lua_isnumber(L, 4)) return Fail(L);
-        if (!g_diagNumeric) {
-            g_diagNumeric = true;
-            LUA_LOGE("DIAG createFire: CFireManager::StartFire is not hooked");
+        const float size = lua_isnumber(L, 4) ? static_cast<float>(lua_tonumber(L, 4)) : 1.8f;
+        if (!WorldNative::CreateFire(x, y, z, size)) {
+            if (!g_diagNumeric) {
+                g_diagNumeric = true;
+                LUA_LOGE("DIAG createFire: CFireManager::StartFire is not hooked");
+            }
         }
         lua_pushboolean(L, 1);
         return 1;
@@ -194,14 +198,14 @@ int ExtinguishFire(lua_State* L) {
         lua_pushboolean(L, 1);
         return 1;
     }
-    float x = 0.f, y = 0.f, z = 0.f;
+    float x = 0.f, y = 0.f, z = 0.f, radius = 1.f;
     if (!Finite(L, 1, x) || !Finite(L, 2, y) || !Finite(L, 3, z)) return Fail(L);
-    if (!lua_isnoneornil(L, 4) && !Finite(L, 4, x)) return Fail(L);
-    (void)y;
-    (void)z;
-    if (!g_diagExtinguish) {
-        g_diagExtinguish = true;
-        LUA_LOGE("DIAG extinguishFire: CFireManager::ExtinguishPoint is not hooked");
+    if (!lua_isnoneornil(L, 4) && !Finite(L, 4, radius)) return Fail(L);
+    if (!WorldNative::ExtinguishFire(x, y, z, radius)) {
+        if (!g_diagExtinguish) {
+            g_diagExtinguish = true;
+            LUA_LOGE("DIAG extinguishFire: CFireManager::ExtinguishPoint is not hooked");
+        }
     }
     lua_pushboolean(L, 1);
     return 1;

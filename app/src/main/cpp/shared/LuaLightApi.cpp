@@ -8,6 +8,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
+#include "WorldNativeBridge.h"
 
 #include "lua.hpp"
 
@@ -162,9 +163,12 @@ int CreateLight(lua_State* L) {
     light.dy = dy;
     light.dz = dz;
     g_lights[id] = light;
-    if (!g_diagLight) {
-        g_diagLight = true;
-        LUA_LOGE("DIAG createLight: CPointLights is not drawn");
+    if (!WorldNative::AddPointLight(light.mode, light.x, light.y, light.z, light.dx, light.dy, light.dz,
+                                    light.radius, light.r / 255.f, light.g / 255.f, light.b / 255.f, false, false)) {
+        if (!g_diagLight) {
+            g_diagLight = true;
+            LUA_LOGE("DIAG createLight: CPointLights::AddLight is not hooked");
+        }
     }
     PushElement(L, id);
     return 1;

@@ -17,6 +17,8 @@
 #include "LuaEventRegistry.h"
 #include "LuaAudioApi.h"
 #include "LuaBrowserApi.h"
+#include "LuaNativeUiApi.h"
+#include "WorldNativeBridge.h"
 #include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
@@ -6623,6 +6625,146 @@ int main(int argc, char** argv) {
                 assert(isElement(inner) == false, "destroying gui-browser destroys linked browser")
                 assert(destroyElement(_G._b) == true and isElement(_G._b) == false, "destroyBrowser")
             )LUA");
+        }
+
+        // Tranche 4: NativeUI DX overlay rendering, live Clock tick, timed showNativeText expiration
+        {
+            const int64_t baseMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count() + 700000;
+            WorldRPG::Script::NativeUiSetTestClockMs(baseMs);
+            WorldRPG::Net::ResourceStartInfo uiRes;
+            uiRes.name = "tranche4_ui";
+            uiRes.resourceId = 194;
+            uiRes.entityId = 0x5194;
+            uiRes.dynamicEntityId = 0x5195;
+            uiRes.noClientCacheScripts = 1;
+            uiRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(uiRes);
+            const std::vector<uint8_t> uiBody = NoCacheScriptBody(194, R"LUA(
+                local tWin = createNativeUI("text", {name = "tWin", content = "Neon Window ~1~"})
+                local tRow1 = createNativeUI("text", {name = "tRow1", content = "Start"})
+                local tRow2 = createNativeUI("text", {name = "tRow2", content = "Quit"})
+                local tObj = createNativeUI("text", {name = "tObj", content = "Deliver ~1~ crates"})
+                assert(tWin and tRow1 and tRow2 and tObj)
+                _G._nRect = createNativeUI("rectangle", {x = 10, y = 20, width = 80, height = 40, color = 0xFF0000FF})
+                _G._nWin = createNativeUI("window", {text = tWin, x = 20, y = 30, width = 200, height = 60, number1 = 7})
+                _G._nDraw = createNativeUI("drawText", {text = tRow1, x = 50, y = 120})
+                _G._nClock = createNativeUI("clock", {x = 400, y = 40, value = 3000, countdown = true})
+                _G._nBar = createNativeUI("counter", {x = 400, y = 80, style = 1, value = 50, maximum = 100, color = 2})
+                _G._nMenu = createNativeUI("menu", {x = 20, y = 160, width = 180, columns = 1, cells = {tRow1, tRow2}, selected = 2})
+                _G._nCard = createNativeUI("card", {x = 500, y = 200, width = 60, height = 90, card = 40}) -- AS
+                assert(_G._nRect and _G._nWin and _G._nDraw and _G._nClock and _G._nBar and _G._nMenu and _G._nCard)
+                assert(showNativeText(tObj, "objective", 2000, 1, 42) == true)
+                local ms = getNativeUIState(_G._nMenu)
+                assert(ms.selected == 2, "menu 1-based selection")
+                local cs = getNativeUIState(_G._nClock)
+                assert(cs.finished == false and cs.value == 3000, "clock initial state")
+                addCommandHandler("t4_clock_done", function()
+                    local cs2 = getNativeUIState(_G._nClock)
+                    assert(cs2.value == 0 and cs2.finished == true, "clock reached 0 and finished")
+                    assert(releaseNativeUI() == true)
+                    _G._t4ClockDone = true
+                end)
+                _G._t4UiSetup = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(uiBody.data(), uiBody.size(), uiBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "tranche4-nativeui-check-setup", "assert(_G._t4UiSetup == true, 'nativeui setup')");
+            vm.setScreenSize(1280, 896);
+            const std::string frame1 = vm.pumpDx();
+            CHECK(frame1.find("R ") != std::string::npos);
+            CHECK(frame1.find("Neon Window 7") != std::string::npos);
+            CHECK(frame1.find("00:03") != std::string::npos);
+            CHECK(frame1.find("AS") != std::string::npos);
+            CHECK(frame1.find("Deliver 42 crates") != std::string::npos);
+
+            WorldRPG::Script::NativeUiSetTestClockMs(baseMs + 3500);
+            const std::string frame2 = vm.pumpDx();
+            CHECK(frame2.find("Deliver 42 crates") == std::string::npos);
+            CHECK(frame2.find("00:00") != std::string::npos);
+            RunLua(vm, "tranche4-nativeui-clock-done", R"LUA(
+                executeCommandHandler("t4_clock_done")
+                assert(_G._t4ClockDone == true, "clock done command verified")
+            )LUA");
+            {
+                WorldRPG::Net::BitStreamWriter stop;
+                stop.Write(static_cast<uint16_t>(194));
+                WorldRPG::Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+            }
+            WorldRPG::Script::NativeUiSetTestClockMs(-1);
+        }
+
+        // Tranche 4: WorldNativeBridge dispatch for pools, explosions, fires, lights, preload, fx, removeWorldModel
+        {
+            static int s_expCalls = 0, s_fireCalls = 0, s_extCalls = 0, s_lightCalls = 0;
+            static int s_preloadCalls = 0, s_fxCalls = 0, s_rmCalls = 0, s_rsCalls = 0, s_rsAllCalls = 0;
+            s_expCalls = s_fireCalls = s_extCalls = s_lightCalls = s_preloadCalls = s_fxCalls = s_rmCalls = s_rsCalls = s_rsAllCalls = 0;
+
+            WorldRPG::WorldNative::Hooks mock{};
+            mock.getPoolCapacity = [](int pool) -> int { return pool == 0 ? 32000 : -1; };
+            mock.getPoolUsedCapacity = [](int pool) -> int { return pool == 1 ? 12 : -1; };
+            mock.createExplosion = [](float, float, float, int, bool, float, bool) -> bool { ++s_expCalls; return true; };
+            mock.createFire = [](float, float, float, float) -> bool { ++s_fireCalls; return true; };
+            mock.extinguishFire = [](float, float, float, float) -> bool { ++s_extCalls; return true; };
+            mock.addPointLight = [](int, float, float, float, float, float, float, float, float, float, float, bool, bool) -> bool { ++s_lightCalls; return true; };
+            mock.preloadWorldArea = [](float, float, float, int) -> bool { ++s_preloadCalls; return true; };
+            mock.removeWorldModel = [](uint16_t, float, float, float, float, int8_t) -> int { ++s_rmCalls; return 3; };
+            mock.restoreWorldModel = [](uint16_t, float, float, float, float, int8_t) -> int { ++s_rsCalls; return 2; };
+            mock.restoreAllWorldModels = []() -> int { ++s_rsAllCalls; return 5; };
+            mock.fxAddBlood = [](float, float, float, float, float, float, int, float) -> bool { ++s_fxCalls; return true; };
+            mock.fxAddSparks = [](float, float, float, float, float, float, float, int, float, float, float, bool, float, float) -> bool { ++s_fxCalls; return true; };
+            mock.fxAddGlass = [](float, float, float, uint8_t, uint8_t, uint8_t, uint8_t, float, int) -> bool { ++s_fxCalls; return true; };
+            WorldRPG::WorldNative::RegisterHooks(mock);
+
+            WorldRPG::Net::ResourceStartInfo wRes;
+            wRes.name = "tranche4_world";
+            wRes.resourceId = 195;
+            wRes.entityId = 0x5196;
+            wRes.dynamicEntityId = 0x5197;
+            wRes.noClientCacheScripts = 1;
+            wRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(wRes);
+            const std::vector<uint8_t> wBody = NoCacheScriptBody(195, R"LUA(
+                assert(engineGetPoolCapacity("building") == 32000, "live pool capacity via bridge")
+                assert(engineGetPoolUsedCapacity("ped") == 12, "live pool used via bridge")
+                assert(createExplosion(1, 2, 3, 4) == true, "native explosion")
+                assert(createFire(4, 5, 6, 2.0) == true, "native fire")
+                assert(extinguishFire(4, 5, 6, 3.0) == true, "native extinguish")
+                local l = createLight(0, 1, 2, 3, 5, 255, 128, 64)
+                assert(isElement(l) and destroyElement(l), "native light")
+                enginePreloadWorldArea(10, 20, 30, "all")
+                assert(fxAddBlood(0, 0, 1, 0, 0, 1, 4, 1.0) == true, "fxAddBlood")
+                assert(fxAddSparks(0, 0, 1, 0, 0, 1) == true, "fxAddSparks")
+                assert(fxAddGlass(0, 0, 1, 255, 255, 255, 200, 1.0, 2) == true, "fxAddGlass")
+                local okRm, nRm = removeWorldModel(1337, 25, 0, 0, 0)
+                assert(okRm == true and nRm == 3, "native removeWorldModel count")
+                local okRs, nRs = restoreWorldModel(1337, 25, 0, 0, 0)
+                assert(okRs == true and nRs == 2, "native restoreWorldModel count")
+                local okAll, nAll = restoreAllWorldModels()
+                assert(okAll == true and nAll == 5, "native restoreAllWorldModels count")
+                _G._t4WorldBridgeOk = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(wBody.data(), wBody.size(), wBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "tranche4-world-native-bridge-check", "assert(_G._t4WorldBridgeOk == true, 'world bridge ok')");
+            {
+                WorldRPG::Net::BitStreamWriter stop;
+                stop.Write(static_cast<uint16_t>(195));
+                WorldRPG::Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+            }
+
+            WorldRPG::WorldNative::RegisterHooks({});
+            CHECK(s_expCalls == 1);
+            CHECK(s_fireCalls == 1);
+            CHECK(s_extCalls == 1);
+            CHECK(s_lightCalls == 1);
+            CHECK(s_preloadCalls == 1);
+            CHECK(s_fxCalls == 3);
+            CHECK(s_rmCalls == 1);
+            CHECK(s_rsCalls == 1);
+            CHECK(s_rsAllCalls == 1);
         }
     }
 

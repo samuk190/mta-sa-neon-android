@@ -2,6 +2,7 @@
 #include <filesystem>
 #include "FxCompiler.h"
 #include "FxWorld.h"
+#include "WorldShaderRuntime.h"
 #include <iterator>
 #include <fstream>
 #include "shared/DxShader.h"
@@ -320,6 +321,64 @@ technique Curved{pass P{VertexShader=compile vs_2_0 VS();PixelShader=compile ps_
     result=vm.executeBuffer(destroy,std::strlen(destroy),"world-shader-destroy");
     Check(result.success&&W::Resolve("body_paint",0,W::kVehicle).base==0&&W::Resolve("body_paint",0,W::kVehicle).layers.size()==1,
           "destroying the shader drops its matches");
+    // End-to-end P1-1 WorldShaderRuntime GLES2 execution test:
+    // dxCreateShader + dxSetShaderValue + engineApplyShaderToWorldTexture -> RenderTestWorldQuad.
+    const char* runtimeLua=R"LUA(
+        local baseFx=[[
+            float4 gTint = float4(1, 0, 0, 1);
+            float4 PS():COLOR0 { return gTint; }
+            technique T { pass P { PixelShader = compile ps_2_0 PS(); } }
+        ]]
+        local layerFx=[[
+            float4 gAdd = float4(1, 0, 0, 0.5);
+            float4 PS():COLOR0 { return gAdd; }
+            technique T { pass P { AlphaBlendEnable = true; PixelShader = compile ps_2_0 PS(); } }
+        ]]
+        _G.rtBase = dxCreateShader(baseFx, 1, 0, false, "vehicle")
+        _G.rtLayer = dxCreateShader(layerFx, 0, 0, true, "all")
+        assert(isElement(rtBase) and isElement(rtLayer), 'runtime world shaders created')
+        assert(dxSetShaderValue(rtBase, "gTint", 0, 1, 0, 1), 'set green tint')
+        assert(engineApplyShaderToWorldTexture(rtBase, "vehiclegrunge*"), 'apply base world shader')
+    )LUA";
+    result=vm.executeBuffer(runtimeLua,std::strlen(runtimeLua),"world-shader-runtime-setup");
+    if(!result.success)std::fprintf(stderr,"Lua diagnostic: %s\n",result.errorMessage.c_str());
+    Check(result.success,"world shader runtime setup");
+    {
+        DX::Image worldImg;
+        int passes=0;
+        const bool ok=WorldRPG::WorldShaderRuntime::RenderTestWorldQuad(
+            "vehiclegrunge256", 0, W::kVehicle, 1.25f, 16, 16, 0xFFFFFFFFu, worldImg, &passes);
+        Check(ok && passes==1, "WorldShaderRuntime compiles and executes base FxWorld pass on GLES2");
+        Check(worldImg.pixels.size()==256 && worldImg.pixels[8*16+8]==0xff00ff00u,
+              "WorldShaderRuntime renders exact green gTint pixel via FxWorld");
+        const char* updateBlue="assert(dxSetShaderValue(rtBase, 'gTint', 0, 0, 1, 1))";
+        Check(vm.executeBuffer(updateBlue,std::strlen(updateBlue),"world-shader-runtime-blue").success,"update gTint to blue");
+        passes=0;
+        Check(WorldRPG::WorldShaderRuntime::RenderTestWorldQuad(
+                  "vehiclegrunge256", 0, W::kVehicle, 2.0f, 16, 16, 0xFFFFFFFFu, worldImg, &passes) &&
+              passes==1 && worldImg.pixels[8*16+8]==0xff0000ffu,
+              "WorldShaderRuntime live uniform updates propagate to GLES2");
+        const char* addLayer="assert(engineApplyShaderToWorldTexture(rtLayer, 'vehiclegrunge*', nil, true))";
+        Check(vm.executeBuffer(addLayer,std::strlen(addLayer),"world-shader-runtime-layer").success,"apply layered world shader");
+        passes=0;
+        Check(WorldRPG::WorldShaderRuntime::RenderTestWorldQuad(
+                  "vehiclegrunge256", 0, W::kVehicle, 2.5f, 16, 16, 0xFFFFFFFFu, worldImg, &passes) &&
+              passes==2,
+              "WorldShaderRuntime executes base + layered shader passes");
+        const uint32_t blended=worldImg.pixels[8*16+8];
+        const unsigned r=(blended>>16)&0xffu, b=blended&0xffu;
+        Check(r>=115 && r<=140 && b>=115 && b<=140, "layered shader alpha-blends over base world shader pass");
+        const char* checkVisible=R"LUA(
+            local vis = engineGetVisibleTextureNames("vehicle*")
+            assert(type(vis) == "table" and #vis >= 1, "visible texture names populated")
+            local found = false
+            for _, n in ipairs(vis) do if n == "vehiclegrunge256" then found = true end end
+            assert(found, "vehiclegrunge256 recorded in visible textures")
+        )LUA";
+        result=vm.executeBuffer(checkVisible,std::strlen(checkVisible),"world-shader-visible-textures");
+        if(!result.success)std::fprintf(stderr,"Lua diagnostic: %s\n",result.errorMessage.c_str());
+        Check(result.success,"engineGetVisibleTextureNames returns observed world textures");
+    }
     vm.shutdown();
     Check(!W::Active(),"VM shutdown clears world matches");
 }

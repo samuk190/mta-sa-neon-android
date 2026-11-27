@@ -8,6 +8,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
+#include "WorldNativeBridge.h"
 
 #include "lua.hpp"
 
@@ -170,16 +171,11 @@ int CreateExplosion(lua_State* L) {
         return Fail(L);
     if (!lua_isnoneornil(L, 6) && !ReadNumber(L, "createExplosion", 6, shake)) return Fail(L);
     if (!ReadBool(L, "createExplosion", 7, damaging, true, true)) return Fail(L);
-    (void)x;
-    (void)y;
-    (void)z;
-    (void)type;
-    (void)sound;
-    (void)shake;
-    (void)damaging;
-    if (!g_diagExplosion) {
-        g_diagExplosion = true;
-        LUA_LOGE("DIAG createExplosion: CExplosionManager::Create is not hooked");
+    if (!WorldNative::CreateExplosion(x, y, z, static_cast<int>(type), sound, shake, damaging)) {
+        if (!g_diagExplosion) {
+            g_diagExplosion = true;
+            LUA_LOGE("DIAG createExplosion: CExplosion::AddExplosion is not hooked");
+        }
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -363,6 +359,8 @@ int RpcRemoveWorldModel(uint16_t model, float radius, float x, float y, float z,
     entry.z = z;
     entry.interior = interior;
     g_removedModels.push_back(entry);
+    const int nativeCount = WorldNative::RemoveWorldModel(model, radius, x, y, z, interior);
+    if (nativeCount >= 0) return nativeCount;
     if (!g_diagRemoval) {
         g_diagRemoval = true;
         LUA_LOGE("DIAG removeWorldModel: CBuildingRemoval native hook pending; removal tracked in script state");
@@ -378,12 +376,14 @@ int RpcRestoreWorldModel(uint16_t model, float radius, float x, float y, float z
             ++it;
         }
     }
-    return 0;
+    const int nativeCount = WorldNative::RestoreWorldModel(model, radius, x, y, z, interior);
+    return nativeCount >= 0 ? nativeCount : 0;
 }
 
 int RpcRestoreAllWorldModels() {
     g_removedModels.clear();
-    return 0;
+    const int nativeCount = WorldNative::RestoreAllWorldModels();
+    return nativeCount >= 0 ? nativeCount : 0;
 }
 
 size_t RemovedWorldModelCount() { return g_removedModels.size(); }

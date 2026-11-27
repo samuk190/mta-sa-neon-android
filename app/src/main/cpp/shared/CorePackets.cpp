@@ -1,4 +1,5 @@
 #include "CorePackets.h"
+#include "WorldNativeBridge.h"
 
 #include "LuaApiExtra.h"
 #include "LuaAudioApi.h"
@@ -380,11 +381,13 @@ bool HandleExplosion(const uint8_t* body, size_t length, size_t bits) {
         }
 
         if (!cancel) {
-            static int diagCount = 0;
-            if (diagCount < 4) {
-                ++diagCount;
-                LUA_LOGI("DIAG EXPLOSION type=%u pos=(%.1f,%.1f,%.1f): CExplosionManager::Create is not hooked",
-                         static_cast<unsigned>(expType), pos[0], pos[1], pos[2]);
+            if (!WorldNative::CreateExplosion(pos[0], pos[1], pos[2], static_cast<int>(expType), true, -1.f, true)) {
+                static int diagCount = 0;
+                if (diagCount < 4) {
+                    ++diagCount;
+                    LUA_LOGI("DIAG EXPLOSION type=%u pos=(%.1f,%.1f,%.1f): CExplosion::AddExplosion is not hooked",
+                             static_cast<unsigned>(expType), pos[0], pos[1], pos[2]);
+                }
             }
         }
     });
@@ -403,11 +406,13 @@ bool HandleFire(const uint8_t* body, size_t length, size_t bits) {
     (void)creatorId;
     (void)latency;
 
-    static int diagCount = 0;
-    if (diagCount < 4) {
-        ++diagCount;
-        LUA_LOGI("DIAG FIRE pos=(%.1f,%.1f,%.1f) size=%.2f: CFireManager::StartFire is not hooked",
-                 pos[0], pos[1], pos[2], size);
+    if (!WorldNative::CreateFire(pos[0], pos[1], pos[2], size)) {
+        static int diagCount = 0;
+        if (diagCount < 4) {
+            ++diagCount;
+            LUA_LOGI("DIAG FIRE pos=(%.1f,%.1f,%.1f) size=%.2f: CFireManager::StartFire is not hooked",
+                     pos[0], pos[1], pos[2], size);
+        }
     }
     return true;
 }

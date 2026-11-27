@@ -3176,6 +3176,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     }
     DxEndRender(g_dx.frame);
     GuiAppendDraws(g_dx.frame);
+    NativeUiAppendDraws(g_dx.frame, g_dx.screenW, g_dx.screenH);
     g_dx.frame += g_dx.postGuiFrame;
     WorldRPG::CorePackets::AppendServerTextItems(g_dx.frame, g_dx.screenW, g_dx.screenH);
     // "C" line: the cursor is showing, so the Android overlay takes touches (MtaDxView).

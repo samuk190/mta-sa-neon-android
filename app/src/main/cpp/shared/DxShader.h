@@ -7,6 +7,7 @@
 #include <vector>
 struct lua_State;
 namespace WorldRPG::WorldShaders { struct ShaderInfo; }
+namespace WorldRPG::FxWorld { struct Effect; }
 namespace WorldRPG::DxShader {
 struct Program;
 struct Transform {
@@ -23,6 +24,13 @@ struct Tile {
     float x=0,y=0,width=0,height=0,u=0,v=0,usize=1,vsize=1;
     float rotation=0,offsetX=0,offsetY=0;
     uint32_t color=0xffffffff;
+};
+struct WorldShaderSnapshot {
+    std::shared_ptr<const FxWorld::Effect> effect;
+    std::map<std::string,std::vector<float>> numbers;
+    std::map<std::string,Image> textures;
+    uint64_t revision=0;
+    float maxDistance=0;
 };
 // A real ES2 program compiled in an isolated EGL context. Unsupported FX
 // techniques fail creation, rather than producing an inert shader element.
@@ -45,6 +53,8 @@ bool Size(uint32_t,unsigned&,unsigned&);
 bool Release(uint32_t);
 // The shader element's dxCreateShader world-texture options (false: not a shader).
 bool WorldInfo(uint32_t,WorldShaders::ShaderInfo&);
+// Thread-safe snapshot of the shader's FxWorld::Effect and current script parameters/textures.
+bool CopyWorldSnapshot(uint32_t,WorldShaderSnapshot&);
 void DropResource(const std::string&,uint16_t,uint32_t);
 bool DrawImage(uint32_t,const Tile&,bool section,bool postGUI);
 } // namespace WorldRPG::DxShader

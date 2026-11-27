@@ -1,6 +1,7 @@
 #include "EngineWorld.h"
 
 #include "LuaVMStub.h"
+#include "WorldNativeBridge.h"
 
 extern "C" {
 #include "lauxlib.h"
@@ -240,6 +241,11 @@ int GetPoolCapacity(lua_State* L) {
     int pool = 0;
     std::string error;
     if (!ReadPool(L, "engineGetPoolCapacity", pool, error)) return luaL_error(L, "%s", error.c_str());
+    const int cap = WorldNative::GetPoolCapacity(pool);
+    if (cap >= 0) {
+        lua_pushnumber(L, cap);
+        return 1;
+    }
     LUA_LOGI("DIAG engineGetPoolCapacity: the live pool size is not hooked");
     lua_pushboolean(L, 0);
     return 1;
@@ -249,6 +255,11 @@ int GetPoolUsed(lua_State* L) {
     int pool = 0;
     std::string error;
     if (!ReadPool(L, "engineGetPoolUsedCapacity", pool, error)) return luaL_error(L, "%s", error.c_str());
+    const int used = WorldNative::GetPoolUsedCapacity(pool);
+    if (used >= 0) {
+        lua_pushnumber(L, used);
+        return 1;
+    }
     LUA_LOGI("DIAG engineGetPoolUsedCapacity: the live pool count is not hooked");
     lua_pushboolean(L, 0);
     return 1;
@@ -296,17 +307,19 @@ int PreloadArea(lua_State* L) {
     if (!ReadFloat(L, 1, "enginePreloadWorldArea", x, error) || !ReadFloat(L, 2, "enginePreloadWorldArea", y, error) ||
         !ReadFloat(L, 3, "enginePreloadWorldArea", z, error))
         return luaL_error(L, "%s", error.c_str());
+    int mode = 0;
     const int optionType = lua_type(L, 4);
     if (optionType != LUA_TNONE && optionType != LUA_TNIL) {
         if (optionType != LUA_TSTRING) return luaL_error(L, "%s", Bad("enginePreloadWorldArea", "preload-area-option", 4, Got(L, 4)).c_str());
         const std::string key = Lower(lua_tostring(L, 4));
-        if (key != "models" && key != "collisions" && key != "all")
-            return luaL_error(L, "%s", Bad("enginePreloadWorldArea", "preload-area-option", 4, Got(L, 4)).c_str());
+        if (key == "models") mode = 1;
+        else if (key == "collisions") mode = 2;
+        else if (key == "all") mode = 0;
+        else return luaL_error(L, "%s", Bad("enginePreloadWorldArea", "preload-area-option", 4, Got(L, 4)).c_str());
     }
-    (void)x;
-    (void)y;
-    (void)z;
-    LUA_LOGI("DIAG enginePreloadWorldArea: CStreaming::LoadScene is not hooked");
+    if (!WorldNative::PreloadWorldArea(x, y, z, mode)) {
+        LUA_LOGI("DIAG enginePreloadWorldArea: CStreaming::LoadScene is not hooked");
+    }
     return 0;
 }
 

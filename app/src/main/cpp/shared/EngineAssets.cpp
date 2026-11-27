@@ -6,6 +6,7 @@
 #include "DesktopLuaString.h"
 #include "DxShader.h"
 #include "WorldShaderMatches.h"
+#include "WorldShaderRuntime.h"
 #include "EngineAssets.h"
 #include "EngineModelLoader.h"
 #include "EngineRenderer.h"
@@ -1131,9 +1132,9 @@ int ApplyShader(lua_State* L) {
     if (!ReadOptionalBool(L, 4, "engineApplyShaderToWorldTexture", true, append, error)) return FailFalse(L, error, true);
     DropDestroyedMatchEntities();
     WorldShaders::AppendAdditive(info, entity, texture, append);
-    if (!g_diagWorldShaderDraw) {
+    if (!g_diagWorldShaderDraw && !WorldShaderRuntime::IsNativeDrawHookInstalled()) {
         g_diagWorldShaderDraw = true;
-        LUA_LOGI("DIAG engineApplyShaderToWorldTexture: matches are recorded; GTA's renderer does not draw them yet");
+        LUA_LOGI("DIAG engineApplyShaderToWorldTexture: matches and FxWorld GLES2 executor ready; GTA inline draw hook pending");
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -1175,14 +1176,13 @@ int VisibleTextures(lua_State* L) {
     std::uint32_t id = 0;
     if (!model.empty() && !ResolveText(model, id))
         return FailFalse(L, Usage("engineGetVisibleTextureNames", "Bad usage", "Expected valid model ID or name at argument 1"), true);
-    (void)match;
     (void)id;
-    static bool noted = false;
-    if (!noted) {
-        noted = true;
-        LUA_LOGI("DIAG engineGetVisibleTextureNames: the visible texture list is not read");
+    const auto names = WorldShaderRuntime::VisibleTextureNames(match);
+    lua_createtable(L, static_cast<int>(names.size()), 0);
+    for (size_t i = 0; i < names.size(); ++i) {
+        lua_pushlstring(L, names[i].data(), names[i].size());
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
     }
-    lua_newtable(L);
     return 1;
 }
 

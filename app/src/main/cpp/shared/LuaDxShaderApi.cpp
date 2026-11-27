@@ -1,6 +1,8 @@
 #include "DxShader.h"
 #include "FxCompiler.h"
+#include "FxWorld.h"
 #include "WorldShaderMatches.h"
+#include "WorldShaderRuntime.h"
 #include "LuaDxApi.h"
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
@@ -9,6 +11,7 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <mutex>
 
 namespace WorldRPG::JniBridge {
 bool LoadPixels(const std::string&,std::vector<uint32_t>&,unsigned&,unsigned&);
@@ -16,6 +19,7 @@ bool StorePixels(const std::string&,const std::vector<uint32_t>&,unsigned,unsign
 }
 namespace WorldRPG::DxShader {
 namespace {
+std::mutex worldSnapshotMutex;
 struct Element {
     std::shared_ptr<Program> program;
     std::string owner;
@@ -25,6 +29,7 @@ struct Element {
     // engineApplyShaderToWorldTexture matching (WorldShaderMatches), not by image drawing.
     WorldShaders::ShaderInfo world;
     float maxDistance=0;
+    WorldShaderSnapshot worldSnapshot;
 };
 uint32_t createCounter=0;  // CShaderItem::m_uiCreateTime order
 // ReadEnumStringList(EEntityTypeMask, "world,vehicle,object,other") (CLuaFunctionParseHelpers.cpp:365-371).
@@ -93,22 +98,50 @@ int CreateLua(lua_State* L) {
     element.world.layered=layered;element.world.typeMask=typeMask;element.maxDistance=distance;
     {
         // CShaderItem::GetUsesVertexShader: the chosen technique has a vertex shader.
+        // Also compile the FxWorld::Effect once so WorldShaderRuntime can execute it on world textures.
         Fx::Effect parsed;std::string ignored;
-        if(Fx::Parse(source,macros,parsed,ignored))
+        if(Fx::Parse(source,macros,parsed,ignored)) {
             for(const auto& t:parsed.techniques)if(t.name==technique)
                 for(const auto& pass:t.passes)element.world.usesVertexShader|=!pass.vertexEntry.empty();
+            auto built=std::make_shared<FxWorld::Effect>();
+            std::string worldDiag;
+            if(FxWorld::Build(parsed,*built,worldDiag)) {
+                element.worldSnapshot.effect=std::move(built);
+                element.worldSnapshot.revision=1;
+                element.worldSnapshot.maxDistance=distance;
+            }
+        }
     }
-    elements[id]=std::move(element);
+    {
+        std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+        elements[id]=std::move(element);
+    }
     Script::PushElement(L,id);lua_pushlstring(L,technique.data(),technique.size());return 2;
 }
 int ValueLua(lua_State* L) {
     Element* element=Find(L);if(!element||lua_type(L,2)!=LUA_TSTRING)return Result(L,false);
     std::string name=lua_tostring(L,2);
-    if(lua_isboolean(L,3))return Result(L,SetNumbers(*element->program,name,{float(lua_toboolean(L,3))},true));
+    if(lua_isboolean(L,3)) {
+        const std::vector<float> vals{float(lua_toboolean(L,3))};
+        const bool ok=SetNumbers(*element->program,name,vals,true);
+        if(ok) {
+            std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+            element->worldSnapshot.numbers[Fx::Key(name)]=vals;
+            ++element->worldSnapshot.revision;
+        }
+        return Result(L,ok);
+    }
     if(lua_istable(L,3) && Script::ElementIdOf(L,3)) {
         std::string source;if(!Script::DxTextureFile(Script::ElementIdOf(L,3),source))return Result(L,false);
         Image image;if(!JniBridge::LoadPixels(source,image.pixels,image.width,image.height))return Result(L,false);
-        return Result(L,SetTexture(*element->program,name,std::move(image)));
+        Image copy=image;
+        const bool ok=SetTexture(*element->program,name,std::move(image));
+        if(ok) {
+            std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+            element->worldSnapshot.textures[Fx::Key(name)]=std::move(copy);
+            ++element->worldSnapshot.revision;
+        }
+        return Result(L,ok);
     }
     std::vector<float> values;
     if(lua_istable(L,3)) {
@@ -117,7 +150,13 @@ int ValueLua(lua_State* L) {
     } else {
         for(int index=3;index<=lua_gettop(L);++index){float v;if(values.size()==16||!Number(L,index,v))return Result(L,false);values.push_back(v);}
     }
-    return Result(L,SetNumbers(*element->program,name,values));
+    const bool ok=SetNumbers(*element->program,name,values);
+    if(ok) {
+        std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+        element->worldSnapshot.numbers[Fx::Key(name)]=values;
+        ++element->worldSnapshot.revision;
+    }
+    return Result(L,ok);
 }
 int TessellationLua(lua_State* L) {
     auto* element=Find(L);float x,y;
@@ -134,19 +173,52 @@ int TransformLua(lua_State* L) {
     return Result(L,SetTransform(*element->program,t));
 }
 }
-void Reset(){elements.clear();WorldShaders::Reset();}
+void Reset(){
+    {
+        std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+        elements.clear();
+    }
+    WorldShaders::Reset();
+    WorldShaderRuntime::Reset();
+}
 bool Exists(uint32_t id){return elements.count(id);}
 bool Size(uint32_t id,unsigned& width,unsigned& height) {
     auto it=elements.find(id);if(it==elements.end())return false;
     MaterialSize(*it->second.program,width,height);return true;
 }
 // CRenderItemManager::RemoveShaderItemFromWatchLists when the shader goes.
-bool Release(uint32_t id){if(!elements.erase(id))return false;WorldShaders::RemoveShaderRefs(id);return true;}
+bool Release(uint32_t id){
+    {
+        std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+        if(!elements.erase(id))return false;
+    }
+    WorldShaders::RemoveShaderRefs(id);
+    WorldShaderRuntime::InvalidateShader(id);
+    return true;
+}
 bool WorldInfo(uint32_t id,WorldShaders::ShaderInfo& out){auto it=elements.find(id);if(it==elements.end())return false;out=it->second.world;return true;}
+bool CopyWorldSnapshot(uint32_t id,WorldShaderSnapshot& out){
+    std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+    auto it=elements.find(id);
+    if(it==elements.end() || !it->second.worldSnapshot.effect)return false;
+    out=it->second.worldSnapshot;
+    return true;
+}
 void DropResource(const std::string& owner,uint16_t net,uint32_t generation) {
-    for(auto it=elements.begin();it!=elements.end();) {
-        auto& e=it->second;
-        if(e.owner==owner && (!net||!e.net||e.net==net)&&(!generation||!e.generation||e.generation==generation)){WorldShaders::RemoveShaderRefs(it->first);it=elements.erase(it);}else ++it;
+    std::vector<uint32_t> removed;
+    {
+        std::lock_guard<std::mutex> lock(worldSnapshotMutex);
+        for(auto it=elements.begin();it!=elements.end();) {
+            auto& e=it->second;
+            if(e.owner==owner && (!net||!e.net||e.net==net)&&(!generation||!e.generation||e.generation==generation)){
+                removed.push_back(it->first);
+                it=elements.erase(it);
+            }else ++it;
+        }
+    }
+    for(uint32_t id:removed){
+        WorldShaders::RemoveShaderRefs(id);
+        WorldShaderRuntime::InvalidateShader(id);
     }
 }
 bool DrawImage(uint32_t id,const Tile& original,bool section,bool postGUI) {

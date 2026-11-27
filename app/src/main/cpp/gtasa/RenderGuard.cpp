@@ -1,4 +1,6 @@
 #include "RenderGuard.h"
+#include "WorldNativeHooks.h"
+#include "WorldShaderHook.h"
 #include "GameEngine.h"
 #include "GameHeap.h"
 
@@ -438,6 +440,8 @@ bool InstallRenderGuard() {
     done = true;
     void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
     if (!handle) return false;
+    WorldRPG::Gta::InstallWorldNativeHooks(handle);
+    WorldRPG::Gta::InstallWorldShaderHook(handle);
     g_arraysGetId = reinterpret_cast<std::uint64_t (*)(std::uint64_t)>(dlsym(handle, "_Z15emu_ArraysGetIDy"));
     g_firstAtomic = reinterpret_cast<void* (*)(void*)>(dlsym(handle, "_Z14GetFirstAtomicP7RpClump"));
     void* target = dlsym(handle, "_Z8sortLODsPKvS0_");

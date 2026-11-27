@@ -114,6 +114,8 @@ set(NATIVE_SOURCES
     "${NATIVE_DIR}/shared/FxCompiler.cpp"
     "${NATIVE_DIR}/shared/FxWorld.cpp"
     "${NATIVE_DIR}/shared/WorldShaderMatches.cpp"
+    "${NATIVE_DIR}/shared/WorldShaderRuntime.cpp"
+    "${NATIVE_DIR}/shared/WorldNativeBridge.cpp"
     "${NATIVE_DIR}/shared/WorldObjectFeed.cpp"
     "${NATIVE_DIR}/shared/LuaDxShaderApi.cpp"
     "${NATIVE_DIR}/shared/LuaModelEffects.cpp"
