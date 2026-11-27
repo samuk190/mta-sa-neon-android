@@ -14,6 +14,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -815,8 +816,10 @@ int ResizeBrowser(lua_State* L) {
 }
 
 // CLuaBrowserDefs.cpp:1135-1138.
+std::atomic<bool> g_browserGpuEnabled{true};
+
 int IsBrowserGPUEnabled(lua_State* L) {
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, g_browserGpuEnabled.load(std::memory_order_relaxed) ? 1 : 0);
     return 1;
 }
 

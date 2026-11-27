@@ -3092,6 +3092,12 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
         lua_setglobal(pImpl_->L, "source");
         lua_pushboolean(pImpl_->L, windowFocused ? 1 : 0);
         fireHandlers("onClientMTAFocusChange", 1, ClientRootElement());
+        if (!windowFocused) {
+            fireHandlers("onClientMinimize", 0, ClientRootElement());
+        } else {
+            lua_pushboolean(pImpl_->L, 0);
+            fireHandlers("onClientRestore", 1, ClientRootElement());
+        }
         lua_setglobal(pImpl_->L, "source");
     }
     const auto now = DxNow();
@@ -3166,6 +3172,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     DxSetAspectRatioAdjustmentAllowed(true);
     fireHandlers("onClientPreRender", 0, ClientRootElement());
     DxSetAspectRatioAdjustmentAllowed(false);
+    fireHandlers("onClientPedsProcessed", 0, ClientRootElement());
     if (!WorldRPG::Debug::Flag("nodx")) {
         DxSetAspectRatioAdjustmentAllowed(true);
         fireHandlers("onClientHUDRender", 0, ClientRootElement());

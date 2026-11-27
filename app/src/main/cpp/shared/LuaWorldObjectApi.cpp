@@ -6,7 +6,6 @@
 //   CDeathmatchObject.cpp 53-92 and CDeathmatchObject.h IsMoving
 // The CObject is created by the game thread when the object streams in (gtasa/WorldObjects.cpp).
 // Break, gang-tag alpha, and texture replace fail closed.
-// onClientObjectMoveStart / onClientObjectMoveStop are not dispatched.
 
 #include "DesktopLuaString.h"
 #include "LuaWorldObjectApi.h"
@@ -462,9 +461,7 @@ void PushVec(lua_State* L, const Vec3& value) {
 }
 
 void NoteMoveGap() {
-    if (g_diagMove) return;
-    g_diagMove = true;
-    LUA_LOGE("DIAG moveObject: onClientObjectMoveStart and onClientObjectMoveStop are not dispatched");
+    (void)g_diagMove;
 }
 
 void NoteCurveGap() {
@@ -779,6 +776,7 @@ int MoveObject(lua_State* L) {
     const uint32_t duration = static_cast<uint32_t>(time);
     const bool linear = easing == 0;
     ApplyTree(object->id, [&](Object& item) { return StartMove(item, duration, target, delta, linear); });
+    ActiveVmFireElementEvent(L, "onClientObjectMoveStart", object->id, 0);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -787,11 +785,13 @@ int StopObject(lua_State* L) {
     Object* object = nullptr;
     if (!ReadObject(L, "stopObject", object)) return Fail(L);
     NoteMoveGap();
+    const bool wasMoving = object->move.active;
     ApplyTree(object->id, [](Object& item) {
         Sample(item);
         item.move.active = false;
         return true;
     });
+    if (wasMoving) ActiveVmFireElementEvent(L, "onClientObjectMoveStop", object->id, 0);
     lua_pushboolean(L, 1);
     return 1;
 }

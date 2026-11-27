@@ -151,6 +151,11 @@ void SetOutboundPacketSink(OutboundPacketSink sink);
 // Outbound gameplay packet encoders matching desktop client wire format (bitstream 0x0030):
 // PACKET_ID_EXPLOSION (37): CClientGame::SendExplosionSync (CClientGame.cpp:6288-6317).
 bool SendExplosionSync(float x, float y, float z, uint8_t explosionType, uint32_t originId = 0x1FFFFu);
+// PACKET_ID_PROJECTILE (39): CClientGame::ProjectileCreationHandler (CClientGame.cpp:6335-6418).
+bool SendProjectileSync(uint8_t weaponType, uint16_t model, float ox, float oy, float oz,
+                        uint32_t originSourceId = 0x1FFFFu, uint32_t targetId = 0x1FFFFu,
+                        float force = 0.0f, float vx = 0.0f, float vy = 0.0f, float vz = 0.0f,
+                        float rx = 0.0f, float ry = 0.0f, float rz = 0.0f);
 // PACKET_ID_DETONATE_SATCHELS (40): CClientGame::SendDetonateSatchels (CClientGame.cpp:2040-2046).
 bool SendDetonateSatchels();
 // PACKET_ID_DESTROY_SATCHELS (41): CClientGame::SendDestroySatchels (CClientGame.cpp:6512-6517).
@@ -167,8 +172,21 @@ bool SendCameraSync(bool fixedMode, float x, float y, float z, float lookX, floa
 // PACKET_ID_OBJECT_SYNC (88): CObjectSync::WriteObjectInformation (CObjectSync.cpp:203-270).
 bool SendObjectSync(uint32_t objectId, uint8_t timeContext, bool hasPos, float x, float y, float z,
                     bool hasRot, float rx, float ry, float rz, bool hasHealth, float health);
+// PACKET_ID_PLAYER_TRANSGRESSION (91): CClientGame::DoPulse (CClientGame.cpp:1248-1256).
+bool SendPlayerTransgression(uint32_t level, const std::string& message);
+// PACKET_ID_PLAYER_DIAGNOSTIC (92): CClientGame::DoPulse (CClientGame.cpp:1278-1283).
+bool SendPlayerDiagnostic(const std::string& message);
+// PACKET_ID_PLAYER_SCREENSHOT (94): CClientGame::TakePlayerScreenShot (CClientGame.cpp:7260-7272).
+bool SendPlayerScreenshotStatus(uint8_t status, uint32_t serverSentTime, uint16_t resourceNetId,
+                                const std::string& tag);
 // PACKET_ID_VEHICLE_PUSH_SYNC (97): CClientGame::SendVehiclePushSync (CClientGame.cpp:4955-4962).
 bool SendVehiclePushSync(uint32_t vehicleId);
+// PACKET_ID_WEAPON_BULLETSYNC (100): CNetAPI::SendBulletSyncCustomWeaponFire (CNetAPI.cpp:2416-2430).
+bool SendWeaponBulletSync(uint32_t weaponId, float sx, float sy, float sz, float ex, float ey, float ez,
+                          uint8_t orderCounter);
+// PACKET_ID_PED_TASK (101): CClientGame::TaskSimpleBeHitHandler (CClientGame.cpp:5350-5362).
+bool SendPedTask(uint16_t taskType, uint32_t attackerId, uint8_t hitBodyPart, uint8_t hitBodySide,
+                 uint8_t weaponId);
 // PACKET_ID_PLAYER_WORLD_SPECIAL_PROPERTY (109): CLuaWorldDefs::SetWorldSpecialPropertyEnabled (CLuaWorldDefs.cpp:2002-2015).
 bool SendWorldSpecialProperty(const std::string& propertyName, bool enabled);
 

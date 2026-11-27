@@ -1054,8 +1054,43 @@ void TestPostJoinInboundAndOutboundPackets() {
         uint8_t bit = 0;
         Check(r.ReadBits(&bit, 1) && (bit & 1u) == 1u, "world special prop enabled bit");
     }
+    // Verify remaining 6 outbound packets (39, 91, 92, 94, 100, 101)
+    Check(CorePackets::SendProjectileSync(16, 342, 1.f, 2.f, 3.f, 701, 0, 0.8f, 0.5f, 0.5f, 0.2f),
+          "SendProjectileSync grenade ok");
+    Check(sent.back().id == PktId::Projectile, "SendProjectileSync grenade id");
+    Check(CorePackets::SendProjectileSync(20, 345, 5.f, 6.f, 7.f, 0, 900, 0.f, 1.f, 0.f, 0.f, 0.1f, 0.2f, 0.3f),
+          "SendProjectileSync rocket_hs ok");
+    Check(CorePackets::SendPlayerTransgression(14, "AC #14 test"), "SendPlayerTransgression ok");
+    Check(sent.back().id == PktId::PlayerTransgression, "SendPlayerTransgression id");
+    Check(CorePackets::SendPlayerDiagnostic("diag-ok"), "SendPlayerDiagnostic ok");
+    Check(sent.back().id == PktId::PlayerDiagnostic, "SendPlayerDiagnostic id");
+    Check(CorePackets::SendPlayerScreenshotStatus(2, 12345u, 7u, "tag1"), "SendPlayerScreenshotStatus ok");
+    Check(sent.back().id == PktId::PlayerScreenshot, "SendPlayerScreenshotStatus id");
+    Check(CorePackets::SendWeaponBulletSync(777, 1.f, 2.f, 3.f, 10.f, 20.f, 30.f, 3), "SendWeaponBulletSync ok");
+    Check(sent.back().id == PktId::WeaponBulletSync, "SendWeaponBulletSync id");
+    Check(CorePackets::SendPedTask(1, 701, 3, 2, 24), "SendPedTask ok");
+    Check(sent.back().id == PktId::PedTask, "SendPedTask id");
+
     CorePackets::SetOutboundPacketSink(nullptr);
-    Check(sent.size() == 10, "all 10 outbound packets captured");
+    Check(sent.size() == 17, "all 17 outbound packets captured");
+
+    // Verify new events: onClientPedsProcessed, onClientPlayerRadioSwitch, onClientObjectMoveStart/Stop
+    AddServerObject(f.handler, 801, 1337, 0.f, 0.f, 5.f);
+    f.Lua("evCounts = { peds=0, radio=0, moveStart=0, moveStop=0 }\n"
+          "addEventHandler('onClientPedsProcessed', root, function() evCounts.peds = evCounts.peds + 1 end)\n"
+          "addEventHandler('onClientPlayerRadioSwitch', root, function(ch) evCounts.radio = ch end)\n"
+          "addEventHandler('onClientObjectMoveStart', root, function() evCounts.moveStart = evCounts.moveStart + 1 end)\n"
+          "addEventHandler('onClientObjectMoveStop', root, function() evCounts.moveStop = evCounts.moveStop + 1 end)\n"
+          "assert(setRadioChannel(4) == true)\n"
+          "local obj = {id=801, element=true}\n"
+          "assert(moveObject(obj, 1000, 10, 0, 5) == true)\n"
+          "assert(stopObject(obj) == true)\n"
+          "assert(isBrowserGPUEnabled() == true)");
+    f.vm.pumpDx(true);
+    f.Lua("assert(evCounts.peds >= 1, 'onClientPedsProcessed fired')\n"
+          "assert(evCounts.radio == 4, 'onClientPlayerRadioSwitch fired')\n"
+          "assert(evCounts.moveStart == 1, 'onClientObjectMoveStart fired')\n"
+          "assert(evCounts.moveStop == 1, 'onClientObjectMoveStop fired')");
 }
 
 }  // namespace

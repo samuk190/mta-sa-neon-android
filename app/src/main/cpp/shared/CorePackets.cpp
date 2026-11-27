@@ -1805,6 +1805,138 @@ bool SendWorldSpecialProperty(const std::string& propertyName, bool enabled) {
     return DispatchOutboundPacket(MtaIds::Packet::PlayerWorldSpecialProperty, w, true, true);
 }
 
+bool SendProjectileSync(uint8_t weaponType, uint16_t model, float ox, float oy, float oz,
+                        uint32_t originSourceId, uint32_t targetId, float force,
+                        float vx, float vy, float vz, float rx, float ry, float rz) {
+    // CClientGame::ProjectileCreationHandler (CClientGame.cpp:6335-6418):
+    // [bit hasOrigin] [opt ElementID origin] [SPositionSync(false) originPos]
+    // [SWeaponTypeSync (6 bits)] [uint16 model] [type-specific payload].
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::Projectile);
+    const bool hasOrigin = originSourceId != 0 && originSourceId != 0x1FFFFu;
+    WriteFlag(w, hasOrigin);
+    if (hasOrigin) WriteElementId(w, originSourceId);
+    WritePosition(w, ox, oy, oz);
+    WriteBitsValue(w, weaponType, 6);
+    w.Write(model);
+
+    auto writeVelocity = [&]() {
+        const float mag = std::sqrt(vx * vx + vy * vy + vz * vz);
+        if (mag < 1e-6f) {
+            WriteFlag(w, false);
+        } else {
+            WriteFlag(w, true);
+            w.Write(mag);
+            w.WriteNormVector(vx / mag, vy / mag, vz / mag);
+        }
+    };
+    auto writeRot = [&]() {
+        constexpr float kTwoPi = 6.283185307f;
+        auto packRad = [](float rad) -> uint16_t {
+            float m = std::fmod(rad, kTwoPi);
+            if (m < 0.0f) m += kTwoPi;
+            return static_cast<uint16_t>(std::lround(m * (65536.0f / kTwoPi)) & 0xFFFF);
+        };
+        w.Write(packRad(rx));
+        w.Write(packRad(ry));
+        w.Write(packRad(rz));
+    };
+
+    switch (weaponType) {
+        case 16:  // GRENADE
+        case 17:  // TEARGAS
+        case 18:  // MOLOTOV
+        case 39:  // REMOTE_SATCHEL_CHARGE
+        {
+            // SFloatSync<7, 17>: signed 24-bit fixed point (7 integer + 17 frac bits).
+            const int32_t fixed = static_cast<int32_t>(std::lround(force * 131072.0f));
+            WriteBitsValue(w, static_cast<uint32_t>(fixed) & 0xFFFFFFu, 24);
+            writeVelocity();
+            break;
+        }
+        case 19:  // ROCKET
+        case 20:  // ROCKET_HS
+        {
+            const bool hasTarget = targetId != 0 && targetId != 0x1FFFFu;
+            WriteFlag(w, hasTarget);
+            if (hasTarget) WriteElementId(w, targetId);
+            writeVelocity();
+            writeRot();
+            break;
+        }
+        default:
+            break;
+    }
+    return DispatchOutboundPacket(MtaIds::Packet::Projectile, w, true, true);
+}
+
+bool SendPlayerTransgression(uint32_t level, const std::string& message) {
+    // CClientGame::DoPulse (CClientGame.cpp:1248-1256): [uint32 level] [WriteString message].
+    if (message.size() > 65535) return false;
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::PlayerTransgression);
+    w.Write(level);
+    w.Write(static_cast<uint16_t>(message.size()));
+    if (!message.empty()) w.WriteBytes(reinterpret_cast<const uint8_t*>(message.data()), message.size());
+    return DispatchOutboundPacket(MtaIds::Packet::PlayerTransgression, w, true, true);
+}
+
+bool SendPlayerDiagnostic(const std::string& message) {
+    // CClientGame::DoPulse (CClientGame.cpp:1278-1283): [WriteString message].
+    if (message.size() > 65535) return false;
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::PlayerDiagnostic);
+    w.Write(static_cast<uint16_t>(message.size()));
+    if (!message.empty()) w.WriteBytes(reinterpret_cast<const uint8_t*>(message.data()), message.size());
+    return DispatchOutboundPacket(MtaIds::Packet::PlayerDiagnostic, w, true, true);
+}
+
+bool SendPlayerScreenshotStatus(uint8_t status, uint32_t serverSentTime, uint16_t resourceNetId,
+                                const std::string& tag) {
+    // CClientGame::TakePlayerScreenShot (CClientGame.cpp:7260-7272):
+    // [uint8 status] [uint32 serverSentTime] [uint16 resourceNetId] [WriteString tag].
+    if (tag.size() > 65535) return false;
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::PlayerScreenshot);
+    w.Write(status);
+    w.Write(serverSentTime);
+    w.Write(resourceNetId);
+    w.Write(static_cast<uint16_t>(tag.size()));
+    if (!tag.empty()) w.WriteBytes(reinterpret_cast<const uint8_t*>(tag.data()), tag.size());
+    return DispatchOutboundPacket(MtaIds::Packet::PlayerScreenshot, w, true, false);
+}
+
+bool SendWeaponBulletSync(uint32_t weaponId, float sx, float sy, float sz, float ex, float ey, float ez,
+                          uint8_t orderCounter) {
+    // CNetAPI::SendBulletSyncCustomWeaponFire (CNetAPI.cpp:2416-2430):
+    // [ElementID weaponId] [CVector start] [CVector end] [uint8 orderCounter].
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::WeaponBulletSync);
+    WriteElementId(w, weaponId);
+    w.Write(sx);
+    w.Write(sy);
+    w.Write(sz);
+    w.Write(ex);
+    w.Write(ey);
+    w.Write(ez);
+    w.Write(orderCounter);
+    return DispatchOutboundPacket(MtaIds::Packet::WeaponBulletSync, w, true, false);
+}
+
+bool SendPedTask(uint16_t taskType, uint32_t attackerId, uint8_t hitBodyPart, uint8_t hitBodySide,
+                 uint8_t weaponId) {
+    // CClientGame::TaskSimpleBeHitHandler (CClientGame.cpp:5350-5362):
+    // [uint16 taskType] [ElementID attackerId] [uint8 hitBodyPart] [uint8 hitBodySide] [uint8 weaponId].
+    BitStreamWriter w;
+    w.Write(MtaIds::Packet::PedTask);
+    w.Write(taskType);
+    WriteElementId(w, attackerId);
+    w.Write(hitBodyPart);
+    w.Write(hitBodySide);
+    w.Write(weaponId);
+    return DispatchOutboundPacket(MtaIds::Packet::PedTask, w, true, true);
+}
+
 void ResetSession() {
     {
         std::lock_guard<std::mutex> lock(g_latentMutex);

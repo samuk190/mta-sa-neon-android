@@ -1164,7 +1164,12 @@ int l_setRadioChannel(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    const uint8_t prev = g_radioChannel;
     g_radioChannel = static_cast<uint8_t>(channel);
+    if (prev != g_radioChannel) {
+        lua_pushinteger(L, g_radioChannel);
+        ActiveVmFireElementEvent(L, "onClientPlayerRadioSwitch", ServerWorld::LocalPlayer(), 1);
+    }
 #ifdef __ANDROID__
     ProbeNativeAudio();
     if (g_nativeAudio.audioEngine) {

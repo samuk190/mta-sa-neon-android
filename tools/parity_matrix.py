@@ -431,10 +431,10 @@ def port_lua_bindings(shared_dir, helpers, fn_bodies):
         for m in re.finditer(r"\bdefaults\[\]\s*=\s*\{", src.masked):
             if open_idx <= m.start() < close:
                 events.append((m.start(), "defaults", m.start()))
-        for m in re.finditer(r'SetGlobal\(\s*L\s*,\s*"(\w+)"\s*,\s*([A-Za-z_][\w:]*)\s*\)', src.clean):
+        for m in re.finditer(r'SetGlobal\(\s*L\s*,\s*"(\w+)"\s*,\s*([A-Za-z_][\w:]*(?:<[^>]+>)?)\s*\)', src.clean):
             if open_idx <= m.start() < close:
                 events.append((m.start(), "setglobal", m))
-        for m in re.finditer(r'Bind\(\s*L\s*,\s*"(\w+)"\s*,\s*(\w+)\s*\)', src.clean):
+        for m in re.finditer(r'Bind\(\s*L\s*,\s*"(\w+)"\s*,\s*([A-Za-z_][\w:]*(?:<[^>]+>)?)\s*\)', src.clean):
             if open_idx <= m.start() < close:
                 events.append((m.start(), "bind", m))
         for m in re.finditer(
@@ -714,6 +714,11 @@ def port_outbound():
             for m in re.finditer(r"\b(NEON_JOIN_DATA_ID)\b", src.clean):
                 if path.name == "JoinDataCodec.h":
                     pkt_id = neon_ids.get("PLAYER_JOINDATA")
+                    if pkt_id is not None:
+                        out.setdefault(pkt_id, ("%s:%d" % (rel(path, REPO), src.line(m.start())), ""))
+            for m in re.finditer(r"\bBuildPlayerResourceStart\b", src.clean):
+                if path.name == "ResourcePackets.cpp":
+                    pkt_id = mta_ids.get("PlayerResourceStart")
                     if pkt_id is not None:
                         out.setdefault(pkt_id, ("%s:%d" % (rel(path, REPO), src.line(m.start())), ""))
     return out

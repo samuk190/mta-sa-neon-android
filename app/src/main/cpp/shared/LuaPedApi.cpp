@@ -969,9 +969,16 @@ int SetPedWeaponSlot(lua_State* L) {
     }
     const char* kind = ServerWorld::ElementKindName(id);
     const bool player = kind && std::strcmp(kind, "player") == 0;
+    PedQueries::Snapshot prevSnap{};
+    const unsigned prevSlot = PedQueries::Copy(id, prevSnap) ? prevSnap.currentSlot : 0;
     if (!PedQueries::SetCurrentSlot(id, static_cast<unsigned>(slot), player)) {
         lua_pushboolean(L, 0);
         return 1;
+    }
+    if (player && id == ServerWorld::LocalPlayer() && prevSlot != static_cast<unsigned>(slot)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(prevSlot));
+        lua_pushinteger(L, static_cast<lua_Integer>(slot));
+        ActiveVmFireElementEvent(L, "onClientPlayerWeaponSwitch", id, 2);
     }
     Game::PedRpcOp op;
     op.kind = Game::PedRpcOp::Kind::SetWeaponSlot;
