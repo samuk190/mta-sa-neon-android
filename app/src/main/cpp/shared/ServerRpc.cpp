@@ -1,6 +1,7 @@
 #include "ServerRpc.h"
 
 #include "LuaApiExtra.h"
+#include "LuaWorldObjectApi.h"
 #include "LuaCameraApi.h"
 #include "LuaFieldApi.h"
 #include "LuaGuiApi.h"
@@ -14,7 +15,10 @@
 #include "../gtasa/HudComponents.h"
 #include "../net/raknet/RakNetWrapper.h"
 
+#include "lua.hpp"
+
 #include <atomic>
+#include <cstring>
 #include <cmath>
 #include <deque>
 #include <functional>
@@ -403,6 +407,215 @@ Result HandleInput(uint8_t func, BitStreamReader& reader) {
     }
 }
 
+constexpr float kPositionLimit = 100000.f;  // SYNC_POSITION_LIMIT (SyncStructures.h:28)
+constexpr float kRadiansToDegrees = 57.295779513082320876798154814105f;
+
+bool WithinLimit(float v) { return v > -kPositionLimit && v < kPositionLimit; }
+
+// SPositionSync(true) (SyncStructures.h:262-275): three floats, each inside +-SYNC_POSITION_LIMIT.
+bool ReadFloatPosition(BitStreamReader& reader, float out[3]) {
+    return reader.Read(out[0]) && reader.Read(out[1]) && reader.Read(out[2]) && WithinLimit(out[0]) && WithinLimit(out[1]) &&
+           WithinLimit(out[2]);
+}
+
+// SRotationRadiansSync(true) (SyncStructures.h:496-505): three floats.
+bool ReadFloatRotation(BitStreamReader& reader, float out[3]) {
+    return reader.Read(out[0]) && reader.Read(out[1]) && reader.Read(out[2]);
+}
+
+// SPositionSync with the default 24-bit components (SyncStructures.h:276-291).
+bool ReadPackedPosition(BitStreamReader& reader, float out[3]) {
+    return Entity::ReadPosition(reader, out[0], out[1], out[2]) && WithinLimit(out[0]) && WithinLimit(out[1]) && WithinLimit(out[2]);
+}
+
+bool ReadDouble(BitStreamReader& reader, double& out) {
+    uint8_t bytes[8] = {};
+    if (!reader.ReadBits(bytes, 64)) return false;
+    std::memcpy(&out, bytes, sizeof(out));
+    return true;
+}
+
+// CElementIDs::GetElement for the elements this port tracks.
+bool ElementExists(uint32_t id) {
+    return id != 0 && id != 0xFFFFFFFFu &&
+           (id == ServerWorld::LocalPlayer() || ServerWorld::IsKnownPlayer(id) || ServerWorld::ModelOf(id) >= 0 ||
+            Script::KnownClientElement(id));
+}
+
+bool IsKind(uint32_t id, const char* kind) {
+    const char* found = ServerWorld::ElementKindName(id);
+    return found && std::strcmp(found, kind) == 0;
+}
+
+// CPositionRotationAnimation::FromBitStream (CPositionRotationAnimation.cpp:111-178).
+bool ReadMoveAnimation(BitStreamReader& reader, Script::ServerObjectMove& move) {
+    bool resume = false;
+    if (!ReadBit(reader, resume)) return false;
+    uint32_t elapsed = 0, left = 0, duration = 0;
+    if (resume) {
+        if (!Entity::ReadCompressed(reader, 4, elapsed) || !Entity::ReadCompressed(reader, 4, left)) return false;
+        move.elapsedMs = elapsed;
+        move.totalMs = elapsed + left < elapsed ? 0xFFFFFFFFu : elapsed + left;
+    } else {
+        if (!Entity::ReadCompressed(reader, 4, duration)) return false;
+        move.elapsedMs = 0;
+        move.totalMs = duration;
+    }
+    if (!ReadPackedPosition(reader, move.sourcePos) || !ReadFloatRotation(reader, move.sourceRot)) return false;
+    if (!ReadPackedPosition(reader, move.targetPos) || !ReadBit(reader, move.deltaRotation) || !ReadFloatRotation(reader, move.targetRot))
+        return false;
+    // NetBitStream::ReadString: a u16 length, then the characters.
+    uint16_t length = 0;
+    if (!reader.Read(length)) return false;
+    std::vector<uint8_t> name(length);
+    if (length && !reader.ReadBits(name.data(), static_cast<size_t>(length) * 8)) return false;
+    double period = 0, amplitude = 0, overshoot = 0;
+    if (!ReadDouble(reader, period) || !ReadDouble(reader, amplitude) || !ReadDouble(reader, overshoot)) return false;
+    // An unknown easing name becomes Linear (CPositionRotationAnimation.cpp:166-171). The curve types are not
+    // sampled on Android yet (the stored move stays linear), so only "Linear" is kept linear here.
+    const std::string easing(name.begin(), name.end());
+    move.linear = easing.empty() || easing == "Linear" || !Script::IsKnownEasingName(easing.c_str());
+    return true;
+}
+
+void PushElementOrNil(lua_State* L, uint32_t id) {
+    if (ElementExists(id)) Script::PushElement(L, id);
+    else lua_pushnil(L);
+}
+
+// CElementRPCs::AttachElements (CElementRPCs.cpp:319-360).
+Result HandleAttach(uint32_t id, BitStreamReader& reader) {
+    uint32_t parent = 0;
+    float position[3] = {}, rotation[3] = {};
+    if (!Entity::ReadElementId(reader, parent) || !reader.Read(position[0]) || !reader.Read(position[1]) ||
+        !reader.Read(position[2]) || !reader.Read(rotation[0]) || !reader.Read(rotation[1]) || !reader.Read(rotation[2]))
+        return Result::Malformed;
+    Enqueue([id, parent, position, rotation]() mutable {
+        if (!ElementExists(parent)) return;
+        for (float& value : rotation) value *= kRadiansToDegrees;
+        lua_State* L = Script::ActiveVmState();
+        if (L) {
+            Script::PushElement(L, parent);
+            for (float value : position) lua_pushnumber(L, value);
+            for (float value : rotation) lua_pushnumber(L, value);
+            if (!Script::ActiveVmFireElementEvent(L, "onClientElementAttach", id, 7)) return;
+        }
+        ServerWorld::NoteAttachedOffsets(id, position[0], position[1], position[2], rotation[0], rotation[1], rotation[2]);
+        ServerWorld::NoteAttachTo(id, parent);
+        // DIAG: CClientEntity::InternalAttachTo (CClientEntity.cpp:667-727), the CPhysical::AttachEntityToEntity
+        // call, is not hooked. The link is visible to Lua only (getElementAttachedTo, getAttachedElements).
+        LUA_LOGI("DIAG ATTACH_ELEMENTS %u -> %u: CPhysical::AttachEntityToEntity is not hooked", id, parent);
+    });
+    return Result::Handled;
+}
+
+// CElementRPCs::DetachElements (CElementRPCs.cpp:362-422). Desktop never reads the attached-to id: it passes an
+// uninitialised ElementID to GetElement, so the event's first argument is whatever the stack held. Android passes nil.
+Result HandleDetach(uint32_t id, BitStreamReader& reader) {
+    uint8_t context = 0;
+    if (!reader.Read(context)) return Result::Malformed;
+    float position[3] = {}, rotation[3] = {};
+    for (float& value : position) reader.Read(value);
+    for (float& value : rotation) reader.Read(value);
+    Enqueue([id, context, position, rotation] {
+        lua_State* L = Script::ActiveVmState();
+        if (L) {
+            lua_pushnil(L);
+            for (float value : position) lua_pushnumber(L, value);
+            for (float value : rotation) lua_pushnumber(L, value);
+            if (!Script::ActiveVmFireElementEvent(L, "onClientElementDetach", id, 7)) return;
+        }
+        ServerWorld::SetSyncTimeContext(id, context);
+        ServerWorld::NoteAttachTo(id, 0xFFFFFFFFu);
+        const bool hasPosition = position[0] != 0.f || position[1] != 0.f || position[2] != 0.f;
+        if (hasPosition && std::isfinite(position[0]) && std::isfinite(position[1]) && std::isfinite(position[2])) {
+            ServerWorld::NoteElementPosition(id, position[0], position[1], position[2]);
+            const char* kind = ServerWorld::ElementKindName(id);
+            if (kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0))
+                Game::RpcSetPosition(id, position[0], position[1], position[2]);
+            else if (kind && std::strcmp(kind, "vehicle") == 0)
+                Game::RpcSetVehiclePosition(id, position[0], position[1], position[2]);
+        }
+        const bool hasRotation = rotation[0] != 0.f || rotation[1] != 0.f || rotation[2] != 0.f;
+        if (hasRotation)
+            LUA_LOGI("DIAG DETACH_ELEMENTS %u: SetRotationDegrees is not hooked for this element", id);
+        LUA_LOGI("DIAG DETACH_ELEMENTS %u: CClientEntity::InternalAttachTo(NULL) is not hooked", id);
+    });
+    return Result::Handled;
+}
+
+// CElementRPCs::SetElementAttachedOffsets (CElementRPCs.cpp:648-656). The radians go in as degrees, the unit
+// ServerWorld keeps (see NoteAttachedOffsets).
+Result HandleAttachedOffsets(uint32_t id, BitStreamReader& reader) {
+    float position[3] = {}, rotation[3] = {};
+    if (!ReadFloatPosition(reader, position) || !ReadFloatRotation(reader, rotation)) return Result::Malformed;
+    Enqueue([id, position, rotation] {
+        ServerWorld::NoteAttachedOffsets(id, position[0], position[1], position[2], rotation[0] * kRadiansToDegrees,
+                                         rotation[1] * kRadiansToDegrees, rotation[2] * kRadiansToDegrees);
+    });
+    return Result::Handled;
+}
+
+// CVehicleRPCs::FixVehicle (CVehicleRPCs.cpp:64-79) and BlowVehicle (81-104). Both run on the net thread, like the
+// vehicle health and position RPCs, so they keep their order against them.
+Result HandleVehicleState(uint8_t func, uint32_t id, BitStreamReader& reader) {
+    uint8_t context = 0;
+    if (!reader.Read(context)) return Result::Malformed;
+    bool withExplosion = true;
+    if (func == Rpc::BlowVehicle && !ReadBit(reader, withExplosion)) return Result::Malformed;
+    if (!IsKind(id, "vehicle")) return Result::Handled;
+    if (func == Rpc::FixVehicle) {
+        // CClientVehicle::Fix (CClientVehicle.cpp:911-1006): SetHealth(1000) is the only step with a hook.
+        Game::RpcSetVehicleHealth(id, 1000.f);
+        LUA_LOGI("DIAG FIX_VEHICLE %u: CVehicle::Fix, door, panel, light and wheel resets are not hooked", id);
+    } else {
+        // CClientVehicle::Blow (CClientVehicle.cpp:1008-): m_fHealth = 0 and SetHealth(0).
+        Game::RpcSetVehicleHealth(id, 0.f);
+        LUA_LOGI("DIAG BLOW_VEHICLE %u (explosion=%d): CVehicle::BlowUp and the burst wheels are not hooked", id,
+                 withExplosion ? 1 : 0);
+    }
+    ServerWorld::SetSyncTimeContext(id, context);
+    return Result::Handled;
+}
+
+// CObjectRPCs.cpp:30-109. Each handler acts on the object only.
+Result HandleObject(uint8_t func, uint32_t id, BitStreamReader& reader) {
+    if (!IsKind(id, "object")) return Result::Handled;
+    switch (func) {
+        case Rpc::SetObjectRotation: {
+            float rotation[3] = {};
+            if (!ReadFloatRotation(reader, rotation)) return Result::Malformed;
+            Enqueue([id, rotation] { Script::ServerSetObjectRotation(id, rotation[0], rotation[1], rotation[2]); });
+            return Result::Handled;
+        }
+        case Rpc::MoveObject: {
+            Script::ServerObjectMove move;
+            if (!ReadMoveAnimation(reader, move)) return Result::Malformed;
+            Enqueue([id, move] { Script::ServerMoveObject(id, move); });
+            return Result::Handled;
+        }
+        case Rpc::StopObject: {
+            float position[3] = {}, rotation[3] = {};
+            if (!ReadFloatRotation(reader, position) || !ReadFloatRotation(reader, rotation)) return Result::Malformed;
+            Enqueue([id, position, rotation] { Script::ServerStopObject(id, position, rotation); });
+            return Result::Handled;
+        }
+        case Rpc::SetObjectScale: {
+            // The reads are unchecked on desktop: y and z fall back to x when the packet ends early.
+            float scale[3] = {};
+            if (!reader.Read(scale[0])) return Result::Malformed;
+            scale[1] = scale[2] = scale[0];
+            float y = scale[0], z = scale[0];
+            if (reader.Read(y)) scale[1] = y;
+            if (reader.Read(z)) scale[2] = z;
+            Enqueue([id, scale] { Script::ServerSetObjectScale(id, scale[0], scale[1], scale[2]); });
+            return Result::Handled;
+        }
+        default:
+            return Result::NotHandled;
+    }
+}
+
 }  // namespace
 
 Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
@@ -420,10 +633,18 @@ Result HandleGlobal(uint8_t func, Net::BitStreamReader& reader) {
 }
 
 Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
-    (void)func;
-    (void)id;
-    (void)reader;
-    return Result::NotHandled;
+    switch (func) {
+        case Rpc::AttachElements: return HandleAttach(id, reader);
+        case Rpc::DetachElements: return HandleDetach(id, reader);
+        case Rpc::SetElementAttachedOffsets: return HandleAttachedOffsets(id, reader);
+        case Rpc::FixVehicle:
+        case Rpc::BlowVehicle: return HandleVehicleState(func, id, reader);
+        case Rpc::SetObjectRotation:
+        case Rpc::MoveObject:
+        case Rpc::StopObject:
+        case Rpc::SetObjectScale: return HandleObject(func, id, reader);
+        default: return Result::NotHandled;
+    }
 }
 
 void Pump() {

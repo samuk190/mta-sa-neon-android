@@ -145,6 +145,9 @@ bool CopyAttachment(uint32_t id, Attachment& out);
 // setElementAttachedOffsets. Rotation stays in degrees, the same units CopyAttachment returns.
 // A missing record is created unattached. An existing parent is left in place.
 void NoteAttachedOffsets(uint32_t id, float x, float y, float z, float rx, float ry, float rz);
+// CClientEntity::AttachTo (CClientEntity.cpp:632-665): links id under parent, or unlinks it when parent is
+// 0xFFFFFFFF. The offsets stay, as on desktop. An element is never attached to itself.
+void NoteAttachTo(uint32_t id, uint32_t parent);
 std::vector<uint32_t> CopyAttachedElements(uint32_t parent);
 // PLAYER_QUIT (5): CPacketHandler::Packet_PlayerQuit -> CClientGame::QuitPlayer deletes the player element.
 // reason is CClientGame::QuitPlayer's text ("Quit", "Kicked", ... "Unknown").

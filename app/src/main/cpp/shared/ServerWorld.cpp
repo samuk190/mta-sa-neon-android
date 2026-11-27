@@ -563,6 +563,14 @@ void NoteAttachedOffsets(uint32_t id, float x, float y, float z, float rx, float
     attachment.rotation[2] = rz;
 }
 
+void NoteAttachTo(uint32_t id, uint32_t parent) {
+    if (id == 0 || id == 0xFFFFFFFFu || id == parent) return;
+    std::lock_guard lock(g_lock);
+    g_attachments[id].parent = parent;
+    g_attachmentOrder.erase(std::remove(g_attachmentOrder.begin(), g_attachmentOrder.end(), id), g_attachmentOrder.end());
+    if (parent != 0xFFFFFFFFu) g_attachmentOrder.push_back(id);
+}
+
 std::vector<uint32_t> CopyAttachedElements(uint32_t parent) {
     std::lock_guard lock(g_lock);
     std::vector<uint32_t> result;

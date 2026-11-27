@@ -26,4 +26,32 @@ bool IsWorldObject(uint32_t id);
 bool SetObjectRotation(uint32_t id, float rx, float ry, float rz);
 bool SetObjectFrozen(uint32_t id, bool frozen);
 
+// Server RPCs of a CDeathmatchObject (CObjectRPCs.cpp:30-109). Each acts on the object only; the Lua moveObject,
+// stopObject and setObjectScale also walk the children (call propagation), the RPCs do not. A server object is adopted
+// on first use. False when id is not an object. VM thread.
+//
+// MOVE_OBJECT: CPositionRotationAnimation::FromBitStream (CPositionRotationAnimation.cpp:111-178) then
+// CDeathmatchObject::StartMovement (CDeathmatchObject.cpp:53-74). Rotations are radians. With deltaRotation the
+// target rotation is the source rotation plus `targetRot`. elapsedMs is the resume-mode time already spent, totalMs
+// the whole duration; an animation with nothing left snaps to the final value.
+struct ServerObjectMove {
+    float sourcePos[3] = {}, sourceRot[3] = {};
+    float targetPos[3] = {}, targetRot[3] = {};
+    bool deltaRotation = false;
+    bool linear = true;
+    uint32_t elapsedMs = 0;
+    uint32_t totalMs = 0;
+};
+// CEasingCurve::GetEasingTypeFromString: true when name is one of the easing types.
+bool IsKnownEasingName(const char* name);
+bool ServerMoveObject(uint32_t id, const ServerObjectMove& move);
+// STOP_OBJECT: StopMovement then SetOrientation(position, rotation radians).
+bool ServerStopObject(uint32_t id, const float position[3], const float rotation[3]);
+// SET_OBJECT_ROTATION: SetRotationRadians. A running move keeps writing its own rotation, as on desktop.
+bool ServerSetObjectRotation(uint32_t id, float rx, float ry, float rz);
+// SET_OBJECT_SCALE: CClientObject::SetScale.
+bool ServerSetObjectScale(uint32_t id, float x, float y, float z);
+// What a test reads back: position, rotation (radians), scale, move running.
+bool CopyObjectState(uint32_t id, float pos[3], float rot[3], float scale[3], bool& moving);
+
 }  // namespace WorldRPG::Script

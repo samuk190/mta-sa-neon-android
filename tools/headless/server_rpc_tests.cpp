@@ -4,11 +4,14 @@
 // CElementRPCs.cpp, CVehicleRPCs.cpp, CObjectRPCs.cpp.
 #include "game_script.h"
 #include "shared/LuaKeyBindApi.h"
+#include "shared/LuaApiExtra.h"
 #include "shared/LuaVMStub.h"
+#include "shared/LuaWorldObjectApi.h"
 #include "shared/MtaIds.h"
 #include "shared/PacketHandler.h"
 #include "shared/ServerRpc.h"
 #include "shared/ServerWorld.h"
+#include "shared/entity/EntityAddTypes.h"
 #include "gtasa/HudComponents.h"
 #include "net/raknet/RakNetWrapper.h"
 
@@ -401,6 +404,258 @@ void Input() {
     Check(!f.Send(Pkt(Rpc::ShowCursor).U8(1).U16(777).w), "SHOW_CURSOR without the toggle is malformed");
 }
 
+void Bits(Net::BitStreamWriter& w, uint32_t value, size_t count) {
+    const uint8_t bytes[4] = {uint8_t(value), uint8_t(value >> 8), uint8_t(value >> 16), uint8_t(value >> 24)};
+    w.WriteBits(bytes, count);
+}
+
+// ENTITY_ADD of one OBJECT (type 3), the layout ReadEntityBodyObject reads.
+void AddObject(uint32_t id, uint32_t model) {
+    Net::BitStreamWriter w;
+    w.WriteCompressed(1u, 4);
+    Bits(w, id, 17); w.Write(uint8_t(3)); Bits(w, 0, 17);
+    w.Write(uint8_t(0)); w.WriteCompressed(0u, 2);
+    Bits(w, 0, 1); Bits(w, 1, 1);
+    w.WriteCompressed(0u, 2); w.WriteCompressed(0u, 2);
+    Bits(w, 1024, 24); Bits(w, 2048, 24); w.Write(3.f);
+    Bits(w, 0, 16); Bits(w, 0, 16); Bits(w, 0, 16);
+    w.WriteCompressed(model, 2); w.WriteCompressed(0u, 1);
+    Bits(w, 0, 1); Bits(w, 0x1FFFF, 17);
+    Bits(w, 0, 1); Bits(w, 0, 1); Bits(w, 0, 1); Bits(w, 0, 1);
+    Bits(w, 1, 1); Bits(w, 1, 1); Bits(w, 0, 1);
+    Bits(w, 2000, 11); Bits(w, 0, 1); Bits(w, 1, 1);
+    ServerWorld::OnEntityAdd(w.GetData(), w.GetByteLength(), w.GetBitLength());
+}
+
+// ENTITY_ADD of one VEHICLE (type 2), the layout of resource_tests CheckVehiclePackets.
+void AddVehicle(uint32_t id) {
+    Net::BitStreamWriter spawn;
+    spawn.WriteCompressed(1u, 4);
+    Bits(spawn, id, 17); spawn.Write(uint8_t(Entity::kTypeVehicle)); Bits(spawn, 0, 17);
+    spawn.Write(uint8_t(0)); spawn.WriteCompressed(0u, 2);
+    Bits(spawn, 0, 1); Bits(spawn, 1, 1);
+    spawn.WriteCompressed(0u, 2); spawn.WriteCompressed(0u, 2);
+    Bits(spawn, 0, 24); Bits(spawn, 0, 24); spawn.Write(10.f);
+    Bits(spawn, 0, 16); Bits(spawn, 0, 16); Bits(spawn, 0, 16);
+    spawn.Write(uint16_t(536));
+    Bits(spawn, 2000, 12); Bits(spawn, 0, 2);
+    Bits(spawn, 1, 2);
+    for (uint8_t component : {19, 42, 201, 9, 77, 123}) spawn.Write(component);
+    Bits(spawn, 0, 2);
+    Bits(spawn, 0, 18); Bits(spawn, 0, 8); Bits(spawn, 0, 14); Bits(spawn, 0, 8);
+    Bits(spawn, 0, 16); Bits(spawn, 0, 12);
+    spawn.Write(uint8_t(2)); spawn.Write(uint8_t(10)); spawn.Write(uint8_t(86));
+    Bits(spawn, 0, 32); Bits(spawn, 0, 32);
+    Bits(spawn, 0, 2);
+    for (int flag = 0; flag < 12; ++flag) Bits(spawn, flag == 4, 1);
+    spawn.WriteCompressed(0u, 1); Bits(spawn, 0, 3);
+    ServerWorld::OnEntityAdd(spawn.GetData(), spawn.GetByteLength(), spawn.GetBitLength());
+}
+
+Pkt& Fixed(Pkt& p, float x, float y, float z) {
+    Bits(p.w, uint32_t(int32_t(x * 1024.f)) & 0xFFFFFFu, 24);
+    Bits(p.w, uint32_t(int32_t(y * 1024.f)) & 0xFFFFFFu, 24);
+    p.w.Write(z);
+    return p;
+}
+
+Pkt& Compressed(Pkt& p, uint32_t value) {
+    p.w.WriteCompressed(value, 4);
+    return p;
+}
+
+Pkt& Double(Pkt& p, double value) {
+    uint8_t bytes[8];
+    std::memcpy(bytes, &value, 8);
+    p.w.WriteBits(bytes, 64);
+    return p;
+}
+
+Pkt& EasingString(Pkt& p, const std::string& name) {
+    p.w.Write(uint16_t(name.size()));
+    if (!name.empty()) p.w.WriteBits(reinterpret_cast<const uint8_t*>(name.data()), unsigned(name.size() * 8));
+    return p;
+}
+
+struct EPkt : Pkt {
+    EPkt(uint8_t func, uint32_t id) : Pkt(func, MtaIds::Packet::LuaElementRpc) { Id(id); }
+};
+
+void SetGlobalElement(const char* name, uint32_t id) {
+    lua_State* L = Script::ActiveVmState();
+    Script::PushElement(L, id);
+    lua_setglobal(L, name);
+}
+
+constexpr uint32_t kVehicle = 0x1234;
+constexpr uint32_t kObject = 2900;
+constexpr uint32_t kObject2 = 2901;
+
+void Attach() {
+    Fixture f;
+    AddVehicle(kVehicle);
+    AddObject(kObject, 1338);
+    f.Lua("events = {} addEventHandler('onClientElementAttach', root, function(parent, x, y, z, rx, ry, rz) "
+          "events[#events + 1] = {'attach', parent, x, y, z, rx, ry, rz} end) "
+          "addEventHandler('onClientElementDetach', root, function(parent, x, y, z, rx, ry, rz) "
+          "events[#events + 1] = {'detach', parent, x, y, z, rx, ry, rz} end)");
+    SetGlobalElement("obj", kObject);
+    SetGlobalElement("veh", kVehicle);
+
+    // ATTACH_ELEMENTS: attached-to id, position floats, rotation radians.
+    Check(f.Send(EPkt(Rpc::AttachElements, kObject).Id(kVehicle).F(1.f).F(2.f).F(3.f).F(0.f).F(0.f).F(1.5707964f).w),
+          "ATTACH_ELEMENTS decodes");
+    f.Pump();
+    f.Lua("assert(getElementAttachedTo(obj) == veh, 'parent')");
+    f.Lua("local x, y, z, rx, ry, rz = getElementAttachedOffsets(obj) "
+          "assert(x == 1 and y == 2 and z == 3 and math.abs(rz - 90) < 0.01, 'offsets')");
+    f.Lua("assert(#events == 1 and events[1][1] == 'attach' and events[1][2] == veh and events[1][5] == 3 "
+          "and math.abs(events[1][8] - 90) < 0.01, 'event in degrees')");
+    Check(ServerWorld::CopyAttachedElements(kVehicle).size() == 1, "the vehicle lists the attached object");
+
+    // SET_ELEMENT_ATTACHED_OFFSETS: floats in radians, the parent stays.
+    Check(f.Send(EPkt(Rpc::SetElementAttachedOffsets, kObject).F(4.f).F(5.f).F(6.f).F(3.1415927f).F(0.f).F(0.f).w),
+          "SET_ELEMENT_ATTACHED_OFFSETS decodes");
+    f.Pump();
+    f.Lua("local x, y, z, rx = getElementAttachedOffsets(obj) assert(x == 4 and z == 6 and math.abs(rx - 180) < 0.01, 'new offsets')");
+    f.Lua("assert(getElementAttachedTo(obj) == veh, 'parent kept')");
+    Check(!f.Send(EPkt(Rpc::SetElementAttachedOffsets, kObject).F(4.f).F(5.f).F(6.f).F(0.f).w),
+          "a short offsets packet is malformed");
+    Check(!f.Send(EPkt(Rpc::SetElementAttachedOffsets, kObject).F(200000.f).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).w),
+          "an offset past SYNC_POSITION_LIMIT is rejected");
+
+    // An unknown attached-to element drops the packet.
+    Check(f.Send(EPkt(Rpc::AttachElements, kObject).Id(777).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).w),
+          "ATTACH_ELEMENTS to an unknown element is consumed");
+    f.Pump();
+    f.Lua("assert(getElementAttachedTo(obj) == veh and #events == 1, 'unknown parent changes nothing')");
+    Check(!f.Send(EPkt(Rpc::AttachElements, kObject).Id(kVehicle).F(1.f).F(2.f).w), "a short ATTACH is malformed");
+
+    // A handler that cancels the event keeps the element detached from the new parent.
+    f.Lua("addEventHandler('onClientElementAttach', root, function() cancelEvent() end)");
+    AddObject(kObject2, 1337);
+    SetGlobalElement("obj2", kObject2);
+    f.Send(EPkt(Rpc::AttachElements, kObject2).Id(kVehicle).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).w);
+    f.Pump();
+    f.Lua("assert(getElementAttachedTo(obj2) == false, 'cancelled attach')");
+
+    // DETACH_ELEMENTS: time context, then position and rotation floats; no attached-to id is read.
+    Check(f.Send(EPkt(Rpc::DetachElements, kObject).U8(7).F(50.f).F(60.f).F(70.f).F(0.f).F(0.f).F(0.f).w),
+          "DETACH_ELEMENTS decodes");
+    f.Pump();
+    f.Lua("assert(getElementAttachedTo(obj) == false, 'detached')");
+    Check(ServerWorld::CopyAttachedElements(kVehicle).empty(), "the vehicle lists nothing after the detach");
+    float x = 0, y = 0, z = 0;
+    Check(ServerWorld::ElementPose(kObject, x, y, z) && Near(x, 50) && Near(y, 60) && Near(z, 70), "a non-zero position is applied");
+    f.Lua("local e = events[#events] assert(e[1] == 'detach' and e[2] == nil and e[3] == 50 and e[4] == 60, 'detach event')");
+    Check(!f.Send(EPkt(Rpc::DetachElements, kObject).w), "DETACH without a time context is malformed");
+    // A truncated tail is read as zeros (the reads are unchecked on desktop): detach still happens, no move.
+    f.Send(EPkt(Rpc::AttachElements, kObject).Id(kVehicle).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).w);
+    f.Lua("events = {}");
+    f.Pump();
+    Check(f.Send(EPkt(Rpc::DetachElements, kObject).U8(8).w), "DETACH with no payload after the context");
+    f.Pump();
+    Check(ServerWorld::ElementPose(kObject, x, y, z) && Near(x, 50), "a zero position leaves the element in place");
+}
+
+void Vehicle() {
+    Fixture f;
+    AddVehicle(kVehicle);
+    AddObject(kObject, 1338);
+    // FIX_VEHICLE: time context. SetHealth(1000) is the hooked step.
+    Check(f.Send(EPkt(Rpc::FixVehicle, kVehicle).U8(3).w), "FIX_VEHICLE decodes");
+    Check(Headless::Probe().vehicleHealthCalls == 1 && Headless::Probe().vehicleHealthId == kVehicle &&
+              Near(Headless::Probe().vehicleHealth, 1000.f),
+          "FIX_VEHICLE sets full health");
+    Check(!f.Send(EPkt(Rpc::FixVehicle, kVehicle).w), "FIX_VEHICLE without a context is malformed");
+    // BLOW_VEHICLE: time context, with-explosion bit.
+    Check(f.Send(EPkt(Rpc::BlowVehicle, kVehicle).U8(4).Bit(true).w), "BLOW_VEHICLE decodes");
+    Check(Headless::Probe().vehicleHealthCalls == 2 && Near(Headless::Probe().vehicleHealth, 0.f), "BLOW_VEHICLE zeroes health");
+    Check(!f.Send(EPkt(Rpc::BlowVehicle, kVehicle).U8(4).w), "BLOW_VEHICLE without the explosion bit is malformed");
+    // A non-vehicle source is read and ignored.
+    Check(f.Send(EPkt(Rpc::FixVehicle, kObject).U8(3).w), "FIX_VEHICLE on an object is consumed");
+    Check(Headless::Probe().vehicleHealthCalls == 2, "FIX_VEHICLE on an object changes nothing");
+}
+
+void Objects() {
+    Fixture f;
+    AddObject(kObject, 1338);
+    float pos[3], rot[3], scale[3];
+    bool moving = false;
+
+    // SET_OBJECT_ROTATION: three float radians.
+    Check(f.Send(EPkt(Rpc::SetObjectRotation, kObject).F(0.1f).F(0.2f).F(0.3f).w), "SET_OBJECT_ROTATION decodes");
+    f.Pump();
+    Check(Script::CopyObjectState(kObject, pos, rot, scale, moving) && Near(rot[0], 0.1) && Near(rot[2], 0.3), "rotation applied");
+    Check(!f.Send(EPkt(Rpc::SetObjectRotation, kObject).F(0.1f).w), "a short rotation is malformed");
+
+    // SET_OBJECT_SCALE: x, then y and z default to x when the packet ends.
+    Check(f.Send(EPkt(Rpc::SetObjectScale, kObject).F(2.f).w), "SET_OBJECT_SCALE with one float");
+    f.Pump();
+    Script::CopyObjectState(kObject, pos, rot, scale, moving);
+    Check(Near(scale[0], 2) && Near(scale[1], 2) && Near(scale[2], 2), "uniform scale");
+    Check(f.Send(EPkt(Rpc::SetObjectScale, kObject).F(1.f).F(2.f).F(3.f).w), "SET_OBJECT_SCALE with three floats");
+    f.Pump();
+    Script::CopyObjectState(kObject, pos, rot, scale, moving);
+    Check(Near(scale[0], 1) && Near(scale[1], 2) && Near(scale[2], 3), "per-axis scale");
+    Check(!f.Send(EPkt(Rpc::SetObjectScale, kObject).w), "an empty scale packet is malformed");
+
+    // MOVE_OBJECT, duration form, linear.
+    EPkt move(Rpc::MoveObject, kObject);
+    move.Bit(false);
+    Compressed(move, 60000);
+    Fixed(move, 1.f, 2.f, 3.f).F(0.f).F(0.f).F(0.f);
+    Fixed(move, 11.f, 22.f, 33.f).Bit(false).F(0.f).F(0.f).F(1.f);
+    EasingString(move, "Linear");
+    Double(move, 0.3); Double(move, 1.0); Double(move, 1.70158);
+    Check(f.Send(move.w), "MOVE_OBJECT decodes");
+    f.Pump();
+    Check(Script::CopyObjectState(kObject, pos, rot, scale, moving) && moving, "the object is moving");
+    Check(Near(pos[0], 1, 0.5) && Near(pos[2], 3, 0.5), "the move starts at the source");
+    // A move cut anywhere is malformed and changes nothing.
+    for (size_t cut = 8 + 8 + 17 + 1; cut < move.w.GetBitLength(); cut += 37) {
+        Check(!SendTruncated(f, move, cut), "a truncated MOVE_OBJECT is malformed");
+    }
+    // STOP_OBJECT: position and rotation floats; the move ends at those values.
+    Check(f.Send(EPkt(Rpc::StopObject, kObject).F(5.f).F(6.f).F(7.f).F(0.5f).F(0.f).F(0.f).w), "STOP_OBJECT decodes");
+    f.Pump();
+    Script::CopyObjectState(kObject, pos, rot, scale, moving);
+    Check(!moving && Near(pos[0], 5) && Near(pos[1], 6) && Near(pos[2], 7) && Near(rot[0], 0.5), "STOP_OBJECT places the object");
+    Check(!f.Send(EPkt(Rpc::StopObject, kObject).F(5.f).F(6.f).w), "a short STOP_OBJECT is malformed");
+
+    // MOVE_OBJECT, resume form with nothing left, delta rotation: the final value is applied at once.
+    EPkt done(Rpc::MoveObject, kObject);
+    done.Bit(true);
+    Compressed(done, 500);
+    Compressed(done, 0);
+    Fixed(done, 0.f, 0.f, 0.f).F(1.f).F(0.f).F(0.f);
+    Fixed(done, 9.f, 8.f, 7.f).Bit(true).F(0.5f).F(0.f).F(0.f);
+    EasingString(done, "Bogus");
+    Double(done, 0.3); Double(done, 1.0); Double(done, 1.70158);
+    Check(f.Send(done.w), "MOVE_OBJECT resume form decodes");
+    f.Pump();
+    Script::CopyObjectState(kObject, pos, rot, scale, moving);
+    Check(!moving && Near(pos[0], 9) && Near(pos[1], 8) && Near(rot[0], 1.5), "a finished move snaps to source + delta");
+
+    // A resume move already part way keeps its elapsed time.
+    EPkt part(Rpc::MoveObject, kObject);
+    part.Bit(true);
+    Compressed(part, 30000);
+    Compressed(part, 30000);
+    Fixed(part, 0.f, 0.f, 0.f).F(0.f).F(0.f).F(0.f);
+    Fixed(part, 100.f, 0.f, 0.f).Bit(false).F(0.f).F(0.f).F(0.f);
+    EasingString(part, "Linear");
+    Double(part, 0.3); Double(part, 1.0); Double(part, 1.70158);
+    Check(f.Send(part.w), "MOVE_OBJECT part way decodes");
+    f.Pump();
+    Script::CopyObjectState(kObject, pos, rot, scale, moving);
+    Check(moving && Near(pos[0], 50, 2), "a resumed move starts half way");
+
+    // Unknown ids and non-object sources are consumed without effect.
+    Check(f.Send(EPkt(Rpc::SetObjectScale, 4000).F(9.f).w), "SET_OBJECT_SCALE on an unknown element");
+    f.Pump();
+}
+
 void QueueAndSession() {
     Fixture f;
     for (int i = 0; i < 600; ++i) f.Send(Pkt(Rpc::SetPlayerMoney).I32(i).w);
@@ -419,6 +674,9 @@ int main() {
     Camera();
     PlayerHudChat();
     Input();
+    Attach();
+    Vehicle();
+    Objects();
     QueueAndSession();
     std::printf("server RPC tests passed (%u checks)\n", checks);
     return 0;
