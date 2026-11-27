@@ -27,7 +27,7 @@ struct Row {
 // Every row is a CPad member that returns an integer or bool in w0 and takes no float argument, so one wrapper
 // shape serves them all: the six integer argument registers are passed through untouched, the original runs, and
 // only w0 is replaced. The slots come from `readelf -r libGTASA.so`; BindImports compares each with dlsym.
-constexpr std::array<Row, 43> kRows = {{
+constexpr std::array<Row, 44> kRows = {{
     {Getter::PedWalkLeftRight, "_ZN4CPad19GetPedWalkLeftRightEv", 0x841dd0},
     {Getter::PedWalkUpDown, "_ZN4CPad16GetPedWalkUpDownEv", 0x840ec0},
     {Getter::SteeringLeftRight, "_ZN4CPad20GetSteeringLeftRightEv", 0x8467f8},
@@ -56,6 +56,7 @@ constexpr std::array<Row, 43> kRows = {{
     {Getter::LookLeft, "_ZN4CPad11GetLookLeftEb", 0x845588},
     {Getter::LookRight, "_ZN4CPad12GetLookRightEb", 0x843890},
     {Getter::Target, "_ZN4CPad9GetTargetEb", 0x83dda0},
+    {Getter::EnterTargeting, "_ZN4CPad17GetEnterTargetingEv", 0x8489c0},
     {Getter::CycleWeaponLeftJustDown, "_ZN4CPad23CycleWeaponLeftJustDownEv", 0x83ef50},
     {Getter::CycleWeaponRightJustDown, "_ZN4CPad24CycleWeaponRightJustDownEv", 0x83fa40},
     {Getter::CycleCameraModeDownJustDown, "_ZN4CPad27CycleCameraModeDownJustDownEv", 0x840920},

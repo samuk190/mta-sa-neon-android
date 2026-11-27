@@ -63,7 +63,7 @@ enum class Getter : uint8_t {
     Jump, JumpJustDown, SwimJumpJustDown, MeleeAttack, MeleeAttackJustDown, Duck, DuckJustDown, Sprint,
     SprintJustDown, Weapon, WeaponJustDown,
     ExitVehicle, ExitVehicleJustDown, Horn, HornJustDown, HandBrake,
-    LookBehindForPed, LookBehindForCar, LookLeft, LookRight, Target,
+    LookBehindForPed, LookBehindForCar, LookLeft, LookRight, Target, EnterTargeting,
     CycleWeaponLeftJustDown, CycleWeaponRightJustDown, CycleCameraModeDownJustDown,
     ConversationYesJustDown, ConversationNoJustDown,
     GroupControlForwardJustDown, GroupControlBackJustDown, GroupControlForward, GroupControlBack,

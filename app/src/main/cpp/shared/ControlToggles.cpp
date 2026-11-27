@@ -109,6 +109,7 @@ constexpr std::array<Policy, kGetterCount> kPolicy = [] {
     set(Getter::LookLeft, Button(Gta::VehicleLookLeft));
     set(Getter::LookRight, Button(Gta::VehicleLookRight));
     set(Getter::Target, Button(Gta::AimWeapon));
+    set(Getter::EnterTargeting, Button(Gta::AimWeapon));
     set(Getter::CycleWeaponLeftJustDown, Button(Gta::PreviousWeapon));
     set(Getter::CycleWeaponRightJustDown, Button(Gta::NextWeapon));
     set(Getter::CycleCameraModeDownJustDown, Button(Gta::ChangeCamera));

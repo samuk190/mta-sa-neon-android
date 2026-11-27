@@ -171,7 +171,7 @@ void Masking() {
     Check(C::MaskGetter(C::Getter::Duck, 1) == 0 && C::MaskGetter(C::Getter::DuckJustDown, 1) == 0, "crouch");
     C::SetControlEnabled("crouch", true);
     C::SetControlEnabled("aim_weapon", false);
-    Check(C::MaskGetter(C::Getter::Target, 1) == 0, "aim_weapon");
+    Check(C::MaskGetter(C::Getter::Target, 1) == 0 && C::MaskGetter(C::Getter::EnterTargeting, 1) == 0, "aim_weapon");
     C::SetControlEnabled("aim_weapon", true);
 
     C::SetAllControlsEnabled(true, true, false);
