@@ -27,3 +27,7 @@ The counts measure Lua binding coverage. `Implemented` identifies a nonconstant 
 1. **Tier 1 (Core Gameplay & UI - Needed Now)**: `ELEMENTS.md`, `GUI_AND_DX.md`, `PEDS_AND_PLAYERS.md`, `VEHICLES.md`.
 2. **Tier 2 (World & Audio - Needed for Ambience)**: `WORLD_AND_OBJECTS.md`, `AUDIO_AND_VOICE.md`, `CAMERA.md`, `WEAPONS_AND_COMBAT.md`.
 3. **Tier 3 (Modding & Advanced UI - Long Term)**: `ENGINE_AND_MODELS.md`, `MARKERS_AND_SPATIAL.md`, `BROWSER_AND_COMPATIBILITY.md`.
+
+## Server RPC reach (lot P0-2)
+
+Several Lua functions run on the server and reach the phone as RPCs of packets 76 and 77. `shared/ServerRpc.cpp` decodes them and applies the effect on the Lua VM thread, so the client getters report the new state: `setTime`, `setWeather`, `setWeatherBlended`, `setMinuteDuration` and the other world setters, `setCameraMatrix`, `setCameraTarget`, `setCameraInterior`, `fadeCamera`, `setPlayerMoney`, `showPlayerHudComponent`, `bindKey` / `unbindKey` / `addCommandHandler` binds (server side), `showCursor`, `showChat`, `attachElements`, `detachElements`, `setElementAttachedOffsets`, `fixVehicle`, `blowVehicle`, `moveObject`, `stopObject`, `setObjectRotation`, `setObjectScale`. Engine effects without a hook log `DIAG` (see the CHANGELOG entry for lot P0-2). Not covered: the vehicle handling functions, `setSkyGradient`, `setHeatHaze`, `setFPSLimit`, `setPlayerWantedLevel`. None of it is device-verified.
