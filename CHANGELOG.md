@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — local PLAYER_WASTED kill task, pool-aware WorldObjects, CEGUI static images & scrollpanes, extended radar panning (2026-11-27)
+
+- **Local `PLAYER_WASTED` kill task** (`CPacketHandler.cpp:1312-1332`, `CClientPed.cpp:3817-3887`): factored `RunDieTaskOnBody` out of `KillRemoteBody` and wired `PacketHandler::HandleWasted` -> `Game::NoteLocalWasted` -> `ApplyLocalPedRpcs` on the game thread, clearing stale local combat death state and running `CTaskComplexDie` when the local ped is still alive in the same life (`g_localLife`).
+- **Pool-aware `WorldObjects` streaming limit** (`gtasa/WorldObjects.cpp`): computes `maxLive` from the live `CPool<CObject>` size (`pool + 16`, minus 200 slots headroom, clamped `[250, 800]`) so dense maps utilize the 1200-slot `CObject` pool expanded by `RenderGuard.cpp`.
+- **CEGUI `gui-staticimage` bitmap rendering & `gui-scrollpane` scrolling/clipping** (`CLuaGUIDefs.cpp:770-819`, `shared/LuaGuiApi.cpp`, `shared/LuaDxApi.cpp`): `guiCreateStaticImage` and `guiStaticImageLoadImage` resolve the cached resource file via `ActiveVmResourceFile` and emit `MtaDxView` `"I"` bitmap draw commands instead of filename text; `guiStaticImageGetNativeSize` reads real PNG/JPEG/BMP/GIF dimensions via `DxReadImageSize`; `gui-scrollpane` applies horizontal/vertical scroll offsets in `ScreenBox` and clips off-pane children in `DrawBranch`/`PickBranch`.
+- **Extended radar panning** (`game/PlayerMapView.java`): expanded `PlayerMapView` pan limits to MTA Neon's `[-10000, 10000)` world coordinates while keeping the stock `map_1024.png` aligned to `[-3000, 3000]`.
+- Tests: `neon_core_packets_tests` expanded to 99 checks covering local `PLAYER_WASTED`, `guiCreateStaticImage`/`guiStaticImageLoadImage`/`guiStaticImageGetNativeSize`, `"I"` draw command emission, and `gui-scrollpane` scrolling/clipping.
+
 ### Added — core gameplay packets and ENTITY_ADD fixes, lot P0-3 (2026-11-27)
 
 `shared/CorePackets.cpp` implements the 15 missing core gameplay packets on `PacketHandler` (bitstream `0x0030`) and removes the dead provisional `MTAPacketID` `0..7` handler map from `PacketHandler.h` / `PacketHandler.cpp`. Every decoder is bounds-checked and rejects non-finite floats before writing state; Lua-visible events and object/projectile mutations are queued into the shared `ServerRpc` VM FIFO so arrival order is preserved across packets and RPCs. Not yet run on a device.

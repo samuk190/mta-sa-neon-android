@@ -362,6 +362,9 @@ bool ConsumeHostedWasted(HostedWasted& out);
 bool CopyLocalCombatDeath(uint64_t& life, HostedWasted& out);
 // PED_WASTED (64) / PLAYER_WASTED (27): CClientPed::Kill on the game thread.
 void NoteRemoteWasted(uint32_t id, int weapon, int animGroup, int animId);
+// Desktop CPacketHandler::Packet_PlayerWasted (CPacketHandler.cpp:1312-1332): runs CClientPed::Kill on the local
+// player too ("needs to be done on the local player to avoid desync") when the server reports a local death.
+void NoteLocalWasted(int weapon, int animGroup, int animId);
 // PLAYER_SPAWN of a remote player: alive again (CClientPlayer::Spawn).
 void NoteRemoteSpawn(uint32_t id);
 void RpcSetRotation(uint32_t id, float radians);

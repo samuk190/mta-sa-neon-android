@@ -18,6 +18,9 @@ import java.io.InputStream;
 public final class PlayerMapView extends View {
     private static final float WORLD_SIZE = 6000f;
     private static final float WORLD_HALF = WORLD_SIZE / 2f;
+    // MTA Neon extends valid world coordinates to [-10000, 10000); keep stock map_1024.png
+    // aligned to [-3000, 3000] while allowing panning across the full extended world.
+    private static final float EXTENDED_WORLD_HALF = 10000f;
 
     public interface Host {
         String snapshot();
@@ -99,8 +102,8 @@ public final class PlayerMapView extends View {
         float size = mapSize();
         if (size <= 0f) return;
         float pixelsPerWorldUnit = size / WORLD_SIZE;
-        float maxPanX = Math.max(0f, (size - getWidth()) / 2f) / pixelsPerWorldUnit;
-        float maxPanY = Math.max(0f, (size - getHeight()) / 2f) / pixelsPerWorldUnit;
+        float maxPanX = Math.max(EXTENDED_WORLD_HALF, (size - getWidth()) / 2f / pixelsPerWorldUnit);
+        float maxPanY = Math.max(EXTENDED_WORLD_HALF, (size - getHeight()) / 2f / pixelsPerWorldUnit);
         panX = Math.max(-maxPanX, Math.min(maxPanX, panX));
         panY = Math.max(-maxPanY, Math.min(maxPanY, panY));
         float left = (getWidth() - size) / 2f - panX * pixelsPerWorldUnit;

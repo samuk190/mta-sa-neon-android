@@ -59,7 +59,8 @@ struct GuiElement {
     double x = 0, y = 0, w = 0, h = 0;
     bool relPos = false;
     bool relSize = false;
-    std::string text;               // window title, label or button text
+    std::string text;               // window title, label, button text, or staticimage raw path
+    std::string imageFile;          // resolved cached image path for gui-staticimage
     bool visible = true;
     bool enabled = true;
     double alpha = 1.0;
@@ -183,7 +184,28 @@ Box ParentBox(const GuiElement& element) {
     return Box{0.0, 0.0, static_cast<double>(width), static_cast<double>(height)};
 }
 
-// Screen-space box of an element, with its parents' offsets applied.
+// Scroll offset (pixels) for children of a gui-scrollpane based on its direct children's extent.
+void ScrollPaneOffset(uint32_t paneId, const GuiElement& pane, const Box& paneBox, double& ox, double& oy) {
+    ox = 0.0;
+    oy = 0.0;
+    if (pane.scrollX <= 0.0 && pane.scroll <= 0.0) return;
+    double maxRight = 0.0, maxBottom = 0.0;
+    for (const auto& [childId, child] : g_elements) {
+        if (child.parent != paneId) continue;
+        const double cx = child.relPos ? child.x * paneBox.w : child.x;
+        const double cy = child.relPos ? child.y * paneBox.h : child.y;
+        const double cw = child.relSize ? child.w * paneBox.w : child.w;
+        const double ch = child.relSize ? child.h * paneBox.h : child.h;
+        if (cx + cw > maxRight) maxRight = cx + cw;
+        if (cy + ch > maxBottom) maxBottom = cy + ch;
+    }
+    const double overflowX = std::max(0.0, maxRight - paneBox.w);
+    const double overflowY = std::max(0.0, maxBottom - paneBox.h);
+    ox = overflowX * std::clamp(pane.scrollX, 0.0, 100.0) / 100.0;
+    oy = overflowY * std::clamp(pane.scroll, 0.0, 100.0) / 100.0;
+}
+
+// Screen-space box of an element, with its parents' offsets (and scrollpane scroll) applied.
 Box ScreenBox(uint32_t id) {
     const GuiElement* element = Find(id);
     if (!element) return Box{};
@@ -193,7 +215,33 @@ Box ScreenBox(uint32_t id) {
     box.y = parent.y + (element->relPos ? element->y * parent.h : element->y);
     box.w = element->relSize ? element->w * parent.w : element->w;
     box.h = element->relSize ? element->h * parent.h : element->h;
+    if (element->parent) {
+        if (const GuiElement* parentElem = Find(element->parent); parentElem && parentElem->type == "gui-scrollpane") {
+            double ox = 0.0, oy = 0.0;
+            ScrollPaneOffset(element->parent, *parentElem, parent, ox, oy);
+            box.x -= ox;
+            box.y -= oy;
+        }
+    }
     return box;
+}
+
+bool ClippedByScrollPane(uint32_t id, const GuiElement& element) {
+    const Box box = ScreenBox(id);
+    uint32_t ancestorId = element.parent;
+    for (int depth = 0; ancestorId && depth < 64; ++depth) {
+        const GuiElement* ancestor = Find(ancestorId);
+        if (!ancestor) break;
+        if (ancestor->type == "gui-scrollpane") {
+            const Box pane = ScreenBox(ancestorId);
+            if (box.x + box.w <= pane.x || box.x >= pane.x + pane.w ||
+                box.y + box.h <= pane.y || box.y >= pane.y + pane.h) {
+                return true;
+            }
+        }
+        ancestorId = ancestor->parent;
+    }
+    return false;
 }
 
 // Desktop CGUIElement::IsVisible is CEGUI isVisible() with localOnly false: a child
@@ -747,6 +795,18 @@ static void DrawElement(std::string& out, uint32_t id, const GuiElement& element
                 x += w;
             }
         }
+    } else if (element.type == "gui-staticimage") {
+        // Emit the same MtaDxView "I" bitmap draw line used by dxDrawImage.
+        if (!element.imageFile.empty() && box.w > 0.0 && box.h > 0.0) {
+            char head[256];
+            std::snprintf(head, sizeof(head), "I %.1f %.1f %.1f %.1f 0.0 0.0 -1.0 -1.0 %u 0.0 0.0 0.0 ",
+                          box.x, box.y, box.w, box.h, WithAlpha(0xFFFFFFFFu, alpha));
+            out += head;
+            out += OneLine(element.imageFile.c_str(), element.imageFile.size());
+            out += '\n';
+        }
+    } else if (element.type == "gui-scrollpane") {
+        // Container only: children are offset by ScreenBox and clipped by ClippedByScrollPane.
     } else if (element.type == "gui-label") {
         const uint32_t color = element.enabled
             ? (0xFF000000u | (static_cast<uint32_t>(element.red) << 16) | (static_cast<uint32_t>(element.green) << 8) | static_cast<uint32_t>(element.blue))
@@ -785,7 +845,7 @@ static void DrawBranch(std::string& out, uint32_t parent) {
     for (uint32_t id : kids) {
         const GuiElement* element = Find(id);
         if (!element || !EffectivelyVisible(*element)) continue;
-        if (element->type != "gui-tab") DrawElement(out, id, *element);
+        if (element->type != "gui-tab" && !ClippedByScrollPane(id, *element)) DrawElement(out, id, *element);
         if (element->type == "gui-tab") {
             const GuiElement* panel = element->parent ? Find(element->parent) : nullptr;
             if (!panel || panel->type != "gui-tabpanel" || panel->tab != id) continue;
@@ -823,7 +883,8 @@ uint32_t PickBranch(uint32_t parent, double x, double y) {
         if (!element || !EffectivelyVisible(*element) || !EffectivelyEnabled(*element)) continue;
         // The resource guiroot covers the screen so children can be placed in it.
         // It is not itself a widget (CClientDummy "guiroot").
-        if (element->type != "guiroot" && BoxContains(ScreenBox(id), x, y)) hit = id;
+        if (element->type != "guiroot" && !ClippedByScrollPane(id, *element) && BoxContains(ScreenBox(id), x, y))
+            hit = id;
         if (element->type == "gui-tab") {
             const GuiElement* panel = element->parent ? Find(element->parent) : nullptr;
             if (panel && panel->type == "gui-tabpanel" && panel->tab != id) continue;
@@ -1945,9 +2006,7 @@ static int GuiCreateScrollBar(lua_State* L) {
     return 1;
 }
 
-static bool g_diagImage = false;
-
-// CLuaGUIDefs.cpp 770-819. The file is not decoded; the path is stored.
+// CLuaGUIDefs.cpp 770-819. Resolves the resource file and draws it through the MtaDxView "I" path.
 static int GuiCreateStaticImage(lua_State* L) {
     Args args{L};
     GuiElement element;
@@ -1958,11 +2017,8 @@ static int GuiCreateStaticImage(lua_State* L) {
         !args.flag(relative, true, false) || !args.parent(parent)) {
         return Reject(L, "guiCreateStaticImage", args, false);
     }
-    if (!g_diagImage) {
-        g_diagImage = true;
-        LUA_LOGE("DIAG guiCreateStaticImage: the bitmap is not decoded; the path is stored");
-    }
     element.type = "gui-staticimage";
+    element.imageFile = ActiveVmResourceFile(element.text);
     element.relPos = relative;
     element.relSize = relative;
     element.parent = parent;
@@ -2470,7 +2526,10 @@ static int GuiStaticImageLoadImage(lua_State* L) {
     std::string path;
     if (!args.gui(id, "gui-staticimage") || !args.text(path) || path.empty() || ParentSegment(path))
         return Reject(L, "guiStaticImageLoadImage", args, false);
-    if (GuiElement* element = Find(id)) element->text = std::move(path);
+    if (GuiElement* element = Find(id)) {
+        element->text = std::move(path);
+        element->imageFile = ActiveVmResourceFile(element->text);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2479,8 +2538,15 @@ static int GuiStaticImageGetNativeSize(lua_State* L) {
     Args args{L};
     uint32_t id = 0;
     if (!args.gui(id, "gui-staticimage")) return Reject(L, "guiStaticImageGetNativeSize", args, false);
-    lua_pushboolean(L, 0);
-    return 1;
+    const GuiElement* element = Find(id);
+    unsigned width = 0, height = 0;
+    if (!element || !DxReadImageSize(element->imageFile, width, height)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushnumber(L, static_cast<double>(width));
+    lua_pushnumber(L, static_cast<double>(height));
+    return 2;
 }
 
 static int GuiSetProperty(lua_State* L) {

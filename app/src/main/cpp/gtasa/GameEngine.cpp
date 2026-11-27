@@ -2496,7 +2496,8 @@ static void SetTargetPosition(void* body, RemoteBody& stored, float x, float y, 
 // array without a check) and a non-null CAnimManager::GetAnimAssociation. Otherwise the default death (group 0, anim 0,
 // ANIM_STD_KO_FRONT, the CTasks.h default) is used.
 // Not run: TASK_COMPLEX_IN_WATER abort, jetpack removal, satchels, stealth kill, the wasted Lua event.
-static void KillRemoteBody(uint32_t id, void* body, int weapon, int group, int anim) {
+// Runs CTaskComplexDie on any valid CPed body (shared by remote observer kills and server-ordered local kills).
+static void RunDieTaskOnBody(uint32_t id, void* body, int weapon, int group, int anim) {
     struct Fns {
         bool looked = false;
         void* (*taskNew)(unsigned long) = nullptr;
@@ -2534,9 +2535,13 @@ static void KillRemoteBody(uint32_t id, void* body, int weapon, int group, int a
             f.dieCtor(task, weapon, group, anim, 4.f, 1.f, false, false, 0, false);
             f.setTask(static_cast<unsigned char*>(intel) + 8, task, 2, false);
         } else {
-            ENGINE_LOGI("DIAG Kill id=%u: no task slot or intelligence; health lock only", id);
+            ENGINE_LOGI("DIAG Kill id=%u: no task slot or intelligence; health only", id);
         }
     }
+}
+
+static void KillRemoteBody(uint32_t id, void* body, int weapon, int group, int anim) {
+    RunDieTaskOnBody(id, body, weapon, group, anim);
     LockPedHealth(id, 0.f);
     LockPedArmor(id, 0.f);
     static int reports = 0;
@@ -2545,6 +2550,15 @@ static void KillRemoteBody(uint32_t id, void* body, int weapon, int group, int a
         ENGINE_LOGI("DIAG Kill id=%u weapon=%d anim=%d/%d", id, weapon, group, anim);
     }
 }
+
+struct PendingLocalWasted {
+    bool pending = false;
+    uint64_t life = 0;
+    int weapon = 0;
+    int animGroup = 0;
+    int animId = 0;
+};
+static PendingLocalWasted g_pendingLocalWasted;  // guarded by g_remoteMutex
 
 // CMultiplayerSA ProcessDamageEvent (multiplayer_shotsync.cpp 1143-1190) wraps CEventDamage::AffectsPed and asks
 // CClientGame::DamageHandler -> ApplyPedDamageFromGame (CClientGame.cpp 4478-4852). For a ped whose health or armor is
@@ -3745,6 +3759,29 @@ static void ApplyLocalPedRpcs() {
         if (g_currentArea && *g_currentArea == previous) *g_currentArea = interior;
     }
     RunPedRpcOps(local, ped, true, nullptr);
+    PendingLocalWasted localKill;
+    {
+        std::lock_guard<std::mutex> lock(g_remoteMutex);
+        if (g_pendingLocalWasted.pending) {
+            localKill = g_pendingLocalWasted;
+            g_pendingLocalWasted.pending = false;
+        }
+    }
+    if (localKill.pending && localKill.life == g_localLife.load()) {
+        {
+            std::lock_guard lock(g_localDeathMutex);
+            g_deathLife = UINT64_MAX;
+            g_localDeath = {};
+        }
+        auto* health = reinterpret_cast<float*>(static_cast<unsigned char*>(ped) + 0x6AC);
+        if (*health > 0.f) {
+            *health = 0.f;
+            g_health = 0.f;
+            RunDieTaskOnBody(local, ped, localKill.weapon, localKill.animGroup, localKill.animId);
+            ENGINE_LOGI("DIAG Kill local id=%u weapon=%d anim=%d/%d", local, localKill.weapon, localKill.animGroup,
+                        localKill.animId);
+        }
+    }
     static int alphaApplied = -1, collisionsApplied = -1;
     const auto* raw = static_cast<const unsigned char*>(ped);
     ApplyPedAlphaAndVisibility(ped, static_cast<uint8_t>(g_localAlpha.load()), raw[0x4B], alphaApplied);
@@ -6507,6 +6544,15 @@ void NoteRemoteWasted(uint32_t id, int weapon, int animGroup, int animId) {
     ped.killAnimId = animId;
 }
 
+void NoteLocalWasted(int weapon, int animGroup, int animId) {
+    std::lock_guard<std::mutex> lock(g_remoteMutex);
+    g_pendingLocalWasted.pending = true;
+    g_pendingLocalWasted.life = g_localLife.load();
+    g_pendingLocalWasted.weapon = weapon;
+    g_pendingLocalWasted.animGroup = animGroup;
+    g_pendingLocalWasted.animId = animId;
+}
+
 void NoteRemoteSpawn(uint32_t id) {
     if (id == 0 || id == 0xFFFFFFFFu || id == ServerWorld::LocalPlayer()) return;
     {
@@ -6705,6 +6751,7 @@ void RequestRemoteReset() {
         g_remotePeds.clear();
         g_forget.clear();
         g_streamedActors.clear();
+        g_pendingLocalWasted = {};
         g_remoteResetPending = true;
     }
 }
@@ -7137,6 +7184,7 @@ void NoteRemoteClothes(uint32_t, const std::vector<WorldRPG::Entity::PedClothes>
 void RpcSetPosition(uint32_t, float, float, float) {}
 void RpcSetFrozen(uint32_t, bool) {}
 void NoteRemoteWasted(uint32_t, int, int, int) {}
+void NoteLocalWasted(int, int, int) {}
 bool CopyLocalCombatDeath(uint64_t&, HostedWasted&) { return false; }
 bool ConsumeHostedWasted(HostedWasted&) { return false; }
 void NoteRemoteSpawn(uint32_t) {}

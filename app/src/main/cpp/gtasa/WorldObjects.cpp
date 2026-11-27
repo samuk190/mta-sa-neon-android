@@ -42,7 +42,9 @@ using WorldRPG::WorldObjects::State;
 
 constexpr float kStreamIn = 250.f;   // CClientStreamer default for objects
 constexpr float kStreamOut = 275.f;  // hysteresis so a border object does not flicker
-constexpr size_t kMaxLive = 250;     // GTA's object pool is 350; leave GTA its own
+constexpr size_t kMinMaxLive = 250;  // stock CObject pool fallback (RenderGuard expands to 1200)
+constexpr size_t kMaxMaxLive = 800;  // leave headroom in the expanded 1200-slot CObject pool
+constexpr size_t kPoolHeadroom = 200;
 constexpr int kCreatesPerFrame = 4;
 constexpr int kMaxModel = 19999;
 
@@ -267,7 +269,14 @@ void Pulse(float cameraX, float cameraY, float cameraZ) {
         if (d2 <= limit * limit) wanted.emplace_back(d2, &s);
     }
     std::sort(wanted.begin(), wanted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    if (wanted.size() > kMaxLive) wanted.resize(kMaxLive);
+    size_t maxLive = kMinMaxLive;
+    if (auto* pool = static_cast<unsigned char*>(*api.objectPool)) {
+        const int poolSize = *reinterpret_cast<int*>(pool + 16);
+        if (poolSize > static_cast<int>(kPoolHeadroom)) {
+            maxLive = std::clamp(static_cast<size_t>(poolSize) - kPoolHeadroom, kMinMaxLive, kMaxMaxLive);
+        }
+    }
+    if (wanted.size() > maxLive) wanted.resize(maxLive);
     std::unordered_map<uint32_t, const State*> keep;
     for (const auto& [d2, s] : wanted) keep[s->id] = s;
     // Stream out what is gone, far, or changed model.

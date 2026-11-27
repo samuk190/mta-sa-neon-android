@@ -1334,6 +1334,10 @@ bool DxResolveMaterial(lua_State* L,int index,std::string& file,unsigned& width,
     return !file.empty() && ImageSize(file,width,height);
 }
 
+bool DxReadImageSize(const std::string& file, unsigned& width, unsigned& height) {
+    return !file.empty() && ImageSize(file, width, height);
+}
+
 void DxFreeOverlayBitmap(uint32_t id) { g_deadTargets.push_back(id); }
 
 bool DxElementRelease(uint32_t id) {

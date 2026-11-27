@@ -10,24 +10,31 @@
 #include "game_script.h"
 #include "gtasa/ProjectileEngine.h"
 #include "gtasa/RemoteVehicle.h"
+#include "net/HttpDownloader.h"
+#include "net/NeonJoinProtocol.h"
 #include "net/raknet/RakNetWrapper.h"
 #include "shared/CorePackets.h"
 #include "shared/LuaApiExtra.h"
+#include "shared/LuaGuiApi.h"
 #include "shared/LuaVMStub.h"
 #include "shared/LuaWorldObjectApi.h"
 #include "shared/MtaIds.h"
 #include "shared/PacketHandler.h"
+#include "shared/ResourceLoader.h"
 #include "shared/ServerRpc.h"
 #include "shared/ServerWorld.h"
 #include "shared/entity/EntityAddTypes.h"
 
 #include "lua.hpp"
+#include <zlib.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -645,6 +652,116 @@ void TestLatentTransferAndPedTask() {
     Check(!f.Send(badTask), "PED_TASK BE_HIT truncated rejected");
 }
 
+void TestLocalWastedAndGuiFixes() {
+    Fixture f;
+    ServerWorld::SetLocalPlayer(10);
+    ServerWorld::NotePlayerSkin(10, 0);
+    ServerWorld::NotePlayerSkin(20, 7);
+
+    // 1. Local PLAYER_WASTED (27) invokes NoteLocalWasted and fires onClientPlayerWasted.
+    f.Lua("localWastedLog = {}\n"
+          "addEventHandler('onClientPlayerWasted', root, function(killer, weapon, bodypart, stealth)\n"
+          "  localWastedLog[#localWastedLog + 1] = {source.id, killer and killer.id or 0, weapon, bodypart, stealth}\n"
+          "end)");
+    Pkt localWasted(PktId::PlayerWasted);
+    localWasted.Id(10).Id(20).Bits(31, 6).Bits(6, 3).Bit(false).U8(2).Compressed(0, 4).Compressed(0, 4);
+    Check(f.Send(localWasted), "local PLAYER_WASTED decoded");
+    f.Lua("assert(#localWastedLog == 1)\n"
+          "assert(localWastedLog[1][1] == 10 and localWastedLog[1][2] == 20)\n"
+          "assert(localWastedLog[1][3] == 31 and localWastedLog[1][4] == 9 and localWastedLog[1][5] == false)");
+
+    // 2. guiCreateStaticImage emits real MtaDxView 'I' bitmap draw line + guiStaticImageGetNativeSize reads PNG dims.
+    namespace fs = std::filesystem;
+    const fs::path cacheDir = fs::temp_directory_path() / "neon_gui_staticimage_test";
+    std::error_code ec;
+    fs::remove_all(cacheDir, ec);
+    fs::create_directories(cacheDir / "uimod", ec);
+    // Minimal PNG signature + IHDR chunk (width=16, height=12) — sufficient for ImageSize().
+    const uint8_t pngHeader[24] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R',
+        0x00, 0x00, 0x00, 16,   0x00, 0x00, 0x00, 12,
+    };
+    const uint8_t pngHeader2[24] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 'I', 'H', 'D', 'R',
+        0x00, 0x00, 0x00, 32,   0x00, 0x00, 0x00, 24,
+    };
+    {
+        std::ofstream out(cacheDir / "uimod" / "logo.png", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(pngHeader), sizeof(pngHeader));
+    }
+    {
+        std::ofstream out(cacheDir / "uimod" / "alt.png", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(pngHeader2), sizeof(pngHeader2));
+    }
+    Net::HttpDownloader::SetResourceCacheRoot(cacheDir.string());
+    Net::ResourceStartInfo resInfo;
+    resInfo.name = "uimod";
+    resInfo.resourceId = 55;
+    resInfo.entityId = 0x5550;
+    resInfo.dynamicEntityId = 0x5551;
+    resInfo.noClientCacheScripts = 1;
+    resInfo.startCounter = 1;
+    Script::ActiveVmOnResourceStart(resInfo);
+    const std::string resScript =
+        "img = guiCreateStaticImage(10, 20, 64, 48, 'logo.png', false)\n"
+        "assert(isElement(img))\n"
+        "local w, h = guiStaticImageGetNativeSize(img)\n"
+        "assert(w == 16 and h == 12, 'native size 16x12')\n"
+        "local reloaded = false\n"
+        "addEventHandler('onClientRender', root, function()\n"
+        "  if reloaded then return end\n"
+        "  reloaded = true\n"
+        "  assert(guiStaticImageLoadImage(img, 'alt.png') == true)\n"
+        "  local w2, h2 = guiStaticImageGetNativeSize(img)\n"
+        "  assert(w2 == 32 and h2 == 24, 'reloaded native size 32x24')\n"
+        "end)\n";
+    uLongf packedLen = compressBound(resScript.size());
+    std::vector<uint8_t> packed(packedLen);
+    compress2(packed.data(), &packedLen, reinterpret_cast<const Bytef*>(resScript.data()), resScript.size(),
+              Z_DEFAULT_COMPRESSION);
+    packed.resize(packedLen);
+    const uint32_t origLen = static_cast<uint32_t>(resScript.size());
+    std::vector<uint8_t> item = {static_cast<uint8_t>(origLen >> 24), static_cast<uint8_t>(origLen >> 16),
+                                 static_cast<uint8_t>(origLen >> 8), static_cast<uint8_t>(origLen)};
+    item.insert(item.end(), packed.begin(), packed.end());
+    std::vector<uint8_t> scriptPkt = {55, 0, 1, 0};
+    const uint32_t itemLen = static_cast<uint32_t>(item.size());
+    for (int i = 0; i < 4; ++i) scriptPkt.push_back(static_cast<uint8_t>(itemLen >> (8 * i)));
+    scriptPkt.insert(scriptPkt.end(), item.begin(), item.end());
+    Check(Script::ActiveVmFeedScripts(scriptPkt.data(), scriptPkt.size(), scriptPkt.size() * 8),
+          "uimod script fed");
+    Script::ActiveVmPulseResources();
+
+    std::string draws;
+    Script::GuiAppendDraws(draws);
+    Check(draws.find("I 10.0 20.0 64.0 48.0 0.0 0.0 -1.0 -1.0 4294967295 0.0 0.0 0.0 ") != std::string::npos &&
+          draws.find("logo.png") != std::string::npos,
+          "guiCreateStaticImage emits MtaDxView 'I' bitmap draw line");
+    Check(draws.find("T 10.0 20.0") == std::string::npos, "guiCreateStaticImage does not draw filename as text");
+
+    // Pump onClientRender so uimod reloads img -> alt.png and verifies 32x24 native size.
+    const std::string pumpedFrame = Script::ActiveVmPump();
+    Check(pumpedFrame.find("alt.png") != std::string::npos, "guiStaticImageLoadImage updates drawn file");
+
+    // 3. guiCreateScrollPane offsets child screen boxes and clips children scrolled out of view.
+    f.Lua("pane = guiCreateScrollPane(0, 0, 100, 100, false)\n"
+          "topLbl = guiCreateLabel(0, 0, 100, 30, 'TOP_ROW', false, pane)\n"
+          "botLbl = guiCreateLabel(0, 150, 100, 30, 'BOT_ROW', false, pane)");
+    draws.clear();
+    Script::GuiAppendDraws(draws);
+    Check(draws.find("TOP_ROW") != std::string::npos && draws.find("BOT_ROW") == std::string::npos,
+          "gui-scrollpane scroll=0 shows top child and clips bottom child");
+
+    f.Lua("assert(guiScrollPaneSetVerticalScrollPosition(pane, 100) == true)");
+    draws.clear();
+    Script::GuiAppendDraws(draws);
+    Check(draws.find("TOP_ROW") == std::string::npos && draws.find("BOT_ROW") != std::string::npos,
+          "gui-scrollpane scroll=100 clips top child and reveals bottom child");
+    fs::remove_all(cacheDir, ec);
+}
+
 }  // namespace
 
 int main() {
@@ -657,6 +774,7 @@ int main() {
     TestVehicleSpawnAndTrailer();
     TestObjectSync();
     TestLatentTransferAndPedTask();
+    TestLocalWastedAndGuiFixes();
     std::printf("core_packets_tests: %u checks passed\n", checks);
     return 0;
 }

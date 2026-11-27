@@ -599,9 +599,9 @@ bool HandleWasted(const uint8_t* body, size_t length, size_t bits, uint8_t packe
                                              static_cast<int>(group), static_cast<int>(anim));
     };
     if (id == WorldRPG::ServerWorld::LocalPlayer()) {
-        // Desktop runs Kill on the local player too (CPacketHandler.cpp 1319-1331, "needs to be done on the local
-        // player to avoid desync"). Not wired on the phone: no local CTaskComplexDie hook.
-        PKT_LOGI("DIAG WASTED local player: CClientPed::Kill not ported");
+        // Desktop CPacketHandler::Packet_PlayerWasted (CPacketHandler.cpp:1312-1332): runs CClientPed::Kill on the
+        // local player too ("needs to be done on the local player to avoid desync").
+        WorldRPG::Game::NoteLocalWasted(weapon & 0x3F, static_cast<int>(group), static_cast<int>(anim));
         fire();
         return true;
     }

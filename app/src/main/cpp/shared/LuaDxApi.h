@@ -39,6 +39,8 @@ bool DxElementRelease(uint32_t id);
 bool DxTextureFile(uint32_t id, std::string& file);
 // Resolve a texture/SVG or resource image path for the 3D material queue.
 bool DxResolveMaterial(lua_State*,int,std::string& file,unsigned& width,unsigned& height);
+// Read native PNG/JPEG/BMP/GIF dimensions of a cached image file (used by guiStaticImageGetNativeSize).
+bool DxReadImageSize(const std::string& file, unsigned& width, unsigned& height);
 // A stopped resource loses its textures and fonts. netId or generation 0 matches any.
 void DxDropResource(const std::string& owner, uint16_t netId, uint32_t generation);
 

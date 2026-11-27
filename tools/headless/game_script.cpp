@@ -738,6 +738,7 @@ void RpcSetPosition(uint32_t id, float x, float y, float z) {
 }
 void RpcSetFrozen(uint32_t, bool) {}
 void NoteRemoteWasted(uint32_t, int, int, int) {}
+void NoteLocalWasted(int, int, int) {}
 bool CopyLocalCombatDeath(uint64_t&, HostedWasted&) { return false; }
 bool ConsumeHostedWasted(HostedWasted&) { return false; }
 void NoteRemoteSpawn(uint32_t) {}
