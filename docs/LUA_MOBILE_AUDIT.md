@@ -94,7 +94,7 @@ inventados como teclas de teclado.
 | Avaliar com testes locais | `getResourceConfig` | O desktop procura configs declaradas no recurso e retorna o nó XML já carregado. Não basta chamar `xmlLoadFile` para qualquer arquivo. |
 | Avaliar com testes locais | `load`, `call` | Preservar carregamento de scripts, contexto do recurso e resultados entre recursos; o port usa uma única VM. Não tratar o `load` padrão do Lua 5.3 como equivalente ao MTA. |
 | Exige integração Android | `isMTAWindowFocused`, `clearDebugBox`, `createTrayNotification` | Estado real da Activity, saída de debug e notificações, respectivamente. |
-| Exige testes de entrada no aparelho | `getAnalogControlState`, `setAnalogControlState`, `toggleControl`, `toggleAllControls` | Controles de toque e estado efetivo aplicado ao jogo; guardar flags não garante funcionamento. |
+| Exige testes de entrada no aparelho | `getAnalogControlState`, `setAnalogControlState`, `toggleControl`, `toggleAllControls` | `toggleControl`/`toggleAllControls` agora mascaram os getters do `CPad` (toque, teclado, controle, mouse) e o chat/radar da Activity; falta rodar no aparelho. `getAnalogControlState`/`setAnalogControlState` seguem sem efeito no jogo. |
 | Exige motor/aparelho | `setPedVoice`, `setPedWalkingStyle`, `fixVehicle`, `getVehicleHandling`, `createWeapon` | Hooks GTA, estado nativo e ciclo de vida dos elementos. |
 | Exige renderização/aparelho | `dxDrawLine3D`, `dxCreateShader`, `engineLoadDFF`, `engineReplaceModel` | Pipeline gráfico, formatos de modelos e diferenças D3D/OpenGL. |
 | Exige protocolo/servidor | `triggerLatentServerEvent`, `getLatentEventStatus`, `cancelLatentEvent`, `downloadFile` | Transferências, cancelamento, progresso e ciclo de vida dos recursos. |

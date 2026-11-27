@@ -200,8 +200,10 @@ int32_t MaskGetter(Getter getter, int32_t raw) {
     if (index >= kGetterCount) return raw;
     const Policy& policy = kPolicy[index];
     if (!policy.axis) return (disabled & Bit(policy.negative)) ? 0 : raw;
-    if (raw < 0 && (disabled & Bit(policy.negative))) return 0;
-    if (raw > 0 && (disabled & Bit(policy.positive))) return 0;
+    // The stick getters return a short in w0; its upper half is not defined, so only the low 16 bits are read.
+    const int16_t value = static_cast<int16_t>(raw);
+    if (value < 0 && (disabled & Bit(policy.negative))) return 0;
+    if (value > 0 && (disabled & Bit(policy.positive))) return 0;
     return raw;
 }
 
