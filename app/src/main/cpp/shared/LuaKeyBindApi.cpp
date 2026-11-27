@@ -6,6 +6,7 @@
 #include "lua.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <strings.h>
 #include <unordered_set>
@@ -87,24 +88,63 @@ std::mutex g_queueMutex;
 std::vector<KeyEvent> g_queue;
 
 // Copy of the bound key names for the UI thread (KeyBindsBoundKeys).
+// Kept split between VM binds, server command binds, and server function binds so KeyBindsServerReset
+// can clear server keys from any thread without touching VM-only containers.
 std::mutex g_boundMutex;
+std::vector<const char*> g_vmBoundKeys;
+std::vector<const char*> g_serverCmdBoundKeys;
+std::vector<const char*> g_serverFuncBoundKeys;
 std::string g_boundKeys;
 
-// Call after every change to g_functions or g_commands.
-void RefreshBoundKeys() {
+// Server-owned function binds (CInputRPCs::BindKey adds CClientGame::StaticProcessServerKeyBind and
+// StaticProcessServerControlBind to CKeyBinds). They hold no Lua function: a press is reported to the server.
+struct ServerBind {
+    const char* name = nullptr;  // points into kKeys or kControls
+    bool control = false;
+    bool down = true;
+};
+std::mutex g_serverMutex;
+std::vector<ServerBind> g_serverBinds;
+std::vector<ServerKeyEvent> g_serverEvents;
+std::atomic<bool> g_pendingServerCommandReset{false};
+
+void RebuildBoundKeysLocked() {
     std::string out;
     for (const char* key : kKeys) {
-        bool bound = false;
-        for (const FunctionBind& bind : g_functions)
-            if (!bind.control && bind.name == key) bound = true;
-        for (const CommandBind& bind : g_commands)
-            if (bind.key == key) bound = true;
+        const bool bound =
+            std::find(g_vmBoundKeys.begin(), g_vmBoundKeys.end(), key) != g_vmBoundKeys.end() ||
+            std::find(g_serverCmdBoundKeys.begin(), g_serverCmdBoundKeys.end(), key) != g_serverCmdBoundKeys.end() ||
+            std::find(g_serverFuncBoundKeys.begin(), g_serverFuncBoundKeys.end(), key) != g_serverFuncBoundKeys.end();
         if (!bound) continue;
         if (!out.empty()) out.push_back('|');
         out += key;
     }
-    std::lock_guard<std::mutex> lock(g_boundMutex);
     g_boundKeys = std::move(out);
+}
+
+// Call after every change to g_functions or g_commands (VM thread).
+void RefreshBoundKeys() {
+    std::vector<const char*> vmKeys;
+    std::vector<const char*> serverCmdKeys;
+    for (const FunctionBind& bind : g_functions) {
+        if (!bind.control) vmKeys.push_back(bind.name);
+    }
+    for (const CommandBind& bind : g_commands) {
+        if (bind.server) serverCmdKeys.push_back(bind.key);
+        else vmKeys.push_back(bind.key);
+    }
+    std::lock_guard<std::mutex> lock(g_boundMutex);
+    g_vmBoundKeys = std::move(vmKeys);
+    g_serverCmdBoundKeys = std::move(serverCmdKeys);
+    RebuildBoundKeysLocked();
+}
+
+void ApplyPendingServerCommandReset() {
+    if (!g_pendingServerCommandReset.exchange(false, std::memory_order_acq_rel)) return;
+    g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(),
+                                    [](const CommandBind& bind) { return bind.server; }),
+                     g_commands.end());
+    RefreshBoundKeys();
 }
 
 void Unref(lua_State* L, const FunctionBind& bind) {
@@ -202,6 +242,7 @@ bool UnbindCommand(const char* key, const char* state, const std::string& comman
 
 // CLuaFunctionDefs::BindKey (lua/CLuaFunctionDefs.Input.cpp 148-200).
 int BindKey(lua_State* L) {
+    ApplyPendingServerCommandReset();
     if (!IsStringArg(L, 1)) return Fail(L, "bindKey", "string", 1);
     if (!IsStringArg(L, 2)) return Fail(L, "bindKey", "string", 2);
     const char* name = lua_tostring(L, 1);
@@ -256,6 +297,7 @@ int BindKey(lua_State* L) {
 
 // CLuaFunctionDefs::UnbindKey (lua/CLuaFunctionDefs.Input.cpp 202-254).
 int UnbindKey(lua_State* L) {
+    ApplyPendingServerCommandReset();
     if (!IsStringArg(L, 1)) return Fail(L, "unbindKey", "string", 1);
     const char* name = lua_tostring(L, 1);
     const char* key = Find(kKeys, name);
@@ -309,6 +351,7 @@ int GetKeyState(lua_State* L) {
 
 // CLuaFunctionDefs.Input.cpp:363-418 and CKeyBinds.cpp:1030-1046, 1388-1405.
 int GetBoundKeys(lua_State* L) {
+    ApplyPendingServerCommandReset();
     if (!IsStringArg(L, 1)) return Fail(L, "getBoundKeys", "string", 1);
     const char* name = lua_tostring(L, 1);
     // GTA_CONTROL binds map physical keys to controls; FunctionBind entries for
@@ -372,6 +415,7 @@ int GetKeyBoundToFunction(lua_State* L) {
 
 // CLuaFunctionDefs::GetCommandsBoundToKey (556-617): command name to arguments.
 int GetCommandsBoundToKey(lua_State* L) {
+    ApplyPendingServerCommandReset();
     if (!IsStringArg(L, 1)) return Fail(L, "getCommandsBoundToKey", "string", 1);
     if (!lua_isnoneornil(L, 2) && !IsStringArg(L, 2)) return Fail(L, "getCommandsBoundToKey", "string", 2);
     const std::string name = lua_tostring(L, 1);
@@ -390,6 +434,7 @@ int GetCommandsBoundToKey(lua_State* L) {
 
 // CLuaFunctionDefs::GetKeyBoundToCommand (619-655).
 int GetKeyBoundToCommand(lua_State* L) {
+    ApplyPendingServerCommandReset();
     if (!IsStringArg(L, 1)) return Fail(L, "getKeyBoundToCommand", "string", 1);
     const std::string command = lua_tostring(L, 1);
     for (const CommandBind& bind : g_commands) {
@@ -404,6 +449,7 @@ int GetKeyBoundToCommand(lua_State* L) {
 }  // namespace
 
 void KeyBindsDropResource(lua_State* L, const std::string& owner, uint16_t netId, uint32_t generation) {
+    ApplyPendingServerCommandReset();
     g_functions.erase(std::remove_if(g_functions.begin(), g_functions.end(), [&](const FunctionBind& bind) {
         if (bind.owner != owner) return false;
         if (netId != 0 && bind.netId != 0 && bind.netId != netId) return false;
@@ -449,6 +495,7 @@ bool KeyBindsNextKey(std::string& key, bool& down) {
 
 void KeyBindsCollect(const std::string& key, bool down, std::vector<KeyBindCall>& calls,
                      std::vector<KeyBindCommand>& commands) {
+    ApplyPendingServerCommandReset();
     for (const FunctionBind& bind : g_functions) {
         if (bind.control || bind.down != down || key != bind.name) continue;
         calls.push_back(KeyBindCall{bind.id, bind.ref, bind.args, bind.owner, bind.netId, bind.generation});
@@ -465,28 +512,25 @@ bool KeyBindLive(uint64_t id) {
     return false;
 }
 
-namespace {
-// Server-owned function binds (CInputRPCs::BindKey adds CClientGame::StaticProcessServerKeyBind and
-// StaticProcessServerControlBind to CKeyBinds). They hold no Lua function: a press is reported to the server.
-struct ServerBind {
-    const char* name = nullptr;  // points into kKeys or kControls
-    bool control = false;
-    bool down = true;
-};
-std::mutex g_serverMutex;
-std::vector<ServerBind> g_serverBinds;
-std::vector<ServerKeyEvent> g_serverEvents;
-}  // namespace
-
 bool KeyBindsServerBindFunction(const std::string& name, bool down) {
     const char* key = Find(kKeys, name.c_str());
     const char* control = key ? nullptr : Find(kControls, name.c_str());
     if (!key && !control) return false;
-    std::lock_guard<std::mutex> lock(g_serverMutex);
-    // "Make sure we only have it once" (CInputRPCs.cpp:46-62).
-    for (const ServerBind& bind : g_serverBinds)
-        if (bind.name == (key ? key : control) && bind.down == down) return true;
-    g_serverBinds.push_back(ServerBind{key ? key : control, control != nullptr, down});
+    std::vector<const char*> serverFuncKeys;
+    {
+        std::lock_guard<std::mutex> lock(g_serverMutex);
+        // "Make sure we only have it once" (CInputRPCs.cpp:46-62).
+        for (const ServerBind& bind : g_serverBinds)
+            if (bind.name == (key ? key : control) && bind.down == down) return true;
+        g_serverBinds.push_back(ServerBind{key ? key : control, control != nullptr, down});
+        for (const ServerBind& bind : g_serverBinds)
+            if (!bind.control) serverFuncKeys.push_back(bind.name);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_boundMutex);
+        g_serverFuncBoundKeys = std::move(serverFuncKeys);
+        RebuildBoundKeysLocked();
+    }
     return true;
 }
 
@@ -495,12 +539,26 @@ bool KeyBindsServerUnbindFunction(const std::string& name, bool down) {
     const char* control = key ? nullptr : Find(kControls, name.c_str());
     const char* target = key ? key : control;
     if (!target) return false;
-    std::lock_guard<std::mutex> lock(g_serverMutex);
-    const auto before = g_serverBinds.size();
-    g_serverBinds.erase(std::remove_if(g_serverBinds.begin(), g_serverBinds.end(), [&](const ServerBind& bind) {
-        return bind.name == target && bind.down == down;
-    }), g_serverBinds.end());
-    return g_serverBinds.size() != before;
+    bool removed = false;
+    std::vector<const char*> serverFuncKeys;
+    {
+        std::lock_guard<std::mutex> lock(g_serverMutex);
+        const auto before = g_serverBinds.size();
+        g_serverBinds.erase(std::remove_if(g_serverBinds.begin(), g_serverBinds.end(), [&](const ServerBind& bind) {
+            return bind.name == target && bind.down == down;
+        }), g_serverBinds.end());
+        removed = g_serverBinds.size() != before;
+        if (removed) {
+            for (const ServerBind& bind : g_serverBinds)
+                if (!bind.control) serverFuncKeys.push_back(bind.name);
+        }
+    }
+    if (removed) {
+        std::lock_guard<std::mutex> lock(g_boundMutex);
+        g_serverFuncBoundKeys = std::move(serverFuncKeys);
+        RebuildBoundKeysLocked();
+    }
+    return removed;
 }
 
 bool KeyBindsServerBound(const std::string& name, bool down) {
@@ -512,6 +570,7 @@ bool KeyBindsServerBound(const std::string& name, bool down) {
 
 bool KeyBindsServerBindCommand(const std::string& key, const std::string& hitState, const std::string& command,
                                const std::string& arguments, const std::string& resource) {
+    ApplyPendingServerCommandReset();
     const char* entry = Find(kKeys, key.c_str());
     const bool bound = entry && BindCommand(entry, hitState.c_str(), command.c_str(), arguments.c_str(), resource, true);
     RefreshBoundKeys();
@@ -520,6 +579,7 @@ bool KeyBindsServerBindCommand(const std::string& key, const std::string& hitSta
 
 bool KeyBindsServerUnbindCommand(const std::string& key, const std::string& hitState, const std::string& command,
                                  const std::string& resource) {
+    ApplyPendingServerCommandReset();
     const bool removed = UnbindCommand(Find(kKeys, key.c_str()), hitState.c_str(), command, resource);
     RefreshBoundKeys();
     return removed;
@@ -548,13 +608,26 @@ void KeyBindsServerReset() {
         g_serverBinds.clear();
         g_serverEvents.clear();
     }
+    g_pendingServerCommandReset.store(true, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(g_boundMutex);
+        g_serverFuncBoundKeys.clear();
+        g_serverCmdBoundKeys.clear();
+        RebuildBoundKeysLocked();
+    }
 }
+
+void KeyBindsSyncServerReset() { ApplyPendingServerCommandReset(); }
 
 void InstallKeyBindLua(lua_State* L) {
     // The refs belonged to the previous Lua state, which is already closed.
     g_functions.clear();
-    // The server's BIND_COMMAND binds belong to the session, not to this VM.
-    g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(), [](const CommandBind& bind) { return !bind.server; }),
+    // The server's BIND_COMMAND binds belong to the session, not to this VM, unless a new session cleared them.
+    const bool dropServerCommands = g_pendingServerCommandReset.exchange(false, std::memory_order_acq_rel);
+    g_commands.erase(std::remove_if(g_commands.begin(), g_commands.end(),
+                                    [dropServerCommands](const CommandBind& bind) {
+                                        return !bind.server || dropServerCommands;
+                                    }),
                      g_commands.end());
     g_pressed.clear();
     RefreshBoundKeys();

@@ -339,6 +339,7 @@ void Input() {
     Check(Script::KeyBindsServerBound("m", true), "a different state is not removed");
 
     Script::KeyBindsTakeServerEvents();
+    Check(Script::KeyBindsBoundKeys().find("m") != std::string::npos, "BIND_KEY key appears in on-screen bound keys");
     Script::KeyBindsQueueKey("m", true);
     Script::KeyBindsQueueKey("m", false);
     Script::KeyBindsQueueKey("n", true);
@@ -352,6 +353,7 @@ void Input() {
     Check(f.Send(Pkt(Rpc::UnbindKey).Str("m").U8(1).w), "UNBIND_KEY down");
     f.Pump();
     Check(!Script::KeyBindsServerBound("m", true), "removed");
+    Check(Script::KeyBindsBoundKeys().find("m") == std::string::npos, "UNBIND_KEY removes key from bound keys");
     Script::KeyBindsQueueKey("m", true);
     f.vm.pumpDx(false);
     Check(Script::KeyBindsTakeServerEvents().empty(), "an unbound key sends nothing");
@@ -362,6 +364,7 @@ void Input() {
     f.Pump();
     Check(Script::KeyBindsServerBound("fire", true), "control bind stored");
     Check(!Script::KeyBindsServerBound("not_a_key", true), "an unknown name is ignored");
+    Check(Script::KeyBindsBoundKeys().find("fire") == std::string::npos, "GTA control names do not appear in key list");
 
     Check(!f.Send(Pkt(Rpc::BindKey).U8(5).U8('a').w), "BIND_KEY with a short key is malformed");
     Check(!f.Send(Pkt(Rpc::BindKey).Str("m").w), "BIND_KEY without the state is malformed");
@@ -389,9 +392,12 @@ void Input() {
     Check(!f.Send(Pkt(Rpc::BindCommand).Str("x").U8(0).Str("say").w), "a short BIND_COMMAND is malformed");
     Check(!f.Send(Pkt(Rpc::UnbindCommand).Str("x").w), "a short UNBIND_COMMAND is malformed");
 
-    // A new session forgets every server bind.
+    // A new session forgets every server bind (both BIND_KEY and BIND_COMMAND).
     ServerWorld::ResetSession();
     Check(!Script::KeyBindsServerBound("fire", true), "ResetSession drops the server binds");
+    Check(Script::KeyBindsBoundKeys().empty(), "ResetSession clears server keys from bound keys immediately");
+    f.Lua("assert(next(getCommandsBoundToKey('x', 'up')) == nil and next(getCommandsBoundToKey('y', 'down')) == nil, "
+          "'ResetSession drops server BIND_COMMAND entries')");
 
     Check(f.Send(Pkt(Rpc::SetControlState).Str("forwards").U8(1).w), "SET_CONTROL_STATE");
     Check(f.Send(Pkt(Rpc::SetControlState).Str("").U8(1).w), "an empty control is ignored");
@@ -654,6 +660,27 @@ void Objects() {
     // Unknown ids and non-object sources are consumed without effect.
     Check(f.Send(EPkt(Rpc::SetObjectScale, 4000).F(9.f).w), "SET_OBJECT_SCALE on an unknown element");
     f.Pump();
+
+    // Non-finite floats and bogus oversized easing lengths are rejected as malformed.
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    Check(!f.Send(EPkt(Rpc::SetObjectRotation, kObject).F(nan).F(0.f).F(0.f).w), "NaN object rotation rejected");
+    Check(!f.Send(EPkt(Rpc::StopObject, kObject).F(0.f).F(inf).F(0.f).F(0.f).F(0.f).F(0.f).w), "Inf STOP_OBJECT rejected");
+    Check(!f.Send(EPkt(Rpc::SetObjectScale, kObject).F(nan).w), "NaN scale x rejected");
+    Check(!f.Send(EPkt(Rpc::SetObjectScale, kObject).F(1.f).F(inf).w), "Inf scale y rejected");
+    Check(!f.Send(EPkt(Rpc::AttachElements, kObject).Id(ServerWorld::LocalPlayer()).F(nan).F(0.f).F(0.f).F(0.f).F(0.f).F(0.f).w),
+          "NaN ATTACH_ELEMENTS rejected");
+    Check(!f.Send(EPkt(Rpc::SetElementAttachedOffsets, kObject).F(0.f).F(0.f).F(0.f).F(inf).F(0.f).F(0.f).w),
+          "Inf SET_ELEMENT_ATTACHED_OFFSETS rejected");
+    Check(!f.Send(EPkt(Rpc::DetachElements, kObject).U8(1).F(0.f).F(0.f).F(0.f).F(nan).F(0.f).F(0.f).w),
+          "NaN DETACH_ELEMENTS rotation rejected");
+    EPkt badMove(Rpc::MoveObject, kObject);
+    badMove.Bit(false);
+    Compressed(badMove, 1000);
+    Fixed(badMove, 0.f, 0.f, 0.f).F(0.f).F(0.f).F(0.f);
+    Fixed(badMove, 1.f, 0.f, 0.f).Bit(false).F(0.f).F(0.f).F(0.f);
+    badMove.U16(65535);
+    Check(!f.Send(badMove.w), "oversized MOVE_OBJECT easing length rejected without over-allocation");
 }
 
 void QueueAndSession() {
@@ -663,9 +690,12 @@ void QueueAndSession() {
     f.Pump();
     Check(ServerRpc::Pending() == 0, "Pump drains the queue");
     Check(LuaNumber(f, "getPlayerMoney()") == 511, "operations run in arrival order, the overflow is dropped");
+    Check(f.Send(Pkt(Rpc::SetCameraTarget).U8(17).Id(ServerWorld::LocalPlayer()).w), "SET_CAMERA_TARGET bumps context");
+    Check(ServerRpc::CameraSyncTimeContext() == 17, "camera context stored");
     f.Send(Pkt(Rpc::SetPlayerMoney).I32(9).w);
     ServerWorld::ResetSession();
     Check(ServerRpc::Pending() == 0, "a new session drops the queued operations");
+    Check(ServerRpc::CameraSyncTimeContext() == 0, "a new session resets camera sync context");
 }
 }  // namespace
 

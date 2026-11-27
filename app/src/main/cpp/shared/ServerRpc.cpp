@@ -321,6 +321,7 @@ bool ReadLengthString(BitStreamReader& reader, std::string& out) {
     uint8_t length = 0;
     out.clear();
     if (!reader.Read(length)) return false;
+    if (static_cast<size_t>(length) * 8 > reader.GetRemainingBits()) return false;
     std::vector<uint8_t> bytes(length);
     if (length && !reader.ReadBits(bytes.data(), static_cast<size_t>(length) * 8)) return false;
     out.assign(bytes.begin(), bytes.end());
@@ -348,7 +349,7 @@ Result HandleInput(uint8_t func, BitStreamReader& reader) {
                     static bool seen = false;
                     if (!seen) {
                         seen = true;
-                        LUA_LOGI("DIAG BIND_KEY: only hardware key presses fire server binds; the touch controls and "
+                        LUA_LOGI("DIAG BIND_KEY: hardware keyboards and the on-screen key list fire server key binds; "
                                  "GTA control names (no keyboard mapping) never do");
                     }
                 }
@@ -418,9 +419,9 @@ bool ReadFloatPosition(BitStreamReader& reader, float out[3]) {
            WithinLimit(out[2]);
 }
 
-// SRotationRadiansSync(true) (SyncStructures.h:496-505): three floats.
+// SRotationRadiansSync(true) (SyncStructures.h:496-505): three floats. Rejects NaN/Inf.
 bool ReadFloatRotation(BitStreamReader& reader, float out[3]) {
-    return reader.Read(out[0]) && reader.Read(out[1]) && reader.Read(out[2]);
+    return ReadFiniteFloat(reader, out[0]) && ReadFiniteFloat(reader, out[1]) && ReadFiniteFloat(reader, out[2]);
 }
 
 // SPositionSync with the default 24-bit components (SyncStructures.h:276-291).
@@ -432,7 +433,7 @@ bool ReadDouble(BitStreamReader& reader, double& out) {
     uint8_t bytes[8] = {};
     if (!reader.ReadBits(bytes, 64)) return false;
     std::memcpy(&out, bytes, sizeof(out));
-    return true;
+    return std::isfinite(out);
 }
 
 // CElementIDs::GetElement for the elements this port tracks.
@@ -467,6 +468,7 @@ bool ReadMoveAnimation(BitStreamReader& reader, Script::ServerObjectMove& move) 
     // NetBitStream::ReadString: a u16 length, then the characters.
     uint16_t length = 0;
     if (!reader.Read(length)) return false;
+    if (static_cast<size_t>(length) * 8 > reader.GetRemainingBits()) return false;
     std::vector<uint8_t> name(length);
     if (length && !reader.ReadBits(name.data(), static_cast<size_t>(length) * 8)) return false;
     double period = 0, amplitude = 0, overshoot = 0;
@@ -487,8 +489,8 @@ void PushElementOrNil(lua_State* L, uint32_t id) {
 Result HandleAttach(uint32_t id, BitStreamReader& reader) {
     uint32_t parent = 0;
     float position[3] = {}, rotation[3] = {};
-    if (!Entity::ReadElementId(reader, parent) || !reader.Read(position[0]) || !reader.Read(position[1]) ||
-        !reader.Read(position[2]) || !reader.Read(rotation[0]) || !reader.Read(rotation[1]) || !reader.Read(rotation[2]))
+    if (!Entity::ReadElementId(reader, parent) || !ReadFloatRotation(reader, position) ||
+        !ReadFloatRotation(reader, rotation))
         return Result::Malformed;
     Enqueue([id, parent, position, rotation]() mutable {
         if (!ElementExists(parent)) return;
@@ -517,6 +519,10 @@ Result HandleDetach(uint32_t id, BitStreamReader& reader) {
     float position[3] = {}, rotation[3] = {};
     for (float& value : position) reader.Read(value);
     for (float& value : rotation) reader.Read(value);
+    for (float value : position)
+        if (!Finite(value)) return Result::Malformed;
+    for (float value : rotation)
+        if (!Finite(value)) return Result::Malformed;
     Enqueue([id, context, position, rotation] {
         lua_State* L = Script::ActiveVmState();
         if (L) {
@@ -603,11 +609,17 @@ Result HandleObject(uint8_t func, uint32_t id, BitStreamReader& reader) {
         case Rpc::SetObjectScale: {
             // The reads are unchecked on desktop: y and z fall back to x when the packet ends early.
             float scale[3] = {};
-            if (!reader.Read(scale[0])) return Result::Malformed;
+            if (!ReadFiniteFloat(reader, scale[0])) return Result::Malformed;
             scale[1] = scale[2] = scale[0];
             float y = scale[0], z = scale[0];
-            if (reader.Read(y)) scale[1] = y;
-            if (reader.Read(z)) scale[2] = z;
+            if (reader.Read(y)) {
+                if (!Finite(y)) return Result::Malformed;
+                scale[1] = y;
+            }
+            if (reader.Read(z)) {
+                if (!Finite(z)) return Result::Malformed;
+                scale[2] = z;
+            }
             Enqueue([id, scale] { Script::ServerSetObjectScale(id, scale[0], scale[1], scale[2]); });
             return Result::Handled;
         }
@@ -648,6 +660,7 @@ Result HandleElement(uint8_t func, uint32_t id, Net::BitStreamReader& reader) {
 }
 
 void Pump() {
+    Script::KeyBindsSyncServerReset();
     std::deque<std::function<void()>> work;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -666,6 +679,8 @@ void ResetSession() {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_queue.clear();
     }
+    g_cameraContext.store(0);
+    g_dropped.store(0);
     Script::KeyBindsServerReset();
 }
 

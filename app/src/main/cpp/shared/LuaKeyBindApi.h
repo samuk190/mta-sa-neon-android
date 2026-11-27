@@ -64,6 +64,8 @@ bool KeyBindsServerUnbindCommand(const std::string& key, const std::string& hitS
                                  const std::string& resource);
 // A new session: every server bind and every unsent KEY_BIND event is dropped. Any thread.
 void KeyBindsServerReset();
+// Applies any pending server command-bind reset on the VM thread (called by ServerRpc::Pump).
+void KeyBindsSyncServerReset();
 
 // CClientGame::ProcessServerKeyBind (CClientGame.cpp:2409-2434): a key with a server bind went down or up. The
 // event is sent as the KEY_BIND RPC (bit control, bit state, the key name). VM thread queues, the JNI pulse takes.
