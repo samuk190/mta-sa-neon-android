@@ -1014,6 +1014,13 @@ void CheckWorldObjectFeed(WorldRPG::Script::LuaVMStub& vm) {
         assert(setElementFrozen(feedObject, true) == true, "object frozen")
         setElementAlpha(feedObject, 0)
         assert(setElementPosition(serverFeedObject, 7, 8, 9) == true, "script moves a server object")
+        preRenderStep = 0
+        addEventHandler("onClientPreRender", root, function()
+            preRenderStep = preRenderStep + 1
+            if preRenderStep == 2 then
+                setElementPosition(feedObject, 11, 22, 33)
+            end
+        end)
     )LUA"}});
     CHECK(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8));
     Script::ActiveVmPulseResources();
@@ -1031,6 +1038,14 @@ void CheckWorldObjectFeed(WorldRPG::Script::LuaVMStub& vm) {
         CHECK(found->dimension == 3 && found->interior == 5 && found->collisions);
         CHECK(found->frozen && found->alpha == 0);
     }
+    // Repositioning an object inside onClientPreRender (like attached holsters/bandoliers)
+    // must reach WorldObjectFeed on the same pumpDx(true) pulse without 1-frame lag.
+    vm.pumpDx();
+    WorldObjects::Copy(states);
+    found = nullptr;
+    for (const auto& s : states)
+        if (s.model == 1337) found = &s;
+    CHECK(found != nullptr && found->x == 11.f && found->y == 22.f && found->z == 33.f);
     {
         // Copy lists the server source first; the script's move of 2900 comes later and wins.
         const WorldObjects::State* last = nullptr;

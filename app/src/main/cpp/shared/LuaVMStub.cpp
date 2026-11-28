@@ -3294,7 +3294,6 @@ void ActiveVmOnVehicleWeaponHit(uint32_t vehicleId, int weaponType, uint32_t hit
 
 std::string LuaVMStub::pumpDx(bool renderFrame) {
     if (!pImpl_->L) return {};
-    PublishClientObjects();  // the game thread streams CObjects from this (WorldObjectFeed)
     ServerRpc::Pump();       // server RPCs that write Lua-owned state (camera, world, binds, objects)
     WorldRPG::Audio::VoiceRuntime::Pump([L = pImpl_->L](const char* eventName, uint32_t playerId) {
         lua_getglobal(L, "source");
@@ -3382,6 +3381,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     g_dx.postGuiFrame.clear();
     if (!renderFrame) {
         PulseSpatial();
+        PublishClientObjects();
         return {};
     }
     DxBeginFrame(g_dx.frame);
@@ -3401,6 +3401,9 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
         fireHandlers("onClientRender", 0, ClientRootElement());
         DxSetAspectRatioAdjustmentAllowed(false);
     }
+    // Publish after pre-render/render so objects repositioned in onClientPreRender
+    // (e.g. attached weapon holsters/bandoliers) reach the game thread on the same pulse.
+    PublishClientObjects();
     DxEndRender(g_dx.frame);
     GuiAppendDraws(g_dx.frame);
     NativeUiAppendDraws(g_dx.frame, g_dx.screenW, g_dx.screenH);

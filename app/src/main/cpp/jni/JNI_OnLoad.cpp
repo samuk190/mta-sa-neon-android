@@ -562,7 +562,10 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeInit(JNIEnv* env, jobject
     // logcat until the session is validated (Plano 22 acceptance rule).
     state->join->SetStateCallback([](WorldRPG::Net::JoinState state, const char* detail) {
         using WorldRPG::Net::JoinState;
-        if (state != JoinState::Complete) WorldRPG::Game::SetAmbientTrafficEnabled(false, false);
+        if (state != JoinState::Complete) {
+            WorldRPG::Game::SetAmbientTrafficEnabled(false, false);
+            WorldRPG::Game::SetLocalWantedLevel(0);
+        }
         if (state == JoinState::Complete) {
             PostConnectionState(true, "Neon join complete");
             // Desktop Packet_ServerJoined: client files come from the server's HTTP service.
@@ -1009,6 +1012,7 @@ Java_com_saonline_neonlauncher_game_GameActivity_nativeDestroy(JNIEnv* env, jobj
     if (!isOwner(env, thiz)) return;
 
     WorldRPG::Game::SetAmbientTrafficEnabled(false, false);
+    WorldRPG::Game::SetLocalWantedLevel(0);
     // Detach callbacks holding raw pointers into this state before teardown.
     g_state->network->SetPacketHandler(nullptr);
     g_state->join->SetStateCallback({});

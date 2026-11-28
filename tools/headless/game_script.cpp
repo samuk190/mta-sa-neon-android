@@ -547,6 +547,11 @@ bool CopyScriptPedFacts(uint32_t id, int& model, float&, bool&) {
     return false;
 }
 void NoteLocalHealth(float) {}
+void SetLocalWantedLevel(uint8_t level) {
+    auto& probe = WorldRPG::Headless::Probe();
+    ++probe.wantedCalls;
+    probe.wantedLevel = level > 6 ? 6 : level;
+}
 
 void NoteDamage(uint32_t, float, uint8_t, uint8_t) {}
 Combat::DamageReport PeekDamage() { return {}; }

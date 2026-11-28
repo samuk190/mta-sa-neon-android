@@ -30,6 +30,8 @@ struct ScriptProbe {
     int vehicleHealthCalls = 0;
     uint32_t vehicleHealthId = 0;
     float vehicleHealth = -1.f;
+    int wantedCalls = 0;
+    uint8_t wantedLevel = 0;
 };
 ScriptProbe& Probe();
 void ResetProbe();

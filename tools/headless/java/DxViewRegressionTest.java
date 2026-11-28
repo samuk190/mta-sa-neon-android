@@ -37,6 +37,10 @@ public final class DxViewRegressionTest {
         check(view.getVisibility() == android.view.View.VISIBLE);
         view.onDraw(new Canvas());
         check(!memory.containsKey("rt:9"));
+        // After the queue drains, an idle empty frame must use INVISIBLE (not GONE)
+        // so Android keeps full edge-to-edge MATCH_PARENT layout dimensions.
+        view.setFrame("");
+        check(view.getVisibility() == android.view.View.INVISIBLE);
 
         Canvas color = new Canvas();
         view.setFrame("B 0\nR 0 0 8 8 4278190335\nB 1\nR 0 0 8 8 4294901760\n");

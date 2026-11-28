@@ -701,6 +701,7 @@ void QueueAndSession() {
 void ExtendedGlobalAndElementRpcs() {
     Fixture f;
     // Global world & player RPCs
+    Headless::ResetProbe();
     Check(f.Send(Pkt(Rpc::SetWantedLevel).U8(4).w), "SET_WANTED_LEVEL");
     Check(f.Send(Pkt(Rpc::SetSkyGradient).U8(10).U8(20).U8(30).U8(40).U8(50).U8(60).w), "SET_SKY_GRADIENT");
     Check(f.Send(Pkt(Rpc::SetFpsLimit).U16(60).w), "SET_FPS_LIMIT");
@@ -723,6 +724,17 @@ void ExtendedGlobalAndElementRpcs() {
         p.U16(1234).F(50.f).F(100.f).F(200.f).F(15.f).U8(0);
         Check(f.Send(p.w), "REMOVE_WORLD_MODEL");
     }
+    f.Pump();
+    Check(Headless::Probe().wantedCalls == 1 && Headless::Probe().wantedLevel == 4,
+        "SET_WANTED_LEVEL reaches Game::SetLocalWantedLevel");
+    Check(f.Send(Pkt(Rpc::SetWantedLevel).U8(9).w), "SET_WANTED_LEVEL clamps >6");
+    f.Pump();
+    Check(Headless::Probe().wantedLevel == 6, "wanted level clamped to 6 stars");
+    Check(f.Send(Pkt(Rpc::SetWantedLevel).U8(0).w), "SET_WANTED_LEVEL clears to 0");
+    f.Pump();
+    Check(Headless::Probe().wantedLevel == 0, "wanted level clears back to 0");
+    // Restore 4 for the assertions below in this test.
+    Check(f.Send(Pkt(Rpc::SetWantedLevel).U8(4).w), "SET_WANTED_LEVEL restore");
     f.Pump();
 
     Check(LuaNumber(f, "getPlayerWantedLevel()") == 4, "wanted level applied");

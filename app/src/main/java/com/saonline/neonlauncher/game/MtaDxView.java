@@ -175,7 +175,7 @@ public final class MtaDxView extends View {
         frames.offer(next);
         // A first line "C" means the cursor is showing (LuaVMStub::pumpDx).
         cursorShown = next.startsWith("C\n") || next.equals("C");
-        setVisibility(frames.hasCommands() ? VISIBLE : GONE);
+        setVisibility(frames.hasCommands() ? VISIBLE : INVISIBLE);
         invalidate();
     }
 

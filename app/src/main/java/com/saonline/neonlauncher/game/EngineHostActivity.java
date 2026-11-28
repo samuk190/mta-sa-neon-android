@@ -160,6 +160,35 @@ public final class EngineHostActivity extends GTASA {
     private native void nativeDestroy();
     private native void nativeSetScreenSize(int width, int height);
 
+    private int[] measureDxViewport() {
+        if (dxOverlay != null && dxOverlay.getWidth() > 0 && dxOverlay.getHeight() > 0) {
+            return new int[]{dxOverlay.getWidth(), dxOverlay.getHeight()};
+        }
+        if (hudHost != null && hudHost.getWidth() > 0 && hudHost.getHeight() > 0) {
+            return new int[]{hudHost.getWidth(), hudHost.getHeight()};
+        }
+        if (view != null && view.getWidth() > 0 && view.getHeight() > 0) {
+            return new int[]{view.getWidth(), view.getHeight()};
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.graphics.Rect bounds = getWindowManager().getMaximumWindowMetrics().getBounds();
+            if (bounds.width() > 0 && bounds.height() > 0) {
+                return new int[]{bounds.width(), bounds.height()};
+            }
+        } else {
+            android.view.Display display = getWindowManager().getDefaultDisplay();
+            if (display != null) {
+                android.util.DisplayMetrics real = new android.util.DisplayMetrics();
+                display.getRealMetrics(real);
+                if (real.widthPixels > 0 && real.heightPixels > 0) {
+                    return new int[]{real.widthPixels, real.heightPixels};
+                }
+            }
+        }
+        android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+        return new int[]{metrics.widthPixels, metrics.heightPixels};
+    }
+
     private void reportDxScreen(int width, int height) {
         if (!clientReady || width <= 0 || height <= 0) return;
         float density = getResources().getDisplayMetrics().density;
@@ -389,15 +418,9 @@ public final class EngineHostActivity extends GTASA {
             return;
         }
         clientReady = true;
-        int screenW = dxOverlay != null ? dxOverlay.getWidth() : 0;
-        int screenH = dxOverlay != null ? dxOverlay.getHeight() : 0;
-        if (screenW <= 0 || screenH <= 0) {
-            android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-            screenW = metrics.widthPixels;
-            screenH = metrics.heightPixels;
-        }
+        int[] screen = measureDxViewport();
         interfaceScalePercent = InterfaceScaleSettings.read(this);
-        reportDxScreen(screenW, screenH);
+        reportDxScreen(screen[0], screen[1]);
         String nick = new PreferencesManager(this).getUsername();
         if (nick == null || nick.isEmpty()) nick = BuildConfig.DEFAULT_PLAYER_NICK;
         connectIp = ip;
@@ -483,7 +506,9 @@ public final class EngineHostActivity extends GTASA {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         dxOverlay = new MtaDxView(this);
-        dxOverlay.setVisibility(View.GONE);
+        // Keep INVISIBLE (not GONE) when idle so Android lays out dxOverlay at full
+        // edge-to-edge MATCH_PARENT before startMtaSession() reports guiGetScreenSize().
+        dxOverlay.setVisibility(View.INVISIBLE);
         dxOverlay.setElevation(dp(12));
         dxOverlay.setCursorListener(this::onCursorTouch);
         dxOverlay.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {

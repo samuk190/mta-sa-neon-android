@@ -146,6 +146,8 @@ private:
 bool InstallServerSessionHook();
 bool BeginServerSession();
 void SetAmbientTrafficEnabled(bool pedestrians, bool vehicles);
+// Server-authoritative wanted level (SET_WANTED_LEVEL RPC 113, desktop CClientGame.cpp:1573-1578).
+void SetLocalWantedLevel(uint8_t level);
 // True once BeginServerSession left the frontend and the game is playing (read-only).
 bool ServerSessionLive();
 void ApplyServerSpawn(float x, float y, float z);

@@ -9,11 +9,10 @@
 //   CPlaceable::SetMatrix               _ZN10CPlaceable9SetMatrixERK7CMatrix
 //   CMatrix::SetRotate(x, y, z)         _ZN7CMatrix9SetRotateEfff
 //   CEntity::CreateRwObject             _ZN7CEntity14CreateRwObjectEv
-//   RwFrameTransform                    moves an object that is already in the world
 // Fixed offsets (each read or written by libGTASA 2.10):
-//   CEntity +0x18 CMatrix*, +0x20 RwObject* (RwObject +0x08 parent frame),
+//   CEntity +0x18 CMatrix*, +0x20 RwObject*, +0x32 m_nModelIndex,
 //   +0x28 entity flags (CObject::SetIsStatic writes bit 2; bit 0 bUsesCollision,
-//   bit 10 bStreamingDontDelete as on PC), +0x4B area (interior);
+//   bit 7 bIsVisible, bit 10 bStreamingDontDelete as on PC), +0x4B area (interior);
 //   CObject +0x1A0 m_nObjectType (CObject::CanBeDeleted reads it; desktop writes 6),
 //   object pool stride 0x220 (CObject::Create).
 #include "WorldObjects.h"
@@ -57,7 +56,6 @@ struct Api {
     void (*setMatrix)(void*, const void*) = nullptr;
     void (*setRotate)(void*, float, float, float) = nullptr;
     void (*createRwObject)(void*) = nullptr;
-    void* (*frameTransform)(void*, const void*, int) = nullptr;
     void (*requestModel)(int, int) = nullptr;
     unsigned char* streamingInfo = nullptr;
     void* placeableVtable = nullptr;
@@ -80,8 +78,6 @@ Api& Engine() {
     api.setMatrix = reinterpret_cast<void (*)(void*, const void*)>(sym("_ZN10CPlaceable9SetMatrixERK7CMatrix"));
     api.setRotate = reinterpret_cast<void (*)(void*, float, float, float)>(sym("_ZN7CMatrix9SetRotateEfff"));
     api.createRwObject = reinterpret_cast<void (*)(void*)>(sym("_ZN7CEntity14CreateRwObjectEv"));
-    api.frameTransform = reinterpret_cast<void* (*)(void*, const void*, int)>(
-        sym("_Z16RwFrameTransformP7RwFramePK11RwMatrixTag15RwOpCombineType"));
     api.requestModel = reinterpret_cast<void (*)(int, int)>(sym("_ZN10CStreaming12RequestModelEii"));
     api.streamingInfo = static_cast<unsigned char*>(sym("_ZN10CStreaming16ms_aInfoForModelE"));
     if (auto* vtable = static_cast<unsigned char*>(sym("_ZTV10CPlaceable"))) api.placeableVtable = vtable + 16;
@@ -142,8 +138,9 @@ bool StillOurs(const Api& api, void* entity, int model) {
     if (offset % kObjectStride || offset / kObjectStride >= static_cast<size_t>(size)) return false;
     if (byteMap[offset / kObjectStride] & 0x80) return false;
     if (api.placeableVtable && *reinterpret_cast<void**>(entity) == api.placeableVtable) return false;
-    // CEntity +0x26 m_nModelIndex (CEntity::SetModelIndexNoCreate stores the halfword there).
-    return Field<uint8_t>(entity, 0x1A0) == kStreamedType && Field<int16_t>(entity, 0x26) == model;
+    // CEntity +0x32 m_nModelIndex in libGTASA 2.10 arm64 (CEntity::SetModelIndexNoCreate
+    // 0x4ca7e0 `strh w1, [x19, #0x32]`, CEntity::IsVisible 0x4cd2e0, CObject::Init 0x53b8c8).
+    return Field<uint8_t>(entity, 0x1A0) == kStreamedType && Field<int16_t>(entity, 0x32) == model;
 }
 
 // CPhysicalSA::SetFrozen: CPhysical +0x64 flag word, bit 13 bDontApplySpeed, bit 2
@@ -175,7 +172,7 @@ bool SameTransform(const State& a, const State& b) {
     return a.x == b.x && a.y == b.y && a.z == b.z && a.rx == b.rx && a.ry == b.ry && a.rz == b.rz;
 }
 
-void ApplyFlags(const Api& api, void* entity, const State& s) {
+void ApplyFlags(const Api& api, void* entity, const State& s, bool updateAlpha) {
     auto& flags = Field<uint64_t>(entity, 0x28);
     flags = s.collisions ? (flags | 1u) : (flags & ~uint64_t{1});
     flags |= uint64_t{1} << 10;  // bStreamingDontDelete (CObjectSA.cpp:139)
@@ -183,7 +180,7 @@ void ApplyFlags(const Api& api, void* entity, const State& s) {
     flags = s.alpha == 0 ? (flags & ~(uint64_t{1} << 7)) : (flags | (uint64_t{1} << 7));
     Field<uint8_t>(entity, 0x4B) = s.interior;
     SetFrozen(entity, s.frozen);
-    if (api.setAlpha && Field<void*>(entity, 0x20) && s.alpha > 0) api.setAlpha(entity, s.alpha);
+    if (updateAlpha && api.setAlpha && Field<void*>(entity, 0x20) && s.alpha > 0) api.setAlpha(entity, s.alpha);
 }
 
 void Destroy(const Api& api, Live& live) {
@@ -209,23 +206,27 @@ void* Create(const Api& api, const State& s) {
     MatrixBuffer matrix;
     BuildMatrix(api, s, matrix);
     api.setMatrix(entity, matrix.bytes);
-    Field<uint8_t>(entity, 0x1A0) = 6;  // CObjectSA.cpp:126
-    api.add(entity);
+    Field<uint8_t>(entity, 0x1A0) = kStreamedType;  // CObjectSA.cpp:126
+    // Create the RW clump before CWorld::Add so CWorld::Add updates RwMatrix + RwFrame immediately.
     if (!Field<void*>(entity, 0x20)) api.createRwObject(entity);
-    ApplyFlags(api, entity, s);
+    api.add(entity);
+    ApplyFlags(api, entity, s, true);
     return entity;
 }
 
 void Move(const Api& api, Live& live, const State& s) {
-    MatrixBuffer matrix;
-    BuildMatrix(api, s, matrix);
-    // CEntitySA::SetPosition: out of the world, new matrix, back in (re-sectored).
-    api.remove(live.entity);
-    api.setMatrix(live.entity, matrix.bytes);
-    if (void* rw = Field<void*>(live.entity, 0x20); rw && api.frameTransform)
-        if (void* frame = Field<void*>(rw, 0x08)) api.frameTransform(frame, matrix.bytes, 0);  // rwCOMBINEREPLACE
-    api.add(live.entity);
-    ApplyFlags(api, live.entity, s);
+    const bool transformChanged = !SameTransform(live.state, s);
+    const bool alphaChanged = live.state.alpha != s.alpha;
+    if (transformChanged) {
+        MatrixBuffer matrix;
+        BuildMatrix(api, s, matrix);
+        // CEntitySA::SetMatrix / SetPosition (CEntitySA.cpp 380-405): out of the world,
+        // new matrix, back in (CWorld::Add runs CMatrix::UpdateRwMatrix + CEntity::UpdateRwFrame).
+        api.remove(live.entity);
+        api.setMatrix(live.entity, matrix.bytes);
+        api.add(live.entity);
+    }
+    ApplyFlags(api, live.entity, s, alphaChanged);
 }
 
 }  // namespace

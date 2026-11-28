@@ -4019,6 +4019,7 @@ void BindPedLua(lua_State* L) {
     g_nametags.clear();
     g_stats.clear();
     g_wantedLevel = 0;
+    WorldRPG::Game::SetLocalWantedLevel(0);
     g_voice.clear();
     g_analog.clear();
     ResetPedBody();
@@ -4334,6 +4335,7 @@ void RpcSetPlayerNametagShowing(uint32_t id, bool showing) {
 
 void RpcSetWantedLevel(uint8_t level) {
     g_wantedLevel = level > 6 ? 6 : level;
+    WorldRPG::Game::SetLocalWantedLevel(g_wantedLevel);
 }
 
 void RpcForcePlayerMap(bool forced) {

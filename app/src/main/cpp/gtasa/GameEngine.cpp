@@ -5854,6 +5854,8 @@ bool KillNativePedTask(uint32_t id, bool primary, int slot, bool gracefully) {
     }) && stopped;
 }
 
+static void SyncLocalWantedLevel();
+
 extern "C" void WorldRPG_NoStoryScript(void*) {
     ServiceScriptStage();
     static int depth = 0;
@@ -5864,6 +5866,7 @@ extern "C" void WorldRPG_NoStoryScript(void*) {
         Projectiles::Pump(ResolveProjectileEntity);
         GameTasks::Service();
         ApplyLocalPedRpcs();
+        SyncLocalWantedLevel();
         PlacePlayer();
         SampleLocalPose();
         SampleLocalPadAndCamera();
@@ -5985,6 +5988,39 @@ static bool WriteExecutable(void* site, const void* bytes, size_t size) {
         reinterpret_cast<char*>(site) + size);
     mprotect(reinterpret_cast<void*>(start), end - start, PROT_READ | PROT_EXEC);
     return true;
+}
+
+// Desktop CMultiplayerSA.cpp:1166-1167 writes a ret at the start of
+// CGameLogic::SetPlayerWantedLevelForForbiddenTerritories. CGameLogic::Update
+// enters it via a direct intra-DSO bl (0x3cd660 -> 0x3ce724 in libGTASA 2.10
+// arm64), bypassing its PLT slot, so patch the entry word directly as well.
+static void DisableForbiddenTerritoryWanted() {
+    constexpr std::uint32_t kOriginalWord = 0xfc1a0feau;  // str d10, [sp, #-0x60]!
+    constexpr std::uint32_t kReturnWord = 0xd65f03c0u;    // ret
+
+    void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+    if (!handle) {
+        ENGINE_LOGE("DIAG forbidden territory wanted: libGTASA.so not loaded");
+        return;
+    }
+    void* fn = dlsym(handle, "_ZN10CGameLogic43SetPlayerWantedLevelForForbiddenTerritoriesEb");
+    if (!fn) {
+        ENGINE_LOGE("DIAG forbidden territory wanted: symbol missing");
+        return;
+    }
+
+    std::uint32_t word = 0;
+    std::memcpy(&word, fn, sizeof(word));
+    if (word == kReturnWord) return;
+    if (word != kOriginalWord) {
+        ENGINE_LOGE("DIAG forbidden territory wanted: unexpected word 0x%08x", word);
+        return;
+    }
+    if (!WriteExecutable(fn, &kReturnWord, sizeof(kReturnWord))) {
+        ENGINE_LOGE("DIAG forbidden territory wanted: WriteExecutable failed");
+        return;
+    }
+    ENGINE_LOGI("Disabled CGameLogic::SetPlayerWantedLevelForForbiddenTerritories (desktop CMultiplayerSA.cpp:1167)");
 }
 
 static void InstallGangRegionUpdateSkip() {
@@ -6146,6 +6182,7 @@ static void ServerSessionGameState() {
 // Written by the network pulse, sampled only at the GTA ambient generators.
 static std::atomic<bool> g_allowAmbientPeds{false};
 static std::atomic<bool> g_allowAmbientVehicles{false};
+static std::atomic<uint8_t> g_serverWantedLevel{0};
 static void (*g_updatePedPopulation)(bool) = nullptr;
 static void (*g_managePopulation)() = nullptr;
 static void (*g_generateRandomCars)() = nullptr;
@@ -6155,6 +6192,55 @@ void SetAmbientTrafficEnabled(bool pedestrians, bool vehicles) {
     g_allowAmbientPeds.store(pedestrians, std::memory_order_relaxed);
     g_allowAmbientVehicles.store(vehicles, std::memory_order_relaxed);
 }
+
+void SetLocalWantedLevel(uint8_t level) {
+    g_serverWantedLevel.store(level > 6 ? 6 : level, std::memory_order_relaxed);
+}
+
+// Desktop CClientGame.cpp:1573-1578: keep GTA's CWanted aligned with the server's
+// wanted level (0 unless SET_WANTED_LEVEL RPC 113 sets 1..6).
+// libGTASA 2.10 arm64: CWanted::m_nWantedLevel is uint32_t at +0x2c
+// (CWanted::NumOfHelisRequired 0x5060dc, CWanted::SetWantedLevelNoDrop 0x505f5c).
+static void SyncLocalWantedLevel() {
+    using FindWantedFn = void* (*)(int);
+    using SetWantedFn = void (*)(void*, int);
+    using SetMaxWantedFn = void (*)(int);
+    static bool resolved = false;
+    static bool maxSet = false;
+    static FindWantedFn findPlayerWanted = nullptr;
+    static SetWantedFn setWantedLevel = nullptr;
+    static SetMaxWantedFn setMaxWantedLevel = nullptr;
+    if (!resolved) {
+        resolved = true;
+        if (void* handle = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL)) {
+            findPlayerWanted = reinterpret_cast<FindWantedFn>(dlsym(handle, "_Z16FindPlayerWantedi"));
+            setWantedLevel = reinterpret_cast<SetWantedFn>(dlsym(handle, "_ZN7CWanted14SetWantedLevelEi"));
+            setMaxWantedLevel = reinterpret_cast<SetMaxWantedFn>(dlsym(handle, "_ZN7CWanted21SetMaximumWantedLevelEi"));
+        }
+        if (!findPlayerWanted || !setWantedLevel) {
+            ENGINE_LOGE("DIAG SyncLocalWantedLevel: FindPlayerWanted or CWanted::SetWantedLevel missing");
+        }
+    }
+    if (!maxSet && setMaxWantedLevel) {
+        maxSet = true;
+        setMaxWantedLevel(6);
+    }
+    if (!findPlayerWanted || !setWantedLevel) return;
+    void* wanted = findPlayerWanted(-1);
+    if (!wanted) return;
+    const uint32_t target = g_serverWantedLevel.load(std::memory_order_relaxed);
+    const uint32_t current = *reinterpret_cast<const uint32_t*>(static_cast<const unsigned char*>(wanted) + 0x2c);
+    if (current != target) setWantedLevel(wanted, static_cast<int>(target));
+}
+
+// Desktop CMultiplayerSA.cpp:1166-1170, 1496-1504: disable GTA SA's single-player
+// crime reporting, wanted level progression, police helicopters and roadblocks.
+static void NoopReportCrime(int, void*, void*) {}
+static void NoopForbiddenTerritoryWanted(bool) {}
+static int ZeroPoliceHelis(void*) { return 0; }
+static void NoopWantedUpdate(void*) {}
+static void NoopRegisterCrime(void*, int, const void*, uint64_t, bool) {}
+static void NoopRoadBlocks() {}
 
 static void UpdatePedPopulation(bool generate) {
     if (g_allowAmbientPeds.load(std::memory_order_relaxed)) {
@@ -6208,6 +6294,24 @@ bool InstallServerSessionHook() {
     g_updatePedPopulation = reinterpret_cast<decltype(g_updatePedPopulation)>(imports[1].original);
     g_generateRandomCars = reinterpret_cast<decltype(g_generateRandomCars)>(imports[2].original);
     g_processCarGenerators = reinterpret_cast<decltype(g_processCarGenerators)>(imports[3].original);
+    // Desktop CMultiplayerSA.cpp:1166-1170, 1496-1504: disable GTA's single-player police,
+    // crime reporting, wanted progression, police helicopters and roadblocks.
+    // Verified R_AARCH64_JUMP_SLOT offsets in libGTASA 2.10 arm64.
+    std::array<Import, 8> policeImports{{
+        {"_ZN6CCrime11ReportCrimeE10eCrimeTypeP7CEntityP4CPed", 0x840738, reinterpret_cast<void*>(&NoopReportCrime)},
+        {"_ZN10CGameLogic43SetPlayerWantedLevelForForbiddenTerritoriesEb", 0x840a90, reinterpret_cast<void*>(&NoopForbiddenTerritoryWanted)},
+        {"_ZN7CWanted18NumOfHelisRequiredEv", 0x83e1a0, reinterpret_cast<void*>(&ZeroPoliceHelis)},
+        {"_ZN7CWanted15UpdateEachFrameEv", 0x8486f8, reinterpret_cast<void*>(&NoopWantedUpdate)},
+        {"_ZN7CWanted6UpdateEv", 0x83f690, reinterpret_cast<void*>(&NoopWantedUpdate)},
+        {"_ZN7CWanted13RegisterCrimeE10eCrimeTypeRK7CVectoryb", 0x841378, reinterpret_cast<void*>(&NoopRegisterCrime)},
+        {"_ZN7CWanted25RegisterCrime_ImmediatelyE10eCrimeTypeRK7CVectoryb", 0x842820, reinterpret_cast<void*>(&NoopRegisterCrime)},
+        {"_ZN11CRoadBlocks18GenerateRoadBlocksEv", 0x847720, reinterpret_cast<void*>(&NoopRoadBlocks)},
+    }};
+    if (BindImports(handle, policeImports)) {
+        ENGINE_LOGI("Disabled GTA single-player crime/wanted/police hooks (desktop CMultiplayerSA.cpp:1166-1170, 1496-1504)");
+    } else {
+        ENGINE_LOGE("DIAG server session: could not bind single-player police/wanted suppression hooks");
+    }
     VehiclePaint::Install(handle);
     dlclose(handle);
     ENGINE_LOGI("Server session dispatcher installed before GTA threads (DoGameState)");
@@ -6309,6 +6413,7 @@ static bool BeginServerSessionOnGameThread() {
         if (!InstallLocalBulletFireHook())
             ENGINE_LOGE("Local bullet sync (PLAYER_BULLETSYNC) disabled: CWeapon::Fire hook missing");
         DisableEntryExits();
+        DisableForbiddenTerritoryWanted();
         InstallGangRegionUpdateSkip();
         InstallRenderQueueFlush(base);
     }
@@ -7289,6 +7394,7 @@ void FinishLocalShot(uint64_t serial) {
 bool InstallServerSessionHook() { return false; }
 bool BeginServerSession() { return false; }
 void SetAmbientTrafficEnabled(bool, bool) {}
+void SetLocalWantedLevel(uint8_t) {}
 bool ServerSessionLive() { return false; }
 bool LocalPlacementPending() { return false; }
 void ApplyServerSpawn(float, float, float) {}
