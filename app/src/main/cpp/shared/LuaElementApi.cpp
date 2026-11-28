@@ -28,6 +28,7 @@
 #include "LuaPickupApi.h"
 #include "LuaLightApi.h"
 #include "LuaWaterApi.h"
+#include "LuaWorldObjectApi.h"
 #include "LuaFireApi.h"
 #include "LuaBirdApi.h"
 #include "LuaRopeApi.h"
@@ -1298,11 +1299,6 @@ int AttachElements(lua_State* L) {
     }
     ServerWorld::NoteAttachedOffsets(id, x, y, z, rx, ry, rz);
     ServerWorld::NoteAttachTo(id, parent);
-    static bool once = false;
-    if (!once) {
-        once = true;
-        LUA_LOGI("DIAG attachElements: attachment graph and onClientElementAttach updated; CPhysical::AttachEntityToEntity is not hooked");
-    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1349,11 +1345,11 @@ int DetachElements(lua_State* L) {
         return 1;
     }
     ServerWorld::NoteAttachTo(id, 0xFFFFFFFFu);
-    static bool once = false;
-    if (!once) {
-        once = true;
-        LUA_LOGI("DIAG detachElements: attachment cleared and onClientElementDetach fired; CPhysical::AttachEntityToEntity(NULL) is not hooked");
-    }
+    ServerWorld::NoteElementPosition(id, px, py, pz);
+    constexpr float kDegToRad = 0.017453292519943295f;
+    const float worldPos[3] = {px, py, pz};
+    const float worldRotRad[3] = {rx * kDegToRad, ry * kDegToRad, rz * kDegToRad};
+    ServerStopObject(id, worldPos, worldRotRad);
     lua_pushboolean(L, 1);
     return 1;
 }

@@ -185,13 +185,12 @@ int CreateSWATRope(lua_State* L) {
     float x = 0.f, y = 0.f, z = 0.f, duration = 4000.f;
     if (!ReadVec(L, "createSWATRope", 1, x, y, z)) return Fail(L);
     if (!lua_isnoneornil(L, 4) && !ReadNumber(L, "createSWATRope", 4, duration)) return Fail(L);
-    (void)x;
-    (void)y;
-    (void)z;
-    (void)duration;
-    if (!g_diagRope) {
-        g_diagRope = true;
-        LUA_LOGE("DIAG createSWATRope: CRopes::CreateRopeForSwatPed is not hooked");
+    const uint32_t durMs = duration > 0.f ? static_cast<uint32_t>(duration) : 4000u;
+    if (!WorldNative::CreateSwatRope(x, y, z, durMs)) {
+        if (!g_diagRope) {
+            g_diagRope = true;
+            LUA_LOGE("DIAG createSWATRope: CRopes::CreateRopeForSwatPed is not hooked");
+        }
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -289,20 +288,46 @@ int RestoreGameWorld(lua_State* L) {
     return 1;
 }
 
-int GarageQuery(lua_State* L, const char* function) {
+bool ReadGarage(lua_State* L, const char* function, float pos[3], float sizeWDH[3], float bbox[4]) {
     float id = 0.f;
-    if (!ReadNumber(L, function, 1, id)) return Fail(L);
-    (void)static_cast<unsigned char>(static_cast<int>(id));
+    if (!ReadNumber(L, function, 1, id)) return false;
+    const int garageId = static_cast<int>(id);
+    if (garageId < 0 || garageId >= 50) return false;
+    if (WorldNative::GetGarageGeometry(garageId, pos, sizeWDH, bbox)) return true;
     if (!g_diagGarage) {
         g_diagGarage = true;
         LUA_LOGE("DIAG %s: CGarages is not readable", function);
     }
-    return Fail(L);
+    return false;
 }
 
-int GetGaragePosition(lua_State* L) { return GarageQuery(L, "getGaragePosition"); }
-int GetGarageSize(lua_State* L) { return GarageQuery(L, "getGarageSize"); }
-int GetGarageBoundingBox(lua_State* L) { return GarageQuery(L, "getGarageBoundingBox"); }
+int GetGaragePosition(lua_State* L) {
+    float pos[3]{}, sizeWDH[3]{}, bbox[4]{};
+    if (!ReadGarage(L, "getGaragePosition", pos, sizeWDH, bbox)) return Fail(L);
+    lua_pushnumber(L, pos[0]);
+    lua_pushnumber(L, pos[1]);
+    lua_pushnumber(L, pos[2]);
+    return 3;
+}
+
+int GetGarageSize(lua_State* L) {
+    float pos[3]{}, sizeWDH[3]{}, bbox[4]{};
+    if (!ReadGarage(L, "getGarageSize", pos, sizeWDH, bbox)) return Fail(L);
+    lua_pushnumber(L, sizeWDH[0]);
+    lua_pushnumber(L, sizeWDH[1]);
+    lua_pushnumber(L, sizeWDH[2]);
+    return 3;
+}
+
+int GetGarageBoundingBox(lua_State* L) {
+    float pos[3]{}, sizeWDH[3]{}, bbox[4]{};
+    if (!ReadGarage(L, "getGarageBoundingBox", pos, sizeWDH, bbox)) return Fail(L);
+    lua_pushnumber(L, bbox[0]);
+    lua_pushnumber(L, bbox[1]);
+    lua_pushnumber(L, bbox[2]);
+    lua_pushnumber(L, bbox[3]);
+    return 4;
+}
 
 int GarageLease(lua_State* L, const char* function) {
     if (!lua_isnumber(L, 1)) return luaL_error(L, "Bad argument @ '%s' [Expected number at argument 1]", function);

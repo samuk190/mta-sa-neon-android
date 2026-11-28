@@ -1,5 +1,6 @@
 #include "DesktopLuaString.h"
 #include "LuaApiExtra.h"
+#include "LuaFieldApi.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
 #include "VehicleColorPalette.h"
@@ -1504,6 +1505,9 @@ int FixVehicle(lua_State* L) {
     for (unsigned char& light : flags.lights) light = 0;
     flags.blown = false;
     UpdateFlags(id, flags);
+    ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, 1000.f);
+    NoteClientElementHealth(id, 1000.f);
+    Game::RpcFixVehicle(id);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1526,9 +1530,13 @@ int BlowVehicle(lua_State* L) {
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     NoteNativeVehicleGap();
+    const bool withExplosion = lua_type(L, 2) == LUA_TBOOLEAN ? (lua_toboolean(L, 2) != 0) : true;
     auto flags = CopyFlags(id);
     flags.blown = true;
     UpdateFlags(id, flags);
+    ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, 0.f);
+    NoteClientElementHealth(id, 0.f);
+    Game::RpcBlowVehicle(id, withExplosion);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2945,16 +2953,36 @@ int SetVehicleComponentVisible(lua_State* L) {
 int CreateVehicle(lua_State* L) {
     uint32_t model = 0;
     if (!ReadModelArg(L, "createVehicle", model)) return Fail(L);
+    float pos[3] = {0.f, 0.f, 0.f};
     for (int index = 2; index <= 4; ++index) {
         if (!lua_isnumber(L, index) || std::isnan(lua_tonumber(L, index))) {
             LogTypeError(L, "createVehicle", "number", index);
             return Fail(L);
         }
+        pos[index - 2] = static_cast<float>(lua_tonumber(L, index));
     }
     if (ActiveVmOwnerNet() == 0) return Fail(L);
-    LUA_LOGI("DIAG createVehicle: client vehicles are not spawned");
-    (void)model;
-    lua_pushboolean(L, 0);
+    float rot[3] = {0.f, 0.f, 0.f};
+    for (int index = 5; index <= 7; ++index) {
+        if (lua_isnumber(L, index) && !std::isnan(lua_tonumber(L, index))) {
+            rot[index - 5] = static_cast<float>(lua_tonumber(L, index));
+        }
+    }
+    const uint32_t id = CreateResourceElement("vehicle");
+    if (!id) return Fail(L);
+    ServerWorld::NoteVehicle(id, static_cast<int>(model));
+    ServerWorld::NoteVehiclePose(id, true, pos, true, rot, true, 1000.f);
+    NoteClientElementHealth(id, 1000.f);
+    if (lua_type(L, 8) == LUA_TSTRING) {
+        size_t len = 0;
+        const char* plate = lua_tolstring(L, 8, &len);
+        if (plate && len > 0) {
+            auto flags = CopyFlags(id);
+            flags.plate.assign(plate, std::min<size_t>(len, 8));
+            UpdateFlags(id, flags);
+        }
+    }
+    PushElement(L, id);
     return 1;
 }
 

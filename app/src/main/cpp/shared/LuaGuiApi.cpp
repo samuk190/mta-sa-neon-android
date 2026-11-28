@@ -286,13 +286,14 @@ void ReleaseCursorHold(const std::string& owner) {
 
 bool AnyCursorHold() { return g_cursorHolds > 0; }
 
-// INPUTMODE_NO_BINDS_ON_EDIT: true only for a visible gui-edit that has focus.
-// Read-only edits and memos are not tracked. Bind blocking is not wired.
+// INPUTMODE_NO_BINDS_ON_EDIT: true for a visible writable gui-edit or gui-memo with focus.
 bool InputEnabledNow() {
     if (g_inputMode == InputMode::AllowBinds) return false;
     if (g_inputMode == InputMode::NoBinds) return true;
     const GuiElement* focused = Find(g_focused);
-    return focused && focused->type == "gui-edit" && EffectivelyVisible(*focused);
+    return focused && !focused->readOnly &&
+           (focused->type == "gui-edit" || focused->type == "gui-memo") &&
+           EffectivelyVisible(*focused);
 }
 
 double EffectiveAlpha(const GuiElement& element) {
@@ -968,6 +969,8 @@ bool GuiEditErase() {
 }
 
 bool GuiKeyCapture() { return g_inputMode == InputMode::NoBinds; }
+
+bool GuiBlocksBinds() { return InputEnabledNow(); }
 
 double DxFontScale(const char* font) {
     struct FontHeight {
@@ -2574,6 +2577,35 @@ static int GuiStaticImageGetNativeSize(lua_State* L) {
     return 2;
 }
 
+static bool ParseCeguiBool(const std::string& value, bool& out) {
+    if (value == "True" || value == "true" || value == "1") {
+        out = true;
+        return true;
+    }
+    if (value == "False" || value == "false" || value == "0") {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
+static bool ParseCeguiHexColor(const std::string& value, int& r, int& g, int& b) {
+    // CEGUI AARRGGBB hex string (e.g. "FFFF8000" or "tl:FFFF0000 tr:FFFF0000 ...").
+    std::string hex = value;
+    const size_t colon = hex.find(':');
+    if (colon != std::string::npos) hex = hex.substr(colon + 1);
+    const size_t space = hex.find(' ');
+    if (space != std::string::npos) hex = hex.substr(0, space);
+    if (hex.size() != 8) return false;
+    char* end = nullptr;
+    const unsigned long v = std::strtoul(hex.c_str(), &end, 16);
+    if (!end || *end != '\0') return false;
+    r = static_cast<int>((v >> 16) & 0xFFu);
+    g = static_cast<int>((v >> 8) & 0xFFu);
+    b = static_cast<int>(v & 0xFFu);
+    return true;
+}
+
 static int GuiSetProperty(lua_State* L) {
     Args args{L};
     uint32_t id = 0;
@@ -2586,7 +2618,42 @@ static int GuiSetProperty(lua_State* L) {
         return 1;
     }
     element->props[key] = value;
-    if (key == "AlwaysOnTop") element->alwaysOnTop = value == "True" || value == "true";
+    bool flag = false;
+    if (key == "AlwaysOnTop" && ParseCeguiBool(value, flag)) element->alwaysOnTop = flag;
+    else if (key == "Visible" && ParseCeguiBool(value, flag)) element->visible = flag;
+    else if (key == "Disabled" && ParseCeguiBool(value, flag)) element->enabled = !flag;
+    else if (key == "ReadOnly" && ParseCeguiBool(value, flag)) element->readOnly = flag;
+    else if (key == "MaskText" && ParseCeguiBool(value, flag)) element->masked = flag;
+    else if (key == "Selected" && ParseCeguiBool(value, flag)) element->selected = flag;
+    else if (key == "SizingEnabled" && ParseCeguiBool(value, flag)) element->sizable = flag;
+    else if (key == "DragMovingEnabled" && ParseCeguiBool(value, flag)) element->movable = flag;
+    else if (key == "WordWrap" && ParseCeguiBool(value, flag)) element->labelWrap = flag;
+    else if (key == "Text") element->text = value;
+    else if (key == "Font") {
+        element->font = value;
+        element->fontId = 0;
+    } else if (key == "Alpha") {
+        char* end = nullptr;
+        const double a = std::strtod(value.c_str(), &end);
+        if (end && *end == '\0' && std::isfinite(a)) element->alpha = std::clamp(a, 0.0, 1.0);
+    } else if (key == "MaxTextLength") {
+        char* end = nullptr;
+        const unsigned long len = std::strtoul(value.c_str(), &end, 10);
+        if (end && *end == '\0') element->maxLength = static_cast<uint32_t>(len);
+    } else if (key == "NormalTextColour" || key == "TextColours") {
+        ParseCeguiHexColor(value, element->red, element->green, element->blue);
+    } else if (key == "HorzFormatting") {
+        if (value.find("Right") != std::string::npos) element->alignH = "right";
+        else if (value.find("Centred") != std::string::npos || value.find("Centered") != std::string::npos)
+            element->alignH = "center";
+        else element->alignH = "left";
+        if (value.find("WordWrap") != std::string::npos) element->labelWrap = true;
+    } else if (key == "VertFormatting") {
+        if (value.find("Bottom") != std::string::npos) element->alignV = "bottom";
+        else if (value.find("Centred") != std::string::npos || value.find("Centered") != std::string::npos)
+            element->alignV = "center";
+        else element->alignV = "top";
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2599,6 +2666,40 @@ static int GuiGetProperty(lua_State* L) {
     const GuiElement* element = Find(id);
     if (!element) {
         lua_pushboolean(L, 0);
+        return 1;
+    }
+    auto pushBoolStr = [&](bool b) {
+        lua_pushstring(L, b ? "True" : "False");
+        return 1;
+    };
+    if (key == "AlwaysOnTop") return pushBoolStr(element->alwaysOnTop);
+    if (key == "Visible") return pushBoolStr(element->visible);
+    if (key == "Disabled") return pushBoolStr(!element->enabled);
+    if (key == "ReadOnly") return pushBoolStr(element->readOnly);
+    if (key == "MaskText") return pushBoolStr(element->masked);
+    if (key == "Selected") return pushBoolStr(element->selected);
+    if (key == "SizingEnabled") return pushBoolStr(element->sizable);
+    if (key == "DragMovingEnabled") return pushBoolStr(element->movable);
+    if (key == "WordWrap") return pushBoolStr(element->labelWrap);
+    if (key == "Text") {
+        lua_pushlstring(L, element->text.data(), element->text.size());
+        return 1;
+    }
+    if (key == "Font") {
+        lua_pushlstring(L, element->font.data(), element->font.size());
+        return 1;
+    }
+    if (key == "Alpha") {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.6f", element->alpha);
+        lua_pushstring(L, buf);
+        return 1;
+    }
+    if (key == "NormalTextColour") {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "FF%02X%02X%02X", element->red & 0xFF, element->green & 0xFF,
+                      element->blue & 0xFF);
+        lua_pushstring(L, buf);
         return 1;
     }
     const auto found = element->props.find(key);

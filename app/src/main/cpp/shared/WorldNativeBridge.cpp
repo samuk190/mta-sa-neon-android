@@ -39,6 +39,24 @@ bool PreloadWorldArea(float x, float y, float z, int mode) {
     return g_hooks.preloadWorldArea ? g_hooks.preloadWorldArea(x, y, z, mode) : false;
 }
 
+bool CreateSwatRope(float x, float y, float z, uint32_t durationMs) {
+    return g_hooks.createSwatRope ? g_hooks.createSwatRope(x, y, z, durationMs) : false;
+}
+
+bool TestSphereAgainstWorld(float x, float y, float z, float radius,
+                            bool checkBuildings, bool checkVehicles, bool checkPeds,
+                            bool checkObjects, bool checkDummies, bool cameraIgnore,
+                            SphereTestResult& out) {
+    return g_hooks.testSphereAgainstWorld
+               ? g_hooks.testSphereAgainstWorld(x, y, z, radius, checkBuildings, checkVehicles, checkPeds,
+                                                checkObjects, checkDummies, cameraIgnore, out)
+               : false;
+}
+
+bool GetGarageGeometry(int garageId, float pos[3], float sizeWDH[3], float bbox[4]) {
+    return g_hooks.getGarageGeometry ? g_hooks.getGarageGeometry(garageId, pos, sizeWDH, bbox) : false;
+}
+
 int RemoveWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior) {
     return g_hooks.removeWorldModel ? g_hooks.removeWorldModel(model, radius, x, y, z, interior) : -1;
 }

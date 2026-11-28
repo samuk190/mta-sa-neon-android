@@ -602,10 +602,10 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             return true;
         }
         case Rpc::SetElementCollisionsEnabled: {
-            // CElementRPCs::SetElementCollisionsEnabled (658-696): one bit; peds and players -> SetUsesCollision.
+            // CElementRPCs::SetElementCollisionsEnabled (658-696): one bit; peds, players, vehicles -> SetUsesCollision.
             bool enabled = true;
             if (!ReadFlag(reader, enabled)) return false;
-            if (!pedLike) { logUnported("collisions on a non-ped element not ported"); return true; }
+            if (!pedLike && !vehicleLike) { logUnported("collisions on a non-ped/vehicle element not ported"); return true; }
             WorldRPG::Game::RpcSetCollisions(id, enabled);
             return true;
         }

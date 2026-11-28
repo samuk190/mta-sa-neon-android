@@ -14,6 +14,7 @@ struct State {
     int model = -1;
     float x = 0, y = 0, z = 0;
     float rx = 0, ry = 0, rz = 0;  // radians, CMatrix::SetRotate order
+    float scaleX = 1.f, scaleY = 1.f, scaleZ = 1.f;
     uint16_t dimension = 0;
     uint8_t interior = 0;
     bool collisions = true;

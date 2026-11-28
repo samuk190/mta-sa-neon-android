@@ -467,6 +467,9 @@ struct CarSeed {
     float turn[3] = {0, 0, 0};
     bool hasHealth = false;
     float health = 0;
+    bool pendingFix = false;
+    bool pendingBlow = false;
+    bool blowWithExplosion = true;
 };
 struct CarInterpolation {
     VehicleSync::Vec3 target{};
@@ -500,10 +503,12 @@ struct RemoteCar {
     std::optional<bool> frozen;
     std::optional<bool> engineOn;
     std::optional<bool> loadCollision;
+    std::optional<bool> collisions;
     std::optional<uint8_t> alpha;
     int appliedFrozen = -1;
     int appliedEngineOn = -1;
     int appliedLoadCollision = -1;
+    int appliedCollisions = -1;
     int appliedAlpha = -1;
     std::optional<HostedCar> lastBodyPose;
     int doorLockMode = 1;
@@ -2086,6 +2091,27 @@ static void ApplyCarSeed(uint32_t vehicleId, void* body, bool localVehicle) {
         if (seed.hasTurnSpeed) std::memcpy(raw + 0x74, seed.turn, sizeof seed.turn);
     }
     if (seed.hasHealth) WriteBodyHealth(body, seed.health);
+    if ((seed.pendingFix || seed.pendingBlow) && !IsPlaceableVtable(body)) {
+        auto** vtable = *reinterpret_cast<void***>(body);
+        if (vtable) {
+            if (seed.pendingFix) {
+                // Verified libGTASA.so 2.10 arm64 vtable[51] (+0x198) across CVehicle/CAutomobile/CBike/CBoat/CHeli/CPlane:
+                // _ZN11CAutomobile3FixEv / _ZN5CBike3FixEv / _ZN8CVehicle3FixEv / _ZN5CHeli3FixEv / _ZN6CPlane3FixEv.
+                using FixFn = void (*)(void*);
+                auto fix = reinterpret_cast<FixFn>(vtable[51]);
+                if (fix) fix(body);
+                WriteBodyHealth(body, 1000.f);
+            }
+            if (seed.pendingBlow) {
+                WriteBodyHealth(body, 0.f);
+                // Verified libGTASA.so 2.10 arm64 vtable[42] (+0x150) across CVehicle/CAutomobile/CBike/CBoat/CHeli/CPlane:
+                // _ZN11CAutomobile9BlowUpCarEP7CEntityh (bHideExplosion = withExplosion ? 0 : 1).
+                using BlowFn = void (*)(void*, void*, uint8_t);
+                auto blow = reinterpret_cast<BlowFn>(vtable[42]);
+                if (blow) blow(body, nullptr, seed.blowWithExplosion ? 0 : 1);
+            }
+        }
+    }
     static int reported = 0;
     if (reported < 6) {
         ++reported;
@@ -2228,13 +2254,14 @@ static void ApplyVehiclePresentation(uint32_t id, RemoteCar& car, void* body) {
         VehiclePaint::Track(clump, id, *car.colors);
         car.appliedColors = car.colors->rgb;
     }
-    std::optional<bool> frozen, engine, loadCollision;
+    std::optional<bool> frozen, engine, loadCollision, collisions;
     std::optional<uint8_t> alpha;
     {
         std::lock_guard lock(g_remoteMutex);
         frozen = car.frozen;
         engine = car.engineOn;
         loadCollision = car.loadCollision;
+        collisions = car.collisions;
         alpha = car.alpha;
     }
     auto* raw = static_cast<unsigned char*>(body);
@@ -2257,6 +2284,12 @@ static void ApplyVehiclePresentation(uint32_t id, RemoteCar& car, void* body) {
         // CRunningScript::ProcessCommands1400To1499 writes CPhysical flags 0x4000 at 0x420acc-0x420ad0.
         auto& flags = *reinterpret_cast<uint32_t*>(raw + 0x64);
         flags = (flags & ~0x4000u) | (*loadCollision ? 0 : 0x4000u);
+    }
+    if (collisions && car.appliedCollisions != *collisions) {
+        car.appliedCollisions = *collisions;
+        // CEntity +0x28 bit 0: bUsesCollision (matches WorldObjects.cpp:177 and ApplyPedCollisions).
+        auto& flags = *reinterpret_cast<uint32_t*>(raw + 0x28);
+        flags = (flags & ~1u) | (*collisions ? 1u : 0u);
     }
     if (alpha && car.appliedAlpha != *alpha) {
         using SetAlpha = void (*)(void*, int);
@@ -7080,6 +7113,11 @@ void RpcSetCollisions(uint32_t id, bool enabled) {
         g_localCollisions = enabled ? 1 : 0;
         return;
     }
+    if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") == 0) {
+        std::lock_guard lock(g_remoteMutex);
+        g_remoteCars[id].collisions = enabled;
+        return;
+    }
     std::lock_guard<std::mutex> lock(g_remoteMutex);
     auto& ped = g_remotePeds[id];
     ped.collisions = enabled;
@@ -7224,6 +7262,31 @@ void RpcSetVehicleHealth(uint32_t id, float health) {
     car.seed.pending = true;
     car.seed.hasHealth = true;
     car.seed.health = health;
+    if (car.observedVehicle) car.observedVehicle->syncHealth = false;
+}
+
+void RpcFixVehicle(uint32_t id) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.seed.pending = true;
+    car.seed.hasHealth = true;
+    car.seed.health = 1000.f;
+    car.seed.pendingFix = true;
+    car.seed.pendingBlow = false;
+    if (car.observedVehicle) car.observedVehicle->syncHealth = false;
+}
+
+void RpcBlowVehicle(uint32_t id, bool withExplosion) {
+    if (id == 0 || id == 0xFFFFFFFFu) return;
+    std::lock_guard lock(g_remoteMutex);
+    auto& car = g_remoteCars[id];
+    car.seed.pending = true;
+    car.seed.hasHealth = true;
+    car.seed.health = 0.f;
+    car.seed.pendingBlow = true;
+    car.seed.blowWithExplosion = withExplosion;
+    car.seed.pendingFix = false;
     if (car.observedVehicle) car.observedVehicle->syncHealth = false;
 }
 
@@ -7514,6 +7577,8 @@ void NoteRemoteVehicleMotion(uint32_t, float, float, float, float, float, float)
 void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate&) {}
 void RpcSetVehiclePosition(uint32_t, float, float, float) {}
 void RpcSetVehicleHealth(uint32_t, float) {}
+void RpcFixVehicle(uint32_t) {}
+void RpcBlowVehicle(uint32_t, bool) {}
 void RpcSetVehicleRotation(uint32_t, float, float, float) {}
 void RpcSetVehicleVelocity(uint32_t, float, float, float, bool) {}
 bool SetOwnedPedControl(uint32_t, const char*, bool) { return false; }

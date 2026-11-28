@@ -17,6 +17,7 @@
 //   object pool stride 0x220 (CObject::Create).
 #include "WorldObjects.h"
 
+#include "GameEngine.h"
 #include "../shared/WorldObjectFeed.h"
 #include "../shared/ServerWorld.h"
 
@@ -102,9 +103,28 @@ struct MatrixBuffer {
     alignas(16) unsigned char bytes[0x80];
 };
 
+bool HasUniformScale(const State& s) {
+    return std::fabs(s.scaleX - s.scaleY) < 1e-4f && std::fabs(s.scaleX - s.scaleZ) < 1e-4f;
+}
+
 void BuildMatrix(const Api& api, const State& s, MatrixBuffer& out) {
     std::memset(out.bytes, 0, sizeof(out.bytes));
     api.setRotate(out.bytes, s.rx, s.ry, s.rz);
+    if (!HasUniformScale(s)) {
+        // Non-uniform scale: scale the right/up/at basis vectors directly in CMatrix
+        // (uniform scale uses CObject::m_fScale at +0x1C0 in PreRender).
+        auto scaleVec = [&](size_t off, float k) {
+            float v[3];
+            std::memcpy(v, out.bytes + off, 12);
+            v[0] *= k;
+            v[1] *= k;
+            v[2] *= k;
+            std::memcpy(out.bytes + off, v, 12);
+        };
+        scaleVec(0x00, s.scaleX);
+        scaleVec(0x10, s.scaleY);
+        scaleVec(0x20, s.scaleZ);
+    }
     std::memcpy(out.bytes + 0x30, &s.x, 4);
     std::memcpy(out.bytes + 0x34, &s.y, 4);
     std::memcpy(out.bytes + 0x38, &s.z, 4);
@@ -169,7 +189,8 @@ uint64_t g_revision = 0;
 int g_frame = 0;
 
 bool SameTransform(const State& a, const State& b) {
-    return a.x == b.x && a.y == b.y && a.z == b.z && a.rx == b.rx && a.ry == b.ry && a.rz == b.rz;
+    return a.x == b.x && a.y == b.y && a.z == b.z && a.rx == b.rx && a.ry == b.ry && a.rz == b.rz &&
+           a.scaleX == b.scaleX && a.scaleY == b.scaleY && a.scaleZ == b.scaleZ;
 }
 
 void ApplyFlags(const Api& api, void* entity, const State& s, bool updateAlpha) {
@@ -179,6 +200,9 @@ void ApplyFlags(const Api& api, void* entity, const State& s, bool updateAlpha) 
     // Alpha 0 hides the object and keeps its collision (bIsVisible, bit 7).
     flags = s.alpha == 0 ? (flags & ~(uint64_t{1} << 7)) : (flags | (uint64_t{1} << 7));
     Field<uint8_t>(entity, 0x4B) = s.interior;
+    // CObject::m_fScale at +0x1C0 (verified libGTASA 2.10 arm64: CObject::Init 0x53bbe4 store 1.0f,
+    // CObject::PreRender 0x53e04c load + RwMatrixScale). Non-uniform scale is baked into CMatrix.
+    Field<float>(entity, 0x1C0) = HasUniformScale(s) ? s.scaleX : 1.0f;
     SetFrozen(entity, s.frozen);
     if (updateAlpha && api.setAlpha && Field<void*>(entity, 0x20) && s.alpha > 0) api.setAlpha(entity, s.alpha);
 }
@@ -247,27 +271,79 @@ void Pulse(float cameraX, float cameraY, float cameraZ) {
     }
     const uint64_t revision = WorldRPG::WorldObjects::Revision();
     const bool changed = revision != g_revision;
-    if (!changed && g_frame % 10) return;
+    const bool hasAttachments = WorldRPG::ServerWorld::HasAnyAttachments();
+    if (!changed && !hasAttachments && g_frame % 10) return;
     if (changed) {
         WorldRPG::WorldObjects::Copy(g_states);
         g_revision = revision;
     }
     const uint16_t dimension = WorldRPG::ServerWorld::LocalDimension();
     // Wanted: in the local dimension and near the camera, nearest first, at most kMaxLive.
-    std::vector<std::pair<float, const State*>> wanted;
+    std::vector<std::pair<float, State>> wanted;
     // One state per element; Copy lists the client source last, so a script's own
     // transform of a server object wins over the server's.
     std::unordered_map<uint32_t, const State*> latest;
     for (const State& s : g_states) latest[s.id] = &s;
+    auto resolveBasePose = [&](uint32_t rootId, float pos[3], float rotDeg[3]) -> bool {
+        pos[0] = pos[1] = pos[2] = 0.f;
+        rotDeg[0] = rotDeg[1] = rotDeg[2] = 0.f;
+        float heading = 0.f;
+        if (rootId == WorldRPG::ServerWorld::LocalPlayer()) {
+            WorldRPG::Game::CopyPose(pos[0], pos[1], pos[2], heading);
+            rotDeg[2] = heading;
+            return true;
+        }
+        WorldRPG::Game::LocalCarState car;
+        if (WorldRPG::Game::CopyLocalCar(car) && car.vehicleId == rootId) {
+            pos[0] = car.x; pos[1] = car.y; pos[2] = car.z;
+            rotDeg[0] = car.rotX; rotDeg[1] = car.rotY; rotDeg[2] = car.rotZ;
+            return true;
+        }
+        WorldRPG::Game::HostedCar traffic;
+        if (WorldRPG::Game::CopyTrafficVehicleState(rootId, traffic)) {
+            pos[0] = traffic.x; pos[1] = traffic.y; pos[2] = traffic.z;
+            rotDeg[0] = traffic.rotX; rotDeg[1] = traffic.rotY; rotDeg[2] = traffic.rotZ;
+            return true;
+        }
+        auto objIt = latest.find(rootId);
+        if (objIt != latest.end()) {
+            constexpr float kRadToDeg = 57.29577951308232f;
+            pos[0] = objIt->second->x; pos[1] = objIt->second->y; pos[2] = objIt->second->z;
+            rotDeg[0] = objIt->second->rx * kRadToDeg;
+            rotDeg[1] = objIt->second->ry * kRadToDeg;
+            rotDeg[2] = objIt->second->rz * kRadToDeg;
+            return true;
+        }
+        WorldRPG::ServerWorld::ActorSpawn vis;
+        if (WorldRPG::ServerWorld::CopyVisual(rootId, vis)) {
+            pos[0] = vis.x; pos[1] = vis.y; pos[2] = vis.z;
+            WorldRPG::Game::CopyRemotePose(rootId, pos[0], pos[1], pos[2]);
+            rotDeg[0] = vis.rotX; rotDeg[1] = vis.rotY; rotDeg[2] = vis.heading;
+            return true;
+        }
+        return WorldRPG::ServerWorld::ElementPose(rootId, pos[0], pos[1], pos[2]);
+    };
     for (const auto& entry : latest) {
-        const State& s = *entry.second;
+        State s = *entry.second;
+        if (hasAttachments) {
+            float attPos[3] = {}, attRotDeg[3] = {};
+            if (WorldRPG::ServerWorld::ResolveAttachedTransform(s.id, resolveBasePose, attPos, attRotDeg)) {
+                constexpr float kDegToRad = 0.017453292519943295f;
+                s.x = attPos[0];
+                s.y = attPos[1];
+                s.z = attPos[2];
+                s.rx = attRotDeg[0] * kDegToRad;
+                s.ry = attRotDeg[1] * kDegToRad;
+                s.rz = attRotDeg[2] * kDegToRad;
+            }
+        }
         if (!s.visible || (!s.allDimensions && s.dimension != dimension) || s.model < 0 || s.model > kMaxModel) continue;
         const float dx = s.x - cameraX, dy = s.y - cameraY, dz = s.z - cameraZ;
         const float d2 = dx * dx + dy * dy + dz * dz;
         const auto current = g_live.find(s.id);
         const bool live = current != g_live.end() && current->second.entity;
         const float limit = live ? kStreamOut : kStreamIn;
-        if (d2 <= limit * limit) wanted.emplace_back(d2, &s);
+        if (d2 <= limit * limit) wanted.emplace_back(d2, s);
     }
     std::sort(wanted.begin(), wanted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     size_t maxLive = kMinMaxLive;
@@ -279,7 +355,7 @@ void Pulse(float cameraX, float cameraY, float cameraZ) {
     }
     if (wanted.size() > maxLive) wanted.resize(maxLive);
     std::unordered_map<uint32_t, const State*> keep;
-    for (const auto& [d2, s] : wanted) keep[s->id] = s;
+    for (const auto& [d2, s] : wanted) keep[s.id] = &s;
     // Stream out what is gone, far, or changed model.
     for (auto it = g_live.begin(); it != g_live.end();) {
         const auto found = keep.find(it->first);
@@ -293,21 +369,21 @@ void Pulse(float cameraX, float cameraY, float cameraZ) {
     // Move what changed; create what is new, a few per frame.
     int creates = 0;
     for (const auto& [d2, s] : wanted) {
-        auto found = g_live.find(s->id);
+        auto found = g_live.find(s.id);
         if (found != g_live.end() && found->second.entity) {
             const State& was = found->second.state;
-            if (!SameTransform(was, *s) || was.collisions != s->collisions || was.interior != s->interior ||
-                was.frozen != s->frozen || was.alpha != s->alpha) {
-                Move(api, found->second, *s);
-                found->second.state = *s;
+            if (!SameTransform(was, s) || was.collisions != s.collisions || was.interior != s.interior ||
+                was.frozen != s.frozen || was.alpha != s.alpha) {
+                Move(api, found->second, s);
+                found->second.state = s;
             }
             continue;
         }
         if (creates >= kCreatesPerFrame) continue;
         ++creates;
-        if (void* entity = Create(api, *s)) {
-            g_live[s->id] = {entity, *s};
-            g_byEntity[entity] = s->id;
+        if (void* entity = Create(api, s)) {
+            g_live[s.id] = {entity, s};
+            g_byEntity[entity] = s.id;
         }
     }
 }

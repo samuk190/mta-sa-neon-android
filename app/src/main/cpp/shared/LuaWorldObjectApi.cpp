@@ -567,6 +567,7 @@ int SetObjectScale(lua_State* L) {
     }
     ApplyTree(object->id, [&](Object& item) {
         item.scale = scale;
+        item.localOverride = true;
         return true;
     });
     lua_pushboolean(L, 1);
@@ -972,8 +973,11 @@ int ReleaseObjectGangTag(lua_State* L) {
 }
 
 int GetElementPositionObject(lua_State* L) {
+    const uint32_t id = ElementIdOf(L, 1);
+    ServerWorld::Attachment att;
+    const bool attached = (id != 0 && ServerWorld::CopyAttachment(id, att) && att.parent != 0xFFFFFFFFu && att.parent != 0);
     float x = 0.f, y = 0.f, z = 0.f;
-    if (CopyObjectPose(ElementIdOf(L, 1), x, y, z)) {
+    if (!attached && CopyObjectPose(id, x, y, z)) {
         lua_pushnumber(L, x);
         lua_pushnumber(L, y);
         lua_pushnumber(L, z);
@@ -1129,6 +1133,9 @@ void PublishClientObjects() {
         state.rx = object.rot.x;
         state.ry = object.rot.y;
         state.rz = object.rot.z;
+        state.scaleX = object.scale.x;
+        state.scaleY = object.scale.y;
+        state.scaleZ = object.scale.z;
         ClientElementWorldState(id, state.interior, state.dimension, state.collisions, state.frozen, state.alpha);
         if (!object.clientCreated) {
             state.dimension = ServerWorld::DimensionOf(id);
@@ -1199,6 +1206,7 @@ bool ServerSetObjectScale(uint32_t id, float x, float y, float z) {
     Object* object = Live(id);
     if (!object) return false;
     object->scale = {x, y, z};
+    object->localOverride = true;
     return true;
 }
 

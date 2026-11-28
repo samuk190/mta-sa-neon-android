@@ -9,6 +9,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
+#include "WorldNativeBridge.h"
 #include "../gtasa/GameEngine.h"
 
 #include "lua.hpp"
@@ -301,9 +302,45 @@ int ProcessLineAgainstMesh(lua_State* L) {
     return Fail(L);
 }
 
+const char* EntityTypeName(uint8_t entityType) {
+    switch (entityType) {
+        case 1: return "building";
+        case 2: return "vehicle";
+        case 3: return "ped";
+        case 4: return "object";
+        case 5: return "dummy";
+        default: return "unknown";
+    }
+}
+
 int TestSphereAgainstWorld(lua_State* L) {
-    if (!ReadVec(L, "testSphereAgainstWorld", 1) || !Finite(L, 4))
+    float x = 0.f, y = 0.f, z = 0.f;
+    if (!ReadVecValues(L, "testSphereAgainstWorld", 1, x, y, z) || !Finite(L, 4))
         return luaL_error(L, "Bad argument @ 'testSphereAgainstWorld' [Expected vector3 and radius]");
+    const float radius = static_cast<float>(lua_tonumber(L, 4));
+    // Arg 5 is optional ignoredElement (not yet mapped to native CEntity*).
+    const bool checkBuildings = ReadBoolDefault(L, 6, true);
+    const bool checkVehicles = ReadBoolDefault(L, 7, true);
+    const bool checkPeds = ReadBoolDefault(L, 8, true);
+    const bool checkObjects = ReadBoolDefault(L, 9, true);
+    const bool checkDummies = ReadBoolDefault(L, 10, true);
+    const bool cameraIgnore = ReadBoolDefault(L, 11, false);
+    WorldNative::SphereTestResult res{};
+    if (WorldNative::TestSphereAgainstWorld(x, y, z, radius, checkBuildings, checkVehicles, checkPeds,
+                                            checkObjects, checkDummies, cameraIgnore, res)) {
+        lua_pushboolean(L, res.hit ? 1 : 0);
+        lua_pushnil(L);
+        lua_pushinteger(L, res.model);
+        lua_pushnumber(L, res.x);
+        lua_pushnumber(L, res.y);
+        lua_pushnumber(L, res.z);
+        lua_pushnumber(L, res.rxDeg);
+        lua_pushnumber(L, res.ryDeg);
+        lua_pushnumber(L, res.rzDeg);
+        lua_pushinteger(L, res.lod);
+        lua_pushstring(L, EntityTypeName(res.entityType));
+        return 11;
+    }
     if (!g_diagSphere) {
         g_diagSphere = true;
         LUA_LOGE("DIAG testSphereAgainstWorld: CWorld::TestSphereAgainstWorld is not hooked");

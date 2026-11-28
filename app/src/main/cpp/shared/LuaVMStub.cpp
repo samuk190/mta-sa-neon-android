@@ -648,7 +648,7 @@ static void ApplyKeyEvents() {
         const bool allowed = fireHandlers("onClientKey", 2, ClientRootElement());
         lua_setglobal(L, "source");
         if (!allowed) continue;
-        if (GuiKeyCapture() || MtaWindowChatInputActive()) continue;
+        if (GuiBlocksBinds() || MtaWindowChatInputActive()) continue;
         std::vector<KeyBindCall> calls;
         std::vector<KeyBindCommand> commands;
         KeyBindsCollect(key, down, calls, commands);
@@ -1807,8 +1807,92 @@ static int l_getElementType(lua_State* L) {
     return 1;
 }
 
+static bool CopyUnattachedElementTransform(uint32_t id, float pos[3], float rotDeg[3]) {
+    pos[0] = pos[1] = pos[2] = 0.f;
+    rotDeg[0] = rotDeg[1] = rotDeg[2] = 0.f;
+    float heading = 0.f;
+    Game::LocalCarState car;
+    if (id == 0 || id == ServerWorld::LocalPlayer()) {
+        Game::CopyPose(pos[0], pos[1], pos[2], heading);
+        rotDeg[2] = heading;
+        return true;
+    }
+    if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        pos[0] = car.x;
+        pos[1] = car.y;
+        pos[2] = car.z;
+        rotDeg[0] = car.rotX;
+        rotDeg[1] = car.rotY;
+        rotDeg[2] = car.rotZ;
+        return true;
+    }
+    Game::HostedCar traffic;
+    if (Game::CopyTrafficVehicleState(id, traffic)) {
+        pos[0] = traffic.x;
+        pos[1] = traffic.y;
+        pos[2] = traffic.z;
+        rotDeg[0] = traffic.rotX;
+        rotDeg[1] = traffic.rotY;
+        rotDeg[2] = traffic.rotZ;
+        return true;
+    }
+    float objPos[3] = {}, objRotRad[3] = {}, objScale[3] = {};
+    bool moving = false;
+    if (CopyObjectState(id, objPos, objRotRad, objScale, moving)) {
+        constexpr float kRadToDeg = 57.29577951308232f;
+        pos[0] = objPos[0];
+        pos[1] = objPos[1];
+        pos[2] = objPos[2];
+        rotDeg[0] = objRotRad[0] * kRadToDeg;
+        rotDeg[1] = objRotRad[1] * kRadToDeg;
+        rotDeg[2] = objRotRad[2] * kRadToDeg;
+        return true;
+    }
+    Spatial::Element shape;
+    if (CopySpatialShape(id, shape)) {
+        pos[0] = shape.position.x;
+        pos[1] = shape.position.y;
+        pos[2] = shape.position.z;
+        return true;
+    }
+    Projectiles::Snapshot projectile;
+    if (Projectiles::Copy(id, projectile)) {
+        pos[0] = projectile.position.x;
+        pos[1] = projectile.position.y;
+        pos[2] = projectile.position.z;
+        return true;
+    }
+    ServerWorld::ActorSpawn vis;
+    const bool hasVisual = ServerWorld::CopyVisual(id, vis);
+    if (Game::CopyRemotePose(id, pos[0], pos[1], pos[2])) {
+        if (hasVisual) {
+            rotDeg[0] = vis.rotX;
+            rotDeg[1] = vis.rotY;
+            rotDeg[2] = vis.heading;
+        }
+        return true;
+    }
+    if (hasVisual) {
+        pos[0] = vis.x;
+        pos[1] = vis.y;
+        pos[2] = vis.z;
+        rotDeg[0] = vis.rotX;
+        rotDeg[1] = vis.rotY;
+        rotDeg[2] = vis.heading;
+        return true;
+    }
+    return ServerWorld::ElementPose(id, pos[0], pos[1], pos[2]);
+}
+
 static int l_getElementPosition(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
+    float attPos[3] = {}, attRot[3] = {};
+    if (id != 0 && ServerWorld::ResolveAttachedTransform(id, CopyUnattachedElementTransform, attPos, attRot)) {
+        lua_pushnumber(L, attPos[0]);
+        lua_pushnumber(L, attPos[1]);
+        lua_pushnumber(L, attPos[2]);
+        return 3;
+    }
     Spatial::Element shape;
     if(CopySpatialShape(id,shape)) {
         lua_pushnumber(L,shape.position.x); lua_pushnumber(L,shape.position.y); lua_pushnumber(L,shape.position.z); return 3;

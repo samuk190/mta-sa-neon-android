@@ -302,6 +302,8 @@ void NoteRemoteVehicleMotion(uint32_t id, float mx, float my, float mz, float tx
 void NoteUnoccupiedVehicleSync(const VehicleSync::UnoccupiedUpdate& update);
 void RpcSetVehiclePosition(uint32_t id, float x, float y, float z);
 void RpcSetVehicleHealth(uint32_t id, float health);
+void RpcFixVehicle(uint32_t id);
+void RpcBlowVehicle(uint32_t id, bool withExplosion);
 void RpcSetVehicleRotation(uint32_t id, float x, float y, float z);
 void RpcSetVehicleVelocity(uint32_t id, float x, float y, float z, bool angular);
 bool SetOwnedPedControl(uint32_t id, const char* control, bool enabled);

@@ -161,6 +161,18 @@ void NoteAttachedOffsets(uint32_t id, float x, float y, float z, float rx, float
 // 0xFFFFFFFF. The offsets stay, as on desktop. An element is never attached to itself.
 void NoteAttachTo(uint32_t id, uint32_t parent);
 std::vector<uint32_t> CopyAttachedElements(uint32_t parent);
+bool HasAnyAttachments();
+// Desktop Utils::AttachedMatrix + CClientEntity::DoAttaching (CClientEntity.cpp:1185-1197,
+// Shared/sdk/CMatrix.h:83-102, 237-278). Rotation angles are in degrees.
+void ComposeAttachedTransform(const float parentPos[3], const float parentRotDeg[3],
+                              const float offsetPos[3], const float offsetRotDeg[3],
+                              float outPos[3], float outRotDeg[3]);
+// Resolves world pose of an attached element by walking its parent chain (cycle-safe, max depth 8).
+// Returns false if id is not attached or the root ancestor pose cannot be resolved.
+bool ResolveAttachedTransform(
+    uint32_t id,
+    const std::function<bool(uint32_t, float[3], float[3])>& basePoseGetter,
+    float outPos[3], float outRotDeg[3]);
 // PLAYER_QUIT (5): CPacketHandler::Packet_PlayerQuit -> CClientGame::QuitPlayer deletes the player element.
 // reason is CClientGame::QuitPlayer's text ("Quit", "Kicked", ... "Unknown").
 void OnPlayerQuit(uint32_t id, const char* reason = "Unknown");

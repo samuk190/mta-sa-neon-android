@@ -85,6 +85,9 @@ bool GuiEditErase();
 // The phone then shows the soft keyboard and delivers keystrokes as onClientCharacter
 // and onClientKey, which is how a DX edit (the login boxes) receives text.
 bool GuiKeyCapture();
+// True when key binds should be suppressed: INPUTMODE_NO_BINDS, or
+// INPUTMODE_NO_BINDS_ON_EDIT while a writable visible gui-edit or gui-memo has focus.
+bool GuiBlocksBinds();
 // onClientGUIFocus / onClientGUIBlur. focused is true for focus, false for blur.
 using GuiFocusHook = void (*)(uint32_t id, bool focused);
 void GuiSetFocusHook(GuiFocusHook hook);

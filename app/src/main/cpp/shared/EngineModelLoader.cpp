@@ -620,6 +620,127 @@ bool NativeFreeModel(int id) {
     return freed;
 }
 
+namespace {
+struct ColOverride {
+    void* originalCol = nullptr;
+    bool originalOwned = false;
+    void* customCol = nullptr;
+};
+std::unordered_map<std::uint16_t, ColOverride> customCols;
+
+struct ColSymbols {
+    bool resolved = false;
+    bool ok = false;
+    void* (*colNew)(std::size_t) = nullptr;
+    void (*colDelete)(void*) = nullptr;
+    void (*colCtor)(void*) = nullptr;
+    void (*colDtor)(void*) = nullptr;
+    void (*loadVer1)(unsigned char*, void*, const char*) = nullptr;
+    void (*loadVer2)(unsigned char*, unsigned int, void*, const char*) = nullptr;
+    void (*loadVer3)(unsigned char*, unsigned int, void*, const char*) = nullptr;
+    void (*loadVer4)(unsigned char*, unsigned int, void*, const char*) = nullptr;
+    void (*setColModel)(void*, void*, bool) = nullptr;
+};
+
+ColSymbols& ResolveColSymbols() {
+    static ColSymbols syms;
+    if (syms.resolved) return syms;
+    syms.resolved = true;
+    void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_NOW);
+    if (!lib) return syms;
+    auto sym = [&](const char* name) { return dlsym(lib, name); };
+    syms.colNew = reinterpret_cast<void* (*)(std::size_t)>(sym("_ZN9CColModelnwEm"));
+    syms.colDelete = reinterpret_cast<void (*)(void*)>(sym("_ZN9CColModeldlEPv"));
+    syms.colCtor = reinterpret_cast<void (*)(void*)>(sym("_ZN9CColModelC1Ev"));
+    syms.colDtor = reinterpret_cast<void (*)(void*)>(sym("_ZN9CColModelD1Ev"));
+    syms.loadVer1 = reinterpret_cast<void (*)(unsigned char*, void*, const char*)>(
+        sym("_ZN11CFileLoader18LoadCollisionModelEPhR9CColModelPKc"));
+    syms.loadVer2 = reinterpret_cast<void (*)(unsigned char*, unsigned int, void*, const char*)>(
+        sym("_ZN11CFileLoader22LoadCollisionModelVer2EPhjR9CColModelPKc"));
+    syms.loadVer3 = reinterpret_cast<void (*)(unsigned char*, unsigned int, void*, const char*)>(
+        sym("_ZN11CFileLoader22LoadCollisionModelVer3EPhjR9CColModelPKc"));
+    syms.loadVer4 = reinterpret_cast<void (*)(unsigned char*, unsigned int, void*, const char*)>(
+        sym("_ZN11CFileLoader22LoadCollisionModelVer4EPhjR9CColModelPKc"));
+    syms.setColModel = reinterpret_cast<void (*)(void*, void*, bool)>(
+        sym("_ZN14CBaseModelInfo11SetColModelEP9CColModelb"));
+    syms.ok = syms.colNew && syms.colDelete && syms.colCtor && syms.colDtor &&
+              syms.loadVer1 && syms.loadVer2 && syms.loadVer3 && syms.setColModel;
+    return syms;
+}
+}  // namespace
+
+// Desktop CRenderWareSA::ReadCOL (CRenderWareSA.cpp:454-488) + CBaseModelInfo::SetColModel.
+bool NativeReplaceCOL(std::uint16_t model, std::span<const std::uint8_t> colBytes) {
+    if (colBytes.size() < 48 || colBytes[0] != 'C' || colBytes[1] != 'O' || colBytes[2] != 'L') return false;
+    const char ver = static_cast<char>(colBytes[3]);
+    if (ver != 'L' && ver != '2' && ver != '3' && ver != '4') return false;
+    std::uint32_t fileSize = 0;
+    std::memcpy(&fileSize, colBytes.data() + 4, 4);
+    if (fileSize < 0x18u || static_cast<std::size_t>(fileSize) + 8u > colBytes.size()) return false;
+    std::vector<std::uint8_t> copy(colBytes.begin(), colBytes.end());
+    bool replaced = false;
+    GameTasks::Run([&] {
+        auto& syms = ResolveColSymbols();
+        if (!syms.ok || !ResolveRenderWare()) return;
+        void* info = GetModel(model);
+        if (!info) return;
+        if (ver == '4' && !syms.loadVer4) return;
+        void* col = syms.colNew(0x38);
+        if (!col) return;
+        syms.colCtor(col);
+        unsigned char* payload = copy.data() + 32;
+        const unsigned int payloadSize = fileSize - 0x18u;
+        if (ver == 'L') syms.loadVer1(payload, col, nullptr);
+        else if (ver == '2') syms.loadVer2(payload, payloadSize, col, nullptr);
+        else if (ver == '3') syms.loadVer3(payload, payloadSize, col, nullptr);
+        else if (ver == '4') syms.loadVer4(payload, payloadSize, col, nullptr);
+
+        auto it = customCols.find(model);
+        if (it == customCols.end()) {
+            // CBaseModelInfo +0x30 m_pColModel, +0x2C bit 7 bDoWeOwnTheColModel (verified _ZN14CBaseModelInfo11SetColModelEP9CColModelb).
+            ColOverride entry;
+            entry.originalCol = Field<void*>(info, 0x30);
+            entry.originalOwned = (Field<std::uint16_t>(info, 0x2C) & 0x80u) != 0;
+            entry.customCol = col;
+            customCols[model] = entry;
+        } else {
+            void* oldCustom = it->second.customCol;
+            it->second.customCol = col;
+            syms.setColModel(info, col, false);
+            if (oldCustom) {
+                syms.colDtor(oldCustom);
+                syms.colDelete(oldCustom);
+            }
+            replaced = true;
+            return;
+        }
+        syms.setColModel(info, col, false);
+        replaced = true;
+    });
+    return replaced;
+}
+
+bool NativeRestoreCOL(std::uint16_t model) {
+    bool restored = false;
+    GameTasks::Run([&] {
+        const auto it = customCols.find(model);
+        if (it == customCols.end()) return;
+        auto& syms = ResolveColSymbols();
+        if (syms.ok && ResolveRenderWare()) {
+            if (void* info = GetModel(model)) {
+                syms.setColModel(info, it->second.originalCol, it->second.originalOwned);
+            }
+            if (it->second.customCol) {
+                syms.colDtor(it->second.customCol);
+                syms.colDelete(it->second.customCol);
+            }
+        }
+        customCols.erase(it);
+        restored = true;
+    });
+    return restored;
+}
+
 } // namespace WorldRPG::Script
 
 #else
@@ -634,6 +755,10 @@ void* NativeLoadTXD(std::span<const std::uint8_t> bytes, bool) {
 bool NativeImportTXD(std::uint16_t, std::uint64_t, void*) { return false; }
 bool NativeReplaceDFF(std::uint16_t, std::uint64_t, const DffSource&, bool) { return false; }
 bool NativeRestoreDFF(std::uint16_t) { return false; }
+bool NativeReplaceCOL(std::uint16_t, std::span<const std::uint8_t> colBytes) {
+    return colBytes.size() >= 32 && colBytes[0] == 'C' && colBytes[1] == 'O' && colBytes[2] == 'L';
+}
+bool NativeRestoreCOL(std::uint16_t) { return true; }
 void NativeReleaseModelAsset(std::uint64_t, void*) {}
 int NativeAllocateObjectModel(int) { return -1; }
 bool NativeFreeModel(int) { return false; }

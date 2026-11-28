@@ -9,6 +9,19 @@
 
 namespace WorldRPG::WorldNative {
 
+struct SphereTestResult {
+    bool hit = false;
+    uint16_t model = 0;
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+    float rxDeg = 0.f;
+    float ryDeg = 0.f;
+    float rzDeg = 0.f;
+    uint16_t lod = 0;
+    uint8_t entityType = 0;  // GTA eEntityType: 1=building, 2=vehicle, 3=ped, 4=object, 5=dummy
+};
+
 struct Hooks {
     // Returns live CPool capacity/used count for pool index 0..19, or -1 if unavailable.
     int (*getPoolCapacity)(int pool) = nullptr;
@@ -22,8 +35,17 @@ struct Hooks {
                           float radius, float r, float g, float b, bool fog, bool shadow) = nullptr;
     bool (*preloadWorldArea)(float x, float y, float z, int mode) = nullptr;
     // mode: 0 = all, 1 = models, 2 = collisions
+    bool (*createSwatRope)(float x, float y, float z, uint32_t durationMs) = nullptr;
 
-    // Building removal via CPools::ms_pBuildingPool + CWorld::Remove/Add; returns count removed/restored, or -1 if unhooked.
+    // World geometry queries; return true when the native hook is installed and succeeded.
+    bool (*testSphereAgainstWorld)(float x, float y, float z, float radius,
+                                   bool checkBuildings, bool checkVehicles, bool checkPeds,
+                                   bool checkObjects, bool checkDummies, bool cameraIgnore,
+                                   SphereTestResult& out) = nullptr;
+    bool (*getGarageGeometry)(int garageId, float pos[3], float sizeWDH[3], float bbox[4]) = nullptr;
+
+    // Building/dummy removal via CPools::ms_pBuildingPool + ms_pDummyPool + CWorld::Remove/Add;
+    // returns count removed/restored, or -1 if unhooked.
     int (*removeWorldModel)(uint16_t model, float radius, float x, float y, float z, int8_t interior) = nullptr;
     int (*restoreWorldModel)(uint16_t model, float radius, float x, float y, float z, int8_t interior) = nullptr;
     int (*restoreAllWorldModels)() = nullptr;
@@ -51,6 +73,12 @@ bool ExtinguishFire(float x, float y, float z, float radius);
 bool AddPointLight(int type, float x, float y, float z, float dx, float dy, float dz,
                    float radius, float r, float g, float b, bool fog, bool shadow);
 bool PreloadWorldArea(float x, float y, float z, int mode);
+bool CreateSwatRope(float x, float y, float z, uint32_t durationMs);
+bool TestSphereAgainstWorld(float x, float y, float z, float radius,
+                            bool checkBuildings, bool checkVehicles, bool checkPeds,
+                            bool checkObjects, bool checkDummies, bool cameraIgnore,
+                            SphereTestResult& out);
+bool GetGarageGeometry(int garageId, float pos[3], float sizeWDH[3], float bbox[4]);
 int RemoveWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior);
 int RestoreWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior);
 int RestoreAllWorldModels();

@@ -664,6 +664,8 @@ void RpcSetVehicleHealth(uint32_t id, float health) {
     probe.vehicleHealthId = id;
     probe.vehicleHealth = health;
 }
+void RpcFixVehicle(uint32_t id) { RpcSetVehicleHealth(id, 1000.f); }
+void RpcBlowVehicle(uint32_t id, bool) { RpcSetVehicleHealth(id, 0.f); }
 void RpcSetVehicleRotation(uint32_t, float, float, float) {}
 void RpcSetVehicleVelocity(uint32_t, float, float, float, bool) {}
 bool SetOwnedPedControl(uint32_t, const char*, bool) { return false; }

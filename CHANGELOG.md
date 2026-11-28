@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added / Fixed — Native GTA world hooks, live element attachment, vehicle/object/COL parity, and GUI CEGUI property/bind-blocking sync (2026-11-27)
+
+- **Game-thread-safe `WorldNativeHooks` & remaining native world/FX bindings** (`CWorldSA.cpp`, `CFxSA.cpp`, `CRopesSA.cpp`, `CGarageSA.h`, `shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaWorldQueryApi.cpp`, `shared/LuaSightApi.cpp`, `shared/EngineWorld.cpp`, `gtasa/RemoteCombat.cpp`):
+  - Dispatched all GTA world/FX native mutations onto the GTA game thread via `GameTasks::Defer`/`Run`/`RunQuery` and fixed all 8 `libGTASA.so` 2.10 arm64 `Fx_c::Add*` mangled signatures (`R7CVector`/`R6RwRGBA`, value `CVector across` for `AddSparks`, `int material` for `AddPunchImpact`).
+  - Implemented verified `NativeRemoveWorldModel`/`NativeRestoreWorldModel`/`NativeRestoreAllWorldModels` scanning `CPools::ms_pBuildingPool` and `CPools::ms_pDummyPool` (pool stride `0x60`, `CEntity` `+0x08/+0x18/+0x32/+0x4B`).
+  - Implemented `NativeTestSphereAgainstWorld` (`CWorld::TestSphereAgainstWorld`, `entityType` at `CEntity +0x5A & 7`), `NativeCreateSwatRope` (`CRopes::CreateRopeForSwatPed`), and `NativeGetGarageGeometry` (`CGarages::aGarages` stride `0xF4`, `+0x00/+0x1C..+0x34`).
+  - Wired `createSWATRope`, `testSphereAgainstWorld`, `getGaragePosition`/`Size`/`BoundingBox`, `enginePreloadWorldAreaInDirection`, and remote combat bullet impact/spark FX + health RPC (`RemoteCombat.cpp`). Not yet run on a physical device.
+- **Live `attachElements` / `detachElements` world-transform propagation** (`Shared/sdk/CMatrix.h:83-102, 237-278`, `CClientEntity::UpdateAttachedPosition`, `shared/ServerWorld.{h,cpp}`, `shared/LuaVMStub.cpp`, `shared/LuaFieldApi.cpp`, `shared/LuaWorldObjectApi.cpp`, `shared/LuaElementApi.cpp`, `shared/ServerRpc.cpp`, `gtasa/WorldObjects.cpp`):
+  - Added cycle-safe `ServerWorld::ComposeAttachedTransform` & `ResolveAttachedTransform`, wired into `getElementPosition`, `getElementRotation`, `WorldObjects::Pulse` per-frame `CObject` streaming, and `detachElements` / `HandleDetach` world-pose snapshots. Not yet run on a physical device.
+- **Native GTA vehicle RPCs, object scale, and COL model replacement** (`CVehicleSA.cpp`, `CObjectSA.cpp`, `CRenderWareSA.cpp:454-488`, `gtasa/GameEngine.{h,cpp}`, `gtasa/WorldObjects.cpp`, `shared/WorldObjectFeed.{h,cpp}`, `shared/LuaWorldObjectApi.cpp`, `shared/LuaVehicleApi.cpp`, `shared/ServerRpc.cpp`, `shared/PacketHandler.cpp`, `shared/EngineModelLoader.{h,cpp}`, `shared/EngineAssets.cpp`):
+  - Added verified `libGTASA.so` 2.10 arm64 vtable calls `CVehicle::Fix()` (`vtable[51]`, `+0x198`) and `CVehicle::BlowUpCar()` (`vtable[42]`, `+0x150`) via `Game::RpcFixVehicle`/`RpcBlowVehicle`, plus `SetElementCollisionsEnabled` for vehicles (`CEntity +0x28` bit 0).
+  - Wired `CObject::m_fScale` (`+0x1C0`, verified `CObject::Init` `0x53bbe4` & `CObject::PreRender` `0x53e04c`) for uniform scale and `CMatrix` basis scaling for non-uniform scale from `setObjectScale` / `SET_OBJECT_SCALE` through `WorldObjects::State`.
+  - Implemented `NativeReplaceCOL`/`NativeRestoreCOL` via `CColModel::operator new`/`CColModel`/`CFileLoader::LoadCollisionModel*`/`CBaseModelInfo::SetColModel` on the game thread. Not yet run on a physical device.
+- **GUI CEGUI property live sync & `no_binds_when_editing` bind blocking** (`shared/LuaGuiApi.{h,cpp}`, `shared/LuaVMStub.cpp`):
+  - Synced `guiSetProperty`/`guiGetProperty` with live `GuiElement` state (`Visible`, `Alpha`, `Disabled`, `Text`, `Font`, `ReadOnly`, `AlwaysOnTop`, `NormalTextColour`, `MaxTextLength`, `MaskText`, `Selected`, `SizingEnabled`, `DragMovingEnabled`, `HorzFormatting`, `VertFormatting`, `WordWrap`).
+  - Extended `InputEnabledNow()` to writable `gui-memo` elements and wired `GuiBlocksBinds()` into key-bind dispatch so `guiSetInputMode("no_binds_when_editing")` blocks key binds while typing in edits/memos.
+
 ### Fixed — Remote players' equipped guns, holsters, and items visibility on mobile (2026-11-27)
 
 - **Show other players' equipped items/holsters/bandoliers (`getElementsByType("player")`, remote pose & heading)** (`CLuaElementDefs.cpp:798-848`, `CPacketHandler.cpp:1049-1056`, `CClientPed.cpp:8657-8822`, `shared/ServerWorld.h`, `shared/ServerWorld.cpp`, `shared/LuaVMStub.cpp`, `gtasa/GameEngine.cpp`, `tools/headless/resource_tests.cpp`):

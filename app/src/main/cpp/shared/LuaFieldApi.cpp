@@ -69,7 +69,6 @@ bool g_weatherSet = false;
 bool g_diagAlpha = false;
 bool g_diagInterior = false;
 bool g_diagDimension = false;
-bool g_diagHealth = false;
 bool g_diagGravity = false;
 bool g_diagSpeed = false;
 bool g_diagMinute = false;
@@ -235,6 +234,61 @@ int l_getElementRotation(lua_State* L) {
     else if (!lua_isnoneornil(L, 2) && lua_type(L, 2) != LUA_TSTRING) {
         lua_pushboolean(L, 0);
         return 1;
+    }
+    float attPos[3] = {}, attRot[3] = {};
+    if (id != 0 && ServerWorld::ResolveAttachedTransform(
+            id,
+            [](uint32_t rootId, float pos[3], float rotDeg[3]) -> bool {
+                pos[0] = pos[1] = pos[2] = 0.f;
+                rotDeg[0] = rotDeg[1] = rotDeg[2] = 0.f;
+                Game::LocalCarState c;
+                if (Game::CopyLocalCar(c) && c.vehicleId == rootId) {
+                    pos[0] = c.x; pos[1] = c.y; pos[2] = c.z;
+                    rotDeg[0] = c.rotX; rotDeg[1] = c.rotY; rotDeg[2] = c.rotZ;
+                    return true;
+                }
+                Game::HostedCar t;
+                if (Game::CopyTrafficVehicleState(rootId, t)) {
+                    pos[0] = t.x; pos[1] = t.y; pos[2] = t.z;
+                    rotDeg[0] = t.rotX; rotDeg[1] = t.rotY; rotDeg[2] = t.rotZ;
+                    return true;
+                }
+                float objPos[3] = {}, objRotRad[3] = {}, objScale[3] = {};
+                bool moving = false;
+                if (CopyObjectState(rootId, objPos, objRotRad, objScale, moving)) {
+                    constexpr float kRadToDeg = 57.29577951308232f;
+                    pos[0] = objPos[0]; pos[1] = objPos[1]; pos[2] = objPos[2];
+                    rotDeg[0] = objRotRad[0] * kRadToDeg;
+                    rotDeg[1] = objRotRad[1] * kRadToDeg;
+                    rotDeg[2] = objRotRad[2] * kRadToDeg;
+                    return true;
+                }
+                float zHeading = 0.f;
+                if (rootId == ServerWorld::LocalPlayer()) {
+                    Game::CopyPose(pos[0], pos[1], pos[2], zHeading);
+                    rotDeg[2] = zHeading;
+                    return true;
+                }
+                ServerWorld::ActorSpawn vis;
+                if (ServerWorld::CopyVisual(rootId, vis)) {
+                    pos[0] = vis.x; pos[1] = vis.y; pos[2] = vis.z;
+                    Game::CopyRemotePose(rootId, pos[0], pos[1], pos[2]);
+                    rotDeg[0] = vis.rotX; rotDeg[1] = vis.rotY; rotDeg[2] = vis.heading;
+                    return true;
+                }
+                if (HeadingOf(rootId, zHeading)) {
+                    rotDeg[2] = zHeading;
+                    VehicleTilt(rootId, rotDeg[0], rotDeg[1]);
+                    ServerWorld::ElementPose(rootId, pos[0], pos[1], pos[2]);
+                    return true;
+                }
+                return false;
+            },
+            attPos, attRot)) {
+        lua_pushnumber(L, attRot[0]);
+        lua_pushnumber(L, attRot[1]);
+        lua_pushnumber(L, attRot[2]);
+        return 3;
     }
     Game::LocalCarState car;
     if (Game::CopyLocalCar(car) && car.vehicleId == id) {
@@ -541,7 +595,12 @@ int l_setElementHealth(lua_State* L) {
     g_fields[id].healthSet = true;
     g_fields[id].health = health;
     if (id == ServerWorld::LocalPlayer()) Game::NoteLocalHealth(health);
-    else Diag(g_diagHealth, "DIAG setElementHealth: CPed::SetHealth is applied for the local player only");
+    else if (kind == Kind::Vehicle) {
+        ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, health);
+        Game::RpcSetVehicleHealth(id, health);
+    } else if (kind == Kind::Ped || kind == Kind::Player) {
+        Game::RpcSetHealth(id, health);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1741,6 +1800,12 @@ void ClientElementWorldState(uint32_t id, uint8_t& interior, uint16_t& dimension
     if (found->second.collisionsSet) collisions = found->second.collisions;
     if (found->second.frozenSet) frozen = found->second.frozen;
     if (found->second.alphaSet) alpha = found->second.alpha;
+}
+
+void NoteClientElementHealth(uint32_t id, float health) {
+    if (!id) return;
+    g_fields[id].healthSet = true;
+    g_fields[id].health = health;
 }
 
 // CWorldRPCs.cpp:72-345 and 564-621. The values arrive without the range checks the Lua setters make, as on

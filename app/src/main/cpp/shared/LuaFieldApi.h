@@ -8,6 +8,7 @@ uint16_t ElementDimensionValue(uint32_t id);
 // Interior, dimension, collisions, frozen and alpha state scripts set on a client element (defaults otherwise).
 void ClientElementWorldState(uint32_t id, uint8_t& interior, uint16_t& dimension, bool& collisions, bool& frozen,
                              uint8_t& alpha);
+void NoteClientElementHealth(uint32_t id, float health);
 
 // Server world RPCs (CWorldRPCs.cpp). They write the state the Lua getters read. VM thread only; ServerRpc::Pump
 // calls them. Engine writes that are not hooked stay DIAG, as in the Lua setters.

@@ -609,6 +609,130 @@ std::vector<uint32_t> CopyAttachedElements(uint32_t parent) {
     return result;
 }
 
+bool HasAnyAttachments() {
+    std::lock_guard lock(g_lock);
+    return !g_attachmentOrder.empty();
+}
+
+namespace {
+constexpr float kAttachDegToRad = 0.017453292519943295f;
+constexpr float kAttachRadToDeg = 57.29577951308232f;
+
+struct AttachMatrix {
+    float r[3], f[3], u[3], p[3];
+};
+
+// Matches desktop CMatrix::SetRotation + SetPosition (Shared/sdk/CMatrix.h:250-285).
+AttachMatrix MakeAttachMatrix(const float pos[3], const float rotDeg[3]) {
+    const float rx = rotDeg[0] * kAttachDegToRad;
+    const float ry = rotDeg[1] * kAttachDegToRad;
+    const float rz = rotDeg[2] * kAttachDegToRad;
+    const float cosX = std::cos(-rx), sinX = std::sin(-rx);
+    const float cosY = std::cos(-ry), sinY = std::sin(-ry);
+    const float cosZ = std::cos(rz), sinZ = std::sin(rz);
+    AttachMatrix m{};
+    m.r[0] = cosY * cosZ;
+    m.r[1] = cosY * sinZ;
+    m.r[2] = sinY;
+    m.f[0] = sinX * sinY * cosZ - cosX * sinZ;
+    m.f[1] = sinX * sinY * sinZ + cosX * cosZ;
+    m.f[2] = -sinX * cosY;
+    m.u[0] = -(cosX * sinY * cosZ + sinX * sinZ);
+    m.u[1] = cosZ * sinX - cosX * sinY * sinZ;
+    m.u[2] = cosX * cosY;
+    m.p[0] = pos[0];
+    m.p[1] = pos[1];
+    m.p[2] = pos[2];
+    return m;
+}
+
+// Matches desktop CMatrix::operator* (Shared/sdk/CMatrix.h:83-102).
+AttachMatrix MulAttachMatrix(const AttachMatrix& a, const AttachMatrix& b) {
+    AttachMatrix out{};
+    for (int i = 0; i < 3; ++i) {
+        out.r[i] = a.r[0] * b.r[i] + a.r[1] * b.f[i] + a.r[2] * b.u[i];
+        out.f[i] = a.f[0] * b.r[i] + a.f[1] * b.f[i] + a.f[2] * b.u[i];
+        out.u[i] = a.u[0] * b.r[i] + a.u[1] * b.f[i] + a.u[2] * b.u[i];
+        out.p[i] = a.p[0] * b.r[i] + a.p[1] * b.f[i] + a.p[2] * b.u[i] + b.p[i];
+    }
+    return out;
+}
+
+float NormalizeDeg(float deg) {
+    if (!std::isfinite(deg)) return 0.f;
+    deg = std::fmod(deg, 360.f);
+    if (deg < 0.f) deg += 360.f;
+    return deg;
+}
+
+// Matches desktop CMatrix::GetRotation (Shared/sdk/CMatrix.h:236-248).
+void ExtractAttachRotationDeg(const AttachMatrix& m, float outRotDeg[3]) {
+    const float rotY = std::atan2(m.r[2], std::sqrt(m.r[0] * m.r[0] + m.r[1] * m.r[1]));
+    const float rotZ = std::atan2(m.r[1], m.r[0]);
+    const float sinZ = -std::sin(rotZ);
+    const float cosZ = std::cos(rotZ);
+    const float rotX = std::atan2(m.u[0] * sinZ + m.u[1] * cosZ, m.f[0] * sinZ + m.f[1] * cosZ);
+    outRotDeg[0] = NormalizeDeg(-rotX * kAttachRadToDeg);
+    outRotDeg[1] = NormalizeDeg(-rotY * kAttachRadToDeg);
+    outRotDeg[2] = NormalizeDeg(rotZ * kAttachRadToDeg);
+}
+}  // namespace
+
+void ComposeAttachedTransform(const float parentPos[3], const float parentRotDeg[3],
+                              const float offsetPos[3], const float offsetRotDeg[3],
+                              float outPos[3], float outRotDeg[3]) {
+    const AttachMatrix parentMat = MakeAttachMatrix(parentPos, parentRotDeg);
+    const AttachMatrix offsetMat = MakeAttachMatrix(offsetPos, offsetRotDeg);
+    const AttachMatrix worldMat = MulAttachMatrix(offsetMat, parentMat);
+    outPos[0] = worldMat.p[0];
+    outPos[1] = worldMat.p[1];
+    outPos[2] = worldMat.p[2];
+    ExtractAttachRotationDeg(worldMat, outRotDeg);
+}
+
+bool ResolveAttachedTransform(
+    uint32_t id,
+    const std::function<bool(uint32_t, float[3], float[3])>& basePoseGetter,
+    float outPos[3], float outRotDeg[3]) {
+    if (id == 0 || id == 0xFFFFFFFFu || !basePoseGetter) return false;
+    struct Link {
+        uint32_t child;
+        Attachment att;
+    };
+    std::vector<Link> chain;
+    uint32_t cur = id;
+    for (int depth = 0; depth < 8; ++depth) {
+        Attachment att;
+        if (!CopyAttachment(cur, att) || att.parent == 0xFFFFFFFFu || att.parent == 0) break;
+        bool cycle = (att.parent == id);
+        for (const auto& link : chain) {
+            if (link.child == att.parent) {
+                cycle = true;
+                break;
+            }
+        }
+        if (cycle) return false;
+        chain.push_back(Link{cur, att});
+        cur = att.parent;
+    }
+    if (chain.empty()) return false;
+    float pos[3] = {}, rotDeg[3] = {};
+    if (!basePoseGetter(cur, pos, rotDeg)) return false;
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        float nextPos[3] = {}, nextRot[3] = {};
+        ComposeAttachedTransform(pos, rotDeg, it->att.position, it->att.rotation, nextPos, nextRot);
+        for (int i = 0; i < 3; ++i) {
+            pos[i] = nextPos[i];
+            rotDeg[i] = nextRot[i];
+        }
+    }
+    for (int i = 0; i < 3; ++i) {
+        outPos[i] = pos[i];
+        outRotDeg[i] = rotDeg[i];
+    }
+    return true;
+}
+
 bool CopyMarkerFields(uint32_t id, MarkerFields& out) {
     std::lock_guard<std::mutex> lock(g_lock);
     auto found = g_visuals.find(id);
@@ -1259,6 +1383,7 @@ void NoteVehicle(uint32_t id, int model) {
     if (stored.kind != 0 && stored.kind != 2) return;
     stored.kind = 2;
     stored.model = model;
+    if (stored.generation == 0) stored.generation = ++g_generation;
 }
 
 bool SetVehicleColors(uint32_t id, const VehicleColors& colors) {

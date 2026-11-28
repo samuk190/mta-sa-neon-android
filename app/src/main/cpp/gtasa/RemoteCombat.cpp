@@ -1,5 +1,9 @@
 #include "RemoteCombat.h"
 
+#include "GameEngine.h"
+#include "../shared/WorldNativeBridge.h"
+
+#include <cmath>
 #include <cstdio>
 
 #ifdef __ANDROID__
@@ -10,8 +14,6 @@
 #define COMBAT_LOGI(...) do { std::printf(__VA_ARGS__); std::printf("\n"); } while (0)
 #endif
 
-// Engine hook stubs. Each one logs a DIAG line (rate limited) and returns.
-// No GTA native is called from here.
 namespace WorldRPG::Combat {
 
 namespace {
@@ -20,20 +22,43 @@ int g_tracerLines = 0;
 int g_fireLines = 0;
 int g_meleeLines = 0;
 int g_healthLines = 0;
+
+void EmitBulletImpactFx(const float start[3], const float end[3]) {
+    float dx = start[0] - end[0];
+    float dy = start[1] - end[1];
+    float dz = start[2] - end[2];
+    const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len > 1e-4f) {
+        dx /= len;
+        dy /= len;
+        dz /= len;
+    } else {
+        dx = 0.f;
+        dy = 0.f;
+        dz = 1.f;
+    }
+    // Emit GTA bullet impact + sparks at hit point (runs on game thread via WorldNativeHooks).
+    WorldNative::FxAddBulletImpact(end[0], end[1], end[2], dx, dy, dz, 1, 4, 1.0f);
+    WorldNative::FxAddSparks(end[0], end[1], end[2], dx, dy, dz, 1.5f, 3, 0.f, 0.f, 0.f, true, 0.5f, 0.4f);
+}
 } // namespace
 
 void ShowRemoteTracer(uint32_t shooter, uint8_t weapon, const float start[3], const float end[3]) {
-    if (g_tracerLines >= kMaxDiagLines) return;
-    ++g_tracerLines;
-    COMBAT_LOGI("DIAG BULLET_SYNC tracer shooter=%u weapon=%u from %.1f %.1f %.1f to %.1f %.1f %.1f (engine hook not wired)",
-                shooter, weapon, start[0], start[1], start[2], end[0], end[1], end[2]);
+    EmitBulletImpactFx(start, end);
+    if (g_tracerLines < kMaxDiagLines) {
+        ++g_tracerLines;
+        COMBAT_LOGI("BULLET_SYNC impact fx shooter=%u weapon=%u from %.1f %.1f %.1f to %.1f %.1f %.1f",
+                    shooter, weapon, start[0], start[1], start[2], end[0], end[1], end[2]);
+    }
 }
 
 void ShowRemoteWeaponFire(uint32_t weaponElement, const float start[3], const float end[3]) {
-    if (g_fireLines >= kMaxDiagLines) return;
-    ++g_fireLines;
-    COMBAT_LOGI("DIAG WEAPON_BULLET_SYNC weapon_element=%u from %.1f %.1f %.1f to %.1f %.1f %.1f (engine hook not wired)",
-                weaponElement, start[0], start[1], start[2], end[0], end[1], end[2]);
+    EmitBulletImpactFx(start, end);
+    if (g_fireLines < kMaxDiagLines) {
+        ++g_fireLines;
+        COMBAT_LOGI("WEAPON_BULLET_SYNC impact fx weapon_element=%u from %.1f %.1f %.1f to %.1f %.1f %.1f",
+                    weaponElement, start[0], start[1], start[2], end[0], end[1], end[2]);
+    }
 }
 
 void StartRemoteMelee(uint32_t id, float heading) {
@@ -43,9 +68,13 @@ void StartRemoteMelee(uint32_t id, float heading) {
 }
 
 void SetRemoteHealth(uint32_t id, uint8_t health) {
-    if (g_healthLines >= kMaxDiagLines) return;
-    ++g_healthLines;
-    COMBAT_LOGI("DIAG VICTIM_HEALTH ped=%u health=%u (engine hook not wired)", id, health);
+    if (id != 0) {
+        Game::RpcSetHealth(id, static_cast<float>(health));
+    }
+    if (g_healthLines < kMaxDiagLines) {
+        ++g_healthLines;
+        COMBAT_LOGI("VICTIM_HEALTH applied ped=%u health=%u", id, health);
+    }
 }
 
 } // namespace WorldRPG::Combat

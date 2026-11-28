@@ -18,7 +18,8 @@ void Publish(Source source, std::vector<State> states) {
             const State& a = slot[i];
             const State& b = states[i];
             same = a.id == b.id && a.model == b.model && a.x == b.x && a.y == b.y && a.z == b.z && a.rx == b.rx &&
-                   a.ry == b.ry && a.rz == b.rz && a.dimension == b.dimension && a.interior == b.interior &&
+                   a.ry == b.ry && a.rz == b.rz && a.scaleX == b.scaleX && a.scaleY == b.scaleY &&
+                   a.scaleZ == b.scaleZ && a.dimension == b.dimension && a.interior == b.interior &&
                    a.collisions == b.collisions && a.visible == b.visible && a.frozen == b.frozen &&
                    a.allDimensions == b.allDimensions && a.alpha == b.alpha;
         }

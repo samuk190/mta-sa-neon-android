@@ -637,9 +637,6 @@ Result HandleAttach(uint32_t id, BitStreamReader& reader) {
         }
         ServerWorld::NoteAttachedOffsets(id, position[0], position[1], position[2], rotation[0], rotation[1], rotation[2]);
         ServerWorld::NoteAttachTo(id, parent);
-        // DIAG: CClientEntity::InternalAttachTo (CClientEntity.cpp:667-727), the CPhysical::AttachEntityToEntity
-        // call, is not hooked. The link is visible to Lua only (getElementAttachedTo, getAttachedElements).
-        LUA_LOGI("DIAG ATTACH_ELEMENTS %u -> %u: CPhysical::AttachEntityToEntity is not hooked", id, parent);
     });
     return Result::Handled;
 }
@@ -676,9 +673,17 @@ Result HandleDetach(uint32_t id, BitStreamReader& reader) {
                 Game::RpcSetVehiclePosition(id, position[0], position[1], position[2]);
         }
         const bool hasRotation = rotation[0] != 0.f || rotation[1] != 0.f || rotation[2] != 0.f;
-        if (hasRotation)
-            LUA_LOGI("DIAG DETACH_ELEMENTS %u: SetRotationDegrees is not hooked for this element", id);
-        LUA_LOGI("DIAG DETACH_ELEMENTS %u: CClientEntity::InternalAttachTo(NULL) is not hooked", id);
+        if (hasRotation) {
+            constexpr float kDegToRad = 0.017453292519943295f;
+            const char* kind = ServerWorld::ElementKindName(id);
+            if (kind && std::strcmp(kind, "vehicle") == 0) {
+                Game::RpcSetVehicleRotation(id, rotation[0], rotation[1], rotation[2]);
+            } else if (kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0)) {
+                Game::RpcSetRotation(id, rotation[2] * kDegToRad);
+            } else {
+                Script::ServerSetObjectRotation(id, rotation[0] * kDegToRad, rotation[1] * kDegToRad, rotation[2] * kDegToRad);
+            }
+        }
     });
     return Result::Handled;
 }
@@ -704,14 +709,15 @@ Result HandleVehicleState(uint8_t func, uint32_t id, BitStreamReader& reader) {
     if (func == Rpc::BlowVehicle && !ReadBit(reader, withExplosion)) return Result::Malformed;
     if (!IsKind(id, "vehicle")) return Result::Handled;
     if (func == Rpc::FixVehicle) {
-        // CClientVehicle::Fix (CClientVehicle.cpp:911-1006): SetHealth(1000) is the only step with a hook.
-        Game::RpcSetVehicleHealth(id, 1000.f);
-        LUA_LOGI("DIAG FIX_VEHICLE %u: CVehicle::Fix, door, panel, light and wheel resets are not hooked", id);
+        // CClientVehicle::Fix (CClientVehicle.cpp:911-1006): CVehicle::Fix vtable[51] + SetHealth(1000) on game thread.
+        ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, 1000.f);
+        Game::RpcFixVehicle(id);
+        Enqueue([id] { Script::NoteClientElementHealth(id, 1000.f); });
     } else {
-        // CClientVehicle::Blow (CClientVehicle.cpp:1008-): m_fHealth = 0 and SetHealth(0).
-        Game::RpcSetVehicleHealth(id, 0.f);
-        LUA_LOGI("DIAG BLOW_VEHICLE %u (explosion=%d): CVehicle::BlowUp and the burst wheels are not hooked", id,
-                 withExplosion ? 1 : 0);
+        // CClientVehicle::Blow (CClientVehicle.cpp:1008-1055): SetHealth(0) + CVehicle::BlowUpCar vtable[42] on game thread.
+        ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, 0.f);
+        Game::RpcBlowVehicle(id, withExplosion);
+        Enqueue([id] { Script::NoteClientElementHealth(id, 0.f); });
     }
     ServerWorld::SetSyncTimeContext(id, context);
     return Result::Handled;

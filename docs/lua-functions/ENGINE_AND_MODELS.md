@@ -9,7 +9,7 @@ Custom DFF mesh loading, TXD texture dictionaries, COL collision models, model h
 - **Stubs:** 0
 - **Missing:** 0
 
-> DFF and TXD replacements use Android RenderWare and the game streamer. These APIs support replacing models already registered in GTA. On-device rendering validation is pending.
+> DFF, TXD, and COL (`CColModel`) replacements use Android RenderWare, `CFileLoader::LoadCollisionModel*`, `CBaseModelInfo::SetColModel`, and the game streamer on the GTA game thread. These APIs support replacing models already registered in GTA. On-device rendering validation is pending.
 
 ## Function List
 

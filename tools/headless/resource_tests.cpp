@@ -19,6 +19,7 @@
 #include "LuaBrowserApi.h"
 #include "LuaNativeUiApi.h"
 #include "WorldNativeBridge.h"
+#include "LuaWorldObjectApi.h"
 #include "LuaFileApi.h"
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
@@ -6877,6 +6878,218 @@ int main(int argc, char** argv) {
             WorldRPG::ServerWorld::OnPlayerQuit(remoteStreamed, "Quit");
             WorldRPG::ServerWorld::OnPlayerQuit(remoteFar, "Quit");
             WorldRPG::Headless::ResetRemoteActorTestState();
+        }
+
+        // Parity & native bridge regression suite:
+        // 1) Live attachElements / detachElements world-transform propagation (multi-level + detach snapshot).
+        // 2) WorldNativeBridge hooks (SWAT rope, sphere test 11-tuple, garage geometry, preload in direction, world model removal).
+        // 3) Vehicle RPCs (fixVehicle/blowVehicle) & object scale propagation into WorldObjects::State.
+        // 4) GUI CEGUI property live sync + guiSetInputMode("no_binds_when_editing") bind blocking.
+        // 5) engineLoadCOL / engineReplaceCOL / engineRestoreCOL native hook lifecycle.
+        {
+            static int s_swatRopeCalls = 0;
+            static float s_swatRopePos[3] = {};
+            static int s_preloadCalls = 0;
+            static float s_preloadPos[3] = {};
+            static int s_removeWorldCalls = 0;
+            static int s_restoreWorldCalls = 0;
+            static int s_restoreAllWorldCalls = 0;
+            s_swatRopeCalls = s_preloadCalls = s_removeWorldCalls = s_restoreWorldCalls = s_restoreAllWorldCalls = 0;
+
+            WorldRPG::WorldNative::Hooks testHooks{};
+            testHooks.createSwatRope = [](float x, float y, float z, uint32_t) {
+                ++s_swatRopeCalls;
+                s_swatRopePos[0] = x; s_swatRopePos[1] = y; s_swatRopePos[2] = z;
+                return true;
+            };
+            testHooks.testSphereAgainstWorld = [](float, float, float, float, bool, bool, bool, bool, bool, bool,
+                                                  WorldRPG::WorldNative::SphereTestResult& out) {
+                out.hit = true;
+                out.model = 1337;
+                out.x = 12.5f; out.y = -4.25f; out.z = 3.5f;
+                out.rxDeg = 10.f; out.ryDeg = 20.f; out.rzDeg = 90.f;
+                out.entityType = 1;
+                out.lod = 0;
+                return true;
+            };
+            testHooks.getGarageGeometry = [](int id, float pos[3], float size[3], float bbox[4]) {
+                if (id != 5) return false;
+                pos[0] = 100.f; pos[1] = 200.f; pos[2] = 15.f;
+                size[0] = 6.f; size[1] = 12.f; size[2] = 10.f;
+                bbox[0] = 94.f; bbox[1] = 106.f; bbox[2] = 195.f; bbox[3] = 205.f;
+                return true;
+            };
+            testHooks.preloadWorldArea = [](float x, float y, float z, int) {
+                ++s_preloadCalls;
+                s_preloadPos[0] = x; s_preloadPos[1] = y; s_preloadPos[2] = z;
+                return true;
+            };
+            testHooks.removeWorldModel = [](uint16_t, float, float, float, float, int8_t) {
+                ++s_removeWorldCalls;
+                return 1;
+            };
+            testHooks.restoreWorldModel = [](uint16_t, float, float, float, float, int8_t) {
+                ++s_restoreWorldCalls;
+                return 1;
+            };
+            testHooks.restoreAllWorldModels = []() {
+                ++s_restoreAllWorldCalls;
+                return 1;
+            };
+            WorldRPG::WorldNative::RegisterHooks(testHooks);
+
+            WorldRPG::Net::ResourceStartInfo pRes;
+            pRes.name = "parity_gap_tests";
+            pRes.resourceId = 209;
+            pRes.entityId = 0x5209;
+            pRes.dynamicEntityId = 0x520A;
+            pRes.noClientCacheScripts = 1;
+            pRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(pRes);
+
+            const std::vector<uint8_t> pBody = NoCacheScriptBody(209, R"LUA(
+                -- 1) Live attachElements / detachElements world-transform propagation
+                local parent = createObject(1337, 10, 20, 30, 0, 0, 90)
+                local child = createObject(1337, 0, 0, 0)
+                local grand = createObject(1337, 0, 0, 0)
+                assert(attachElements(child, parent, 2, 0, 1, 0, 0, 0))
+                assert(attachElements(grand, child, 0, 3, 0, 0, 0, 0))
+                -- Parent rotated +90 deg around Z: local +X (2,0,1) rotates to (0,2,1) -> (10,22,31)
+                local cx, cy, cz = getElementPosition(child)
+                assert(math.abs(cx - 10) < 0.05 and math.abs(cy - 22) < 0.05 and math.abs(cz - 31) < 0.05,
+                       string.format("attached child pos mismatch: %.2f,%.2f,%.2f", cx, cy, cz))
+                -- Grandchild offset (0,3,0) in +90 deg Z frame rotates to (-3,0,0) -> (7,22,31)
+                local gx, gy, gz = getElementPosition(grand)
+                assert(math.abs(gx - 7) < 0.05 and math.abs(gy - 22) < 0.05 and math.abs(gz - 31) < 0.05,
+                       string.format("attached grandchild pos mismatch: %.2f,%.2f,%.2f", gx, gy, gz))
+                -- Move parent and verify child follows live
+                setElementPosition(parent, 50, 60, 70)
+                local cx2, cy2, cz2 = getElementPosition(child)
+                assert(math.abs(cx2 - 50) < 0.05 and math.abs(cy2 - 62) < 0.05 and math.abs(cz2 - 71) < 0.05,
+                       "attached child must follow moved parent")
+                -- Detach snapshots live world position so element stays put after parent moves
+                assert(detachElements(child, parent))
+                setElementPosition(parent, 0, 0, 0)
+                local cx3, cy3, cz3 = getElementPosition(child)
+                assert(math.abs(cx3 - 50) < 0.05 and math.abs(cy3 - 62) < 0.05 and math.abs(cz3 - 71) < 0.05,
+                       "detached child must keep world position snapshot")
+                setObjectScale(child, 2.5, 3.0, 4.0)
+                local sx, sy, sz = getObjectScale(child)
+                assert(math.abs(sx - 2.5) < 0.01 and math.abs(sy - 3.0) < 0.01 and math.abs(sz - 4.0) < 0.01)
+
+                -- 2) WorldNativeBridge hooks
+                assert(createSWATRope(11, 22, 33, 5000) == true)
+                local hit, el, model, hx, hy, hz, hrx, hry, hrz, lod, etype = testSphereAgainstWorld(1, 2, 3, 5)
+                assert(hit == true and el == nil and model == 1337 and math.abs(hx - 12.5) < 0.01 and math.abs(hrz - 90) < 0.01 and etype == "building")
+                local gpx, gpy, gpz = getGaragePosition(5)
+                assert(math.abs(gpx - 100) < 0.01 and math.abs(gpy - 200) < 0.01 and math.abs(gpz - 15) < 0.01)
+                local gsx, gsy, gsz = getGarageSize(5)
+                assert(math.abs(gsx - 6) < 0.01 and math.abs(gsy - 12) < 0.01 and math.abs(gsz - 10) < 0.01)
+                local bl, br, bf, bb = getGarageBoundingBox(5)
+                assert(math.abs(bl - 94) < 0.01 and math.abs(br - 106) < 0.01 and math.abs(bf - 195) < 0.01 and math.abs(bb - 205) < 0.01)
+                assert(enginePreloadWorldAreaInDirection(10, 20, 30, 0) == true)
+                assert(removeWorldModel(1337, 10, 10, 20, 30) == true)
+                assert(restoreWorldModel(1337, 10, 10, 20, 30) == true)
+                assert(restoreAllWorldModels() == true)
+
+                -- 3) Vehicle fixVehicle / blowVehicle
+                local veh = createVehicle(411, 0, 0, 5)
+                assert(setElementHealth(veh, 450))
+                assert(fixVehicle(veh) == true)
+                assert(math.abs(getElementHealth(veh) - 1000) < 0.1)
+                assert(blowVehicle(veh, true) == true)
+                assert(getElementHealth(veh) <= 0.1)
+
+                -- 4) GUI CEGUI property live sync
+                local lbl = guiCreateLabel(10, 10, 200, 30, "hello", false)
+                assert(guiSetProperty(lbl, "Visible", "False"))
+                assert(guiGetVisible(lbl) == false and guiGetProperty(lbl, "Visible") == "False")
+                assert(guiSetProperty(lbl, "Alpha", "0.5"))
+                assert(math.abs(guiGetAlpha(lbl) - 0.5) < 0.01)
+                assert(guiSetProperty(lbl, "Text", "world"))
+                assert(guiGetText(lbl) == "world" and guiGetProperty(lbl, "Text") == "world")
+                assert(guiSetProperty(lbl, "NormalTextColour", "FF112233"))
+                local r, g, b = guiLabelGetColor(lbl)
+                assert(r == 0x11 and g == 0x22 and b == 0x33 and guiGetProperty(lbl, "NormalTextColour") == "FF112233")
+                local edit = guiCreateEdit(10, 50, 200, 30, "", false)
+                assert(guiSetProperty(edit, "ReadOnly", "True"))
+                assert(guiEditIsReadOnly(edit) == true and guiGetProperty(edit, "ReadOnly") == "True")
+                assert(guiSetProperty(edit, "ReadOnly", "False"))
+                assert(guiEditIsReadOnly(edit) == false)
+
+                -- 5) engineLoadCOL / engineReplaceCOL / engineRestoreCOL
+                local colHeader = "COL3" .. string.char(40, 0, 0, 0) .. string.rep("\0", 56)
+                local col = engineLoadCOL(colHeader)
+                assert(isElement(col), "engineLoadCOL must load valid COL3 bytes")
+                assert(engineReplaceCOL(col, 1337) == true)
+                assert(engineRestoreCOL(1337) == true)
+                assert(engineRestoreCOL(1337) == false)
+
+                -- 6) Keep one scaled object alive for WorldObjects::Publish check
+                _G._scaledObj = createObject(1337, 1, 2, 3)
+                setObjectScale(_G._scaledObj, 1.5, 2.5, 3.5)
+
+                destroyElement(grand)
+                destroyElement(child)
+                destroyElement(parent)
+                destroyElement(veh)
+                destroyElement(lbl)
+                destroyElement(edit)
+                destroyElement(col)
+                _G._parityGapTestsOk = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(pBody.data(), pBody.size(), pBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "parity-gap-tests-ok", "assert(_G._parityGapTestsOk == true, 'parity gap tests ok')");
+
+            CHECK(s_swatRopeCalls == 1 && std::fabs(s_swatRopePos[0] - 11.f) < 0.01f);
+            CHECK(s_preloadCalls == 2 && std::fabs(s_preloadPos[0] - 10.f) < 0.01f &&
+                  std::fabs(s_preloadPos[1] - 70.f) < 0.01f);
+            CHECK(s_removeWorldCalls == 1 && s_restoreWorldCalls == 1 && s_restoreAllWorldCalls == 1);
+
+            // Verify WorldObjects::Publish carries scaleX/Y/Z
+            WorldRPG::Script::PublishClientObjects();
+            std::vector<WorldRPG::WorldObjects::State> feedStates;
+            WorldRPG::WorldObjects::Copy(feedStates);
+            bool foundScaled = false;
+            for (const auto& st : feedStates) {
+                if (std::fabs(st.scaleX - 1.5f) < 0.01f && std::fabs(st.scaleY - 2.5f) < 0.01f &&
+                    std::fabs(st.scaleZ - 3.5f) < 0.01f) {
+                    foundScaled = true;
+                }
+            }
+            CHECK(foundScaled);
+
+            // Verify GuiBlocksBinds respects no_binds / allow_binds / no_binds_when_editing (edit & memo)
+            RunLua(vm, "gui-bind-block-setup", R"LUA(
+                guiSetInputMode("allow_binds")
+            )LUA");
+            CHECK(!WorldRPG::Script::GuiBlocksBinds());
+            RunLua(vm, "gui-bind-block-nobinds", R"LUA(
+                guiSetInputMode("no_binds")
+            )LUA");
+            CHECK(WorldRPG::Script::GuiBlocksBinds());
+            RunLua(vm, "gui-bind-block-onedit", R"LUA(
+                guiSetInputMode("no_binds_when_editing")
+                _G._testMemo = guiCreateMemo(10, 10, 100, 60, "abc", false)
+                guiFocus(_G._testMemo)
+            )LUA");
+            CHECK(WorldRPG::Script::GuiBlocksBinds());
+            RunLua(vm, "gui-bind-block-readonly", R"LUA(
+                guiMemoSetReadOnly(_G._testMemo, true)
+            )LUA");
+            CHECK(!WorldRPG::Script::GuiBlocksBinds());
+            RunLua(vm, "gui-bind-block-cleanup", R"LUA(
+                destroyElement(_G._testMemo); _G._testMemo = nil
+                guiSetInputMode("no_binds_when_editing")
+            )LUA");
+
+            {
+                WorldRPG::Net::BitStreamWriter stop;
+                stop.Write(static_cast<uint16_t>(209));
+                WorldRPG::Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
+            }
+            WorldRPG::WorldNative::RegisterHooks({});
         }
     }
 

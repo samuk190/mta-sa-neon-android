@@ -334,8 +334,19 @@ int PreloadDirection(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    LUA_LOGI("DIAG enginePreloadWorldAreaInDirection: CStreaming::LoadSceneInDirection is not hooked");
-    lua_pushboolean(L, 0);
+    // Project ahead along GTA Z-heading (0 = North/+Y, CCW) and preload both the origin
+    // and lookahead sector via CStreaming::LoadSceneCollision + LoadScene.
+    constexpr float kDegToRad = 0.017453292519943295f;
+    constexpr float kLookAheadDist = 50.0f;
+    const float rad = heading * kDegToRad;
+    const float tx = x - std::sin(rad) * kLookAheadDist;
+    const float ty = y + std::cos(rad) * kLookAheadDist;
+    const bool ok = WorldNative::PreloadWorldArea(x, y, z, 0) |
+                    WorldNative::PreloadWorldArea(tx, ty, z, 0);
+    if (!ok) {
+        LUA_LOGI("DIAG enginePreloadWorldAreaInDirection: CStreaming::LoadScene is not hooked");
+    }
+    lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
 

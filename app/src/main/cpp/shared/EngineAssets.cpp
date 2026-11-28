@@ -111,7 +111,6 @@ std::unordered_map<uint32_t, ImgAsset> g_imgAssets;
 std::unordered_map<std::uint32_t, ImgDffLink> g_imgDffLinks;
 std::unordered_map<std::uint32_t, ImgTxdLink> g_imgTxdLinks;
 std::uint64_t g_nextAssetSerial = 1;
-bool g_diagColHookLogged = false;
 bool g_diagIfpHookLogged = false;
 
 std::string LowerAscii(std::string_view text) {
@@ -830,7 +829,8 @@ int RestoreTxdImage(lua_State* L) {
 
 int ReplaceCol(lua_State* L) {
     const uint32_t colId = ElementIdOf(L, 1);
-    if (g_colAssets.find(colId) == g_colAssets.end())
+    const auto colIt = g_colAssets.find(colId);
+    if (colIt == g_colAssets.end())
         return FailFalse(L, ScriptBad(L, "engineReplaceCOL", "col-model", 1), true);
     std::string modelText;
     std::string error;
@@ -838,10 +838,7 @@ int ReplaceCol(lua_State* L) {
     std::uint32_t id = 0;
     if (!ResolveText(modelText, id) || id >= kTxdBase)
         return FailFalse(L, Usage("engineReplaceCOL", "Could not replace COL for model", modelText), true);
-    if (!g_diagColHookLogged) {
-        g_diagColHookLogged = true;
-        LUA_LOGI("DIAG engineReplaceCOL: CColModel GTA replacement hook pending (stored in asset registry)");
-    }
+    (void)NativeReplaceCOL(static_cast<std::uint16_t>(id), colIt->second.bytes);
     g_colModelLinks[id] = colId;
     lua_pushboolean(L, 1);
     return 1;
@@ -856,7 +853,9 @@ int RestoreCol(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    lua_pushboolean(L, g_colModelLinks.erase(id) > 0 ? 1 : 0);
+    const bool erased = g_colModelLinks.erase(id) > 0;
+    if (erased) (void)NativeRestoreCOL(static_cast<std::uint16_t>(id));
+    lua_pushboolean(L, erased ? 1 : 0);
     return 1;
 }
 
