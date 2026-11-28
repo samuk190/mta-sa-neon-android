@@ -320,11 +320,29 @@ bool CopyPedQueryNative(uint32_t id, PedQueries::Snapshot& snapshot) {
     return true;
 }
 
+struct TestRemoteActor {
+    bool streamed = false;
+    bool hasPose = false;
+    float x = 0.f, y = 0.f, z = 0.f;
+    float heading = 0.f;
+    float vx = 0.f, vy = 0.f, vz = 0.f;
+};
+std::unordered_map<uint32_t, TestRemoteActor> g_testRemoteActors;
+
 ScriptProbe& Probe() {
     static ScriptProbe probe;
     return probe;
 }
 void ResetProbe() { Probe() = ScriptProbe{}; }
+void SetRemoteActorStreamed(uint32_t id, bool streamed) { g_testRemoteActors[id].streamed = streamed; }
+void SetRemoteActorPose(uint32_t id, float x, float y, float z, float headingRad, float vx, float vy, float vz) {
+    auto& a = g_testRemoteActors[id];
+    a.hasPose = true;
+    a.x = x; a.y = y; a.z = z;
+    a.heading = headingRad;
+    a.vx = vx; a.vy = vy; a.vz = vz;
+}
+void ResetRemoteActorTestState() { g_testRemoteActors.clear(); }
 
 void SetMode(Mode mode) { g_mode = mode; }
 
@@ -656,7 +674,11 @@ bool StartPedDriveWander(uint32_t, uint32_t, float, int) { return false; }
 bool ScanTrafficObstacle(uint32_t, bool, float, TrafficObstacleScan&) { return false; }
 bool IsTrafficPedTaskActive(uint32_t, TrafficPedTask) { return false; }
 bool KillNativePedTask(uint32_t, bool, int, bool) { return false; }
-bool IsNativeActorStreamed(uint32_t) { return false; }
+bool IsNativeActorStreamed(uint32_t id) {
+    if (id == WorldRPG::ServerWorld::LocalPlayer() && id != 0) return true;
+    auto it = WorldRPG::Headless::g_testRemoteActors.find(id);
+    return it != WorldRPG::Headless::g_testRemoteActors.end() && it->second.streamed;
+}
 bool HasNativeTrafficCapability(const char*) { return false; }
 bool SetTrafficVehicleVelocity(uint32_t, float, float, float, bool) { return false; }
 bool SetTrafficVehicleRotation(uint32_t, float, float, float) { return false; }
@@ -664,8 +686,26 @@ bool IsTrafficVehicleOnGround(uint32_t) { return false; }
 bool SetTrafficVehicleLoadCollision(uint32_t, bool) { return false; }
 bool CopyTrafficVehicleState(uint32_t, HostedCar&) { return false; }
 bool SetTrafficVehicleEngine(uint32_t, bool) { return false; }
-bool CopyRemotePedMotion(uint32_t, float&, float&, float&, float&) { return false; }
-bool CopyRemotePose(uint32_t, float& x, float& y, float& z) { x = y = z = 0.f; return false; }
+bool CopyRemotePedMotion(uint32_t id, float& heading, float& vx, float& vy, float& vz) {
+    auto it = WorldRPG::Headless::g_testRemoteActors.find(id);
+    if (it == WorldRPG::Headless::g_testRemoteActors.end() || !it->second.hasPose) return false;
+    heading = it->second.heading;
+    vx = it->second.vx;
+    vy = it->second.vy;
+    vz = it->second.vz;
+    return true;
+}
+bool CopyRemotePose(uint32_t id, float& x, float& y, float& z) {
+    auto it = WorldRPG::Headless::g_testRemoteActors.find(id);
+    if (it != WorldRPG::Headless::g_testRemoteActors.end() && it->second.hasPose) {
+        x = it->second.x;
+        y = it->second.y;
+        z = it->second.z;
+        return true;
+    }
+    x = y = z = 0.f;
+    return false;
+}
 int CopyHostedPeds(HostedPed*, int) { return 0; }
 int CopyHostedCars(HostedCar*, int) { return 0; }
 

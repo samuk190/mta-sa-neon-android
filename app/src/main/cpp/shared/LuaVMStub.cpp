@@ -1354,10 +1354,24 @@ static int l_getElementVelocity(lua_State* L) {
 // pure-sync sample. 0 is north, 90 is west. The square radar draws arrow.png
 // with -heading so a clockwise dxDrawImage points the way the ped faces.
 static int l_getPedRotation(lua_State* L) {
+    auto wrapDegrees = [](double radians) {
+        const double turns = radians * (180.0 / 3.14159265358979323846) + 360.0;
+        return turns - 360.0 * std::floor(turns / 360.0);
+    };
     double degrees = 0;
     if (IsLocalStatElement(L, 1)) {
-        const double turns = static_cast<double>(Game::CopyRadarHeading()) * (180.0 / 3.14159265358979323846) + 360.0;
-        degrees = turns - 360.0 * std::floor(turns / 360.0);
+        degrees = wrapDegrees(static_cast<double>(Game::CopyRadarHeading()));
+    } else if (const uint32_t id = ElementIdOf(L, 1); id != 0) {
+        int model = 0;
+        float radians = 0.f, vx = 0.f, vy = 0.f, vz = 0.f;
+        bool frozen = false;
+        ServerWorld::ActorSpawn visual;
+        if (Game::CopyScriptPedFacts(id, model, radians, frozen) ||
+            Game::CopyRemotePedMotion(id, radians, vx, vy, vz)) {
+            degrees = wrapDegrees(static_cast<double>(radians));
+        } else if (ServerWorld::CopyVisual(id, visual) && (visual.kind == 1 || visual.kind == 14)) {
+            degrees = wrapDegrees(static_cast<double>(visual.heading));
+        }
     }
     lua_pushnumber(L, degrees);
     return 1;
@@ -1753,7 +1767,8 @@ static int l_isElement(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     float x = 0, y = 0, z = 0;
     const bool known = id != 0 && (id == ServerWorld::LocalPlayer() || id == ServerWorld::LastResourceRoot() ||
-                                    GuiIsElement(id) || Game::ScriptPedAlive(id) || SoundElementAlive(id) ||
+                                    ServerWorld::IsKnownPlayer(id) || GuiIsElement(id) ||
+                                    Game::ScriptPedAlive(id) || SoundElementAlive(id) ||
                                     ServerWorld::ElementPose(id, x, y, z) || Game::CopyRemotePose(id, x, y, z));
     lua_pushboolean(L, known ? 1 : 0);
     return 1;
@@ -1843,15 +1858,28 @@ static int l_getPlayerMoney(lua_State* L) {
 
 static int l_getElementsByType(lua_State* L) {
     const char* kind = luaL_optstring(L, 1, "");
+    // Desktop GetElementsByType (CLuaElementDefs.cpp 798-848): optional 3rd arg streamedIn.
+    const bool streamedInOnly = lua_toboolean(L, 3) != 0;
     lua_newtable(L);
     int index = 1;
     if (std::strcmp(kind, "player") == 0) {
-        PushElement(L, ServerWorld::LocalPlayer());
-        lua_rawseti(L, -2, index++);
+        const uint32_t localId = ServerWorld::LocalPlayer();
+        if (localId != 0) {
+            PushElement(L, localId);
+            lua_rawseti(L, -2, index++);
+        }
+        uint32_t players[128];
+        const int count = ServerWorld::CopyPlayers(players, 128);
+        for (int i = 0; i < count; ++i) {
+            if (streamedInOnly && !Game::IsNativeActorStreamed(players[i])) continue;
+            PushElement(L, players[i]);
+            lua_rawseti(L, -2, index++);
+        }
+        return 1;
     }
     // Desktop GetElementsByType (CLuaElementDefs.cpp 798-848) asks FindAllChildrenByType for
-    // one type name. The phone still returns at most 96 and ignores the start-element and
-    // streamed-in arguments. The copy is that one kind, so vehicles cannot fill a "ped" query.
+    // one type name. The phone still returns at most 96 and ignores the start-element argument.
+    // The copy is that one kind, so vehicles cannot fill a "ped" query.
     int pedLimit = -1;
     int vehicleLimit = -1;
     if (std::strcmp(kind, "ped") == 0) {
@@ -1866,8 +1894,8 @@ static int l_getElementsByType(lua_State* L) {
     for (int i = 0; i < count; ++i) {
         const bool ped = actors[i].kind == 14 && std::strcmp(kind, "ped") == 0;
         const bool vehicle = actors[i].kind == 2 && std::strcmp(kind, "vehicle") == 0;
-        const bool player = actors[i].kind == 1 && std::strcmp(kind, "player") == 0;
-        if (!ped && !vehicle && !player) continue;
+        if (!ped && !vehicle) continue;
+        if (streamedInOnly && !Game::IsNativeActorStreamed(actors[i].id)) continue;
         PushElement(L, actors[i].id);
         lua_rawseti(L, -2, index++);
     }

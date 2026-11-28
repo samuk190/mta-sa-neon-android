@@ -50,6 +50,7 @@
 #include "RemoteVehicle.h"
 #include "PedQueries.h"
 #include "gtasa/GameEngine.h"
+#include "game_script.h"
 #include "test_ped_queries.h"
 #include "ResourceFiles.h"
 #include "ResourceLoader.h"
@@ -6817,6 +6818,66 @@ int main(int argc, char** argv) {
             assert(type(mem) == "number" and mem > 0, "EngineStreaming.getMemorySize returns positive bytes")
             assert(EngineStreaming.memorySize == mem, "EngineStreaming.memorySize static property")
         )LUA");
+
+        // Remote player visibility for equipped items/holsters: getElementsByType("player", root, streamedIn),
+        // NotePlayerSeen generation, live remote pose/heading, and getPedRotation for remote players.
+        {
+            WorldRPG::Headless::ResetRemoteActorTestState();
+            const uint32_t remoteStreamed = 98001u;
+            const uint32_t remoteFar = 98002u;
+            WorldRPG::ServerWorld::NotePlayerSeen(remoteStreamed);
+            WorldRPG::ServerWorld::NotePlayerSeen(remoteFar);
+            CHECK(WorldRPG::ServerWorld::ElementGeneration(remoteStreamed) != 0);
+            CHECK(WorldRPG::ServerWorld::ElementGeneration(remoteFar) != 0);
+
+            uint32_t copied[16] = {};
+            const int nPlayers = WorldRPG::ServerWorld::CopyPlayers(copied, 16);
+            bool sawStreamed = false, sawFar = false;
+            for (int i = 0; i < nPlayers; ++i) {
+                if (copied[i] == remoteStreamed) sawStreamed = true;
+                if (copied[i] == remoteFar) sawFar = true;
+            }
+            CHECK(sawStreamed && sawFar);
+
+            WorldRPG::Headless::SetRemoteActorStreamed(remoteStreamed, true);
+            WorldRPG::Headless::SetRemoteActorStreamed(remoteFar, false);
+            WorldRPG::Headless::SetRemoteActorPose(remoteStreamed, 123.5f, -45.25f, 13.75f, 1.5707963f, 1.0f, 2.0f, 0.0f);
+
+            RunLua(vm, "remote-players-holster-visibility", R"LUA(
+                local allPlayers = getElementsByType("player")
+                local has98001, has98002, hasLocal = false, false, false
+                for _, p in ipairs(allPlayers) do
+                    if p == localPlayer then hasLocal = true end
+                    if p.id == 98001 then has98001 = true end
+                    if p.id == 98002 then has98002 = true end
+                end
+                assert(hasLocal and has98001 and has98002, "getElementsByType('player') must include local and remote players")
+
+                local streamed = getElementsByType("player", root, true)
+                local s98001, s98002 = false, false
+                local pStreamed = nil
+                for _, p in ipairs(streamed) do
+                    if p.id == 98001 then s98001 = true; pStreamed = p end
+                    if p.id == 98002 then s98002 = true end
+                end
+                assert(s98001 and not s98002, "getElementsByType('player', root, true) must filter by streamed-in state")
+                assert(isElement(pStreamed) and isElementStreamedIn(pStreamed), "remote player isElement & streamed")
+
+                local px, py, pz = getElementPosition(pStreamed)
+                assert(math.abs(px - 123.5) < 0.01 and math.abs(py + 45.25) < 0.01 and math.abs(pz - 13.75) < 0.01,
+                       "remote player getElementPosition must return live pose")
+                local rx, ry, rz = getElementRotation(pStreamed)
+                assert(math.abs(rz - 90.0) < 0.5, "remote player getElementRotation must return live heading, got " .. tostring(rz))
+                local pedRot = getPedRotation(pStreamed)
+                assert(math.abs(pedRot - 90.0) < 0.5, "remote player getPedRotation must return live heading, got " .. tostring(pedRot))
+                local vx, vy, vz = getElementVelocity(pStreamed)
+                assert(math.abs(vx - 1.0) < 0.01 and math.abs(vy - 2.0) < 0.01, "remote player velocity must return live motion")
+            )LUA");
+
+            WorldRPG::ServerWorld::OnPlayerQuit(remoteStreamed, "Quit");
+            WorldRPG::ServerWorld::OnPlayerQuit(remoteFar, "Quit");
+            WorldRPG::Headless::ResetRemoteActorTestState();
+        }
     }
 
     if (argc > 1) {

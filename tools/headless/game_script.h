@@ -35,6 +35,9 @@ struct ScriptProbe {
 };
 ScriptProbe& Probe();
 void ResetProbe();
+void SetRemoteActorStreamed(uint32_t id, bool streamed);
+void SetRemoteActorPose(uint32_t id, float x, float y, float z, float headingRad, float vx = 0.f, float vy = 0.f, float vz = 0.f);
+void ResetRemoteActorTestState();
 // Seconds since process start; the timestamp used by every headless log line.
 double ElapsedSeconds();
 

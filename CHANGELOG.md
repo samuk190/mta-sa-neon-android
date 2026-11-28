@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Remote players' equipped guns, holsters, and items visibility on mobile (2026-11-27)
+
+- **Show other players' equipped items/holsters/bandoliers (`getElementsByType("player")`, remote pose & heading)** (`CLuaElementDefs.cpp:798-848`, `CPacketHandler.cpp:1049-1056`, `CClientPed.cpp:8657-8822`, `shared/ServerWorld.h`, `shared/ServerWorld.cpp`, `shared/LuaVMStub.cpp`, `gtasa/GameEngine.cpp`, `tools/headless/resource_tests.cpp`):
+  - Added `ServerWorld::CopyPlayers` and updated `l_getElementsByType("player", ...)` (which previously called `CopyActors` that only copies `kind == 14` peds and `kind == 2` vehicles, so `getElementsByType("player")` only ever returned `{ localPlayer }`) to include all remote players and honor the 3rd `streamedInOnly` boolean argument via `Game::IsNativeActorStreamed`.
+  - Assigned `stored.generation` in `ServerWorld::NotePlayerSeen` (so `IsNativeActorStreamed` never fails on generation `0`), decoded the 16-bit spawn heading in `ServerWorld::OnPlayerList` via `ReadAngle16`, and recognized unspawned players in `l_isElement`.
+  - Updated `ApplyRemotePeds()`'s on-foot `controlled` branch to copy the body's live position and heading (`ReadBodyPos`) into `shownX/Y/Z/H`, removed the `serverPed`-only filter from `Game::CopyRemotePedMotion`, and extended `l_getPedRotation` to remote players/peds so client holster/attachment scripts (`holster.lua`, `mobile_holster.lua`, `skins.lua`, `device_client.lua`) track moving remote players instead of freezing at spawn facing 0°. Not yet run on a physical device.
+- **Show other players' equipped weapons in hand (model streaming, re-attachment, and restore ammo)** (`CClientPed.cpp:4078-4130, 5605-5631, 5807-5811`, `CPedSA.cpp:717-760`, `CPacketHandler.cpp:1073-1082`, `gtasa/GameEngine.cpp`):
+  - Added `EnsureWeaponModelLoaded` + verified `CPed::AddWeaponModel` (`libGTASA.so` 2.10 arm64 `0x59b174`, `m_pWeaponObject` at `CPed +0x650`) checks in `ApplyRemotePlayerWeapon`, `RunPedRpcOp` (`K::SetWeaponSlot`), and `PedSetCurrentWeaponSlot`/`SA` so weapon models (including custom DFF/TXD models evicted by `EngineModelLoader::RefreshWhenUnused`) are always streamed in before `CPed::SetCurrentWeapon` -> `CPed::AddWeaponModel`, and any missing/null weapon object (`+0x650 == nullptr`) is re-attached once the model is loaded.
+  - Restored unstreamed remote player weapons on stream-in with at least `1` ammo when `PedQueries` cached ammo is `0` (`restore.player && w.total == 0`), matching `Packet_PlayerList` (`GiveWeapon(type, 1)`), so `PedSetCurrentWeaponSlot` does not reject equipping the remote player's current weapon. Not yet run on a physical device.
+
 ### Fixed — Single-player police suppression, streamed object reuse/repositioning (bandolier), and fullscreen DX overlay viewport (2026-11-27)
 
 - **Disable GTA single-player crime/wanted/police system & sync server wanted level** (`CMultiplayerSA.cpp:1166-1170, 1496-1504`, `CClientGame.cpp:1573-1578`, `gtasa/GameEngine.h`, `gtasa/GameEngine.cpp`, `shared/LuaPedApi.cpp`, `jni/JNI_OnLoad.cpp`, `tools/headless/game_script.{h,cpp}`, `tools/headless/server_rpc_tests.cpp`):

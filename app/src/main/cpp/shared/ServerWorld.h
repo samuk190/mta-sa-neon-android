@@ -92,6 +92,8 @@ struct ActorSpawn {
 // Otherwise each kind stops at its own limit and peds are copied first, so a full vehicle
 // quota cannot take a ped slot. `capacity` is the size of `out`.
 int CopyActors(ActorSpawn* out, int capacity, int pedLimit = -1, int vehicleLimit = -1);
+// Copies known remote player element ids (kind 1 or PLAYER_LIST nick), excluding the local player.
+int CopyPlayers(uint32_t* out, int capacity);
 void SetActorHost(uint32_t id, bool host);
 bool ActorHosted(uint32_t id);
 bool ElementPose(uint32_t id, float& x, float& y, float& z);

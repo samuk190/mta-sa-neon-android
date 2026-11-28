@@ -420,6 +420,27 @@ int CopyActors(ActorSpawn* out, int capacity, int pedLimit, int vehicleLimit) {
     return count;
 }
 
+int CopyPlayers(uint32_t* out, int capacity) {
+    if (!out || capacity <= 0) return 0;
+    std::lock_guard<std::mutex> lock(g_lock);
+    int count = 0;
+    auto push = [&](uint32_t id) {
+        if (id == 0 || id == 0xFFFFFFFFu || id == g_local || count >= capacity) return;
+        for (int i = 0; i < count; ++i) {
+            if (out[i] == id) return;
+        }
+        out[count++] = id;
+    };
+    for (const auto& [id, visual] : g_visuals) {
+        if (visual.kind == 1) push(id);
+    }
+    for (const auto& [id, nick] : g_nicks) {
+        (void)nick;
+        push(id);
+    }
+    return count;
+}
+
 void SetActorHost(uint32_t id, bool host) {
     std::lock_guard<std::mutex> lock(g_lock);
     auto found = g_visuals.find(id);
@@ -1291,6 +1312,7 @@ void NotePlayerSeen(uint32_t id) {
     std::lock_guard<std::mutex> lock(g_lock);
     auto& stored = g_visuals[id];
     if (stored.kind == 0) stored.kind = 1;
+    if (!stored.generation) stored.generation = ++g_generation;
     PedQueries::Ensure(id, true);
 }
 
@@ -1511,12 +1533,12 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
         if (inVehicle) {
             if (!ReadElementId(reader, vehicle) || !reader.ReadBits(&seat, 4)) break;
         } else {
-            float x = 0, y = 0, z = 0;
-            uint8_t rotation[2] = {};
-            if (!ReadPosition(reader, x, y, z) || !reader.ReadBits(rotation, 16)) break;
+            float x = 0, y = 0, z = 0, heading = 0;
+            if (!ReadPosition(reader, x, y, z) || !ReadAngle16(reader, heading)) break;
             g_visuals[id].x = x;
             g_visuals[id].y = y;
             g_visuals[id].z = z;
+            g_visuals[id].heading = heading;
         }
         uint32_t dimension = 0, alpha = 0;
         uint8_t style = 0, interior = 0;

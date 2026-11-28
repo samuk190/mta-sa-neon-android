@@ -447,6 +447,10 @@ struct RemoteBody {
     // Last effective alpha / collision state written to this body (-1: not yet).
     int alphaApplied = -1;
     int collisionsApplied = -1;
+    // Weapon model streaming wait state for ApplyRemotePlayerWeapon (CClientPed::GiveWeapon / AddWeaponModel).
+    int pendingWeaponModel = -1;
+    int pendingWeaponWaits = 0;
+    bool pendingWeaponRequested = false;
 };
 // Desktop CPacketHandler::Packet_EntityAdd (vehicle: SetRotationDegrees, SetHealth) and
 // CUnoccupiedVehicleSync::Packet_UnoccupiedVehicleStartSync (CUnoccupiedVehicleSync.cpp 104-158: SetTargetPosition,
@@ -3159,6 +3163,32 @@ static int& WeaponTotal(unsigned char* w) { return *reinterpret_cast<int*>(w + 0
 static bool WeaponReloading(const unsigned char* w) { return *reinterpret_cast<const int*>(w + 4) == 2; }
 static int CurrentWeaponSlot(void* ped) { return *(reinterpret_cast<signed char*>(ped) + 0x8dc); }
 
+// CPed::AddWeaponModel (libGTASA.so 2.10 arm64, 0x59b174): +0x3c loads and +0x64 stores m_pWeaponObject at CPed +0x650.
+static bool WeaponObjectLayoutValid() {
+    static const bool layout = [] {
+        void* h = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_GLOBAL);
+        auto* add = h ? static_cast<const unsigned char*>(dlsym(h, "_ZN4CPed14AddWeaponModelEi")) : nullptr;
+        return add && *reinterpret_cast<const uint32_t*>(add + 0x3c) == 0xf9432a69 &&
+            *reinterpret_cast<const uint32_t*>(add + 0x64) == 0xf9032a60;
+    }();
+    return layout;
+}
+static void* PedWeaponObject(void* ped) {
+    return *reinterpret_cast<void* const*>(static_cast<const unsigned char*>(ped) + 0x650);
+}
+static bool PedMissingWeaponObject(void* ped, int slot, int model) {
+    return slot > 0 && model > 0 && WeaponObjectLayoutValid() && PedWeaponObject(ped) == nullptr;
+}
+static bool EnsureWeaponModelLoaded(int model, int& waits, bool& requested) {
+    if (model <= 0 || StreamingLoadState(model) == 1) return true;
+    if (waits >= 120) return true;
+    if (g_requestModel) g_requestModel(model, 0x14);
+    if (g_loadAll && !requested) g_loadAll(true);
+    requested = true;
+    ++waits;
+    return StreamingLoadState(model) == 1;
+}
+
 // Read-only Lua inventory queries use the same verified 2.10 layout as the RPCs.
 // SetCurrentWeapon+0x1c/0x24 (0x59b7cc/0x59b7d4) loads slot/type;
 // CWeapon::Reload+0x10/+0x50 (0x700a3c/0x700a7c) loads total/stores clip.
@@ -3400,8 +3430,11 @@ static void PedSetCurrentWeaponSlotSA(void* ped, int slot, bool local) {
     auto& f = PedRpc();
     if (slot < 0 || slot >= kWeaponSlots || !f.removeWeaponModel || !f.setCurrentWeapon) return;
     const int current = CurrentWeaponSlot(ped);
-    if (slot == current) return;
-    if (current >= 0 && current < kWeaponSlots) {
+    const int slotModel = slot > 0 ? WeaponInfoModel(WeaponType(PedWeaponAt(ped, slot))) : -1;
+    const bool reattachMissing = slot == current && PedMissingWeaponObject(ped, slot, slotModel) &&
+        StreamingLoadState(slotModel) == 1;
+    if (slot == current && !reattachMissing) return;
+    if (!reattachMissing && current >= 0 && current < kWeaponSlots) {
         const int model = WeaponInfoModel(WeaponType(PedWeaponAt(ped, current)));
         f.removeWeaponModel(ped, model);
     }
@@ -3453,13 +3486,7 @@ static bool PedGiveWeapon(void* ped, int type, unsigned ammo, bool setCurrent, b
     if (!f.giveWeapon || !WeaponInfoOf(type)) return true;
     if (type != 0) {
         const int model = WeaponInfoModel(type);
-        if (model > 0 && StreamingLoadState(model) != 1 && wait && wait->waits < 120) {
-            if (g_requestModel) g_requestModel(model, 0x14);
-            if (g_loadAll && !wait->requested) g_loadAll(true);
-            wait->requested = true;
-            ++wait->waits;
-            if (StreamingLoadState(model) != 1) return false;
-        }
+        if (model > 0 && wait && !EnsureWeaponModelLoaded(model, wait->waits, wait->requested)) return false;
         if (type == 39) PedGiveWeapon(ped, 40, 1, false, local, nullptr);  // WEAPONTYPE_REMOTE_SATCHEL_CHARGE
     }
     unsigned prevTotal = 0, prevClip = 0;
@@ -3491,7 +3518,13 @@ static bool PedGiveWeapon(void* ped, int type, unsigned ammo, bool setCurrent, b
 
 // CClientPed::SetCurrentWeaponSlot (CClientPed.cpp 4078-4130), streamed-in branch.
 static void PedSetCurrentWeaponSlot(void* ped, int slot, bool local) {
-    if (slot < 0 || slot >= kWeaponSlots || slot == CurrentWeaponSlot(ped)) return;
+    if (slot < 0 || slot >= kWeaponSlots) return;
+    if (slot == CurrentWeaponSlot(ped)) {
+        const int model = slot > 0 ? WeaponInfoModel(WeaponType(PedWeaponAt(ped, slot))) : -1;
+        if (PedMissingWeaponObject(ped, slot, model) && StreamingLoadState(model) == 1)
+            PedSetCurrentWeaponSlotSA(ped, slot, local);
+        return;
+    }
     if (slot == 0) {
         const int current = CurrentWeaponSlot(ped);
         if (current < 0 || current >= kWeaponSlots) return;
@@ -3740,7 +3773,8 @@ static void ApplyRemoteBullets() {
 
 // CClientPed::AddChangeWeapon / UpdateKeysync (2864-2878, 5605-5631).
 // Read the type from the inventory created by PLAYER_LIST and weapon RPCs.
-// If the weapon is still loading, leave the revision pending for another frame.
+// Desktop's DELAYEDSYNC_CHANGEWEAPON calls GiveWeapon (which streams the weapon model before AddWeaponModel).
+// If the weapon or its model is still loading, leave the revision pending for another frame.
 static bool ApplyRemotePlayerWeapon(void* body, RemoteBody& stored, const RemotePed& ped) {
     if (!ped.weaponRevision) return true;
     if (!WeaponLayoutValid() || ped.syncWeapon.slot >= kWeaponSlots) return false;
@@ -3750,18 +3784,39 @@ static bool ApplyRemotePlayerWeapon(void* body, RemoteBody& stored, const Remote
     const int type = WeaponType(weapon);
     if (sync.slot && (type <= 0 || type > 46)) return false;
 
-    if (stored.appliedWeaponRevision != ped.weaponRevision) {
-        if (sync.ammoSynced) {
-            WeaponTotal(weapon) = sync.total;
-            // Desktop avoids overwriting the clip while GTA plays a reload.
-            if (!WeaponReloading(weapon)) WeaponClip(weapon) = sync.clip;
-        } else if (sync.slot && !PlayerWeaponSync::SlotHasAmmo(sync.slot) && WeaponTotal(weapon) == 0) {
-            // PLAYER_LIST carries the type only. GTA requires one unit to select even a melee weapon.
-            WeaponTotal(weapon) = 1;
+    const int model = sync.slot ? WeaponInfoModel(type) : -1;
+    const bool needsRevision = stored.appliedWeaponRevision != ped.weaponRevision;
+    const bool needsReattach = !needsRevision && CurrentWeaponSlot(body) == sync.slot &&
+        PedMissingWeaponObject(body, sync.slot, model);
+
+    if (needsRevision || needsReattach) {
+        if (sync.slot && model > 0) {
+            if (stored.pendingWeaponModel != model) {
+                stored.pendingWeaponModel = model;
+                stored.pendingWeaponWaits = 0;
+                stored.pendingWeaponRequested = false;
+            }
+            if (!EnsureWeaponModelLoaded(model, stored.pendingWeaponWaits, stored.pendingWeaponRequested))
+                return false;
+            stored.pendingWeaponModel = -1;
+            stored.pendingWeaponWaits = 0;
+            stored.pendingWeaponRequested = false;
         }
-        PedSetCurrentWeaponSlot(body, sync.slot, false);
-        if (CurrentWeaponSlot(body) != sync.slot) return false;
-        stored.appliedWeaponRevision = ped.weaponRevision;
+        if (needsRevision) {
+            if (sync.ammoSynced) {
+                WeaponTotal(weapon) = sync.total;
+                // Desktop avoids overwriting the clip while GTA plays a reload.
+                if (!WeaponReloading(weapon)) WeaponClip(weapon) = sync.clip;
+            } else if (sync.slot && WeaponTotal(weapon) == 0) {
+                // PLAYER_LIST carries the type only. GTA requires one unit to select even a melee weapon.
+                WeaponTotal(weapon) = 1;
+            }
+            PedSetCurrentWeaponSlot(body, sync.slot, false);
+            if (CurrentWeaponSlot(body) != sync.slot) return false;
+            stored.appliedWeaponRevision = ped.weaponRevision;
+        } else if (StreamingLoadState(model) == 1) {
+            PedSetCurrentWeaponSlot(body, sync.slot, false);
+        }
     }
     // Goggles, detonators and cameras must not use the generic fire input.
     return CurrentWeaponSlot(body) == sync.slot && sync.slot != 11 && sync.slot != 12 && type != 43;
@@ -3840,9 +3895,15 @@ static bool RunPedRpcOp(uint32_t id, void* ped, PedRpcOp& op, bool local, Remote
             if (!op.ammoInClip) WeaponClip(w) = static_cast<int>(op.ammo > clip ? clip : op.ammo);
             return true;
         }
-        case K::SetWeaponSlot:
+        case K::SetWeaponSlot: {
+            if (op.slot > 0 && op.slot < kWeaponSlots) {
+                const int type = WeaponType(PedWeaponAt(ped, op.slot));
+                const int model = type > 0 ? WeaponInfoModel(type) : -1;
+                if (model > 0 && !EnsureWeaponModelLoaded(model, op.waits, op.requested)) return false;
+            }
             PedSetCurrentWeaponSlot(ped, op.slot, local);
             return true;
+        }
     }
     return true;
 }
@@ -4267,7 +4328,10 @@ static void ApplyRemotePeds() {
                     PedRpcOp give;
                     give.kind = PedRpcOp::Kind::GiveWeapon;
                     give.weapon = w.type;
-                    give.ammo = w.total;
+                    // Remote players' unstreamed cache does not track ped-only ammo (PedQueries.cpp),
+                    // matching desktop CWeaponRPCs; give at least 1 unit on restore (Packet_PlayerList)
+                    // so SetWeaponSlot selects the weapon immediately on stream-in.
+                    give.ammo = (restore.player && w.total == 0) ? 1u : w.total;
                     base.push_back(give);
                 }
                 PedRpcOp slot;
@@ -4524,7 +4588,16 @@ static void ApplyRemotePeds() {
                 SetRemotePedHeading(body, ped.heading);
             }
             UpdateTargetPosition(body, found->second);
-            live->shown = true;
+            {
+                float rx = ped.x, ry = ped.y, rz = ped.z, rh = ped.heading;
+                ReadBodyPos(body, rx, ry, rz, rh);
+                std::lock_guard<std::mutex> lock(g_remoteMutex);
+                live->shownX = rx;
+                live->shownY = ry;
+                live->shownZ = rz;
+                live->shownH = rh;
+                live->shown = true;
+            }
             // The pad hook only drives the stick. libGTASA reads fire from the touch widget, not from the pad
             // (PlayerPedPort.cpp, RemotePlayerProcessControl), so the punch for a remote fire key comes from
             // PresentOnFoot, as it does without the hook.
@@ -7282,7 +7355,7 @@ bool CopyRemotePose(uint32_t id, float& x, float& y, float& z) {
 bool CopyRemotePedMotion(uint32_t id, float& heading, float& vx, float& vy, float& vz) {
     std::lock_guard lock(g_remoteMutex);
     auto found = g_remotePeds.find(id);
-    if (found == g_remotePeds.end() || !found->second.shown || !found->second.serverPed) return false;
+    if (found == g_remotePeds.end() || !found->second.shown) return false;
     const auto& ped = found->second;
     heading = ped.shownH;
     vx = ped.vx;
