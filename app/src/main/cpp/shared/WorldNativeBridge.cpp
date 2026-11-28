@@ -69,6 +69,98 @@ int RestoreAllWorldModels() {
     return g_hooks.restoreAllWorldModels ? g_hooks.restoreAllWorldModels() : -1;
 }
 
+bool SetGameSpeed(float speed) {
+    return g_hooks.setGameSpeed ? g_hooks.setGameSpeed(speed) : false;
+}
+
+bool SetMinuteDuration(uint32_t ms) {
+    return g_hooks.setMinuteDuration ? g_hooks.setMinuteDuration(ms) : false;
+}
+
+bool SetWeatherBlended(int weather) {
+    return g_hooks.setWeatherBlended ? g_hooks.setWeatherBlended(weather) : false;
+}
+
+bool SetRainLevel(float level, bool forced) {
+    return g_hooks.setRainLevel ? g_hooks.setRainLevel(level, forced) : false;
+}
+
+bool SetWindVelocity(float x, float y, float z, bool reset) {
+    return g_hooks.setWindVelocity ? g_hooks.setWindVelocity(x, y, z, reset) : false;
+}
+
+bool SetWaveHeight(float height) {
+    return g_hooks.setWaveHeight ? g_hooks.setWaveHeight(height) : false;
+}
+
+bool SetMoonSize(int size) {
+    return g_hooks.setMoonSize ? g_hooks.setMoonSize(size) : false;
+}
+
+bool SetBlurLevel(int level) {
+    return g_hooks.setBlurLevel ? g_hooks.setBlurLevel(level) : false;
+}
+
+bool SetGrainLevel(int level) {
+    return g_hooks.setGrainLevel ? g_hooks.setGrainLevel(level) : false;
+}
+
+bool SetHeatHaze(int intensity, int randomShift, int speedMin, int speedMax,
+                 int scanX, int scanY, int renderX, int renderY, bool showInside, bool reset) {
+    return g_hooks.setHeatHaze
+               ? g_hooks.setHeatHaze(intensity, randomShift, speedMin, speedMax,
+                                     scanX, scanY, renderX, renderY, showInside, reset)
+               : false;
+}
+
+bool SetFarClipDistance(float distance, bool reset) {
+    return g_hooks.setFarClipDistance ? g_hooks.setFarClipDistance(distance, reset) : false;
+}
+
+bool SetFogDistance(float distance, bool reset) {
+    return g_hooks.setFogDistance ? g_hooks.setFogDistance(distance, reset) : false;
+}
+
+bool SetSunSize(float size, bool reset) {
+    return g_hooks.setSunSize ? g_hooks.setSunSize(size, reset) : false;
+}
+
+bool SetSunColor(int coreR, int coreG, int coreB, int coronaR, int coronaG, int coronaB, bool reset) {
+    return g_hooks.setSunColor
+               ? g_hooks.setSunColor(coreR, coreG, coreB, coronaR, coronaG, coronaB, reset)
+               : false;
+}
+
+bool SetSkyGradient(int topR, int topG, int topB, int botR, int botG, int botB, bool reset) {
+    return g_hooks.setSkyGradient
+               ? g_hooks.setSkyGradient(topR, topG, topB, botR, botG, botB, reset)
+               : false;
+}
+
+bool SetWaterColor(int r, int g, int b, int a, bool reset) {
+    return g_hooks.setWaterColor ? g_hooks.setWaterColor(r, g, b, a, reset) : false;
+}
+
+bool SetCloudsEnabled(bool enabled) {
+    return g_hooks.setCloudsEnabled ? g_hooks.setCloudsEnabled(enabled) : false;
+}
+
+bool SetOcclusionsEnabled(bool enabled) {
+    return g_hooks.setOcclusionsEnabled ? g_hooks.setOcclusionsEnabled(enabled) : false;
+}
+
+bool SetGarageOpen(int garageId, bool open) {
+    return g_hooks.setGarageOpen ? g_hooks.setGarageOpen(garageId, open) : false;
+}
+
+bool IsGarageOpen(int garageId, bool& outOpen) {
+    return g_hooks.isGarageOpen ? g_hooks.isGarageOpen(garageId, outOpen) : false;
+}
+
+bool SetCurrentArea(int area) {
+    return g_hooks.setCurrentArea ? g_hooks.setCurrentArea(area) : false;
+}
+
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     return g_hooks.fxAddBlood ? g_hooks.fxAddBlood(x, y, z, dx, dy, dz, count, brightness) : false;
 }

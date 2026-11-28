@@ -1808,7 +1808,7 @@ void CheckCompatibilityAliases(WorldRPG::Script::LuaVMStub& vm) {
         assert(isPedDoingTask(me, 'TASK_SIMPLE_PLAYER_ON_FOOT') == false and getPedTarget(me) == false, 'no task or target')
         assert(getPedTrafficObstacleScan(false) == nil and getPedTrafficObstacleScan(me, 0/0) == nil, 'invalid obstacle scan')
         assert(getPedTrafficObstacleScan(me, 90) == nil, 'no hosted GTA body or collision world on headless')
-        assert(setPedRotation(me, 90) == false, 'local rotation is not hooked')
+        assert(setPedRotation(me, 90) == true, 'rotation delegates to RpcSetRotation')
         assert(attachElements(me, me) == false and detachElements(me) == false, 'no physical attach')
     )LUA");
 }
@@ -7089,6 +7089,154 @@ int main(int argc, char** argv) {
                 stop.Write(static_cast<uint16_t>(209));
                 WorldRPG::Script::ActiveVmOnResourceStop(stop.GetData(), stop.GetByteLength(), stop.GetBitLength());
             }
+            WorldRPG::WorldNative::RegisterHooks({});
+        }
+
+        // Verify all 21 new WorldNativeBridge hooks, GUI setElementParent, and SET_CONTROL_STATE RPC.
+        {
+            struct HookLog {
+                int speedCalls = 0; float lastSpeed = 0.f;
+                int minDurCalls = 0; uint32_t lastMinDur = 0;
+                int weatherBlendCalls = 0; int lastBlendWeather = -1;
+                int rainCalls = 0; float lastRain = -1.f; bool lastRainReset = false;
+                int windCalls = 0; float lastWindX = 0.f, lastWindY = 0.f, lastWindZ = 0.f; bool lastWindReset = false;
+                int waveCalls = 0; float lastWave = 0.f;
+                int moonCalls = 0; int lastMoon = -1;
+                int blurCalls = 0; int lastBlur = 0;
+                int grainCalls = 0; int lastGrain = 0;
+                int heatCalls = 0; int lastHeatIntensity = -1; bool lastHeatReset = false;
+                int farClipCalls = 0; float lastFarClip = 0.f; bool lastFarClipReset = false;
+                int fogCalls = 0; float lastFog = 0.f; bool lastFogReset = false;
+                int sunSizeCalls = 0; float lastSunSize = 0.f; bool lastSunSizeReset = false;
+                int sunColorCalls = 0; int lastSunR = 0; bool lastSunColorReset = false;
+                int skyGradCalls = 0; int lastSkyTR = 0; bool lastSkyReset = false;
+                int waterColorCalls = 0; int lastWaterA = 0; bool lastWaterReset = false;
+                int cloudsCalls = 0; bool lastClouds = true;
+                int occlCalls = 0; bool lastOccl = true;
+                int garageSetCalls = 0; int lastGarageId = -1; bool lastGarageOpen = false;
+                int garageQueryCalls = 0;
+                int areaCalls = 0; int lastArea = -1;
+            };
+            static HookLog gLog;
+            gLog = HookLog{};
+
+            WorldRPG::WorldNative::Hooks h;
+            h.setGameSpeed = [](float s) { ++gLog.speedCalls; gLog.lastSpeed = s; return true; };
+            h.setMinuteDuration = [](uint32_t ms) { ++gLog.minDurCalls; gLog.lastMinDur = ms; return true; };
+            h.setWeatherBlended = [](int w) { ++gLog.weatherBlendCalls; gLog.lastBlendWeather = w; return true; };
+            h.setRainLevel = [](float l, bool r) { ++gLog.rainCalls; gLog.lastRain = l; gLog.lastRainReset = r; return true; };
+            h.setWindVelocity = [](float x, float y, float z, bool r) {
+                ++gLog.windCalls; gLog.lastWindX = x; gLog.lastWindY = y; gLog.lastWindZ = z; gLog.lastWindReset = r;
+                return true;
+            };
+            h.setWaveHeight = [](float w) { ++gLog.waveCalls; gLog.lastWave = w; return true; };
+            h.setMoonSize = [](int s) { ++gLog.moonCalls; gLog.lastMoon = s; return true; };
+            h.setBlurLevel = [](int b) { ++gLog.blurCalls; gLog.lastBlur = b; return true; };
+            h.setGrainLevel = [](int g) { ++gLog.grainCalls; gLog.lastGrain = g; return true; };
+            h.setHeatHaze = [](int intensity, int, int, int, int, int, int, int, bool, bool r) {
+                ++gLog.heatCalls; gLog.lastHeatIntensity = intensity; gLog.lastHeatReset = r; return true;
+            };
+            h.setFarClipDistance = [](float d, bool r) { ++gLog.farClipCalls; gLog.lastFarClip = d; gLog.lastFarClipReset = r; return true; };
+            h.setFogDistance = [](float d, bool r) { ++gLog.fogCalls; gLog.lastFog = d; gLog.lastFogReset = r; return true; };
+            h.setSunSize = [](float s, bool r) { ++gLog.sunSizeCalls; gLog.lastSunSize = s; gLog.lastSunSizeReset = r; return true; };
+            h.setSunColor = [](int cr, int, int, int, int, int, bool r) {
+                ++gLog.sunColorCalls; gLog.lastSunR = cr; gLog.lastSunColorReset = r; return true;
+            };
+            h.setSkyGradient = [](int tr, int, int, int, int, int, bool r) {
+                ++gLog.skyGradCalls; gLog.lastSkyTR = tr; gLog.lastSkyReset = r; return true;
+            };
+            h.setWaterColor = [](int, int, int, int a, bool r) {
+                ++gLog.waterColorCalls; gLog.lastWaterA = a; gLog.lastWaterReset = r; return true;
+            };
+            h.setCloudsEnabled = [](bool e) { ++gLog.cloudsCalls; gLog.lastClouds = e; return true; };
+            h.setOcclusionsEnabled = [](bool e) { ++gLog.occlCalls; gLog.lastOccl = e; return true; };
+            h.setGarageOpen = [](int id, bool open) { ++gLog.garageSetCalls; gLog.lastGarageId = id; gLog.lastGarageOpen = open; return true; };
+            h.isGarageOpen = [](int id, bool& outOpen) { ++gLog.garageQueryCalls; outOpen = (id == gLog.lastGarageId && gLog.lastGarageOpen); return true; };
+            h.setCurrentArea = [](int area) { ++gLog.areaCalls; gLog.lastArea = area; return true; };
+            WorldRPG::WorldNative::RegisterHooks(h);
+
+            RunLua(vm, "world-native-21-hooks", R"LUA(
+                assert(setGameSpeed(1.5) == true)
+                assert(setMinuteDuration(2000) == true)
+                assert(setWeatherBlended(8) == true)
+                assert(setRainLevel(0.75) == true)
+                assert(resetRainLevel() == true)
+                assert(setWindVelocity(1.0, 2.0, 0.5) == true)
+                assert(resetWindVelocity() == true)
+                assert(setWaveHeight(2.5) == true)
+                assert(setMoonSize(5) == true)
+                assert(setBlurLevel(40) == true)
+                assert(setHeatHaze(120, 12, 18, 75, 80, 85, 80, 85, true) == true)
+                assert(resetHeatHaze() == true)
+                assert(setFarClipDistance(1200) == true)
+                assert(resetFarClipDistance() == true)
+                assert(setFogDistance(250) == true)
+                assert(resetFogDistance() == true)
+                assert(setSunSize(3.0) == true)
+                assert(resetSunSize() == true)
+                assert(setSunColor(250, 200, 100, 240, 180, 80) == true)
+                assert(resetSunColor() == true)
+                assert(setSkyGradient(10, 20, 30, 40, 50, 60) == true)
+                assert(resetSkyGradient() == true)
+                assert(setWaterColor(10, 20, 30, 180) == true)
+                assert(resetWaterColor() == true)
+                assert(setCloudsEnabled(false) == true)
+                assert(setOcclusionsEnabled(false) == true)
+                assert(setGarageOpen(7, true) == true)
+                assert(isGarageOpen(7) == true)
+                assert(setElementInterior(localPlayer, 3) == true)
+            )LUA");
+
+            CHECK(gLog.speedCalls == 1 && std::fabs(gLog.lastSpeed - 1.5f) < 0.001f);
+            CHECK(gLog.minDurCalls == 1 && gLog.lastMinDur == 2000u);
+            CHECK(gLog.weatherBlendCalls == 1 && gLog.lastBlendWeather == 8);
+            CHECK(gLog.rainCalls == 2 && gLog.lastRainReset == true);
+            CHECK(gLog.windCalls == 2 && gLog.lastWindReset == true);
+            CHECK(gLog.waveCalls == 1 && std::fabs(gLog.lastWave - 2.5f) < 0.001f);
+            CHECK(gLog.moonCalls == 1 && gLog.lastMoon == 5);
+            CHECK(gLog.blurCalls == 1 && gLog.lastBlur == 40);
+            CHECK(gLog.heatCalls == 2 && gLog.lastHeatReset == true);
+            CHECK(gLog.farClipCalls == 2 && gLog.lastFarClipReset == true);
+            CHECK(gLog.fogCalls == 2 && gLog.lastFogReset == true);
+            CHECK(gLog.sunSizeCalls == 2 && gLog.lastSunSizeReset == true);
+            CHECK(gLog.sunColorCalls == 2 && gLog.lastSunColorReset == true);
+            CHECK(gLog.skyGradCalls == 2 && gLog.lastSkyReset == true);
+            CHECK(gLog.waterColorCalls == 2 && gLog.lastWaterReset == true);
+            CHECK(gLog.cloudsCalls == 1 && gLog.lastClouds == false);
+            CHECK(gLog.occlCalls == 1 && gLog.lastOccl == false);
+            CHECK(gLog.garageSetCalls == 1 && gLog.lastGarageId == 7 && gLog.lastGarageOpen == true);
+            CHECK(gLog.garageQueryCalls >= 1);
+            CHECK(gLog.areaCalls == 1 && gLog.lastArea == 3);
+
+            // Verify GUI setElementParent (reparent across windows, reparent to guiroot, reject cycle).
+            RunLua(vm, "gui-reparent-and-cycle", R"LUA(
+                local w1 = guiCreateWindow(10, 10, 200, 200, "W1", false)
+                local w2 = guiCreateWindow(220, 10, 200, 200, "W2", false)
+                local btn = guiCreateButton(10, 30, 80, 30, "OK", false, w1)
+                assert(getElementParent(btn) == w1, "initial button parent is w1")
+                assert(setElementParent(btn, w2) == true, "reparent button to w2")
+                assert(getElementParent(btn) == w2, "button parent updated to w2")
+                assert(setElementParent(w2, btn) == false, "cycle reparent rejected")
+                local gr = getElementParent(w1)
+                if gr and getElementType(gr) == "guiroot" then
+                    assert(setElementParent(btn, gr) == true, "reparent button to guiroot")
+                    assert(getElementParent(btn) == gr, "button parent is guiroot")
+                end
+                destroyElement(btn)
+                destroyElement(w1)
+                destroyElement(w2)
+            )LUA");
+
+            // Verify server RPC SET_CONTROL_STATE updates local player control state.
+            WorldRPG::Script::PedSetServerControlState("fire", true);
+            RunLua(vm, "rpc-set-control-state-on", R"LUA(
+                assert(getControlState("fire") == true, "server RPC enabled fire control")
+            )LUA");
+            WorldRPG::Script::PedSetServerControlState("fire", false);
+            RunLua(vm, "rpc-set-control-state-off", R"LUA(
+                assert(getControlState("fire") == false, "server RPC cleared fire control")
+            )LUA");
+
             WorldRPG::WorldNative::RegisterHooks({});
         }
     }

@@ -50,6 +50,30 @@ struct Hooks {
     int (*restoreWorldModel)(uint16_t model, float radius, float x, float y, float z, int8_t interior) = nullptr;
     int (*restoreAllWorldModels)() = nullptr;
 
+    // World/weather/clock/timecycle/postfx/garage/area native hooks (all game-thread safe).
+    bool (*setGameSpeed)(float speed) = nullptr;
+    bool (*setMinuteDuration)(uint32_t ms) = nullptr;
+    bool (*setWeatherBlended)(int weather) = nullptr;
+    bool (*setRainLevel)(float level, bool forced) = nullptr;
+    bool (*setWindVelocity)(float x, float y, float z, bool reset) = nullptr;
+    bool (*setWaveHeight)(float height) = nullptr;
+    bool (*setMoonSize)(int size) = nullptr;
+    bool (*setBlurLevel)(int level) = nullptr;
+    bool (*setGrainLevel)(int level) = nullptr;
+    bool (*setHeatHaze)(int intensity, int randomShift, int speedMin, int speedMax,
+                        int scanX, int scanY, int renderX, int renderY, bool showInside, bool reset) = nullptr;
+    bool (*setFarClipDistance)(float distance, bool reset) = nullptr;
+    bool (*setFogDistance)(float distance, bool reset) = nullptr;
+    bool (*setSunSize)(float size, bool reset) = nullptr;
+    bool (*setSunColor)(int coreR, int coreG, int coreB, int coronaR, int coronaG, int coronaB, bool reset) = nullptr;
+    bool (*setSkyGradient)(int topR, int topG, int topB, int botR, int botG, int botB, bool reset) = nullptr;
+    bool (*setWaterColor)(int r, int g, int b, int a, bool reset) = nullptr;
+    bool (*setCloudsEnabled)(bool enabled) = nullptr;
+    bool (*setOcclusionsEnabled)(bool enabled) = nullptr;
+    bool (*setGarageOpen)(int garageId, bool open) = nullptr;
+    bool (*isGarageOpen)(int garageId, bool& outOpen) = nullptr;
+    bool (*setCurrentArea)(int area) = nullptr;
+
     // Immediate Fx_c particle emitters; return true if invoked.
     bool (*fxAddBlood)(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) = nullptr;
     bool (*fxAddBulletImpact)(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity) = nullptr;
@@ -82,6 +106,29 @@ bool GetGarageGeometry(int garageId, float pos[3], float sizeWDH[3], float bbox[
 int RemoveWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior);
 int RestoreWorldModel(uint16_t model, float radius, float x, float y, float z, int8_t interior);
 int RestoreAllWorldModels();
+
+bool SetGameSpeed(float speed);
+bool SetMinuteDuration(uint32_t ms);
+bool SetWeatherBlended(int weather);
+bool SetRainLevel(float level, bool forced);
+bool SetWindVelocity(float x, float y, float z, bool reset);
+bool SetWaveHeight(float height);
+bool SetMoonSize(int size);
+bool SetBlurLevel(int level);
+bool SetGrainLevel(int level);
+bool SetHeatHaze(int intensity, int randomShift, int speedMin, int speedMax,
+                 int scanX, int scanY, int renderX, int renderY, bool showInside, bool reset);
+bool SetFarClipDistance(float distance, bool reset);
+bool SetFogDistance(float distance, bool reset);
+bool SetSunSize(float size, bool reset);
+bool SetSunColor(int coreR, int coreG, int coreB, int coronaR, int coronaG, int coronaB, bool reset);
+bool SetSkyGradient(int topR, int topG, int topB, int botR, int botG, int botB, bool reset);
+bool SetWaterColor(int r, int g, int b, int a, bool reset);
+bool SetCloudsEnabled(bool enabled);
+bool SetOcclusionsEnabled(bool enabled);
+bool SetGarageOpen(int garageId, bool open);
+bool IsGarageOpen(int garageId, bool& outOpen);
+bool SetCurrentArea(int area);
 
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness);
 bool FxAddBulletImpact(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity);

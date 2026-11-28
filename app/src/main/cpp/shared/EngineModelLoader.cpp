@@ -741,6 +741,86 @@ bool NativeRestoreCOL(std::uint16_t model) {
     return restored;
 }
 
+// Verified libGTASA.so 2.10 arm64: _ZN12CAnimManager12LoadAnimFileEP8RwStreambPA32_Kc (0x46776c).
+bool NativeLoadIFP(std::span<const std::uint8_t> ifpBytes) {
+    if (ifpBytes.size() < 8 || ifpBytes.size() > kMaxAssetBytes) return false;
+    if (std::memcmp(ifpBytes.data(), "ANP", 3) != 0) return false;
+    std::vector<std::uint8_t> copy(ifpBytes.begin(), ifpBytes.end());
+    bool loaded = false;
+    GameTasks::Run([&] {
+        if (!ResolveRenderWare() || !rw.open || !rw.close) return;
+        using LoadAnimFileFn = void (*)(RwStream*, bool, const char (*)[32]);
+        static LoadAnimFileFn loadAnimFile = []() -> LoadAnimFileFn {
+            void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_NOW);
+            if (!lib) return nullptr;
+            return reinterpret_cast<LoadAnimFileFn>(
+                dlsym(lib, "_ZN12CAnimManager12LoadAnimFileEP8RwStreambPA32_Kc"));
+        }();
+        if (!loadAnimFile) return;
+        RwMemory mem{copy.data(), static_cast<std::uint32_t>(copy.size())};
+        RwStream* stream = rw.open(kStreamMemory, kStreamRead, &mem);
+        if (!stream) return;
+        loadAnimFile(stream, true, nullptr);
+        rw.close(stream, nullptr);
+        loaded = true;
+    });
+    return loaded;
+}
+
+// Verified libGTASA.so 2.10 arm64: CBaseModelInfo +0x24 = int16 m_nTxdIndex,
+// CTxdStore::ms_pTxdPool = CPool<TxdDef>* (m_pObjects +0x00, m_byteMap +0x08, m_nSize +0x10),
+// TxdDef stride 0x40 (_ZN9CTxdStore6AddRefEi lsl #6), TxdDef +0x00 = RwTexDictionary*,
+// RwTexture +0x20 = 32-byte texture name.
+bool NativeGetModelTextureNames(std::uint16_t model, std::vector<std::string>& outNames) {
+    outNames.clear();
+    bool ok = false;
+    GameTasks::Run([&] {
+        if (!ResolveRenderWare() || !rw.forEachTexture) return;
+        void* info = GetModel(model);
+        if (!info) return;
+        struct CollectCtx {
+            std::vector<std::string>* out;
+            std::unordered_set<std::string> seen;
+        } ctx{&outNames, {}};
+        auto collect = [](RwTexture* tex, void* user) -> RwTexture* {
+            if (!tex || !user) return tex;
+            auto* c = static_cast<CollectCtx*>(user);
+            const char* raw = reinterpret_cast<const char*>(tex) + 0x20;
+            const std::size_t len = strnlen(raw, 32);
+            if (len > 0) {
+                std::string s(raw, len);
+                if (c->seen.insert(s).second) c->out->push_back(std::move(s));
+            }
+            return tex;
+        };
+
+        static void** txdPoolPtr = []() -> void** {
+            void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_NOW);
+            if (!lib) return nullptr;
+            return static_cast<void**>(dlsym(lib, "_ZN9CTxdStore11ms_pTxdPoolE"));
+        }();
+        const std::int16_t txdIdx = Field<std::int16_t>(info, 0x24);
+        if (txdPoolPtr && *txdPoolPtr && txdIdx >= 0) {
+            auto* pool = static_cast<std::uint8_t*>(*txdPoolPtr);
+            auto* objects = *reinterpret_cast<std::uint8_t**>(pool + 0x00);
+            auto* byteMap = *reinterpret_cast<std::uint8_t**>(pool + 0x08);
+            const std::int32_t poolSize = *reinterpret_cast<std::int32_t*>(pool + 0x10);
+            if (objects && byteMap && txdIdx < poolSize && (byteMap[txdIdx] & 0x80u) == 0) {
+                auto* dict = *reinterpret_cast<RwTexDictionary**>(
+                    objects + static_cast<std::size_t>(txdIdx) * 0x40u);
+                if (dict) rw.forEachTexture(dict, collect, &ctx);
+            }
+        }
+        if (auto it = modelAssets.find(model); it != modelAssets.end()) {
+            for (const auto& imported : it->second.textures) {
+                if (imported.dictionary) rw.forEachTexture(imported.dictionary, collect, &ctx);
+            }
+        }
+        ok = true;
+    });
+    return ok;
+}
+
 } // namespace WorldRPG::Script
 
 #else
@@ -759,6 +839,10 @@ bool NativeReplaceCOL(std::uint16_t, std::span<const std::uint8_t> colBytes) {
     return colBytes.size() >= 32 && colBytes[0] == 'C' && colBytes[1] == 'O' && colBytes[2] == 'L';
 }
 bool NativeRestoreCOL(std::uint16_t) { return true; }
+bool NativeLoadIFP(std::span<const std::uint8_t> ifpBytes) {
+    return ifpBytes.size() >= 8 && ifpBytes[0] == 'A' && ifpBytes[1] == 'N' && ifpBytes[2] == 'P';
+}
+bool NativeGetModelTextureNames(std::uint16_t, std::vector<std::string>&) { return false; }
 void NativeReleaseModelAsset(std::uint64_t, void*) {}
 int NativeAllocateObjectModel(int) { return -1; }
 bool NativeFreeModel(int) { return false; }

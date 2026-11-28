@@ -41,6 +41,8 @@ uint32_t GuiEnsureResourceRoot(const std::string& owner, uint16_t netId, uint32_
 // (element, parent) for every GUI element at once.
 uint32_t GuiEventParent(uint32_t id);
 void GuiEventEdges(std::vector<std::pair<uint32_t, uint32_t>>& out);
+// Reparents a GUI element under another GUI element (desktop setElementParent).
+bool GuiSetParent(uint32_t id, uint32_t parentId);
 // Drops every GUI element (new VM or session).
 void GuiReset();
 // CClientGuiFont::Unlink restores default-normal on every widget using that font.

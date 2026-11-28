@@ -2348,16 +2348,17 @@ int GetVehicleNativeAutoPilotDiagnostic(lua_State* L) {
 int SpawnVehicleFlyingComponent(lua_State* L) {
     if (!IsElementArg(L, 1) || std::strcmp(ServerWorld::ElementKindName(ElementIdOf(L, 1)), "vehicle") != 0)
         return luaL_error(L, "%s", ParserError(L, "spawnVehicleFlyingComponent", "vehicle", 1).c_str());
+    const uint32_t id = ElementIdOf(L, 1);
     if (!lua_isnumber(L, 2)) return luaL_error(L, "%s", ParserError(L, "spawnVehicleFlyingComponent", "number", 2).c_str());
     const int node = static_cast<int>(lua_tonumber(L, 2));
     if (node < 1 || node >= 25) return luaL_error(L, "Invalid component index");
+    int collision = 2;  // Desktop default CAutomobile::SpawnFlyingComponent collisionType = 2
     if (lua_type(L, 3) != LUA_TNONE && lua_type(L, 3) != LUA_TNIL) {
         if (!lua_isnumber(L, 3)) return luaL_error(L, "%s", ParserError(L, "spawnVehicleFlyingComponent", "number", 3).c_str());
-        const int collision = static_cast<int>(lua_tonumber(L, 3));
+        collision = static_cast<int>(lua_tonumber(L, 3));
         if (collision < 0 || collision >= 6) return luaL_error(L, "Invalid collision type index");
     }
-    LUA_LOGI("DIAG spawnVehicleFlyingComponent: CAutomobile::SpawnFlyingComponent is not hooked");
-    lua_pushboolean(L, 0);
+    lua_pushboolean(L, Game::RpcSpawnVehicleFlyingComponent(id, node, collision) ? 1 : 0);
     return 1;
 }
 

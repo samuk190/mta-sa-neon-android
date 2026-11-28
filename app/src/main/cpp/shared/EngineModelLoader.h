@@ -24,6 +24,8 @@ bool NativeReplaceDFF(std::uint16_t model, std::uint64_t asset, const DffSource&
 bool NativeRestoreDFF(std::uint16_t model);
 bool NativeReplaceCOL(std::uint16_t model, std::span<const std::uint8_t> colBytes);
 bool NativeRestoreCOL(std::uint16_t model);
+bool NativeLoadIFP(std::span<const std::uint8_t> ifpBytes);
+bool NativeGetModelTextureNames(std::uint16_t model, std::vector<std::string>& outNames);
 void NativeReleaseModelAsset(std::uint64_t asset, void* dictionary);
 // engineRequestModel("object", parent): a new model id copied from the object
 // model parent, or -1. engineFreeModel: false while an entity still uses it.

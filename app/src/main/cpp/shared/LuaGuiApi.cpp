@@ -604,6 +604,21 @@ uint32_t GuiEventParent(uint32_t id) {
     return element->generation != 0 && ResourceLoader::CopyResourceByGeneration(element->generation, view) ? view.root : 0;
 }
 
+bool GuiSetParent(uint32_t id, uint32_t parentId) {
+    GuiElement* child = Find(id);
+    GuiElement* newParent = Find(parentId);
+    if (!child || !newParent || id == parentId || child->type == "guiroot") return false;
+    // Reject cycles: walk newParent's ancestor chain to confirm id is not an ancestor.
+    uint32_t cursor = newParent->parent;
+    for (int depth = 0; cursor != 0 && depth < 128; ++depth) {
+        if (cursor == id) return false;
+        const GuiElement* anc = Find(cursor);
+        cursor = anc ? anc->parent : 0;
+    }
+    child->parent = (newParent->type == "guiroot") ? 0 : parentId;
+    return true;
+}
+
 uint32_t GuiEnsureResourceRoot(const std::string& owner, uint16_t netId, uint32_t generation) {
     if (owner.empty()) return 0;
     for (const auto& [id, element] : g_elements) {

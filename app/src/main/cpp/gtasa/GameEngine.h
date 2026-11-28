@@ -304,6 +304,7 @@ void RpcSetVehiclePosition(uint32_t id, float x, float y, float z);
 void RpcSetVehicleHealth(uint32_t id, float health);
 void RpcFixVehicle(uint32_t id);
 void RpcBlowVehicle(uint32_t id, bool withExplosion);
+bool RpcSpawnVehicleFlyingComponent(uint32_t id, int node, int collisionType);
 void RpcSetVehicleRotation(uint32_t id, float x, float y, float z);
 void RpcSetVehicleVelocity(uint32_t id, float x, float y, float z, bool angular);
 bool SetOwnedPedControl(uint32_t id, const char* control, bool enabled);

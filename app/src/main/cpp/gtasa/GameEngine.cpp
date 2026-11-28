@@ -7290,6 +7290,36 @@ void RpcBlowVehicle(uint32_t id, bool withExplosion) {
     if (car.observedVehicle) car.observedVehicle->syncHealth = false;
 }
 
+// Verified libGTASA.so 2.10 arm64: _ZN11CAutomobile20SpawnFlyingComponentEij (0x672b74)
+// and CVehicle::m_dwVehicleClass at +0x734 (0 == VEHICLE_AUTOMOBILE).
+bool RpcSpawnVehicleFlyingComponent(uint32_t id, int node, int collisionType) {
+    if (id == 0 || id == 0xFFFFFFFFu || node < 1 || node >= 25 || collisionType < 0 || collisionType >= 6) {
+        return false;
+    }
+    bool spawned = false;
+    GameTasks::RunQuery([&] {
+        void* body = nullptr;
+        {
+            std::lock_guard lock(g_remoteMutex);
+            auto it = g_remoteCars.find(id);
+            if (it != g_remoteCars.end()) body = it->second.body;
+        }
+        if (!body || IsPlaceableVtable(body)) return;
+        uint32_t vehicleClass = 0xFFFFFFFFu;
+        std::memcpy(&vehicleClass, static_cast<const unsigned char*>(body) + 0x734, sizeof(vehicleClass));
+        if (vehicleClass != 0u) return;  // CAutomobile only
+        using SpawnFlyingFn = void* (*)(void*, int, uint32_t);
+        static SpawnFlyingFn spawnFlying = []() -> SpawnFlyingFn {
+            void* lib = dlopen("libGTASA.so", RTLD_NOLOAD | RTLD_NOW);
+            if (!lib) return nullptr;
+            return reinterpret_cast<SpawnFlyingFn>(dlsym(lib, "_ZN11CAutomobile20SpawnFlyingComponentEij"));
+        }();
+        if (!spawnFlying) return;
+        spawned = spawnFlying(body, node, static_cast<uint32_t>(collisionType)) != nullptr;
+    });
+    return spawned;
+}
+
 void RpcSetVehicleRotation(uint32_t id, float x, float y, float z) {
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     std::lock_guard lock(g_remoteMutex);
@@ -7579,6 +7609,7 @@ void RpcSetVehiclePosition(uint32_t, float, float, float) {}
 void RpcSetVehicleHealth(uint32_t, float) {}
 void RpcFixVehicle(uint32_t) {}
 void RpcBlowVehicle(uint32_t, bool) {}
+bool RpcSpawnVehicleFlyingComponent(uint32_t, int, int) { return false; }
 void RpcSetVehicleRotation(uint32_t, float, float, float) {}
 void RpcSetVehicleVelocity(uint32_t, float, float, float, bool) {}
 bool SetOwnedPedControl(uint32_t, const char*, bool) { return false; }

@@ -637,6 +637,15 @@ int GetElementParent(lua_State* L) {
         PushFail(L);
         return 1;
     }
+    if (GuiIsElement(id)) {
+        const uint32_t gp = GuiEventParent(id);
+        if (gp == 0) {
+            PushFail(L);
+            return 1;
+        }
+        PushElement(L, gp);
+        return 1;
+    }
     Node* node = Find(id);
     if (!node || node->parent == 0) {
         PushFail(L);
@@ -767,17 +776,11 @@ int SetElementParent(lua_State* L) {
         return 1;
     }
     if (GuiIsElement(id)) {
-        if (!GuiIsElement(parent)) {
+        if (!GuiIsElement(parent) || !GuiSetParent(id, parent)) {
             PushFail(L);
             return 1;
         }
-        // GUI parent is stored in LuaGuiApi and has no write from here.
-        static bool logged = false;
-        if (!logged) {
-            logged = true;
-            LUA_LOGI("DIAG setElementParent: GUI parent write is not wired (LuaGuiApi)");
-        }
-        PushFail(L);
+        lua_pushboolean(L, 1);
         return 1;
     }
     if (HasMapAncestor(parent) && IsLocal(id) && Find(id)) {

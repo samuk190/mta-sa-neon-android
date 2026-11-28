@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -121,6 +122,71 @@ WorldEntityFn g_worldRemove = nullptr;
 WorldEntityFn g_worldAdd = nullptr;
 uint8_t* g_garages = nullptr;
 int32_t* g_numGarages = nullptr;
+using GarageMethodFn = void (*)(void* garage);
+using IsGarageOpenFn = bool (*)(int16_t garageId);
+GarageMethodFn g_garageOpen = nullptr;
+GarageMethodFn g_garageClose = nullptr;
+IsGarageOpenFn g_isGarageOpen = nullptr;
+
+// Verified libGTASA.so 2.10 arm64 world/weather/clock/postfx/area globals (exact sizes verified via nm -D --print-size).
+float* g_timeScale = nullptr;                   // CTimer::ms_fTimeScale (4B)
+uint32_t* g_msPerGameMinute = nullptr;          // CClock::ms_nMillisecondsPerGameMinute (4B)
+int16_t* g_newWeatherType = nullptr;            // CWeather::NewWeatherType (2B)
+int16_t* g_forcedWeatherType = nullptr;         // CWeather::ForcedWeatherType (2B)
+float* g_weatherInterp = nullptr;               // CWeather::InterpolationValue (4B)
+float* g_weatherRain = nullptr;                 // CWeather::Rain (4B)
+bool* g_scriptsForceRain = nullptr;             // CWeather::bScriptsForceRain (1B)
+float* g_weatherWind = nullptr;                 // CWeather::Wind (4B)
+CVector* g_weatherWindDir = nullptr;            // CWeather::WindDir (12B)
+float* g_weatherWavyness = nullptr;             // CWeather::Wavyness (4B)
+float* g_weatherHeatHaze = nullptr;             // CWeather::HeatHaze (4B)
+int32_t* g_moonSize = nullptr;                  // CCoronas::MoonSize (4B)
+int32_t* g_currArea = nullptr;                  // CGame::currArea (4B)
+bool* g_speedFx = nullptr;                      // CPostEffects::m_bSpeedFX (1B)
+int32_t* g_speedFxAlpha = nullptr;              // CPostEffects::m_SpeedFXAlpha (4B)
+bool* g_grainEnable = nullptr;                  // CPostEffects::m_bGrainEnable (1B)
+int32_t* g_grainStrength = nullptr;             // CPostEffects::m_grainStrength (4B)
+bool* g_heatHazeEnable = nullptr;               // CPostEffects::m_bHeatHazeFX (1B)
+int32_t* g_heatHazeIntensity = nullptr;         // CPostEffects::m_HeatHazeFXIntensity (4B)
+int32_t* g_heatHazeRandomShift = nullptr;       // CPostEffects::m_HeatHazeFXRandomShift (4B)
+int32_t* g_heatHazeSpeedMin = nullptr;          // CPostEffects::m_HeatHazeFXSpeedMin (4B)
+int32_t* g_heatHazeSpeedMax = nullptr;          // CPostEffects::m_HeatHazeFXSpeedMax (4B)
+int32_t* g_heatHazeScanX = nullptr;             // CPostEffects::m_HeatHazeFXScanSizeX (4B)
+int32_t* g_heatHazeScanY = nullptr;             // CPostEffects::m_HeatHazeFXScanSizeY (4B)
+int32_t* g_heatHazeRenderX = nullptr;           // CPostEffects::m_HeatHazeFXRenderSizeX (4B)
+int32_t* g_heatHazeRenderY = nullptr;           // CPostEffects::m_HeatHazeFXRenderSizeY (4B)
+int32_t* g_numOccludersOnMap = nullptr;         // COcclusion::NumOccludersOnMap (4B)
+bool g_savedOccludersValid = false;
+int32_t g_savedOccludersCount = 0;
+
+// CTimeCycle 23-weather x 8-hour tables (0xB8 = 184 uint8_t, 0x170 = 184 int16_t).
+constexpr size_t kTimeCycleEntries = 23 * 8;
+int16_t* g_tcFarClip = nullptr;
+int16_t* g_tcFogStart = nullptr;
+uint8_t* g_tcSunSize = nullptr;
+uint8_t* g_tcSkyTop[3] = {};
+uint8_t* g_tcSkyBottom[3] = {};
+uint8_t* g_tcSunCore[3] = {};
+uint8_t* g_tcSunCorona[3] = {};
+uint8_t* g_tcWater[4] = {};
+uint8_t* g_tcCloudAlpha = nullptr;
+
+bool g_savedFarClip = false;
+std::array<int16_t, kTimeCycleEntries> g_origFarClip{};
+bool g_savedFogStart = false;
+std::array<int16_t, kTimeCycleEntries> g_origFogStart{};
+bool g_savedSunSize = false;
+std::array<uint8_t, kTimeCycleEntries> g_origSunSize{};
+bool g_savedSky = false;
+std::array<uint8_t, kTimeCycleEntries> g_origSkyTop[3]{};
+std::array<uint8_t, kTimeCycleEntries> g_origSkyBottom[3]{};
+bool g_savedSunColor = false;
+std::array<uint8_t, kTimeCycleEntries> g_origSunCore[3]{};
+std::array<uint8_t, kTimeCycleEntries> g_origSunCorona[3]{};
+bool g_savedWaterColor = false;
+std::array<uint8_t, kTimeCycleEntries> g_origWater[4]{};
+bool g_savedCloudAlpha = false;
+std::array<uint8_t, kTimeCycleEntries> g_origCloudAlpha{};
 
 void* g_fx = nullptr;
 FxBloodFn g_fxBlood = nullptr;
@@ -409,6 +475,331 @@ int NativeRestoreAllWorldModels() {
     return ran ? restored : 0;
 }
 
+bool NativeSetGameSpeed(float speed) {
+    if (!g_timeScale) return false;
+    GameTasks::Defer([speed]() {
+        if (g_timeScale) *g_timeScale = speed;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetMinuteDuration(uint32_t ms) {
+    if (!g_msPerGameMinute) return false;
+    GameTasks::Defer([ms]() {
+        if (g_msPerGameMinute) *g_msPerGameMinute = ms;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetWeatherBlended(int weather) {
+    if (!g_newWeatherType) return false;
+    GameTasks::Defer([weather]() {
+        if (g_newWeatherType) *g_newWeatherType = static_cast<int16_t>(weather);
+        if (g_forcedWeatherType) *g_forcedWeatherType = -1;
+        if (g_weatherInterp) *g_weatherInterp = 0.f;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetRainLevel(float level, bool forced) {
+    if (!g_weatherRain) return false;
+    GameTasks::Defer([level, forced]() {
+        if (g_weatherRain) *g_weatherRain = level;
+        if (g_scriptsForceRain) *g_scriptsForceRain = forced;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetWindVelocity(float x, float y, float z, bool reset) {
+    if (!g_weatherWind && !g_weatherWindDir) return false;
+    GameTasks::Defer([x, y, z, reset]() {
+        if (reset) {
+            if (g_weatherWind) *g_weatherWind = 0.f;
+            if (g_weatherWindDir) *g_weatherWindDir = CVector{0.f, 0.f, 0.f};
+            return true;
+        }
+        const float mag = std::sqrt(x * x + y * y + z * z);
+        if (g_weatherWind) *g_weatherWind = mag;
+        if (g_weatherWindDir) {
+            if (mag > 1e-6f) {
+                *g_weatherWindDir = CVector{x / mag, y / mag, z / mag};
+            } else {
+                *g_weatherWindDir = CVector{0.f, 0.f, 0.f};
+            }
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetWaveHeight(float height) {
+    if (!g_weatherWavyness) return false;
+    GameTasks::Defer([height]() {
+        if (g_weatherWavyness) *g_weatherWavyness = height;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetMoonSize(int size) {
+    if (!g_moonSize) return false;
+    GameTasks::Defer([size]() {
+        if (g_moonSize) *g_moonSize = size;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetBlurLevel(int level) {
+    if (!g_speedFxAlpha && !g_speedFx) return false;
+    GameTasks::Defer([level]() {
+        if (g_speedFxAlpha) *g_speedFxAlpha = std::clamp(level, 0, 255);
+        if (g_speedFx) *g_speedFx = (level > 0);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetGrainLevel(int level) {
+    if (!g_grainStrength && !g_grainEnable) return false;
+    GameTasks::Defer([level]() {
+        if (g_grainStrength) *g_grainStrength = std::clamp(level, 0, 255);
+        if (g_grainEnable) *g_grainEnable = (level > 0);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetHeatHaze(int intensity, int randomShift, int speedMin, int speedMax,
+                       int scanX, int scanY, int renderX, int renderY, bool showInside, bool reset) {
+    (void)showInside;
+    if (!g_heatHazeEnable && !g_heatHazeIntensity) return false;
+    GameTasks::Defer([=]() {
+        if (reset) {
+            if (g_heatHazeEnable) *g_heatHazeEnable = false;
+            if (g_heatHazeIntensity) *g_heatHazeIntensity = 0;
+            if (g_weatherHeatHaze) *g_weatherHeatHaze = 0.f;
+            return true;
+        }
+        if (g_heatHazeEnable) *g_heatHazeEnable = (intensity > 0);
+        if (g_heatHazeIntensity) *g_heatHazeIntensity = std::clamp(intensity, 0, 255);
+        if (g_heatHazeRandomShift) *g_heatHazeRandomShift = randomShift;
+        if (g_heatHazeSpeedMin) *g_heatHazeSpeedMin = speedMin;
+        if (g_heatHazeSpeedMax) *g_heatHazeSpeedMax = speedMax;
+        if (g_heatHazeScanX) *g_heatHazeScanX = scanX;
+        if (g_heatHazeScanY) *g_heatHazeScanY = scanY;
+        if (g_heatHazeRenderX) *g_heatHazeRenderX = renderX;
+        if (g_heatHazeRenderY) *g_heatHazeRenderY = renderY;
+        if (g_weatherHeatHaze) *g_weatherHeatHaze = std::clamp(static_cast<float>(intensity) / 255.f, 0.f, 1.f);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetFarClipDistance(float distance, bool reset) {
+    if (!g_tcFarClip) return false;
+    GameTasks::Defer([distance, reset]() {
+        if (!g_tcFarClip) return true;
+        if (!g_savedFarClip) {
+            std::memcpy(g_origFarClip.data(), g_tcFarClip, sizeof(g_origFarClip));
+            g_savedFarClip = true;
+        }
+        if (reset) {
+            std::memcpy(g_tcFarClip, g_origFarClip.data(), sizeof(g_origFarClip));
+        } else {
+            const int16_t val = static_cast<int16_t>(std::clamp(std::lround(distance), -32768L, 32767L));
+            std::fill_n(g_tcFarClip, kTimeCycleEntries, val);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetFogDistance(float distance, bool reset) {
+    if (!g_tcFogStart) return false;
+    GameTasks::Defer([distance, reset]() {
+        if (!g_tcFogStart) return true;
+        if (!g_savedFogStart) {
+            std::memcpy(g_origFogStart.data(), g_tcFogStart, sizeof(g_origFogStart));
+            g_savedFogStart = true;
+        }
+        if (reset) {
+            std::memcpy(g_tcFogStart, g_origFogStart.data(), sizeof(g_origFogStart));
+        } else {
+            const int16_t val = static_cast<int16_t>(std::clamp(std::lround(distance), -32768L, 32767L));
+            std::fill_n(g_tcFogStart, kTimeCycleEntries, val);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetSunSize(float size, bool reset) {
+    if (!g_tcSunSize) return false;
+    GameTasks::Defer([size, reset]() {
+        if (!g_tcSunSize) return true;
+        if (!g_savedSunSize) {
+            std::memcpy(g_origSunSize.data(), g_tcSunSize, sizeof(g_origSunSize));
+            g_savedSunSize = true;
+        }
+        if (reset) {
+            std::memcpy(g_tcSunSize, g_origSunSize.data(), sizeof(g_origSunSize));
+        } else {
+            const uint8_t val = static_cast<uint8_t>(std::clamp(std::lround(size * 10.f), 0L, 255L));
+            std::fill_n(g_tcSunSize, kTimeCycleEntries, val);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetSunColor(int coreR, int coreG, int coreB, int coronaR, int coronaG, int coronaB, bool reset) {
+    if (!g_tcSunCore[0] || !g_tcSunCorona[0]) return false;
+    GameTasks::Defer([=]() {
+        if (!g_savedSunColor) {
+            for (int c = 0; c < 3; ++c) {
+                if (g_tcSunCore[c]) std::memcpy(g_origSunCore[c].data(), g_tcSunCore[c], kTimeCycleEntries);
+                if (g_tcSunCorona[c]) std::memcpy(g_origSunCorona[c].data(), g_tcSunCorona[c], kTimeCycleEntries);
+            }
+            g_savedSunColor = true;
+        }
+        const int core[3] = {coreR, coreG, coreB};
+        const int corona[3] = {coronaR, coronaG, coronaB};
+        for (int c = 0; c < 3; ++c) {
+            if (reset) {
+                if (g_tcSunCore[c]) std::memcpy(g_tcSunCore[c], g_origSunCore[c].data(), kTimeCycleEntries);
+                if (g_tcSunCorona[c]) std::memcpy(g_tcSunCorona[c], g_origSunCorona[c].data(), kTimeCycleEntries);
+            } else {
+                if (g_tcSunCore[c]) std::fill_n(g_tcSunCore[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(core[c], 0, 255)));
+                if (g_tcSunCorona[c]) std::fill_n(g_tcSunCorona[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(corona[c], 0, 255)));
+            }
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetSkyGradient(int topR, int topG, int topB, int botR, int botG, int botB, bool reset) {
+    if (!g_tcSkyTop[0] || !g_tcSkyBottom[0]) return false;
+    GameTasks::Defer([=]() {
+        if (!g_savedSky) {
+            for (int c = 0; c < 3; ++c) {
+                if (g_tcSkyTop[c]) std::memcpy(g_origSkyTop[c].data(), g_tcSkyTop[c], kTimeCycleEntries);
+                if (g_tcSkyBottom[c]) std::memcpy(g_origSkyBottom[c].data(), g_tcSkyBottom[c], kTimeCycleEntries);
+            }
+            g_savedSky = true;
+        }
+        const int top[3] = {topR, topG, topB};
+        const int bot[3] = {botR, botG, botB};
+        for (int c = 0; c < 3; ++c) {
+            if (reset) {
+                if (g_tcSkyTop[c]) std::memcpy(g_tcSkyTop[c], g_origSkyTop[c].data(), kTimeCycleEntries);
+                if (g_tcSkyBottom[c]) std::memcpy(g_tcSkyBottom[c], g_origSkyBottom[c].data(), kTimeCycleEntries);
+            } else {
+                if (g_tcSkyTop[c]) std::fill_n(g_tcSkyTop[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(top[c], 0, 255)));
+                if (g_tcSkyBottom[c]) std::fill_n(g_tcSkyBottom[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(bot[c], 0, 255)));
+            }
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetWaterColor(int r, int g, int b, int a, bool reset) {
+    if (!g_tcWater[0]) return false;
+    GameTasks::Defer([=]() {
+        if (!g_savedWaterColor) {
+            for (int c = 0; c < 4; ++c) {
+                if (g_tcWater[c]) std::memcpy(g_origWater[c].data(), g_tcWater[c], kTimeCycleEntries);
+            }
+            g_savedWaterColor = true;
+        }
+        const int col[4] = {r, g, b, a};
+        for (int c = 0; c < 4; ++c) {
+            if (!g_tcWater[c]) continue;
+            if (reset) {
+                std::memcpy(g_tcWater[c], g_origWater[c].data(), kTimeCycleEntries);
+            } else {
+                std::fill_n(g_tcWater[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(col[c], 0, 255)));
+            }
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetCloudsEnabled(bool enabled) {
+    if (!g_tcCloudAlpha) return false;
+    GameTasks::Defer([enabled]() {
+        if (!g_tcCloudAlpha) return true;
+        if (!g_savedCloudAlpha) {
+            std::memcpy(g_origCloudAlpha.data(), g_tcCloudAlpha, kTimeCycleEntries);
+            g_savedCloudAlpha = true;
+        }
+        if (enabled) {
+            std::memcpy(g_tcCloudAlpha, g_origCloudAlpha.data(), kTimeCycleEntries);
+        } else {
+            std::fill_n(g_tcCloudAlpha, kTimeCycleEntries, static_cast<uint8_t>(0));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetOcclusionsEnabled(bool enabled) {
+    if (!g_numOccludersOnMap) return false;
+    GameTasks::Defer([enabled]() {
+        if (!g_numOccludersOnMap) return true;
+        if (!g_savedOccludersValid) {
+            g_savedOccludersCount = *g_numOccludersOnMap;
+            g_savedOccludersValid = true;
+        }
+        *g_numOccludersOnMap = enabled ? g_savedOccludersCount : 0;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetGarageOpen(int garageId, bool open) {
+    if (!g_garages || garageId < 0 || garageId >= kMaxGarages) return false;
+    if (open && !g_garageOpen) return false;
+    if (!open && !g_garageClose) return false;
+    GameTasks::Defer([garageId, open]() {
+        if (!g_garages) return true;
+        if (g_numGarages && *g_numGarages > 0 && garageId >= *g_numGarages) return true;
+        void* garage = g_garages + static_cast<size_t>(garageId) * kGarageStride;
+        if (open && g_garageOpen) g_garageOpen(garage);
+        else if (!open && g_garageClose) g_garageClose(garage);
+        return true;
+    });
+    return true;
+}
+
+bool NativeIsGarageOpen(int garageId, bool& outOpen) {
+    if (!g_isGarageOpen || garageId < 0 || garageId >= kMaxGarages) return false;
+    if (g_numGarages && *g_numGarages > 0 && garageId >= *g_numGarages) return false;
+    bool open = false;
+    const bool ok = GameTasks::RunQuery([&]() {
+        open = g_isGarageOpen(static_cast<int16_t>(garageId));
+    });
+    if (!ok) return false;
+    outOpen = open;
+    return true;
+}
+
+bool NativeSetCurrentArea(int area) {
+    if (!g_currArea) return false;
+    GameTasks::Defer([area]() {
+        if (g_currArea) *g_currArea = area;
+        return true;
+    });
+    return true;
+}
+
 bool NativeFxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     if (!g_fx || !g_fxBlood) return false;
     GameTasks::Defer([x, y, z, dx, dy, dz, count, brightness]() {
@@ -549,6 +940,58 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     g_worldAdd = ResolveAny<WorldEntityFn>(g_lib, {"_ZN6CWorld3AddEP7CEntity"});
     g_garages = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN8CGarages8aGaragesE"));
     g_numGarages = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN8CGarages10NumGaragesE"));
+    g_garageOpen = ResolveAny<GarageMethodFn>(g_lib, {"_ZN7CGarage15OpenThisGarageEv"});
+    g_garageClose = ResolveAny<GarageMethodFn>(g_lib, {"_ZN7CGarage16CloseThisGarageEv"});
+    g_isGarageOpen = ResolveAny<IsGarageOpenFn>(g_lib, {"_ZN8CGarages12IsGarageOpenEs"});
+
+    g_timeScale = reinterpret_cast<float*>(dlsym(g_lib, "_ZN6CTimer13ms_fTimeScaleE"));
+    g_msPerGameMinute = reinterpret_cast<uint32_t*>(dlsym(g_lib, "_ZN6CClock29ms_nMillisecondsPerGameMinuteE"));
+    g_newWeatherType = reinterpret_cast<int16_t*>(dlsym(g_lib, "_ZN8CWeather14NewWeatherTypeE"));
+    g_forcedWeatherType = reinterpret_cast<int16_t*>(dlsym(g_lib, "_ZN8CWeather17ForcedWeatherTypeE"));
+    g_weatherInterp = reinterpret_cast<float*>(dlsym(g_lib, "_ZN8CWeather18InterpolationValueE"));
+    g_weatherRain = reinterpret_cast<float*>(dlsym(g_lib, "_ZN8CWeather4RainE"));
+    g_scriptsForceRain = reinterpret_cast<bool*>(dlsym(g_lib, "_ZN8CWeather17bScriptsForceRainE"));
+    g_weatherWind = reinterpret_cast<float*>(dlsym(g_lib, "_ZN8CWeather4WindE"));
+    g_weatherWindDir = reinterpret_cast<CVector*>(dlsym(g_lib, "_ZN8CWeather7WindDirE"));
+    g_weatherWavyness = reinterpret_cast<float*>(dlsym(g_lib, "_ZN8CWeather8WavynessE"));
+    g_weatherHeatHaze = reinterpret_cast<float*>(dlsym(g_lib, "_ZN8CWeather8HeatHazeE"));
+    g_moonSize = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN8CCoronas8MoonSizeE"));
+    g_currArea = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN5CGame8currAreaE"));
+    g_speedFx = reinterpret_cast<bool*>(dlsym(g_lib, "_ZN12CPostEffects10m_bSpeedFXE"));
+    g_speedFxAlpha = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects14m_SpeedFXAlphaE"));
+    g_grainEnable = reinterpret_cast<bool*>(dlsym(g_lib, "_ZN12CPostEffects14m_bGrainEnableE"));
+    g_grainStrength = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects15m_grainStrengthE"));
+    g_heatHazeEnable = reinterpret_cast<bool*>(dlsym(g_lib, "_ZN12CPostEffects13m_bHeatHazeFXE"));
+    g_heatHazeIntensity = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects21m_HeatHazeFXIntensityE"));
+    g_heatHazeRandomShift = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects23m_HeatHazeFXRandomShiftE"));
+    g_heatHazeSpeedMin = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects20m_HeatHazeFXSpeedMinE"));
+    g_heatHazeSpeedMax = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects20m_HeatHazeFXSpeedMaxE"));
+    g_heatHazeScanX = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects21m_HeatHazeFXScanSizeXE"));
+    g_heatHazeScanY = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects21m_HeatHazeFXScanSizeYE"));
+    g_heatHazeRenderX = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects23m_HeatHazeFXRenderSizeXE"));
+    g_heatHazeRenderY = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN12CPostEffects23m_HeatHazeFXRenderSizeYE"));
+    g_numOccludersOnMap = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN10COcclusion17NumOccludersOnMapE"));
+
+    g_tcFarClip = reinterpret_cast<int16_t*>(dlsym(g_lib, "_ZN10CTimeCycle10m_fFarClipE"));
+    g_tcFogStart = reinterpret_cast<int16_t*>(dlsym(g_lib, "_ZN10CTimeCycle11m_fFogStartE"));
+    g_tcSunSize = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle10m_fSunSizeE"));
+    g_tcSkyTop[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle12m_nSkyTopRedE"));
+    g_tcSkyTop[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle14m_nSkyTopGreenE"));
+    g_tcSkyTop[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_nSkyTopBlueE"));
+    g_tcSkyBottom[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_nSkyBottomRedE"));
+    g_tcSkyBottom[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle17m_nSkyBottomGreenE"));
+    g_tcSkyBottom[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle16m_nSkyBottomBlueE"));
+    g_tcSunCore[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_nSunCoreRedE"));
+    g_tcSunCore[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_nSunCoreGreenE"));
+    g_tcSunCore[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle14m_nSunCoreBlueE"));
+    g_tcSunCorona[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_nSunCoronaRedE"));
+    g_tcSunCorona[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle17m_nSunCoronaGreenE"));
+    g_tcSunCorona[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle16m_nSunCoronaBlueE"));
+    g_tcWater[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle11m_fWaterRedE"));
+    g_tcWater[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fWaterGreenE"));
+    g_tcWater[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle12m_fWaterBlueE"));
+    g_tcWater[3] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fWaterAlphaE"));
+    g_tcCloudAlpha = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fCloudAlphaE"));
 
     g_fx = dlsym(g_lib, "g_fx");
     g_fxBlood = ResolveAny<FxBloodFn>(g_lib, {"_ZN4Fx_c8AddBloodER7CVectorS1_if"});
@@ -574,6 +1017,27 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     hooks.removeWorldModel = &NativeRemoveWorldModel;
     hooks.restoreWorldModel = &NativeRestoreWorldModel;
     hooks.restoreAllWorldModels = &NativeRestoreAllWorldModels;
+    hooks.setGameSpeed = &NativeSetGameSpeed;
+    hooks.setMinuteDuration = &NativeSetMinuteDuration;
+    hooks.setWeatherBlended = &NativeSetWeatherBlended;
+    hooks.setRainLevel = &NativeSetRainLevel;
+    hooks.setWindVelocity = &NativeSetWindVelocity;
+    hooks.setWaveHeight = &NativeSetWaveHeight;
+    hooks.setMoonSize = &NativeSetMoonSize;
+    hooks.setBlurLevel = &NativeSetBlurLevel;
+    hooks.setGrainLevel = &NativeSetGrainLevel;
+    hooks.setHeatHaze = &NativeSetHeatHaze;
+    hooks.setFarClipDistance = &NativeSetFarClipDistance;
+    hooks.setFogDistance = &NativeSetFogDistance;
+    hooks.setSunSize = &NativeSetSunSize;
+    hooks.setSunColor = &NativeSetSunColor;
+    hooks.setSkyGradient = &NativeSetSkyGradient;
+    hooks.setWaterColor = &NativeSetWaterColor;
+    hooks.setCloudsEnabled = &NativeSetCloudsEnabled;
+    hooks.setOcclusionsEnabled = &NativeSetOcclusionsEnabled;
+    hooks.setGarageOpen = &NativeSetGarageOpen;
+    hooks.isGarageOpen = &NativeIsGarageOpen;
+    hooks.setCurrentArea = &NativeSetCurrentArea;
     hooks.fxAddBlood = &NativeFxAddBlood;
     hooks.fxAddBulletImpact = &NativeFxAddBulletImpact;
     hooks.fxAddSparks = &NativeFxAddSparks;

@@ -16,6 +16,7 @@
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
+#include "WorldNativeBridge.h"
 #include "../gtasa/GameEngine.h"
 
 extern "C" {
@@ -481,7 +482,10 @@ int l_setElementInterior(lua_State* L) {
     if (ServerWorld::ElementGeneration(id)) {
         ServerWorld::NoteElementInterior(id, newInterior);
         g_fields[id].interiorSet = false;
-        Diag(g_diagInterior, "DIAG setElementInterior: client area updated; native CWorld::SetCurrentArea remains unported");
+        Game::RpcSetInterior(id, newInterior);
+        if (id == ServerWorld::LocalPlayer()) {
+            WorldNative::SetCurrentArea(newInterior);
+        }
         notifyInterior();
         lua_pushboolean(L, 1);
         return 1;
@@ -491,7 +495,10 @@ int l_setElementInterior(lua_State* L) {
     if (area.areaGeneration != generation) { area.interiorSet = false; area.dimensionSet = false; area.areaGeneration = generation; }
     g_fields[id].interiorSet = true;
     g_fields[id].interior = newInterior;
-    Diag(g_diagInterior, "DIAG setElementInterior: CWorld::SetCurrentArea is not hooked; the area is stored");
+    Game::RpcSetInterior(id, newInterior);
+    if (id == ServerWorld::LocalPlayer()) {
+        WorldNative::SetCurrentArea(newInterior);
+    }
     notifyInterior();
     lua_pushboolean(L, 1);
     return 1;
@@ -692,7 +699,9 @@ int l_setGameSpeed(lua_State* L) {
         return 1;
     }
     g_gameSpeed = speed;
-    Diag(g_diagSpeed, "DIAG setGameSpeed: CGame::SetGameSpeed is not hooked; the value is stored");
+    if (!WorldNative::SetGameSpeed(speed)) {
+        Diag(g_diagSpeed, "DIAG setGameSpeed: CTimer::ms_fTimeScale hook unavailable; the value is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -709,7 +718,9 @@ int l_setMinuteDuration(lua_State* L) {
         return 1;
     }
     g_minuteMs = static_cast<unsigned>(ms);
-    Diag(g_diagMinute, "DIAG setMinuteDuration: CGame::SetMinuteDuration is not hooked; the value is stored");
+    if (!WorldNative::SetMinuteDuration(g_minuteMs)) {
+        Diag(g_diagMinute, "DIAG setMinuteDuration: CClock::ms_nMillisecondsPerGameMinute hook unavailable; the value is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -727,7 +738,9 @@ int l_setFarClipDistance(lua_State* L) {
     }
     g_far = distance;
     g_farSet = true;
-    Diag(g_diagFar, "DIAG setFarClipDistance: CMultiplayer::SetFarClipDistance is not hooked; the value is stored");
+    if (!WorldNative::SetFarClipDistance(distance, false)) {
+        Diag(g_diagFar, "DIAG setFarClipDistance: CTimeCycle::m_fFarClip hook unavailable; the value is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -736,6 +749,7 @@ int l_resetFarClipDistance(lua_State* L) {
     (void)L;
     g_far = 800.f;
     g_farSet = false;
+    WorldNative::SetFarClipDistance(800.f, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -753,7 +767,9 @@ int l_setFogDistance(lua_State* L) {
     }
     g_fog = distance;
     g_fogSet = true;
-    Diag(g_diagFog, "DIAG setFogDistance: CMultiplayer::SetFogDistance is not hooked; the value is stored");
+    if (!WorldNative::SetFogDistance(distance, false)) {
+        Diag(g_diagFog, "DIAG setFogDistance: CTimeCycle::m_fFogStart hook unavailable; the value is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -762,6 +778,7 @@ int l_resetFogDistance(lua_State* L) {
     (void)L;
     g_fog = 150.f;
     g_fogSet = false;
+    WorldNative::SetFogDistance(150.f, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -772,9 +789,10 @@ int l_setElementCollisionsEnabled(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    const bool enabled = lua_toboolean(L, 2) != 0;
     g_fields[id].collisionsSet = true;
-    g_fields[id].collisions = lua_toboolean(L, 2) != 0;
-    Diag(g_diagCollision, "DIAG setElementCollisionsEnabled: CPhysical::SetUsesCollision is not hooked; the flag is stored");
+    g_fields[id].collisions = enabled;
+    Game::RpcSetCollisions(id, enabled);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -829,7 +847,16 @@ int l_resetNearClipDistance(lua_State* L) {
 }
 
 int l_getCloudsEnabled(lua_State* L) { lua_pushboolean(L, g_clouds); return 1; }
-int l_setCloudsEnabled(lua_State* L) { return WorldFlag(L, g_clouds) ? 1 : 1; }
+int l_setCloudsEnabled(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TBOOLEAN) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_clouds = lua_toboolean(L, 1) != 0;
+    WorldNative::SetCloudsEnabled(g_clouds);
+    lua_pushboolean(L, 1);
+    return 1;
+}
 int l_getBirdsEnabled(lua_State* L) { lua_pushboolean(L, g_birds); return 1; }
 int l_setBirdsEnabled(lua_State* L) { return WorldFlag(L, g_birds) ? 1 : 1; }
 
@@ -841,7 +868,7 @@ int l_setRainLevel(lua_State* L) {
         return 1;
     }
     g_rain = level;
-    Diag(g_diagWorld, "DIAG setRainLevel: CGame::SetRainLevel is not hooked; the value is stored");
+    WorldNative::SetRainLevel(level, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -854,7 +881,7 @@ int l_setBlurLevel(lua_State* L) {
         return 1;
     }
     g_blur = static_cast<int>(level);
-    Diag(g_diagWorld, "DIAG setBlurLevel: CGame::SetBlurLevel is not hooked; the value is stored");
+    WorldNative::SetBlurLevel(g_blur);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -867,7 +894,7 @@ int l_setMoonSize(lua_State* L) {
         return 1;
     }
     g_moon = static_cast<int>(size);
-    Diag(g_diagWorld, "DIAG setMoonSize: CGame::SetMoonSize is not hooked; the value is stored");
+    WorldNative::SetMoonSize(g_moon);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -880,7 +907,7 @@ int l_setSunSize(lua_State* L) {
         return 1;
     }
     g_sunSize = size;
-    Diag(g_diagWorld, "DIAG setSunSize: CGame::SetSunSize is not hooked; the value is stored");
+    WorldNative::SetSunSize(g_sunSize, false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -911,7 +938,7 @@ int l_setSunColor(lua_State* L) {
     g_sunB = static_cast<int>(b);
     g_sunA = static_cast<int>(a);
     g_sunColorSet = true;
-    Diag(g_diagWorld, "DIAG setSunColor: CGame::SetSunColor is not hooked; the value is stored");
+    WorldNative::SetSunColor(g_sunR, g_sunG, g_sunB, g_sunR, g_sunG, g_sunB, false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -923,7 +950,9 @@ int l_getSkyGradient(lua_State* L) {
 
 int l_setSkyGradient(lua_State* L) {
     float color[8] = {};
-    for (int i = 0; i < 8; ++i) {
+    const int argc = lua_gettop(L);
+    const int count = (argc >= 8) ? 8 : 6;
+    for (int i = 0; i < count; ++i) {
         if (!Number(L, i + 1, color[i]) || color[i] < 0.f || color[i] > 255.f) {
             lua_pushboolean(L, 0);
             return 1;
@@ -931,7 +960,7 @@ int l_setSkyGradient(lua_State* L) {
     }
     for (int i = 0; i < 8; ++i) g_sky[i] = static_cast<int>(color[i]);
     g_skySet = true;
-    Diag(g_diagWorld, "DIAG setSkyGradient: CGame::SetSkyGradient is not hooked; the value is stored");
+    WorldNative::SetSkyGradient(g_sky[0], g_sky[1], g_sky[2], g_sky[3], g_sky[4], g_sky[5], false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -940,6 +969,7 @@ int l_resetSkyGradient(lua_State* L) {
     (void)L;
     for (int& value : g_sky) value = 0;
     g_skySet = false;
+    WorldNative::SetSkyGradient(0, 0, 0, 0, 0, 0, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -961,7 +991,7 @@ int l_setWindVelocity(lua_State* L) {
     g_windY = y;
     g_windZ = z;
     g_windSet = true;
-    Diag(g_diagWorld, "DIAG setWindVelocity: CGame::SetWindVelocity is not hooked; the value is stored");
+    WorldNative::SetWindVelocity(x, y, z, false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -974,7 +1004,7 @@ int l_setWaveHeight(lua_State* L) {
         return 1;
     }
     g_wave = height;
-    Diag(g_diagWorld, "DIAG setWaveHeight: CGame::SetWaveHeight is not hooked; the value is stored");
+    WorldNative::SetWaveHeight(g_wave);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1026,16 +1056,18 @@ int l_setWorldSpecialPropertyEnabled(lua_State* L) {
 int l_resetRainLevel(lua_State* L) {
     (void)L;
     g_rain = 0.f;
+    WorldNative::SetRainLevel(0.f, true);
     lua_pushboolean(L, 1);
     return 1;
 }
-int l_resetMoonSize(lua_State* L) { (void)L; g_moon = 3; lua_pushboolean(L, 1); return 1; }
-int l_resetSunSize(lua_State* L) { (void)L; g_sunSize = 1.f; lua_pushboolean(L, 1); return 1; }
+int l_resetMoonSize(lua_State* L) { (void)L; g_moon = 3; WorldNative::SetMoonSize(3); lua_pushboolean(L, 1); return 1; }
+int l_resetSunSize(lua_State* L) { (void)L; g_sunSize = 1.f; WorldNative::SetSunSize(1.f, true); lua_pushboolean(L, 1); return 1; }
 int l_resetSunColor(lua_State* L) {
     (void)L;
     g_sunR = g_sunG = g_sunB = 0;
     g_sunA = 255;
     g_sunColorSet = false;
+    WorldNative::SetSunColor(0, 0, 0, 0, 0, 0, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1043,10 +1075,11 @@ int l_resetWindVelocity(lua_State* L) {
     (void)L;
     g_windX = g_windY = g_windZ = 0.f;
     g_windSet = false;
+    WorldNative::SetWindVelocity(0.f, 0.f, 0.f, true);
     lua_pushboolean(L, 1);
     return 1;
 }
-int l_resetBlurLevel(lua_State* L) { (void)L; g_blur = 36; lua_pushboolean(L, 1); return 1; }
+int l_resetBlurLevel(lua_State* L) { (void)L; g_blur = 36; WorldNative::SetBlurLevel(36); lua_pushboolean(L, 1); return 1; }
 
 int l_getJetpackMaxHeight(lua_State* L) { lua_pushnumber(L, g_jetpack); return 1; }
 int l_setJetpackMaxHeight(lua_State* L) {
@@ -1075,7 +1108,16 @@ int l_setAircraftMaxHeight(lua_State* L) {
 }
 
 int l_getOcclusionsEnabled(lua_State* L) { lua_pushboolean(L, g_occlusions); return 1; }
-int l_setOcclusionsEnabled(lua_State* L) { return WorldFlag(L, g_occlusions) ? 1 : 1; }
+int l_setOcclusionsEnabled(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TBOOLEAN) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_occlusions = lua_toboolean(L, 1) != 0;
+    WorldNative::SetOcclusionsEnabled(g_occlusions);
+    lua_pushboolean(L, 1);
+    return 1;
+}
 int l_getInteriorSoundsEnabled(lua_State* L) { lua_pushboolean(L, g_interiorSounds); return 1; }
 int l_setInteriorSoundsEnabled(lua_State* L) { return WorldFlag(L, g_interiorSounds) ? 1 : 1; }
 
@@ -1108,7 +1150,7 @@ int l_setGrainLevel(lua_State* L) {
         return 1;
     }
     g_grain = static_cast<int>(level);
-    Diag(g_diagWorld, "DIAG setGrainLevel: CGame::SetGrainLevel is not hooked; the value is stored");
+    WorldNative::SetGrainLevel(g_grain);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1139,7 +1181,7 @@ int l_setWaterColor(lua_State* L) {
     }
     for (int i = 0; i < 4; ++i) g_water[i] = static_cast<int>(color[i]);
     g_waterSet = true;
-    Diag(g_diagWorld, "DIAG setWaterColor: CMultiplayer::SetWaterColor is not hooked; the value is stored");
+    WorldNative::SetWaterColor(g_water[0], g_water[1], g_water[2], g_water[3], false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1148,6 +1190,7 @@ int l_resetWaterColor(lua_State* L) {
     g_water[0] = g_water[1] = g_water[2] = 0;
     g_water[3] = 200;
     g_waterSet = false;
+    WorldNative::SetWaterColor(0, 0, 0, 200, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1382,7 +1425,8 @@ int l_setHeatHaze(lua_State* L) {
     g_heat[6] = OptionalInt(L, 7, 80);
     g_heat[7] = OptionalInt(L, 8, 85);
     if (lua_type(L, 9) == LUA_TBOOLEAN) g_heatInside = lua_toboolean(L, 9) != 0;
-    Diag(g_diagWorld, "DIAG setHeatHaze: CMultiplayer::SetHeatHaze is not hooked; the value is stored");
+    WorldNative::SetHeatHaze(g_heat[0], g_heat[1], g_heat[2], g_heat[3],
+                             g_heat[4], g_heat[5], g_heat[6], g_heat[7], g_heatInside, false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1398,6 +1442,7 @@ int l_resetHeatHaze(lua_State* L) {
     g_heat[0] = 0; g_heat[1] = 0; g_heat[2] = 12; g_heat[3] = 18;
     g_heat[4] = 75; g_heat[5] = 80; g_heat[6] = 80; g_heat[7] = 85;
     g_heatInside = false;
+    WorldNative::SetHeatHaze(0, 0, 12, 18, 75, 80, 80, 85, false, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1536,7 +1581,7 @@ int l_setWeatherBlended(lua_State* L) {
     }
     g_weatherBlend = static_cast<int>(weather);
     g_blendSet = true;
-    Diag(g_diagWorld, "DIAG setWeatherBlended: CBlendedWeather blend is not hooked; the target is stored");
+    WorldNative::SetWeatherBlended(g_weatherBlend);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1547,8 +1592,10 @@ int l_setGarageOpen(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    g_garage[static_cast<int>(id)] = lua_toboolean(L, 2) != 0;
-    Diag(g_diagWorld, "DIAG setGarageOpen: CGarage::Open is not hooked; the flag is stored");
+    const int garageId = static_cast<int>(id);
+    const bool open = lua_toboolean(L, 2) != 0;
+    g_garage[garageId] = open;
+    WorldNative::SetGarageOpen(garageId, open);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1559,7 +1606,13 @@ int l_isGarageOpen(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    lua_pushboolean(L, g_garage[static_cast<int>(id)] ? 1 : 0);
+    const int garageId = static_cast<int>(id);
+    bool nativeOpen = false;
+    if (WorldNative::IsGarageOpen(garageId, nativeOpen)) {
+        lua_pushboolean(L, nativeOpen ? 1 : 0);
+        return 1;
+    }
+    lua_pushboolean(L, g_garage[garageId] ? 1 : 0);
     return 1;
 }
 
@@ -1825,12 +1878,12 @@ void RpcSetWeatherBlended(int weather, int hour) {
     (void)hour;
     g_weatherBlend = weather;
     g_blendSet = true;
-    Diag(g_diagWorld, "DIAG SET_WEATHER_BLENDED: CBlendedWeather blend is not hooked; the target is stored");
+    WorldNative::SetWeatherBlended(weather);
 }
 
 void RpcSetMinuteDuration(uint32_t milliseconds) {
     g_minuteMs = milliseconds;
-    Diag(g_diagMinute, "DIAG SET_MINUTE_DURATION: CGame::SetMinuteDuration is not hooked; the value is stored");
+    WorldNative::SetMinuteDuration(milliseconds);
 }
 
 void RpcSetGravity(float gravity) {
@@ -1840,37 +1893,43 @@ void RpcSetGravity(float gravity) {
 
 void RpcSetGameSpeed(float speed) {
     g_gameSpeed = speed;
-    Diag(g_diagSpeed, "DIAG SET_GAME_SPEED: CGame::SetGameSpeed is not hooked; the value is stored");
+    WorldNative::SetGameSpeed(speed);
 }
 
 void RpcSetWaveHeight(float height) {
     g_wave = height;
-    Diag(g_diagWorld, "DIAG SET_WAVE_HEIGHT: CWaterManager::SetWaveLevel is not hooked; the value is stored");
+    WorldNative::SetWaveHeight(height);
 }
 
 void RpcSetBlurLevel(uint8_t level) {
     g_blur = level;
-    Diag(g_diagWorld, "DIAG SET_BLUR_LEVEL: CGame::SetBlurLevel is not hooked; the value is stored");
+    WorldNative::SetBlurLevel(level);
 }
 
 void RpcSetCloudsEnabled(bool enabled) {
     g_clouds = enabled;
-    Diag(g_diagWorld, "DIAG SET_CLOUDS_ENABLED: CMultiplayer::SetCloudsEnabled is not hooked; the flag is stored");
+    WorldNative::SetCloudsEnabled(enabled);
 }
 
 void RpcSetRainLevel(float level) {
     g_rain = level;
-    Diag(g_diagWorld, "DIAG SET_RAIN_LEVEL: CWeather::SetAmountOfRain is not hooked; the value is stored");
+    WorldNative::SetRainLevel(level, true);
 }
 
-void RpcResetRainLevel() { g_rain = 0.f; }
+void RpcResetRainLevel() {
+    g_rain = 0.f;
+    WorldNative::SetRainLevel(0.f, false);
+}
 
 void RpcSetSunSize(float size) {
     g_sunSize = size;
-    Diag(g_diagWorld, "DIAG SET_SUN_SIZE: CMultiplayer::SetSunSize is not hooked; the value is stored");
+    WorldNative::SetSunSize(size, false);
 }
 
-void RpcResetSunSize() { g_sunSize = 1.f; }
+void RpcResetSunSize() {
+    g_sunSize = 1.f;
+    WorldNative::SetSunSize(1.f, true);
+}
 
 void RpcSetSunColor(uint8_t coreR, uint8_t coreG, uint8_t coreB, uint8_t coronaR, uint8_t coronaG, uint8_t coronaB) {
     g_sunR = coreR;
@@ -1881,7 +1940,7 @@ void RpcSetSunColor(uint8_t coreR, uint8_t coreG, uint8_t coreB, uint8_t coronaR
     g_sunCoronaG = coronaG;
     g_sunCoronaB = coronaB;
     g_sunColorSet = true;
-    Diag(g_diagWorld, "DIAG SET_SUN_COLOR: CMultiplayer::SetSunColor is not hooked; the colours are stored");
+    WorldNative::SetSunColor(coreR, coreG, coreB, coronaR, coronaG, coronaB, false);
 }
 
 void RpcResetSunColor() {
@@ -1889,6 +1948,7 @@ void RpcResetSunColor() {
     g_sunA = 255;
     g_sunCoronaR = g_sunCoronaG = g_sunCoronaB = 0;
     g_sunColorSet = false;
+    WorldNative::SetSunColor(0, 0, 0, 0, 0, 0, true);
 }
 
 void RpcCopySunCorona(uint8_t& r, uint8_t& g, uint8_t& b) {
@@ -1902,42 +1962,48 @@ void RpcSetWindVelocity(float x, float y, float z) {
     g_windY = y;
     g_windZ = z;
     g_windSet = true;
-    Diag(g_diagWorld, "DIAG SET_WIND_VELOCITY: CMultiplayer::SetWindVelocity is not hooked; the value is stored");
+    WorldNative::SetWindVelocity(x, y, z, false);
 }
 
 void RpcResetWindVelocity() {
     g_windX = g_windY = g_windZ = 0.f;
     g_windSet = false;
+    WorldNative::SetWindVelocity(0.f, 0.f, 0.f, true);
 }
 
 void RpcSetFarClipDistance(float distance) {
     g_far = distance;
     g_farSet = true;
-    Diag(g_diagFar, "DIAG SET_FAR_CLIP_DISTANCE: CMultiplayer::SetFarClipDistance is not hooked; the value is stored");
+    WorldNative::SetFarClipDistance(distance, false);
 }
 
 void RpcResetFarClipDistance() {
     g_far = 800.f;
     g_farSet = false;
+    WorldNative::SetFarClipDistance(800.f, true);
 }
 
 void RpcSetFogDistance(float distance) {
     g_fog = distance;
     g_fogSet = true;
-    Diag(g_diagFog, "DIAG SET_FOG_DISTANCE: CMultiplayer::SetFogDistance is not hooked; the value is stored");
+    WorldNative::SetFogDistance(distance, false);
 }
 
 void RpcResetFogDistance() {
     g_fog = 150.f;
     g_fogSet = false;
+    WorldNative::SetFogDistance(150.f, true);
 }
 
 void RpcSetMoonSize(int size) {
     g_moon = size;
-    Diag(g_diagWorld, "DIAG SET_MOON_SIZE: CMultiplayer::SetMoonSize is not hooked; the value is stored");
+    WorldNative::SetMoonSize(size);
 }
 
-void RpcResetMoonSize() { g_moon = 3; }
+void RpcResetMoonSize() {
+    g_moon = 3;
+    WorldNative::SetMoonSize(3);
+}
 
 void RpcSetInteriorSoundsEnabled(bool enabled) {
     g_interiorSounds = enabled;
@@ -1946,7 +2012,7 @@ void RpcSetInteriorSoundsEnabled(bool enabled) {
 
 void RpcSetOcclusionsEnabled(bool enabled) {
     g_occlusions = enabled;
-    Diag(g_diagWorld, "DIAG SET_OCCLUSIONS_ENABLED: CWorld::SetOcclusionsEnabled is not hooked; the flag is stored");
+    WorldNative::SetOcclusionsEnabled(enabled);
 }
 
 void RpcSetAircraftMaxHeight(float height) {
@@ -1972,11 +2038,13 @@ void RpcSetSkyGradient(uint8_t topR, uint8_t topG, uint8_t topB, uint8_t bottomR
     g_sky[4] = bottomG;
     g_sky[5] = bottomB;
     g_skySet = true;
+    WorldNative::SetSkyGradient(topR, topG, topB, bottomR, bottomG, bottomB, false);
 }
 
 void RpcResetSkyGradient() {
     for (int& v : g_sky) v = 0;
     g_skySet = false;
+    WorldNative::SetSkyGradient(0, 0, 0, 0, 0, 0, true);
 }
 
 void RpcSetHeatHaze(uint8_t intensity, uint8_t randomShift, uint16_t speedMin, uint16_t speedMax,
@@ -1991,18 +2059,24 @@ void RpcSetHeatHaze(uint8_t intensity, uint8_t randomShift, uint16_t speedMin, u
     g_heat[6] = renderSizeX;
     g_heat[7] = renderSizeY;
     g_heatInside = showInside;
+    WorldNative::SetHeatHaze(intensity, randomShift, speedMin, speedMax,
+                             scanSizeX, scanSizeY, renderSizeX, renderSizeY, showInside, false);
 }
 
 void RpcResetHeatHaze() {
     const int def[8] = {0, 0, 12, 18, 75, 80, 80, 85};
     for (int i = 0; i < 8; ++i) g_heat[i] = def[i];
     g_heatInside = false;
+    WorldNative::SetHeatHaze(0, 0, 12, 18, 75, 80, 80, 85, false, true);
 }
 
 void RpcSetFpsLimit(uint16_t fps) { g_fps = fps; }
 
 void RpcSetGarageOpen(uint8_t garageId, bool open) {
-    if (garageId < 50) g_garage[garageId] = open;
+    if (garageId < 50) {
+        g_garage[garageId] = open;
+        WorldNative::SetGarageOpen(garageId, open);
+    }
 }
 
 void RpcSetWorldSpecialProperty(int propertyIndex, bool enabled) {
@@ -2027,12 +2101,14 @@ void RpcSetWaterColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     g_water[2] = b;
     g_water[3] = a;
     g_waterSet = true;
+    WorldNative::SetWaterColor(r, g, b, a, false);
 }
 
 void RpcResetWaterColor() {
     g_water[0] = g_water[1] = g_water[2] = 0;
     g_water[3] = 200;
     g_waterSet = false;
+    WorldNative::SetWaterColor(0, 0, 0, 200, true);
 }
 
 void RpcSetElementDoubleSided(uint32_t id, bool doubleSided) {
@@ -2052,6 +2128,13 @@ void RpcResetMapInfo() {
     g_farSet = false;
     g_fogSet = false;
     g_waterSet = false;
+    WorldNative::SetGameSpeed(1.f);
+    WorldNative::SetWaveHeight(0.f);
+    WorldNative::SetSkyGradient(0, 0, 0, 0, 0, 0, true);
+    WorldNative::SetWindVelocity(0.f, 0.f, 0.f, true);
+    WorldNative::SetFarClipDistance(800.f, true);
+    WorldNative::SetFogDistance(150.f, true);
+    WorldNative::SetWaterColor(0, 0, 0, 200, true);
 }
 
 void RpcResetWorldProperties(bool resetSpecial, bool resetWorld, bool resetWeather, bool resetLods, bool resetSounds) {
@@ -2071,6 +2154,9 @@ void RpcResetWorldProperties(bool resetSpecial, bool resetWorld, bool resetWeath
         g_aircraftVelocity = 200.f;
         g_jetpack = 100.f;
         g_occlusions = true;
+        WorldNative::SetGameSpeed(1.f);
+        WorldNative::SetMinuteDuration(1000);
+        WorldNative::SetOcclusionsEnabled(true);
     }
     if (resetWeather) {
         g_weather = 0;
@@ -2082,6 +2168,11 @@ void RpcResetWorldProperties(bool resetSpecial, bool resetWorld, bool resetWeath
         g_farSet = false;
         g_fogSet = false;
         g_rain = 0.f;
+        WorldNative::SetSkyGradient(0, 0, 0, 0, 0, 0, true);
+        WorldNative::SetWindVelocity(0.f, 0.f, 0.f, true);
+        WorldNative::SetFarClipDistance(800.f, true);
+        WorldNative::SetFogDistance(150.f, true);
+        WorldNative::SetRainLevel(0.f, false);
     }
     if (resetLods) {
         g_pedsLod = 500.f;

@@ -294,6 +294,49 @@ int GetPedTargetEnd(lua_State* L) {
     return 3;
 }
 
+// Computes ped aim ray start/end from keysync aim origin or live pose + weapon range.
+bool ComputePedTargetRay(uint32_t id, float& sx, float& sy, float& sz, float& ex, float& ey, float& ez) {
+    float px = 0.f, py = 0.f, pz = 0.f, heading = 0.f;
+    bool hasPose = false;
+    if (id == ServerWorld::LocalPlayer()) {
+        Game::CopyPose(px, py, pz, heading);
+        hasPose = true;
+    } else if (ServerWorld::ElementPose(id, px, py, pz)) {
+        float vx = 0.f, vy = 0.f, vz = 0.f;
+        Game::CopyRemotePedMotion(id, heading, vx, vy, vz);
+        hasPose = true;
+    } else {
+        int model = 0;
+        bool frozen = false;
+        if (Game::CopyScriptPedFacts(id, model, heading, frozen)) {
+            hasPose = ServerWorld::ElementPose(id, px, py, pz);
+        }
+    }
+    const PedQueries::Presentation aim = PedQueries::ReadPresentation(id);
+    if (aim.aim) {
+        sx = aim.aimX;
+        sy = aim.aimY;
+        sz = aim.aimZ;
+    } else if (hasPose) {
+        sx = px;
+        sy = py;
+        sz = pz + 0.65f;
+    } else {
+        return false;
+    }
+    PedQueries::Snapshot snap;
+    float range = 50.f;
+    if (PedQueries::Copy(id, snap) && snap.currentSlot < PedQueries::Slots) {
+        const uint32_t wtype = snap.weapons[snap.currentSlot].type;
+        const float nativeRange = Game::NativeWeaponRange(static_cast<int>(wtype));
+        if (nativeRange > 0.f) range = nativeRange;
+    }
+    ex = sx - std::sin(heading) * range;
+    ey = sy + std::cos(heading) * range;
+    ez = sz;
+    return true;
+}
+
 // CLuaPedDefs.cpp:1092-1116 and CStaticFunctionDefinitions.cpp:1760-1776.
 int GetPedTargetCollision(lua_State* L) {
     uint32_t id = 0;
@@ -302,10 +345,27 @@ int GetPedTargetCollision(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG getPedTargetCollision: CWorld::ProcessLineOfSight is not hooked");
-    lua_pushboolean(L, 0);
-    return 1;
+    float sx = 0.f, sy = 0.f, sz = 0.f, ex = 0.f, ey = 0.f, ez = 0.f;
+    if (!ComputePedTargetRay(id, sx, sy, sz, ex, ey, ez)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    Game::LineOfSightFlags flags;
+    flags.buildings = true;
+    flags.vehicles = true;
+    flags.peds = true;
+    flags.objects = true;
+    flags.dummies = true;
+    flags.ignoredElement = id;
+    Game::LineOfSightResult hit;
+    if (!Game::ProcessLineOfSight(sx, sy, sz, ex, ey, ez, flags, hit)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_pushnumber(L, hit.x);
+    lua_pushnumber(L, hit.y);
+    lua_pushnumber(L, hit.z);
+    return 3;
 }
 
 // CLuaFunctionDefs.Util.cpp:13-54. Only stock models are available: the port's
@@ -944,7 +1004,7 @@ int IsPedDoingTask(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:973-995. ProcessLineOfSight is not hooked, so there is no target element.
+// CLuaPedDefs.cpp:973-995. Queries CWorld::ProcessLineOfSight along the ped's aim ray.
 int GetPedTarget(lua_State* L) {
     uint32_t id = 0;
     if (!IsPed(L, 1, id)) {
@@ -952,9 +1012,25 @@ int GetPedTarget(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG getPedTarget: CWorld::ProcessLineOfSight is not hooked");
-    lua_pushboolean(L, 0);
+    float sx = 0.f, sy = 0.f, sz = 0.f, ex = 0.f, ey = 0.f, ez = 0.f;
+    if (!ComputePedTargetRay(id, sx, sy, sz, ex, ey, ez)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    Game::LineOfSightFlags flags;
+    flags.buildings = false;
+    flags.vehicles = true;
+    flags.peds = true;
+    flags.objects = true;
+    flags.dummies = false;
+    flags.ignoredElement = id;
+    Game::LineOfSightResult hit;
+    if (!Game::ProcessLineOfSight(sx, sy, sz, ex, ey, ez, flags, hit) ||
+        hit.hitElement == 0 || hit.hitElement == 0xFFFFFFFFu) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    PushElement(L, hit.hitElement);
     return 1;
 }
 
@@ -993,7 +1069,7 @@ int SetPedWeaponSlot(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:2548-2573. Script peds store the heading. Other peds have no rotation hook.
+// CLuaPedDefs.cpp:2548-2573. Writes heading for both script peds and networked/local peds.
 int SetPedRotation(lua_State* L) {
     uint32_t id = 0;
     if (!IsPed(L, 1, id) || !lua_isnumber(L, 2)) {
@@ -1006,13 +1082,17 @@ int SetPedRotation(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    if (!Game::ScriptPedAlive(id)) {
-        static bool once = false;
-        DiagOnce(once, "DIAG setPedRotation: CClientPed::SetCurrentRotation is not hooked");
+    const float degrees = static_cast<float>(lua_tonumber(L, 2));
+    if (!std::isfinite(degrees)) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    Game::NoteScriptRotation(id, static_cast<float>(lua_tonumber(L, 2)));
+    if (Game::ScriptPedAlive(id)) {
+        Game::NoteScriptRotation(id, degrees);
+    } else {
+        constexpr float kDegToRad = 3.14159265358979323846f / 180.f;
+        Game::RpcSetRotation(id, degrees * kDegToRad);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -4410,6 +4490,18 @@ void RpcSetPedFrozen(uint32_t id, bool frozen) {
     state.frozen = frozen;
     StoreBody(id, state);
     Game::RpcSetFrozen(id, frozen);
+}
+
+void PedSetServerControlState(const std::string& control, bool enabled) {
+    const uint32_t id = ServerWorld::LocalPlayer();
+    if (!id || control.empty() || !KnownControl(control.c_str())) return;
+    {
+        std::lock_guard lock(g_controlMu);
+        g_controls[id][control] = enabled;
+    }
+    if (std::strcmp(ServerWorld::ElementKindName(id), "ped") == 0 && ServerWorld::ActorHosted(id)) {
+        Game::SetOwnedPedControl(id, control.c_str(), enabled);
+    }
 }
 
 void RpcReloadPedWeapon(uint32_t id) {

@@ -517,11 +517,8 @@ Result HandleInput(uint8_t func, BitStreamReader& reader) {
             uint8_t state = 0;
             if (!ReadLengthString(reader, control) || !reader.Read(state)) return Result::Malformed;
             if (control.empty()) return Result::Handled;
-            // DIAG: CStaticFunctionDefinitions::SetControlState (CStaticFunctionDefinitions.cpp:7470-7520) writes
-            // CClientPad analog state or SBindableGTAControl::bState; the phone has no CPad injection (see
-            // setPedAnalogControlState in LuaPedApi.cpp).
-            LUA_LOGI("DIAG SET_CONTROL_STATE %s=%u: CClientPad::SetAnalogControlState is not hooked", control.c_str(),
-                     static_cast<unsigned>(state == 1));
+            const bool enabled = (state == 1);
+            Enqueue([control, enabled] { Script::PedSetServerControlState(control, enabled); });
             return Result::Handled;
         }
         case Rpc::ShowCursor: {

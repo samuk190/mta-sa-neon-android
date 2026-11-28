@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added / Fixed — Remaining native GTA world/weather/timecycle/postFX/garage hooks, IFP/TXD inspection, ped/vehicle native wiring, and GUI reparenting (2026-11-28)
+
+- **21 verified native GTA world, weather, clock, timecycle, post-FX, garage & interior-area hooks** (`CTimer`, `CClock`, `CWeather`, `CCoronas`, `CPostEffects`, `CTimeCycle`, `COcclusion`, `CGarages`, `CGame::currArea` in `shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaFieldApi.cpp`):
+  - Verified exact symbol sizes and addresses in `libGTASA.so` 2.10 arm64 and dispatched mutations on the GTA game thread via `GameTasks::Defer`/`RunQuery`: `setGameSpeed`, `setMinuteDuration`, `setWeatherBlended`, `setRainLevel`/`resetRainLevel` (`CWeather::bScriptsForceRain` reset fix), `setWindVelocity`/`resetWindVelocity`, `setWaveHeight`, `setMoonSize`/`resetMoonSize`, `setBlurLevel`, `setHeatHaze`/`resetHeatHaze`, `setFarClipDistance`/`resetFarClipDistance`, `setFogDistance`/`resetFogDistance`, `setSunSize`/`resetSunSize`, `setSunColor`/`resetSunColor`, `setSkyGradient`/`resetSkyGradient` (accepts desktop 6-arg or 8-arg form), `setWaterColor`/`resetWaterColor`, `setCloudsEnabled`, `setOcclusionsEnabled`, `setGarageOpen`/`isGarageOpen`, `setElementInterior` (`CGame::currArea` + `Game::RpcSetInterior`), `setElementCollisionsEnabled`, and matching server `RpcSet*`/`RpcReset*` world RPCs. Lazy snapshot/restore preserves original `CTimeCycle` 23×8 arrays and `COcclusion::NumOccludersOnMap`. Not yet run on a physical device.
+- **Native ped aiming/rotation, `SET_CONTROL_STATE` RPC, GUI reparenting, IFP loading, TXD texture names, and vehicle flying components** (`shared/LuaPedApi.cpp`, `shared/LuaGuiApi.{h,cpp}`, `shared/LuaElementApi.cpp`, `shared/ServerRpc.cpp`, `shared/EngineModelLoader.{h,cpp}`, `shared/EngineAssets.cpp`, `gtasa/GameEngine.{h,cpp}`, `shared/LuaVehicleApi.cpp`):
+  - Wired `getPedTargetCollision` and `getPedTarget` to `Game::ProcessLineOfSight` along the ped's aim ray (`PedQueries::ReadPresentation` / live pose + `Game::NativeWeaponRange`), and wired `setPedRotation` for local/networked peds to `Game::RpcSetRotation`.
+  - Wired `ServerRpc` `SET_CONTROL_STATE` to `Script::PedSetServerControlState`.
+  - Implemented `GuiSetParent` with cycle detection and wired both `setElementParent` and `getElementParent` for GUI elements (`GuiEventParent`).
+  - Implemented `NativeLoadIFP` (`_ZN12CAnimManager12LoadAnimFileEP8RwStreambPA32_Kc` via `RwStreamOpen`) and `NativeGetModelTextureNames` (`CBaseModelInfo +0x24`, `CTxdStore::ms_pTxdPool` stride `0x40`, `RwTexDictionaryForAllTextures`, `RwTexture +0x20`) for `engineLoadIFP` and `engineGetModelTextureNames`.
+  - Implemented `Game::RpcSpawnVehicleFlyingComponent` (`_ZN11CAutomobile20SpawnFlyingComponentEij`, gated on `CVehicle +0x734 == 0` `VEHICLE_AUTOMOBILE` on the game thread) for `spawnVehicleFlyingComponent`. Not yet run on a physical device.
+
 ### Added / Fixed — Native GTA world hooks, live element attachment, vehicle/object/COL parity, and GUI CEGUI property/bind-blocking sync (2026-11-27)
 
 - **Game-thread-safe `WorldNativeHooks` & remaining native world/FX bindings** (`CWorldSA.cpp`, `CFxSA.cpp`, `CRopesSA.cpp`, `CGarageSA.h`, `shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaWorldQueryApi.cpp`, `shared/LuaSightApi.cpp`, `shared/EngineWorld.cpp`, `gtasa/RemoteCombat.cpp`):

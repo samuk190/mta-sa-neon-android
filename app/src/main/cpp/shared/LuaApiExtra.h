@@ -100,6 +100,8 @@ void RpcSetPedOnFire(uint32_t id, bool onFire);
 void RpcSetPedHeadless(uint32_t id, bool headless);
 void RpcSetPedFrozen(uint32_t id, bool frozen);
 void RpcReloadPedWeapon(uint32_t id);
+// CInputRPCs::SetControlState (CInputRPCs.cpp:220-239): server control state update for local player.
+void PedSetServerControlState(const std::string& control, bool enabled);
 
 // Element / transfer-box RPC setters (CElementRPCs.cpp, COutputRPCs.cpp). VM thread.
 void RpcSetCallPropagationEnabled(uint32_t id, bool enabled);

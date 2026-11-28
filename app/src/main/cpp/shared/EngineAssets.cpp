@@ -553,6 +553,7 @@ int LoadIFP(lua_State* L) {
     asset.blockName = block;
     asset.blockKey = blockKey;
     ParseIfpAnimNames(bytes, asset.animNames);
+    NativeLoadIFP(bytes);
     asset.bytes = std::move(bytes);
     g_ifpAssets.emplace(id, std::move(asset));
     g_ifpByBlock[blockKey] = id;
@@ -1213,8 +1214,16 @@ int TextureNames(lua_State* L) {
     if (!ReadScriptString(L, 1, "engineGetModelTextureNames", name, error, true, "")) return FailFalse(L, error, true);
     std::uint32_t id = 0;
     if (!ResolveText(name, id)) return FailFalse(L, Usage("engineGetModelTextureNames", "Bad usage", "Expected valid model ID or name at argument 1"), true);
-    LUA_LOGI("DIAG engineGetModelTextureNames: model texture names are not read");
-    lua_pushboolean(L, 0);
+    std::vector<std::string> names;
+    if (!NativeGetModelTextureNames(static_cast<std::uint16_t>(id), names)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    lua_createtable(L, static_cast<int>(names.size()), 0);
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        lua_pushlstring(L, names[i].data(), names[i].size());
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
     return 1;
 }
 
