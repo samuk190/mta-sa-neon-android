@@ -189,6 +189,8 @@ public:
 
     size_t GetReadOffsetBits() const;
     size_t GetRemainingBits() const;
+    // RakNet BitStream::AlignReadToByteBoundary: advances to the next byte boundary.
+    void AlignReadToByteBoundary();
     void Reset();
 
 private:

@@ -159,6 +159,37 @@ fun main(args: Array<String>) = runBlocking {
     check(favoriteFallback.size == 2)
     check(favoriteFallback.single { it.isFavorite }.getKey() == "192.0.2.5:22003")
     checkAndroidCapability()
+    run {
+        // UTF-8 server name and player name must decode without ISO-8859-1 mojibake,
+        // while legacy ISO-8859-1 bytes still fall back cleanly.
+        val utf8Pkt = ByteArrayOutputStream().apply {
+            write("EYE2".toByteArray())
+            for (field in listOf("mta", "22003", "Brasil São Paulo — Ação", "RPG", "Mapa\u00001/8", "1.6")) {
+                val encoded = field.toByteArray(Charsets.UTF_8)
+                write(encoded.size + 1)
+                write(encoded)
+            }
+            write(byteArrayOf(0, 0, 1, 8))
+            val nick = "João_RP".toByteArray(Charsets.UTF_8)
+            write(nick.size + 1)
+            write(nick)
+        }.toByteArray()
+        val parsed = checkNotNull(ServerQuery.parse(utf8Pkt, utf8Pkt.size, 15))
+        check(parsed.serverName == "Brasil São Paulo — Ação") { "Expected UTF-8 serverName, got ${parsed.serverName}" }
+        check(parsed.playerNames == listOf("João_RP")) { "Expected UTF-8 playerName, got ${parsed.playerNames}" }
+
+        val latin1Pkt = ByteArrayOutputStream().apply {
+            write("EYE2".toByteArray())
+            val latinName = "S\u00E3o Paulo".toByteArray(Charsets.ISO_8859_1)
+            for (encoded in listOf("mta".toByteArray(), "22003".toByteArray(), latinName, "RPG".toByteArray(), "Map".toByteArray(), "1.6".toByteArray())) {
+                write(encoded.size + 1)
+                write(encoded)
+            }
+            write(byteArrayOf(0, 0, 0, 8))
+        }.toByteArray()
+        val parsedLatin = checkNotNull(ServerQuery.parse(latin1Pkt, latin1Pkt.size, 15))
+        check(parsedLatin.serverName == "São Paulo") { "Expected ISO-8859-1 fallback, got ${parsedLatin.serverName}" }
+    }
     checkLiveQuery()
 
     val active = AtomicInteger()

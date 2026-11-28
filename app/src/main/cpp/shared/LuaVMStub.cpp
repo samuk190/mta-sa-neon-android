@@ -983,9 +983,9 @@ static std::string DxImageFile(const std::string& raw) {
     }
     if (!any) return {};
     for (unsigned char ch : resource)
-        if (ch < 32 || ch >= 127 || ch == '/') return {};
+        if (ch < 32 || ch == 127 || ch == '/') return {};
     for (unsigned char ch : path)
-        if (ch < 32 || ch >= 127) return {};
+        if (ch < 32 || ch == 127) return {};
     return WorldRPG::Net::HttpDownloader::CachedFilePath(resource, path);
 }
 
@@ -3714,7 +3714,11 @@ static bool ReadLuaArg(lua_State* L, Net::BitStreamReader& reader, int depth) {
     }
     if (kind == 4 || kind == 9) {
         uint32_t length = 0;
-        if (!ReadCompressedBits(reader, kind == 4 ? 2 : 4, length) || length > 65536) return false;
+        const uint32_t maxLen = kind == 4 ? 65536u : 1024u * 1024u;
+        if (!ReadCompressedBits(reader, kind == 4 ? 2 : 4, length) || length > maxLen) return false;
+        // Desktop CLuaArgument::ReadFromBitStream (CLuaArgument.cpp:587-610):
+        // LUA_TSTRING_LONG (kind 9) aligns to a byte boundary before reading its payload.
+        if (kind == 9 && length > 0) reader.AlignReadToByteBoundary();
         std::string text(length, '\0');
         if (length && !reader.ReadBits(reinterpret_cast<uint8_t*>(text.data()), length * 8)) return false;
         lua_pushlstring(L, text.data(), length);

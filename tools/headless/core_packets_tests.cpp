@@ -1382,6 +1382,255 @@ void TestAllRemainingParityClientEvents() {
     Check(true, "all remaining 34+ newly wired client events fired and verified (144/144)");
 }
 
+void TestPcCompatTextAndEncodingFixes() {
+    // 1. DecodeChatEcho: whole-byte netc.dll delivery (bits % 8 == 0) must decode BOTH
+    //    25-bit mobile headers (Neon/World RPG servers seeing BitStreamVersion 0x0030)
+    //    AND 50-bit desktop headers (stock MTA 1.6 servers) without garbled bit-shifted text.
+    auto makeMobileChat = [](uint8_t r, uint8_t g, uint8_t b, bool coded, const std::string& msg) {
+        Pkt p;
+        p.U8(r).U8(g).U8(b).Bit(coded);
+        if (!msg.empty()) p.Bytes(reinterpret_cast<const uint8_t*>(msg.data()), msg.size());
+        return std::make_pair(std::vector<uint8_t>(p.w.GetData(), p.w.GetData() + p.w.GetByteLength()), p.w.GetBitLength());
+    };
+    auto makeDesktopChat = [](uint8_t r, uint8_t g, uint8_t b, bool coded, uint32_t speaker, uint8_t msgType,
+                              const std::string& msg) {
+        Pkt p;
+        p.U8(r).U8(g).U8(b).Bit(coded).Id(speaker).U8(msgType);
+        if (!msg.empty()) p.Bytes(reinterpret_cast<const uint8_t*>(msg.data()), msg.size());
+        return std::make_pair(std::vector<uint8_t>(p.w.GetData(), p.w.GetData() + p.w.GetByteLength()), p.w.GetBitLength());
+    };
+
+    {
+        const std::string ptMsg = "Bem-vindo ao World RPG, Jo\xC3\xA3o! A\xC3\xA7\xC3\xA3o n\xC2\xBA 1";
+        auto [bytes, bits] = makeMobileChat(255, 200, 100, true, ptMsg);
+        Sync::ChatEchoMessage out;
+        // Whole-byte delivery (bits == byteLen * 8) with PC Network enabled:
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bytes.size() * 8, true, out),
+              "DecodeChatEcho mobile UTF-8 over PC Network");
+        Check(!out.desktopHeader && out.text == ptMsg && out.red == 255 && out.green == 200 && out.blue == 100,
+              "DecodeChatEcho mobile UTF-8 text matches exactly");
+        // Exact bit length (bits % 8 == 1):
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bits, false, out),
+              "DecodeChatEcho mobile exact bit length");
+        Check(!out.desktopHeader && out.text == ptMsg, "DecodeChatEcho mobile exact text");
+    }
+    {
+        const std::string stockMsg = "Playerkk: #EBDDB2oi";
+        auto [bytes, bits] = makeDesktopChat(235, 221, 178, true, 1, 0, stockMsg);
+        Sync::ChatEchoMessage out;
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bytes.size() * 8, true, out),
+              "DecodeChatEcho stock desktop over PC Network");
+        Check(out.desktopHeader && out.text == stockMsg && out.speaker == 1 && out.messageType == 0,
+              "DecodeChatEcho stock desktop text matches");
+        // Exact bit length (bits % 8 == 2):
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bits, false, out),
+              "DecodeChatEcho desktop exact bit length");
+        Check(out.desktopHeader && out.text == stockMsg, "DecodeChatEcho desktop exact text");
+    }
+    {
+        // Edge case: mobile message containing only ASCII digits (shifted left 1 stays ASCII,
+        // so desktop ucMessageType validation must disambiguate).
+        auto [bytes, bits] = makeMobileChat(255, 255, 255, false, "123456");
+        (void)bits;
+        Sync::ChatEchoMessage out;
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bytes.size() * 8, true, out),
+              "DecodeChatEcho mobile digits over PC Network");
+        Check(!out.desktopHeader && out.text == "123456", "DecodeChatEcho mobile digits exact");
+    }
+    {
+        // Edge case: short 2-char desktop message with INVALID_ELEMENT_ID speaker.
+        auto [bytes, bits] = makeDesktopChat(255, 168, 0, false, 0x1FFFFu, 4, "oi");
+        (void)bits;
+        Sync::ChatEchoMessage out;
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bytes.size() * 8, true, out),
+              "DecodeChatEcho short desktop over PC Network");
+        Check(out.desktopHeader && out.text == "oi", "DecodeChatEcho short desktop exact");
+    }
+    {
+        // Long color-coded UTF-8 message (> 256 bytes, < 1024 bytes) must not be dropped or truncated.
+        std::string longMsg;
+        for (int i = 0; i < 12; ++i) longMsg += "#FFAA00Ol\xC3\xA1 Jo\xC3\xA3o! A\xC3\xA7\xC3\xA3o! ";
+        while (!longMsg.empty() && longMsg.back() == ' ') longMsg.pop_back();
+        Check(longMsg.size() > 280, "long UTF-8 chat message > 256 bytes");
+        auto [bytes, bits] = makeMobileChat(200, 220, 240, true, longMsg);
+        (void)bits;
+        Sync::ChatEchoMessage out;
+        Check(Sync::DecodeChatEcho(bytes.data(), bytes.size(), bytes.size() * 8, true, out),
+              "DecodeChatEcho long UTF-8 accepted");
+        Check(out.text == longMsg, "DecodeChatEcho long UTF-8 preserved without truncation");
+    }
+
+    // 2. BitStreamReader::AlignReadToByteBoundary + LUA_TSTRING_LONG (kind 9) byte alignment
+    {
+        uint8_t buf[3] = {0xAA, 0x55, 0xCC};
+        Net::BitStreamReader r(buf, sizeof(buf), sizeof(buf) * 8);
+        uint8_t nibble = 0;
+        Check(r.ReadBits(&nibble, 4), "AlignReadToByteBoundary pre-read 4 bits");
+        Check(r.GetReadOffsetBits() == 4, "offset is 4 before align");
+        r.AlignReadToByteBoundary();
+        Check(r.GetReadOffsetBits() == 8, "offset is 8 after align");
+        r.AlignReadToByteBoundary();
+        Check(r.GetReadOffsetBits() == 8, "align at byte boundary is a no-op");
+        uint8_t next = 0;
+        Check(r.Read(next) && next == 0x55, "next byte reads cleanly after align");
+    }
+    {
+        Fixture f;
+        f.Lua("longEv = nil\n"
+              "addEvent('onLongUtf8Test', true)\n"
+              "addEventHandler('onLongUtf8Test', root, function(a, b) longEv = {a, b} end)\n");
+        const std::string evName = "onLongUtf8Test";
+        const std::string payload = "Texto longo com acentua\xC3\xA7\xC3\xA3o: Jo\xC3\xA3o & S\xC3\xA3o Paulo!";
+        const std::string tail = "after-long";
+        Pkt ev(81);  // PACKET_ID_LUA_EVENT
+        ev.Compressed16(static_cast<uint16_t>(evName.size()));
+        ev.Bytes(reinterpret_cast<const uint8_t*>(evName.data()), evName.size());
+        ev.Id(1);  // root element (unaligns bitstream!)
+        ev.Compressed32(2);  // argument count
+        // Arg 1: LUA_TSTRING_LONG (kind = 9)
+        ev.Bits(9, 4);
+        ev.Compressed32(static_cast<uint32_t>(payload.size()));
+        // Align write to byte boundary (CLuaArgument::WriteToBitStream)
+        const size_t rem = ev.w.GetBitLength() % 8;
+        if (rem != 0) ev.Bits(0, static_cast<unsigned>(8 - rem));
+        ev.Bytes(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+        // Arg 2: LUA_TSTRING (kind = 4) immediately after
+        ev.Bits(4, 4);
+        ev.Compressed16(static_cast<uint16_t>(tail.size()));
+        ev.Bytes(reinterpret_cast<const uint8_t*>(tail.data()), tail.size());
+
+        Check(f.Send(ev), "PACKET_ID_LUA_EVENT with LUA_TSTRING_LONG accepted");
+        f.Lua("assert(longEv ~= nil, 'onLongUtf8Test did not fire')\n"
+              "assert(longEv[1] == 'Texto longo com acentua\\195\\167\\195\\163o: Jo\\195\\163o & S\\195\\163o Paulo!', 'LUA_TSTRING_LONG payload corrupted: ' .. tostring(longEv[1]))\n"
+              "assert(longEv[2] == 'after-long', 'arg after LUA_TSTRING_LONG misaligned: ' .. tostring(longEv[2]))\n");
+        Check(true, "LUA_TSTRING_LONG aligned and subsequent args preserved");
+
+        // Also check Entity::ReadLuaValue with unaligned LUA_TSTRING_LONG
+        Pkt datum;
+        datum.Bit(true);  // force unaligned offset = 1
+        datum.Bits(9, 4);
+        datum.Compressed32(static_cast<uint32_t>(payload.size()));
+        const size_t drem = datum.w.GetBitLength() % 8;
+        if (drem != 0) datum.Bits(0, static_cast<unsigned>(8 - drem));
+        datum.Bytes(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+        datum.Bits(4, 4);
+        datum.Compressed16(static_cast<uint16_t>(tail.size()));
+        datum.Bytes(reinterpret_cast<const uint8_t*>(tail.data()), tail.size());
+        Net::BitStreamReader dr(datum.w.GetData(), datum.w.GetByteLength(), datum.w.GetBitLength());
+        uint8_t dummyBit = 0;
+        Check(dr.ReadBits(&dummyBit, 1), "read unaligning bit");
+        Entity::Datum d1, d2;
+        Check(Entity::ReadLuaValue(dr, d1) && !d1.number && d1.text == payload,
+              "Entity::ReadLuaValue decodes aligned LUA_TSTRING_LONG");
+        Check(Entity::ReadLuaValue(dr, d2) && !d2.number && d2.text == tail,
+              "Entity::ReadLuaValue decodes follow-up string cleanly");
+    }
+
+    // 3. NormalizeAscii: proper UTF-8 decoding for Portuguese accents and punctuation
+    {
+        Check(Net::NormalizeAscii("Jo\xC3\xA3o") == "Joao", "NormalizeAscii Joao");
+        Check(Net::NormalizeAscii("S\xC3\xA3o Paulo") == "Sao Paulo", "NormalizeAscii Sao Paulo");
+        Check(Net::NormalizeAscii("Voc\xC3\xAA") == "Voce", "NormalizeAscii Voce");
+        Check(Net::NormalizeAscii("A\xC3\xA7\xC3\xA3o") == "Acao", "NormalizeAscii Acao");
+        Check(Net::NormalizeAscii("\xC3\x89pico \xE2\x80\xA2 Caf\xC3\xA9 \xE2\x80\x94 \xE2\x80\x9COk\xE2\x80\x9D") ==
+                  "Epico * Cafe - \"Ok\"",
+              "NormalizeAscii punctuation + accents");
+        // Single-byte Latin-1 fallback still works for legacy callers:
+        Check(Net::NormalizeAscii(std::string("Jo\xE3o")) == "Joao", "NormalizeAscii Latin-1 fallback");
+    }
+
+    // 4. ServerWorld::OnPlayerList accepts UTF-8 player nicknames (does not drop packet)
+    {
+        const std::string utf8Nick = "Jo\xC3\xA3o_RP";
+        Pkt p;
+        // Desktop prefix: empty AC string (u16=0) + empty SD string (u16=0)
+        p.U16(0).U16(0).Bit(true).Id(4242u).U8(1).U8(static_cast<uint8_t>(utf8Nick.size()));
+        p.Bytes(reinterpret_cast<const uint8_t*>(utf8Nick.data()), utf8Nick.size());
+        p.U16(0x0030).U32(0);
+        // flags=0 (unspawned), tagLength=0, moveAnim=0
+        p.U8(0).U8(0).U8(0);
+        ServerWorld::OnPlayerList(p.w.GetData(), p.w.GetByteLength(), p.w.GetBitLength());
+        std::string storedNick;
+        Check(ServerWorld::CopyPlayerNick(4242u, storedNick) && storedNick == utf8Nick,
+              "OnPlayerList accepts UTF-8 player nickname");
+    }
+
+    // 5. HandleDebugEvent fires onClientDebugMessage instead of hijacking download panel
+    {
+        Fixture f;
+        f.Lua("dbgEv = nil\n"
+              "addEventHandler('onClientDebugMessage', root, function(msg, lvl, file, line, r, g, b)\n"
+              "  dbgEv = {msg, lvl, file, line, r, g, b}\n"
+              "end)\n");
+        Pkt de(PktId::DebugEvent);
+        de.U8(2).U32(88).U32(12345).U8(1).U8(2).U32(42).U32(1).U8(255).U8(180).U8(0);
+        auto writeStr = [&](const std::string& s) {
+            de.U16(static_cast<uint16_t>(s.size())).Bytes(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+        };
+        writeStr("script");
+        writeStr("ctx");
+        writeStr("myres");
+        writeStr("main.lua");
+        writeStr("aviso de teste");
+        writeStr("corr-2");
+        Check(f.Send(de), "DEBUG_EVENT dispatched");
+        f.vm.pumpDx(false);
+        f.Lua("assert(dbgEv ~= nil, 'DEBUG_EVENT did not fire onClientDebugMessage')\n"
+              "assert(dbgEv[1] == 'aviso de teste' and dbgEv[2] == 2 and dbgEv[3] == 'main.lua' and dbgEv[4] == 42)\n");
+        Check(true, "DEBUG_EVENT routes to onClientDebugMessage");
+    }
+
+    // 6. DxImageFile / dxCreateFont allows UTF-8 paths (matching ResourceFiles IsSafeRelativePath)
+    {
+        Fixture f;
+        const std::filesystem::path root = "/tmp/neon_utf8_cache_test";
+        const std::filesystem::path fontDir = root / "utf8_font_res" / "fontes";
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec);
+        std::filesystem::create_directories(fontDir, ec);
+        const std::filesystem::path fontPath = fontDir / "T\xC3\xADtulo.ttf";
+        {
+            std::ofstream out(fontPath, std::ios::binary);
+            const char ttfMagic[4] = {0x00, 0x01, 0x00, 0x00};
+            out.write(ttfMagic, 4);
+        }
+        Net::HttpDownloader::SetResourceCacheRoot(root.string());
+
+        const std::string luaSrc =
+            "local fOk = dxCreateFont('fontes/T\xC3\xADtulo.ttf', 12)\n"
+            "local fTrav = dxCreateFont('../secret.ttf', 12)\n"
+            "local fCtrl = dxCreateFont('bad\\001name.ttf', 12)\n"
+            "setElementData(root, 'utf8_font_check', isElement(fOk) and (fTrav == false) and (fCtrl == false))\n";
+        Net::ResourceStartInfo info;
+        info.name = "utf8_font_res";
+        info.resourceId = 77;
+        info.entityId = 0x5177;
+        info.dynamicEntityId = 0x5277;
+        info.noClientCacheScripts = 1;
+        info.startCounter = 1;
+        Script::ActiveVmOnResourceStart(info);
+        uLongf packedLen = compressBound(luaSrc.size());
+        std::vector<uint8_t> packed(packedLen);
+        compress2(packed.data(), &packedLen, reinterpret_cast<const Bytef*>(luaSrc.data()), luaSrc.size(),
+                  Z_DEFAULT_COMPRESSION);
+        packed.resize(packedLen);
+        const uint32_t orig = static_cast<uint32_t>(luaSrc.size());
+        std::vector<uint8_t> item = {static_cast<uint8_t>(orig >> 24), static_cast<uint8_t>(orig >> 16),
+                                     static_cast<uint8_t>(orig >> 8), static_cast<uint8_t>(orig)};
+        item.insert(item.end(), packed.begin(), packed.end());
+        std::vector<uint8_t> body = {static_cast<uint8_t>(info.resourceId & 0xFF),
+                                     static_cast<uint8_t>(info.resourceId >> 8), 1, 0};
+        const uint32_t len = static_cast<uint32_t>(item.size());
+        for (int i = 0; i < 4; ++i) body.push_back(static_cast<uint8_t>((len >> (8 * i)) & 0xFF));
+        body.insert(body.end(), item.begin(), item.end());
+        Check(Script::ActiveVmFeedScripts(body.data(), body.size(), body.size() * 8), "feed utf8_font_res");
+        Script::ActiveVmPulseResources();
+        f.Lua("assert(getElementData(root, 'utf8_font_check') == true, 'dxCreateFont UTF-8 check failed')\n");
+        Check(true, "dxCreateFont accepts UTF-8 font path and rejects traversal/control bytes");
+        std::filesystem::remove_all(root, ec);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1399,6 +1648,7 @@ int main() {
     TestPostJoinInboundAndOutboundPackets();
     TestParityClientEvents();
     TestAllRemainingParityClientEvents();
+    TestPcCompatTextAndEncodingFixes();
     std::printf("core_packets_tests: %u checks passed\n", checks);
     return 0;
 }

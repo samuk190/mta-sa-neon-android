@@ -21,6 +21,22 @@ namespace WorldRPG::Sync {
 
 constexpr uint8_t USER_PACKET_ENUM_ID = 99; // RID_USER_PACKET_ENUM
 
+struct ChatEchoMessage {
+    uint8_t red = 255;
+    uint8_t green = 255;
+    uint8_t blue = 255;
+    bool colorCoded = false;
+    bool desktopHeader = false;
+    uint32_t speaker = 0x1FFFFu;
+    uint8_t messageType = 0;
+    std::string text;
+};
+
+/// Decodes PACKET_ID_CHAT_ECHO (43), supporting both the 50-bit desktop header
+/// and the 25-bit mobile (bitstream <= 0x30) header even when transport delivers
+/// whole-byte lengths (e.g. emulated PC Network / netc.dll).
+bool DecodeChatEcho(const uint8_t* body, size_t length, size_t bits, bool pcNetworkHint, ChatEchoMessage& out);
+
 /// Dispatches incoming MTA game packets (real ePacketID values from Shared/sdk/net/Packets.h).
 class PacketHandler {
 public:

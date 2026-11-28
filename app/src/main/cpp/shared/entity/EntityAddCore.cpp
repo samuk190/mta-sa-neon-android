@@ -50,6 +50,9 @@ bool SkipLuaBody(Net::BitStreamReader& reader, uint8_t kind, int depth) {
         uint32_t length = 0;
         const int width = kind == 4 ? 2 : 4;
         if (!ReadCompressed(reader, width, length) || length > 1024 * 1024) return false;
+        // Desktop CLuaArgument::ReadFromBitStream (CLuaArgument.cpp:587-610):
+        // LUA_TSTRING_LONG (kind 9) byte-aligns before the string payload.
+        if (kind == 9 && length > 0) reader.AlignReadToByteBoundary();
         return SkipBytes(reader, length);
     }
     if (kind == 5) {
@@ -134,9 +137,12 @@ bool ReadLuaValue(Net::BitStreamReader& reader, Datum& out) {
         out.value = static_cast<int32_t>(integer);
         return true;
     }
-    if (kind == 4) {
+    if (kind == 4 || kind == 9) {
         uint32_t length = 0;
-        if (!ReadCompressed(reader, 2, length) || length > 65535) LUA_FAIL();
+        const int width = kind == 4 ? 2 : 4;
+        const uint32_t maxLen = kind == 4 ? 65535u : 1024u * 1024u;
+        if (!ReadCompressed(reader, width, length) || length > maxLen) LUA_FAIL();
+        if (kind == 9 && length > 0) reader.AlignReadToByteBoundary();
         if (length > 512) {
             out.number = false;
             out.text.clear();

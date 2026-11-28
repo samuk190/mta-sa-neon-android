@@ -60,62 +60,120 @@ bool ReadElementId(WorldRPG::Net::BitStreamReader& reader, uint32_t& out) {
     return true;
 }
 
-int ReadableScore(const std::string& text) {
+struct ChatCandidate {
+    bool valid = false;
+    int score = -1000000;
+    uint8_t red = 0, green = 0, blue = 0, coded = 0, msgType = 0;
+    uint32_t speaker = 0x1FFFFu;
+    std::string text;
+};
+
+int ScoreRawChatBytes(const std::vector<uint8_t>& raw) {
     int score = 0;
-    for (unsigned char ch : text) {
-        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
-            ++score;
+    for (size_t i = 0; i < raw.size();) {
+        const uint8_t b = raw[i];
+        if (b < 0x80u) {
+            if (b == '\t') {
+                score += 1;
+            } else if (b < 0x20u || b == 0x7Fu) {
+                score -= 100;
+            } else if ((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') ||
+                       b == ' ' || b == ':' || b == '#' || b == '-' || b == '.' || b == ',' ||
+                       b == '!' || b == '?' || b == '[' || b == ']' || b == '(' || b == ')') {
+                score += 4;
+            } else {
+                score += 2;
+            }
+            ++i;
+            continue;
+        }
+        size_t count = 0;
+        uint32_t cp = 0;
+        if (b >= 0xC2u && b <= 0xDFu) { count = 2; cp = b & 0x1Fu; }
+        else if (b >= 0xE0u && b <= 0xEFu) { count = 3; cp = b & 0x0Fu; }
+        else if (b >= 0xF0u && b <= 0xF4u) { count = 4; cp = b & 0x07u; }
+
+        bool ok = (count >= 2 && i + count <= raw.size());
+        for (size_t j = 1; ok && j < count; ++j) {
+            const uint8_t next = raw[i + j];
+            if ((next & 0xC0u) != 0x80u) ok = false;
+            else cp = (cp << 6) | (next & 0x3Fu);
+        }
+        if (ok &&
+            ((count == 2 && cp < 0x80u) || (count == 3 && cp < 0x800u) || (count == 4 && cp < 0x10000u) ||
+             cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu))) {
+            ok = false;
+        }
+        if (!ok) {
+            score -= 100;
+            ++i;
+            continue;
+        }
+        if (cp >= 0x80u && cp <= 0x9Fu) score -= 40;
+        else score += 4;
+        i += count;
     }
     return score;
 }
 
-std::string ReadChatText(WorldRPG::Net::BitStreamReader& reader) {
+ChatCandidate ReadChatCandidate(const uint8_t* body, size_t length, size_t bits, bool desktopHeader) {
+    ChatCandidate out;
+    WorldRPG::Net::BitStreamReader reader(body, length, bits);
+    if (!reader.Read(out.red) || !reader.Read(out.green) || !reader.Read(out.blue) ||
+        !reader.ReadBits(&out.coded, 1)) {
+        return out;
+    }
+    if (desktopHeader) {
+        if (!ReadElementId(reader, out.speaker) || !reader.Read(out.msgType)) return out;
+    }
     const size_t chars = reader.GetRemainingBits() / 8;
-    if (chars == 0 || chars > 256) return {};
+    // Desktop MAX_CHATECHO_LENGTH is 256 UTF-16 code units after stripping #RRGGBB codes;
+    // UTF-8 with color codes can exceed 256 bytes, so allow up to 1024 raw bytes.
+    if (chars == 0 || chars > 1024) return out;
     std::vector<uint8_t> raw(chars);
-    if (!reader.ReadBits(raw.data(), chars * 8)) return {};
+    if (!reader.ReadBits(raw.data(), chars * 8)) return out;
+
+    int score = ScoreRawChatBytes(raw);
+    const size_t padBits = reader.GetRemainingBits();
+    if (padBits > 0 && padBits < 8) {
+        uint8_t pad = 0;
+        if (reader.ReadBits(&pad, padBits) && pad != 0) score -= 50;
+    }
+    if (desktopHeader) {
+        // CChatEchoPacket.h eMessageType: 0..4 (PLAYER..INTERNAL).
+        score += (out.msgType <= 4u) ? 30 : -60;
+    }
+
     std::string text;
     text.reserve(chars);
     for (unsigned char ch : raw) {
-        if (ch >= 0x20) text.push_back(static_cast<char>(ch));
+        if (ch >= 0x20u && ch != 0x7Fu) text.push_back(static_cast<char>(ch));
+        else if (ch == '\t') text.push_back(' ');
     }
     while (!text.empty() && text.back() == ' ') text.pop_back();
-    return text;
+    if (text.empty()) return out;
+
+    out.valid = true;
+    out.score = score;
+    out.text = std::move(text);
+    return out;
 }
 
 // The network the packet handlers were registered with (PacketHandler::registerAll).
 const WorldRPG::Net::RakNetWrapper* g_packetNetwork = nullptr;
 
 bool HandleChatEcho(const uint8_t* body, size_t length, size_t bits) {
-    // The standard header has 50 bits. The shortened mobile header has 25.
-    // When a caller has only whole bytes, retain its legacy layout fallback.
-    WorldRPG::Net::BitStreamReader mobile(body, length, bits);
-    uint8_t red = 0, green = 0, blue = 0, coded = 0;
-    if (!mobile.Read(red) || !mobile.Read(green) || !mobile.Read(blue) || !mobile.ReadBits(&coded, 1))
-        return false;
-    std::string text = ReadChatText(mobile);
-    // Through PC Network the server writes the desktop header (it sees a
-    // desktop bitstream version), and netc reports whole bytes, so the
-    // bit-length test below cannot tell.
-    const bool standardHeader = (bits % 8 == 2) || (g_packetNetwork && g_packetNetwork->IsPcNetwork());
-    if (standardHeader || (bits % 8 == 0 && ReadableScore(text) < 2)) {
-        WorldRPG::Net::BitStreamReader desktop(body, length, bits);
-        uint8_t ignored = 0;
-        uint32_t speaker = 0;
-        if (desktop.Read(red) && desktop.Read(green) && desktop.Read(blue) &&
-            desktop.ReadBits(&coded, 1) && ReadElementId(desktop, speaker) &&
-            desktop.Read(ignored)) {
-            const std::string other = ReadChatText(desktop);
-            if (standardHeader || ReadableScore(other) > ReadableScore(text)) text = other;
-        }
-    }
-    if (text.empty()) return false;
-    char colored[400];
-    std::snprintf(colored, sizeof(colored), "#%02X%02X%02X%s", red, green, blue, text.c_str());
-    PKT_LOGI("ChatEcho: %s", colored);
-    const bool notCancelled = WorldRPG::Script::ActiveVmOnChat(text.c_str(), red, green, blue);
+    WorldRPG::Sync::ChatEchoMessage msg;
+    const bool pcNet = g_packetNetwork && g_packetNetwork->IsPcNetwork();
+    if (!WorldRPG::Sync::DecodeChatEcho(body, length, bits, pcNet, msg)) return false;
+
+    char prefix[8];
+    std::snprintf(prefix, sizeof(prefix), "#%02X%02X%02X", msg.red, msg.green, msg.blue);
+    const std::string colored = std::string(prefix) + msg.text;
+    PKT_LOGI("ChatEcho: %s", colored.c_str());
+    const bool notCancelled = WorldRPG::Script::ActiveVmOnChat(msg.text.c_str(), msg.red, msg.green, msg.blue);
     if (notCancelled)
-        WorldRPG::JniBridge::PostGameLine(0, colored);
+        WorldRPG::JniBridge::PostGameLine(0, colored.c_str());
     return true;
 }
 
@@ -1634,6 +1692,43 @@ bool HandleResourceStart(const uint8_t* body, size_t length, size_t bits) {
 } // namespace
 
 namespace WorldRPG::Sync {
+
+bool DecodeChatEcho(const uint8_t* body, size_t length, size_t bits, bool pcNetworkHint, ChatEchoMessage& out) {
+    if (!body || length == 0) return false;
+    const size_t effectiveBits = bits ? std::min(bits, length * 8) : length * 8;
+    const size_t mod = effectiveBits % 8;
+
+    auto commit = [&](const ChatCandidate& c, bool isDesktop) {
+        if (!c.valid) return false;
+        out.red = c.red;
+        out.green = c.green;
+        out.blue = c.blue;
+        out.colorCoded = (c.coded != 0);
+        out.desktopHeader = isDesktop;
+        out.speaker = c.speaker;
+        out.messageType = c.msgType;
+        out.text = c.text;
+        return true;
+    };
+
+    // Exact bit-length transports (native RakNet / QUIC) preserve the header remainder:
+    // 50-bit desktop header => (50 + 8N) % 8 == 2; 25-bit mobile header => (25 + 8N) % 8 == 1.
+    if (mod == 2) return commit(ReadChatCandidate(body, length, effectiveBits, true), true);
+    if (mod == 1) return commit(ReadChatCandidate(body, length, effectiveBits, false), false);
+
+    // Whole-byte transports (notably PC Compatibility Mode / netc.dll, which pads packets
+    // to whole bytes): stock MTA 1.6 servers always send the 50-bit desktop header, while
+    // Neon/World RPG servers still see BitStreamVersion 0x0030 from BuildJoinData and send
+    // the 25-bit mobile header. Evaluate both candidates and pick the clean UTF-8 decoding.
+    const ChatCandidate desktop = ReadChatCandidate(body, length, effectiveBits, true);
+    const ChatCandidate mobile = ReadChatCandidate(body, length, effectiveBits, false);
+    if (!desktop.valid && !mobile.valid) return false;
+    if (!desktop.valid) return commit(mobile, false);
+    if (!mobile.valid) return commit(desktop, true);
+    if (desktop.score > mobile.score) return commit(desktop, true);
+    if (mobile.score > desktop.score) return commit(mobile, false);
+    return pcNetworkHint ? commit(desktop, true) : commit(mobile, false);
+}
 
 struct PacketHandler::Impl {
     SyncManager* syncManager = nullptr;

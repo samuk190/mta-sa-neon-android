@@ -1561,8 +1561,31 @@ void OnPlayerList(const uint8_t* body, size_t length, size_t bits) {
         if (nl < 1 || nl > 32) return false;
         std::vector<uint8_t> chars(nl);
         if (!r.ReadBits(chars.data(), nl * 8u)) return false;
-        for (uint8_t c : chars)
-            if (c < 0x20 || c > 0x7e) return false;
+        for (size_t i = 0; i < chars.size();) {
+            const uint8_t b = chars[i];
+            if (b < 0x80u) {
+                if (b < 0x20u || b == 0x7Fu) return false;
+                ++i;
+                continue;
+            }
+            size_t count = 0;
+            uint32_t cp = 0;
+            if (b >= 0xC2u && b <= 0xDFu) { count = 2; cp = b & 0x1Fu; }
+            else if (b >= 0xE0u && b <= 0xEFu) { count = 3; cp = b & 0x0Fu; }
+            else if (b >= 0xF0u && b <= 0xF4u) { count = 4; cp = b & 0x07u; }
+            else return false;
+            if (i + count > chars.size()) return false;
+            for (size_t j = 1; j < count; ++j) {
+                const uint8_t next = chars[i + j];
+                if ((next & 0xC0u) != 0x80u) return false;
+                cp = (cp << 6) | (next & 0x3Fu);
+            }
+            if ((count == 2 && cp < 0x80u) || (count == 3 && cp < 0x800u) || (count == 4 && cp < 0x10000u) ||
+                cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu) || (cp >= 0x80u && cp <= 0x9Fu)) {
+                return false;
+            }
+            i += count;
+        }
         return true;
     };
     auto stringsAt = [&](size_t start, size_t& end) {

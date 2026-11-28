@@ -29,36 +29,92 @@ namespace WorldRPG::Net {
 // ---------------------------------------------------------------------------
 // ASCII Normalization
 // ---------------------------------------------------------------------------
+namespace {
+
+void AppendMappedCodePoint(uint32_t cp, std::string& result) {
+    if (cp < 0x80) {
+        result += static_cast<char>(cp);
+        return;
+    }
+    if (cp >= 0xC0 && cp <= 0xC5) { result += 'A'; return; }
+    if (cp == 0xC6) { result += "AE"; return; }
+    if (cp == 0xC7) { result += 'C'; return; }
+    if (cp >= 0xC8 && cp <= 0xCB) { result += 'E'; return; }
+    if (cp >= 0xCC && cp <= 0xCF) { result += 'I'; return; }
+    if (cp == 0xD0) { result += 'D'; return; }
+    if (cp == 0xD1) { result += 'N'; return; }
+    if ((cp >= 0xD2 && cp <= 0xD6) || cp == 0xD8) { result += 'O'; return; }
+    if (cp >= 0xD9 && cp <= 0xDC) { result += 'U'; return; }
+    if (cp == 0xDD) { result += 'Y'; return; }
+    if (cp == 0xDF) { result += "ss"; return; }
+    if (cp >= 0xE0 && cp <= 0xE5) { result += 'a'; return; }
+    if (cp == 0xE6) { result += "ae"; return; }
+    if (cp == 0xE7) { result += 'c'; return; }
+    if (cp >= 0xE8 && cp <= 0xEB) { result += 'e'; return; }
+    if (cp >= 0xEC && cp <= 0xEF) { result += 'i'; return; }
+    if (cp == 0xF0) { result += 'd'; return; }
+    if (cp == 0xF1) { result += 'n'; return; }
+    if ((cp >= 0xF2 && cp <= 0xF6) || cp == 0xF8) { result += 'o'; return; }
+    if (cp >= 0xF9 && cp <= 0xFC) { result += 'u'; return; }
+    if (cp == 0xFD || cp == 0xFF) { result += 'y'; return; }
+    if (cp == 0xA0) { result += ' '; return; }
+    if (cp == 0xAA) { result += 'a'; return; }
+    if (cp == 0xBA) { result += 'o'; return; }
+    if (cp == 0x2013 || cp == 0x2014) { result += '-'; return; }
+    if (cp == 0x2018 || cp == 0x2019) { result += '\''; return; }
+    if (cp == 0x201C || cp == 0x201D) { result += '"'; return; }
+    if (cp == 0x2022) { result += '*'; return; }
+    if (cp == 0x2026) { result += "..."; return; }
+}
+
+}  // namespace
+
 std::string NormalizeAscii(const std::string& input) {
     std::string result;
     result.reserve(input.size());
-    for (unsigned char ch : input) {
-        // Map common UTF-8 accented characters to ASCII equivalents
-        // Since we receive already-decoded bytes, handle direct Latin-1 range
-        if (ch >= 0xC0 && ch <= 0xC5) { result += 'A'; continue; } // A variants
-        if (ch == 0xC7) { result += 'C'; continue; }
-        if (ch >= 0xC8 && ch <= 0xCB) { result += 'E'; continue; }
-        if (ch >= 0xCC && ch <= 0xCF) { result += 'I'; continue; }
-        if (ch == 0xD1) { result += 'N'; continue; }
-        if (ch >= 0xD2 && ch <= 0xD6) { result += 'O'; continue; }
-        if (ch >= 0xD9 && ch <= 0xDC) { result += 'U'; continue; }
-        if (ch >= 0xE0 && ch <= 0xE5) { result += 'a'; continue; }
-        if (ch == 0xE7) { result += 'c'; continue; }
-        if (ch >= 0xE8 && ch <= 0xEB) { result += 'e'; continue; }
-        if (ch >= 0xEC && ch <= 0xEF) { result += 'i'; continue; }
-        if (ch == 0xF1) { result += 'n'; continue; }
-        if (ch >= 0xF2 && ch <= 0xF6) { result += 'o'; continue; }
-        if (ch >= 0xF9 && ch <= 0xFC) { result += 'u'; continue; }
-        // Skip continuation bytes of multi-byte UTF-8 sequences
-        if (ch >= 0x80 && ch <= 0xBF) continue;
-        // Replace bullet and special markers
-        if (ch == 0xE2) continue; // Start of bullet/em-dash sequence
-        if (ch == 0x80) continue;
-        if (ch == 0xA2) { result += '*'; continue; } // bullet -> *
-        if (ch == 0x93 || ch == 0x94) { result += '"'; continue; } // smart quotes
-        if (ch == 0x91 || ch == 0x92) { result += '\''; continue; }
-        if (ch == 0x96 || ch == 0x97) { result += '-'; continue; } // en/em dash
-        result += static_cast<char>(ch);
+    for (size_t i = 0; i < input.size();) {
+        const unsigned char lead = static_cast<unsigned char>(input[i]);
+        if (lead < 0x80) {
+            result += static_cast<char>(lead);
+            ++i;
+            continue;
+        }
+        // Decode valid UTF-8 first so multi-byte sequences (e.g. 0xC3 xx for
+        // Portuguese accents) map by code point rather than colliding with Latin-1.
+        size_t count = 0;
+        uint32_t cp = 0;
+        if (lead >= 0xC2 && lead <= 0xDF) { count = 2; cp = lead & 0x1Fu; }
+        else if (lead >= 0xE0 && lead <= 0xEF) { count = 3; cp = lead & 0x0Fu; }
+        else if (lead >= 0xF0 && lead <= 0xF4) { count = 4; cp = lead & 0x07u; }
+
+        bool validUtf8 = (count >= 2 && i + count <= input.size());
+        for (size_t j = 1; validUtf8 && j < count; ++j) {
+            const unsigned char next = static_cast<unsigned char>(input[i + j]);
+            if ((next & 0xC0u) != 0x80u) validUtf8 = false;
+            else cp = (cp << 6) | (next & 0x3Fu);
+        }
+        if (validUtf8 &&
+            ((count == 2 && cp < 0x80u) || (count == 3 && cp < 0x800u) || (count == 4 && cp < 0x10000u) ||
+             cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu))) {
+            validUtf8 = false;
+        }
+        if (validUtf8) {
+            AppendMappedCodePoint(cp, result);
+            i += count;
+            continue;
+        }
+        // Fallback for non-UTF-8 single-byte Windows-1252 / Latin-1 inputs.
+        switch (lead) {
+            case 0x85: result += "..."; break;
+            case 0x91: case 0x92: result += '\''; break;
+            case 0x93: case 0x94: result += '"'; break;
+            case 0x95: result += '*'; break;
+            case 0x96: case 0x97: result += '-'; break;
+            default:
+                if (lead >= 0xA0) AppendMappedCodePoint(lead, result);
+                break;
+        }
+        ++i;
     }
     return result;
 }
@@ -283,6 +339,14 @@ size_t BitStreamReader::GetReadOffsetBits() const {
 
 size_t BitStreamReader::GetRemainingBits() const {
     return pImpl_->bitLength - pImpl_->readBitOffset;
+}
+
+void BitStreamReader::AlignReadToByteBoundary() {
+    const size_t rem = pImpl_->readBitOffset % 8;
+    if (rem != 0) {
+        const size_t pad = 8 - rem;
+        pImpl_->readBitOffset = std::min(pImpl_->bitLength, pImpl_->readBitOffset + pad);
+    }
 }
 
 void BitStreamReader::Reset() {

@@ -195,7 +195,16 @@ object ServerQuery {
         return out
     }
 
-    private fun ascii(raw: ByteArray): String = String(raw, Charsets.ISO_8859_1)
+    private fun ascii(raw: ByteArray): String {
+        val decoder = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        return try {
+            decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString()
+        } catch (_: java.nio.charset.CharacterCodingException) {
+            String(raw, Charsets.ISO_8859_1)
+        }
+    }
 
     /** Desktop RemoveColorCodes: drops #RRGGBB. */
     private val colorCode = Regex("#[0-9A-Fa-f]{6}")

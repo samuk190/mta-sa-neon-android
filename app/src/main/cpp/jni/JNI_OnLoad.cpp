@@ -90,6 +90,13 @@ static jmethodID g_copyScreenMethod = nullptr;
 static jmethodID g_onVoiceConfigMethod = nullptr;
 static jmethodID g_onVoicePlaybackMethod = nullptr;
 
+namespace {
+jstring NewJStringFromUtf8(JNIEnv* env, std::string_view text) {
+    const auto wide = WorldRPG::Utf8::ToUtf16(text);
+    return env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
+}
+} // namespace
+
 namespace WorldRPG::JniBridge {
 void PostGameLine(int kind, const char* text) {
     if (!g_jvm || !g_gameActivityRef || !g_onGameLineMethod || !text) return;
@@ -137,8 +144,7 @@ float MeasureText(const std::string& utf8, float pixelSize, const std::string& f
     float width = -1.f;
     jstring jtext = env->NewString(reinterpret_cast<const jchar*>(wide.data()), static_cast<jsize>(wide.size()));
     if (jtext) {
-        // The versioned font source and cache path are printable ASCII; the overlay resolves them.
-        jstring jfont = fontFile.empty() ? nullptr : env->NewStringUTF(fontFile.c_str());
+        jstring jfont = fontFile.empty() ? nullptr : NewJStringFromUtf8(env, fontFile);
         width = env->CallFloatMethod(g_gameActivityRef, g_measureTextMethod, jtext, static_cast<jfloat>(pixelSize), jfont,
                                      static_cast<jboolean>(bold ? JNI_TRUE : JNI_FALSE));
         if (jfont) env->DeleteLocalRef(jfont);
@@ -392,7 +398,7 @@ static void PostConnectionState(bool connected, const char* message) {
     } else if (result != JNI_OK) {
         return;
     }
-    jstring jmsg = env->NewStringUTF(message ? message : "");
+    jstring jmsg = NewJStringFromUtf8(env, message ? message : "");
     if (jmsg) {
         env->CallVoidMethod(g_gameActivityRef, g_onConnectionStateChangeMethod,
                             static_cast<jboolean>(connected), jmsg);
@@ -909,7 +915,7 @@ Java_com_saonline_neonlauncher_game_EngineHostActivity_nativeMapSnapshot(JNIEnv*
     WorldRPG::Game::CopyPose(x, y, z, heading);
     heading = WorldRPG::Game::CopyRadarHeading();
     const std::string text = WorldRPG::ServerWorld::MapSnapshot(x, y, heading);
-    return env->NewStringUTF(text.c_str());
+    return NewJStringFromUtf8(env, text);
 }
 
 JNIEXPORT void JNICALL

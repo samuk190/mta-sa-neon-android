@@ -1648,7 +1648,19 @@ bool HandleDebugEvent(const uint8_t* body, size_t length, size_t bits) {
         std::lock_guard<std::mutex> lock(g_extraStateMutex);
         g_lastDebugEvent = DebugEventRecord{true, sequence, line, timestamp, legacyText};
     }
-    JniBridge::PostGameLine(2, legacyText.c_str());
+    LUA_LOGI("DEBUG_EVENT[%u]: %s", static_cast<unsigned>(severity), legacyText.c_str());
+    ServerRpc::Enqueue([message, severity, file, line, r, g, b] {
+        lua_State* L = Script::ActiveVmState();
+        if (!L) return;
+        lua_pushlstring(L, message.data(), message.size());
+        lua_pushinteger(L, severity);
+        lua_pushlstring(L, file.data(), file.size());
+        lua_pushinteger(L, static_cast<lua_Integer>(line));
+        lua_pushinteger(L, r);
+        lua_pushinteger(L, g);
+        lua_pushinteger(L, b);
+        Script::ActiveVmFireElementEvent(L, "onClientDebugMessage", Script::ClientRootElement(), 7);
+    });
     return true;
 }
 
