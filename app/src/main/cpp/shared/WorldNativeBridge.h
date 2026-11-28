@@ -114,6 +114,27 @@ struct Hooks {
     bool (*getVehicleContactWheels)(uint32_t id, uint8_t& outWheels) = nullptr;
     bool (*fixVehicle)(uint32_t id) = nullptr;
 
+    bool (*setWorldSpecialProperty)(const char* name, bool enabled) = nullptr;
+    bool (*setCameraViewMode)(int vehicleMode, int pedMode) = nullptr;
+    bool (*setCameraTargetEntity)(uint32_t id) = nullptr;
+    bool (*setVehicleEngineState)(uint32_t id, bool on) = nullptr;
+    bool (*setVehicleOverrideLights)(uint32_t id, uint8_t mode) = nullptr;
+    bool (*setVehicleDoorLockMode)(uint32_t id, int mode) = nullptr;
+    bool (*setVehicleSirensOn)(uint32_t id, bool on) = nullptr;
+    bool (*setVehicleTaxiLightOn)(uint32_t id, bool on) = nullptr;
+    bool (*setVehiclePaintjob)(uint32_t id, int paintjob) = nullptr;
+    bool (*setVehicleColor)(uint32_t id, uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4) = nullptr;
+    bool (*setVehiclePhysicalProofs)(uint32_t id, bool bullet, bool fire, bool explosion,
+                                     bool collision, bool melee) = nullptr;
+    bool (*setVehicleTyresCanBurst)(uint32_t id, bool canBurst) = nullptr;
+    bool (*setVehicleDirtLevel)(uint32_t id, float level) = nullptr;
+    bool (*setVehicleDoorOpenRatio)(uint32_t id, uint8_t door, float ratio) = nullptr;
+    bool (*blowVehicle)(uint32_t id, bool withExplosion) = nullptr;
+    bool (*burstVehicleTyre)(uint32_t id, uint8_t wheelId) = nullptr;
+    bool (*setVehicleUpgrade)(uint32_t id, uint16_t upgrade, bool add) = nullptr;
+    bool (*setVehicleNitroState)(uint32_t id, int count, float level) = nullptr;
+    bool (*setTrainSpeed)(uint32_t id, float speed) = nullptr;
+
     // Immediate Fx_c particle emitters; return true if invoked.
     bool (*fxAddBlood)(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) = nullptr;
     bool (*fxAddBulletImpact)(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity) = nullptr;
@@ -205,6 +226,26 @@ bool GetEntityComDistance(uint32_t id, float& outDist);
 bool IsEntityOnScreen(uint32_t id, bool& outOnScreen);
 bool GetVehicleContactWheels(uint32_t id, uint8_t& outWheels);
 bool FixVehicle(uint32_t id);
+
+bool SetWorldSpecialProperty(const char* name, bool enabled);
+bool SetCameraViewMode(int vehicleMode, int pedMode);
+bool SetCameraTargetEntity(uint32_t id);
+bool SetVehicleEngineState(uint32_t id, bool on);
+bool SetVehicleOverrideLights(uint32_t id, uint8_t mode);
+bool SetVehicleDoorLockMode(uint32_t id, int mode);
+bool SetVehicleSirensOn(uint32_t id, bool on);
+bool SetVehicleTaxiLightOn(uint32_t id, bool on);
+bool SetVehiclePaintjob(uint32_t id, int paintjob);
+bool SetVehicleColor(uint32_t id, uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4);
+bool SetVehiclePhysicalProofs(uint32_t id, bool bullet, bool fire, bool explosion, bool collision, bool melee);
+bool SetVehicleTyresCanBurst(uint32_t id, bool canBurst);
+bool SetVehicleDirtLevel(uint32_t id, float level);
+bool SetVehicleDoorOpenRatio(uint32_t id, uint8_t door, float ratio);
+bool BlowVehicle(uint32_t id, bool withExplosion);
+bool BurstVehicleTyre(uint32_t id, uint8_t wheelId);
+bool SetVehicleUpgrade(uint32_t id, uint16_t upgrade, bool add);
+bool SetVehicleNitroState(uint32_t id, int count, float level);
+bool SetTrainSpeed(uint32_t id, float speed);
 
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness);
 bool FxAddBulletImpact(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity);

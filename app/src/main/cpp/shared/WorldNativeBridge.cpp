@@ -299,6 +299,84 @@ bool FixVehicle(uint32_t id) {
     return g_hooks.fixVehicle ? g_hooks.fixVehicle(id) : false;
 }
 
+bool SetWorldSpecialProperty(const char* name, bool enabled) {
+    return g_hooks.setWorldSpecialProperty ? g_hooks.setWorldSpecialProperty(name, enabled) : false;
+}
+
+bool SetCameraViewMode(int vehicleMode, int pedMode) {
+    return g_hooks.setCameraViewMode ? g_hooks.setCameraViewMode(vehicleMode, pedMode) : false;
+}
+
+bool SetCameraTargetEntity(uint32_t id) {
+    return g_hooks.setCameraTargetEntity ? g_hooks.setCameraTargetEntity(id) : false;
+}
+
+bool SetVehicleEngineState(uint32_t id, bool on) {
+    return g_hooks.setVehicleEngineState ? g_hooks.setVehicleEngineState(id, on) : false;
+}
+
+bool SetVehicleOverrideLights(uint32_t id, uint8_t mode) {
+    return g_hooks.setVehicleOverrideLights ? g_hooks.setVehicleOverrideLights(id, mode) : false;
+}
+
+bool SetVehicleDoorLockMode(uint32_t id, int mode) {
+    return g_hooks.setVehicleDoorLockMode ? g_hooks.setVehicleDoorLockMode(id, mode) : false;
+}
+
+bool SetVehicleSirensOn(uint32_t id, bool on) {
+    return g_hooks.setVehicleSirensOn ? g_hooks.setVehicleSirensOn(id, on) : false;
+}
+
+bool SetVehicleTaxiLightOn(uint32_t id, bool on) {
+    return g_hooks.setVehicleTaxiLightOn ? g_hooks.setVehicleTaxiLightOn(id, on) : false;
+}
+
+bool SetVehiclePaintjob(uint32_t id, int paintjob) {
+    return g_hooks.setVehiclePaintjob ? g_hooks.setVehiclePaintjob(id, paintjob) : false;
+}
+
+bool SetVehicleColor(uint32_t id, uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4) {
+    return g_hooks.setVehicleColor ? g_hooks.setVehicleColor(id, c1, c2, c3, c4) : false;
+}
+
+bool SetVehiclePhysicalProofs(uint32_t id, bool bullet, bool fire, bool explosion, bool collision, bool melee) {
+    return g_hooks.setVehiclePhysicalProofs
+               ? g_hooks.setVehiclePhysicalProofs(id, bullet, fire, explosion, collision, melee)
+               : false;
+}
+
+bool SetVehicleTyresCanBurst(uint32_t id, bool canBurst) {
+    return g_hooks.setVehicleTyresCanBurst ? g_hooks.setVehicleTyresCanBurst(id, canBurst) : false;
+}
+
+bool SetVehicleDirtLevel(uint32_t id, float level) {
+    return g_hooks.setVehicleDirtLevel ? g_hooks.setVehicleDirtLevel(id, level) : false;
+}
+
+bool SetVehicleDoorOpenRatio(uint32_t id, uint8_t door, float ratio) {
+    return g_hooks.setVehicleDoorOpenRatio ? g_hooks.setVehicleDoorOpenRatio(id, door, ratio) : false;
+}
+
+bool BlowVehicle(uint32_t id, bool withExplosion) {
+    return g_hooks.blowVehicle ? g_hooks.blowVehicle(id, withExplosion) : false;
+}
+
+bool BurstVehicleTyre(uint32_t id, uint8_t wheelId) {
+    return g_hooks.burstVehicleTyre ? g_hooks.burstVehicleTyre(id, wheelId) : false;
+}
+
+bool SetVehicleUpgrade(uint32_t id, uint16_t upgrade, bool add) {
+    return g_hooks.setVehicleUpgrade ? g_hooks.setVehicleUpgrade(id, upgrade, add) : false;
+}
+
+bool SetVehicleNitroState(uint32_t id, int count, float level) {
+    return g_hooks.setVehicleNitroState ? g_hooks.setVehicleNitroState(id, count, level) : false;
+}
+
+bool SetTrainSpeed(uint32_t id, float speed) {
+    return g_hooks.setTrainSpeed ? g_hooks.setTrainSpeed(id, speed) : false;
+}
+
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     return g_hooks.fxAddBlood ? g_hooks.fxAddBlood(x, y, z, dx, dy, dz, count, brightness) : false;
 }

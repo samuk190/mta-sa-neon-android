@@ -328,8 +328,7 @@ int l_setCameraTarget(lua_State* L) {
         }
         g_cam.fixed = false;
         Game::ClearScriptCamera();
-        if (!player)
-            Diag(g_diagFocus, "DIAG setCameraTarget: CClientCamera::SetFocus is not hooked for a remote element");
+        if (!player) WorldNative::SetCameraTargetEntity(id);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -435,8 +434,10 @@ int l_setCameraViewMode(lua_State* L) {
     }
     g_cam.vehicleView = vehicle;
     g_cam.pedView = ped;
-    if (setVehicle || setPed)
-        Diag(g_diagView, "DIAG setCameraViewMode: CCamera vehicle and ped view modes are not hooked");
+    if (setVehicle || setPed) {
+        WorldNative::SetCameraViewMode(setVehicle ? static_cast<int>(vehicle) : -1,
+                                       setPed ? static_cast<int>(ped) : -1);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

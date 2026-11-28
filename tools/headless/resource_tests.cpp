@@ -7571,6 +7571,207 @@ int main(int argc, char** argv) {
 
             WorldRPG::WorldNative::RegisterHooks({});
         }
+        // Batch E: 19 new libGTASA 2.10 arm64 native hooks (world special props, camera view/target,
+        // full vehicle engine/lights/locks/sirens/taxi/paintjob/color/proofs/tyres/dirt/doors/blow/
+        // burst/upgrades/nitro/train) + Bug E1..E4 & E6 fixes (frozen, health, object model, inWater, nitro).
+        {
+            struct BatchEState {
+                int specialPropCalls = 0; std::string lastSpecialProp; bool lastSpecialVal = false;
+                int camViewCalls = 0; int lastVehView = -1, lastPedView = -1;
+                int camTargetCalls = 0; uint32_t lastCamTarget = 0;
+                int engineCalls = 0; bool lastEngine = false;
+                int lightsCalls = 0; uint8_t lastLights = 0;
+                int lockCalls = 0; int lastLockMode = 0;
+                int sirenCalls = 0; bool lastSiren = false;
+                int taxiCalls = 0; bool lastTaxi = false;
+                int paintCalls = 0; int lastPaint = -1;
+                int colorCalls = 0; uint8_t lastColors[4] = {};
+                int proofCalls = 0; bool lastProofs[5] = {};
+                int tyreBurstFlagCalls = 0; bool lastCanBurst = true;
+                int dirtCalls = 0; float lastDirt = 0.f;
+                int doorRatioCalls = 0; uint8_t lastDoor = 0; float lastDoorRatio = 0.f;
+                int blowCalls = 0; bool lastBlowExpl = true;
+                int burstTyreCalls = 0; uint8_t burstMask = 0;
+                int upgradeAddCalls = 0, upgradeRemCalls = 0; uint16_t lastUpgrade = 0;
+                int nitroStateCalls = 0; int lastNitroCount = -1; float lastNitroLevel = 0.f;
+                int trainSpeedCalls = 0; float lastTrainSpeed = 0.f;
+            };
+            static BatchEState gE;
+            gE = BatchEState{};
+
+            WorldRPG::WorldNative::Hooks hooks;
+            hooks.getWaterLevel = [](float, float, float, bool, float& outZ) { outZ = 10.f; return true; };
+            hooks.setWorldSpecialProperty = [](const char* n, bool en) {
+                ++gE.specialPropCalls; gE.lastSpecialProp = n ? n : ""; gE.lastSpecialVal = en; return true;
+            };
+            hooks.setCameraViewMode = [](int v, int p) {
+                ++gE.camViewCalls; gE.lastVehView = v; gE.lastPedView = p; return true;
+            };
+            hooks.setCameraTargetEntity = [](uint32_t id) {
+                ++gE.camTargetCalls; gE.lastCamTarget = id; return true;
+            };
+            hooks.setVehicleEngineState = [](uint32_t, bool on) {
+                ++gE.engineCalls; gE.lastEngine = on; return true;
+            };
+            hooks.setVehicleOverrideLights = [](uint32_t, uint8_t m) {
+                ++gE.lightsCalls; gE.lastLights = m; return true;
+            };
+            hooks.setVehicleDoorLockMode = [](uint32_t, int m) {
+                ++gE.lockCalls; gE.lastLockMode = m; return true;
+            };
+            hooks.setVehicleSirensOn = [](uint32_t, bool on) {
+                ++gE.sirenCalls; gE.lastSiren = on; return true;
+            };
+            hooks.setVehicleTaxiLightOn = [](uint32_t, bool on) {
+                ++gE.taxiCalls; gE.lastTaxi = on; return true;
+            };
+            hooks.setVehiclePaintjob = [](uint32_t, int p) {
+                ++gE.paintCalls; gE.lastPaint = p; return true;
+            };
+            hooks.setVehicleColor = [](uint32_t, uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4) {
+                ++gE.colorCalls; gE.lastColors[0] = c1; gE.lastColors[1] = c2;
+                gE.lastColors[2] = c3; gE.lastColors[3] = c4; return true;
+            };
+            hooks.setVehiclePhysicalProofs = [](uint32_t, bool b, bool f, bool e, bool c, bool m) {
+                ++gE.proofCalls; gE.lastProofs[0] = b; gE.lastProofs[1] = f; gE.lastProofs[2] = e;
+                gE.lastProofs[3] = c; gE.lastProofs[4] = m; return true;
+            };
+            hooks.setVehicleTyresCanBurst = [](uint32_t, bool cb) {
+                ++gE.tyreBurstFlagCalls; gE.lastCanBurst = cb; return true;
+            };
+            hooks.setVehicleDirtLevel = [](uint32_t, float d) {
+                ++gE.dirtCalls; gE.lastDirt = d; return true;
+            };
+            hooks.setVehicleDoorOpenRatio = [](uint32_t, uint8_t d, float r) {
+                ++gE.doorRatioCalls; gE.lastDoor = d; gE.lastDoorRatio = r; return true;
+            };
+            hooks.blowVehicle = [](uint32_t, bool ex) {
+                ++gE.blowCalls; gE.lastBlowExpl = ex; return true;
+            };
+            hooks.burstVehicleTyre = [](uint32_t, uint8_t w) {
+                ++gE.burstTyreCalls; if (w < 4) gE.burstMask |= static_cast<uint8_t>(1u << w); return true;
+            };
+            hooks.setVehicleUpgrade = [](uint32_t, uint16_t up, bool add) {
+                if (add) ++gE.upgradeAddCalls; else ++gE.upgradeRemCalls;
+                gE.lastUpgrade = up; return true;
+            };
+            hooks.setVehicleNitroState = [](uint32_t, int cnt, float lvl) {
+                ++gE.nitroStateCalls; gE.lastNitroCount = cnt; gE.lastNitroLevel = lvl; return true;
+            };
+            hooks.setTrainSpeed = [](uint32_t, float sp) {
+                ++gE.trainSpeedCalls; gE.lastTrainSpeed = sp; return true;
+            };
+            WorldRPG::WorldNative::RegisterHooks(hooks);
+
+            WorldRPG::Net::ResourceStartInfo eRes;
+            eRes.name = "batch_e_native_test";
+            eRes.resourceId = 213;
+            eRes.entityId = 0x5215;
+            eRes.dynamicEntityId = 0x5216;
+            eRes.noClientCacheScripts = 1;
+            eRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(eRes);
+
+            const std::vector<uint8_t> eBody = NoCacheScriptBody(213, R"LUA(
+                -- Bug E1: setElementFrozen / isElementFrozen across object, localPlayer, and vehicle + sync
+                local obj = createObject(1337, 0, 0, 5)
+                assert(isElementFrozen(obj) == false, "object starts unfrozen")
+                assert(setElementFrozen(obj, true) == true and isElementFrozen(obj) == true, "object freeze")
+                assert(setElementFrozen(obj, false) == true and isElementFrozen(obj) == false, "object unfreeze")
+
+                assert(setElementFrozen(localPlayer, true) == true and isElementFrozen(localPlayer) == true, "localPlayer freeze")
+                assert(setElementFrozen(localPlayer, false) == true and isElementFrozen(localPlayer) == false, "localPlayer unfreeze")
+
+                local car = createVehicle(411, 0, 0, 5)
+                assert(setElementFrozen(car, true) == true and isElementFrozen(car) == true and isVehicleFrozen(car) == true, "veh freeze via element api")
+                assert(setVehicleFrozen(car, false) == true and isElementFrozen(car) == false and isVehicleFrozen(car) == false, "veh unfreeze via vehicle api")
+
+                -- Bug E2: getElementHealth / setElementHealth on objects & vehicle default 1000
+                assert(getElementHealth(obj) == 1000, "object default health 1000")
+                assert(setElementHealth(obj, 420) == true and getElementHealth(obj) == 420, "object set/get health")
+                assert(getElementHealth(car) == 1000, "vehicle default health 1000")
+
+                -- Bug E3: setElementModel on objects + onClientElementModelChange
+                local oldM, newM = 0, 0
+                addEventHandler("onClientElementModelChange", obj, function(o, n) oldM, newM = o, n end)
+                assert(setElementModel(obj, 1338) == true and getElementModel(obj) == 1338, "object setElementModel")
+                assert(oldM == 1337 and newM == 1338, "object model change event")
+
+                -- Bug E4: isElementInWater uses WorldNative::GetWaterLevel (mock waterZ = 10)
+                assert(isElementInWater(obj) == true, "object z=5 < waterZ=10")
+                assert(setElementPosition(obj, 0, 0, 25) == true and isElementInWater(obj) == false, "object z=25 >= waterZ=10")
+                assert(isElementInWater(car) == true, "car z=5 < waterZ=10")
+
+                -- Bug E6: Nitro APIs gated on nitro upgrade + native forwarding
+                assert(getVehicleNitroCount(car) == false and getVehicleNitroLevel(car) == false, "no nitro yet")
+                assert(setVehicleNitroCount(car, 5) == false and setVehicleNitroLevel(car, 0.5) == false, "setters gated")
+                assert(addVehicleUpgrade(car, 1010) == true, "install 10x nitro")
+                assert(getVehicleNitroCount(car) == 10 and getVehicleNitroLevel(car) == 1, "default 10x nitro")
+                assert(setVehicleNitroCount(car, 7) == true and getVehicleNitroCount(car) == 7, "set nitro count")
+                assert(setVehicleNitroLevel(car, -0.5) == true and math.abs(getVehicleNitroLevel(car) + 0.5) < 0.01, "set nitro level")
+                assert(isVehicleNitroRecharging(car) == true and isVehicleNitroActivated(car) == false, "recharging when <0 and inactive")
+                assert(setVehicleNitroActivated(car, true) == true and isVehicleNitroActivated(car) == true and isVehicleNitroRecharging(car) == false, "activated")
+                assert(removeVehicleUpgrade(car, 1010) == true and getVehicleNitroCount(car) == false, "removed nitro")
+
+                -- 19 WorldNative Batch E hooks
+                assert(setWorldSpecialPropertyEnabled("aircars", true) == true)
+                assert(setCameraViewMode(2, 1) == true)
+                assert(setCameraTarget(car) == true)
+                assert(setVehicleEngineState(car, true) == true)
+                assert(setVehicleOverrideLights(car, 2) == true)
+                assert(setVehicleLocked(car, true) == true)
+                assert(setVehicleDoorLockMode(car, 4) == true)
+                assert(setVehiclePaintjob(car, 1) == true)
+                assert(setVehicleColor(car, 3, 6, 0, 0) == true)
+                assert(setVehicleDamageProof(car, true) == true)
+                assert(setVehiclePhysicalProofs(car, true, false, true, false, true) == true)
+                assert(setVehicleTyresCanBurst(car, false) == true)
+                assert(setVehicleDirtLevel(car, 7.5) == true)
+                assert(setVehicleDoorOpenRatio(car, 2, 0.75) == true)
+                assert(setVehicleWheelStates(car, 1, 0, 2, 0) == true)
+                assert(blowVehicle(car, false) == true)
+
+                local cop = createVehicle(596, 10, 0, 15)
+                assert(setVehicleSirensOn(cop, true) == true)
+                local taxi = createVehicle(420, 20, 0, 15)
+                assert(setVehicleTaxiLightOn(taxi, true) == true)
+                local train = createVehicle(538, 30, 0, 15)
+                assert(setTrainSpeed(train, 1.25) == true)
+
+                destroyElement(train)
+                destroyElement(taxi)
+                destroyElement(cop)
+                destroyElement(car)
+                destroyElement(obj)
+                _G._batchEOk = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(eBody.data(), eBody.size(), eBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "batch-e-ok", "assert(_G._batchEOk == true, 'batch E native & bugfix test ran')");
+
+            CHECK(gE.specialPropCalls == 1 && gE.lastSpecialProp == "aircars" && gE.lastSpecialVal);
+            CHECK(gE.camViewCalls == 1 && gE.lastVehView == 2 && gE.lastPedView == 1);
+            CHECK(gE.camTargetCalls == 1 && gE.lastCamTarget != 0);
+            CHECK(gE.engineCalls == 1 && gE.lastEngine);
+            CHECK(gE.lightsCalls == 1 && gE.lastLights == 2);
+            CHECK(gE.lockCalls == 2 && gE.lastLockMode == 4);
+            CHECK(gE.sirenCalls == 1 && gE.lastSiren);
+            CHECK(gE.taxiCalls == 1 && gE.lastTaxi);
+            CHECK(gE.paintCalls == 1 && gE.lastPaint == 1);
+            CHECK(gE.colorCalls == 1 && gE.lastColors[0] == 3 && gE.lastColors[1] == 6);
+            CHECK(gE.proofCalls == 2 && gE.lastProofs[0] && !gE.lastProofs[1] && gE.lastProofs[2] &&
+                  !gE.lastProofs[3] && gE.lastProofs[4]);
+            CHECK(gE.tyreBurstFlagCalls == 1 && !gE.lastCanBurst);
+            CHECK(gE.dirtCalls == 1 && std::fabs(gE.lastDirt - 7.5f) < 0.01f);
+            CHECK(gE.doorRatioCalls == 1 && gE.lastDoor == 2 && std::fabs(gE.lastDoorRatio - 0.75f) < 0.01f);
+            CHECK(gE.blowCalls == 1 && !gE.lastBlowExpl);
+            CHECK(gE.burstTyreCalls == 2 && gE.burstMask == ((1u << 0) | (1u << 2)));
+            CHECK(gE.upgradeAddCalls == 1 && gE.upgradeRemCalls == 1 && gE.lastUpgrade == 1010);
+            CHECK(gE.nitroStateCalls >= 4 && gE.lastNitroCount == 0);
+            CHECK(gE.trainSpeedCalls == 1 && std::fabs(gE.lastTrainSpeed - 1.25f) < 0.01f);
+
+            WorldRPG::WorldNative::RegisterHooks({});
+        }
     }
 
     if (argc > 1) {

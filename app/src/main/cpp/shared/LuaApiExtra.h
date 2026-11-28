@@ -47,6 +47,8 @@ void RpcSetWantedLevel(uint8_t level);
 
 // Thread-safe vehicle flag updates from server sync packets (VEHICLE_RESYNC, VEHICLE_SPAWN,
 // VEHICLE_DAMAGE_SYNC, VEHICLE_TRAILER, EXPLOSION). Backed by LuaVehicleApi.cpp's locked g_vehicleFlags.
+bool VehicleBodyFrozen(uint32_t id);
+void NoteVehicleFrozenField(uint32_t id, bool frozen);
 void VehicleApplyDamageSync(uint32_t id, const bool doorChanged[6], const uint8_t doors[6],
                             const bool wheelChanged[4], const uint8_t wheels[4],
                             const bool panelChanged[7], const uint8_t panels[7],

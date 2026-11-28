@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added / Fixed — 19 world/camera/vehicle `libGTASA.so` 2.10 ARM64 native hooks & 5 element/vehicle runtime bug fixes (2026-11-28, v1.0.0-alpha.7)
+
+- **19 disassembly-verified `libGTASA.so` 2.10 arm64 native hooks** (`shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaFieldApi.cpp`, `shared/LuaCameraApi.cpp`, `shared/LuaVehicleApi.cpp`):
+  - World & Camera natives: `setWorldSpecialPropertyEnabled` / `SET_WORLD_SPECIAL_PROPERTY` / `RESET_WORLD_PROPERTIES` (`CCheat::m_aCheatsActive` indices 41 `hovercars`, 56 `aircars`, 57 `extrabunny`, 68 `extrajump`), `setCameraViewMode` (`CCamera::SetZoomValueCamStringScript` / `SetZoomValueFollowPedScript`), and `setCameraTarget(entity)` (`CCamera::TakeControl`).
+  - Vehicle & Train natives: `setVehicleEngineState` (`CVehicle+0x568` bit 4), `setVehicleOverrideLights` (`CVehicle+0x61A` bits 3..4 + `+0x568` bit 6), `setVehicleLocked`/`setVehicleDoorLockMode` (`CVehicle+0x684`), `setVehicleSirensOn` (`CVehicle+0x56D` bit 7), `setVehicleTaxiLightOn` (`CAutomobile::SetTaxiLight`, `m_dwVehicleClass == 0`), `setVehiclePaintjob` (`CVehicle::SetRemap`), `setVehicleColor` (`CVehicle+0x574..0x577`), `setVehicleDamageProof`/`setVehiclePhysicalProofs` (`CPhysical+0x66` bits `0x04/0x08/0x10/0x20/0x80`), `setVehicleTyresCanBurst` (`CVehicle+0x568` bit 31), `setVehicleDirtLevel` (`CVehicle+0x624` clamped `0..15`), `setVehicleDoorOpenRatio` (runtime-verified `_ZTV8CVehicle` slot 28 `CVehicle::OpenDoor`), `blowVehicle` (runtime-verified slot 42 `CVehicle::BlowUpCar`), `setVehicleWheelStates` tyre bursts (runtime-verified slot 45 `CVehicle::BurstTyre`), `addVehicleUpgrade`/`removeVehicleUpgrade` (`CStreaming::RequestVehicleUpgrade`/`HasVehicleUpgradeLoaded` + `CVehicle::AddVehicleUpgrade`/`RemoveVehicleUpgrade`), `setVehicleNitroCount`/`setVehicleNitroLevel`/`setVehicleNitroActivated` (`CAutomobile+0x5EE/+0xAC0/+0x4B8` bit 19), and `setTrainSpeed` (`CTrain::SetTrainSpeed`, `m_dwVehicleClass == 6`). Not yet run on a physical device.
+- **5 real runtime bugs fixed** (`shared/LuaVMStub.cpp`, `shared/LuaFieldApi.{h,cpp}`, `shared/LuaWorldObjectApi.{h,cpp}`, `shared/LuaElementApi.cpp`, `shared/LuaVehicleApi.cpp`):
+  - `setElementFrozen`/`isElementFrozen` now work across objects, `localPlayer`, remote players/peds, and vehicles, and stay synchronized with `setVehicleFrozen`/`isVehicleFrozen` and `Game::RpcSetFrozen`.
+  - `getElementHealth`/`setElementHealth` now support `Kind::Object`, and unset vehicles/objects default to `1000` instead of `100`.
+  - `setElementModel` now supports world objects (`SetObjectModel` + `ObjectModelOf` in `CurrentModel`) and fires `onClientElementModelChange`.
+  - `isElementInWater` now probes `WorldNative::GetWaterLevel` against live position for vehicles, objects, and peds inside vehicles instead of returning `false`.
+  - `isVehicleNitroRecharging`, `isVehicleNitroActivated`, `getVehicleNitroCount`, `getVehicleNitroLevel`, `setVehicleNitroCount`, and `setVehicleNitroLevel` now track nitro state when a nitro upgrade (1008/1009/1010) is installed and forward updates to `WorldNative::SetVehicleNitroState`.
+- **Release bump**: `app/build.gradle.kts` updated to `versionCode = 7`, `versionName = "1.0.0-alpha.7"`.
+
 ### Added / Fixed — 23 ped/entity/vehicle `libGTASA.so` 2.10 ARM64 native hooks & 7 real element/matrix/model bugs fixed (2026-11-28)
 
 - **23 disassembly-verified `libGTASA.so` 2.10 arm64 native hooks** (`shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaPedApi.cpp`, `shared/LuaElementTree.{h,cpp}`, `shared/LuaVehicleApi.cpp`):

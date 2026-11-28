@@ -665,13 +665,21 @@ int l_setElementDimension(lua_State* L) {
 int l_isElementFrozen(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     const Kind kind = KindOf(id);
-    if (!BodyKind(kind)) {
+    if (!BodyKind(kind) && kind != Kind::Object) {
         lua_pushboolean(L, 0);
         return 1;
     }
     const auto found = g_fields.find(id);
     if (found != g_fields.end() && found->second.frozenSet) {
         lua_pushboolean(L, found->second.frozen ? 1 : 0);
+        return 1;
+    }
+    if (kind == Kind::Object) {
+        lua_pushboolean(L, ObjectFrozenOf(id) ? 1 : 0);
+        return 1;
+    }
+    if (kind == Kind::Vehicle) {
+        lua_pushboolean(L, VehicleBodyFrozen(id) ? 1 : 0);
         return 1;
     }
     int model = 0;
@@ -689,7 +697,7 @@ int l_setElementHealth(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     float health = 0.f;
     const Kind kind = KindOf(id);
-    if (!BodyKind(kind) || !Number(L, 2, health)) {
+    if ((!BodyKind(kind) && kind != Kind::Object) || !Number(L, 2, health)) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -713,7 +721,7 @@ int l_setElementHealth(lua_State* L) {
 int l_getElementHealth(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     const Kind kind = KindOf(id);
-    if (!BodyKind(kind)) {
+    if (!BodyKind(kind) && kind != Kind::Object) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -738,7 +746,7 @@ int l_getElementHealth(lua_State* L) {
         lua_pushnumber(L, visual.health);
         return 1;
     }
-    lua_pushnumber(L, 100);
+    lua_pushnumber(L, (kind == Kind::Vehicle || kind == Kind::Object) ? 1000 : 100);
     return 1;
 }
 
@@ -1148,8 +1156,8 @@ int l_setWorldSpecialPropertyEnabled(lua_State* L) {
         return 1;
     }
     prop->enabled = lua_toboolean(L, 2) != 0;
+    WorldNative::SetWorldSpecialProperty(prop->name, prop->enabled);
     CorePackets::SendWorldSpecialProperty(prop->name, prop->enabled);
-    Diag(g_diagWorld, "DIAG setWorldSpecialPropertyEnabled: CGame special-property toggle not hooked; flag stored and PACKET_ID_PLAYER_WORLD_SPECIAL_PROPERTY sent");
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1970,6 +1978,12 @@ void NoteClientElementHealth(uint32_t id, float health) {
     g_fields[id].health = health;
 }
 
+void SetElementFrozenField(uint32_t id, bool frozen) {
+    if (!id) return;
+    g_fields[id].frozenSet = true;
+    g_fields[id].frozen = frozen;
+}
+
 // CWorldRPCs.cpp:72-345 and 564-621. The values arrive without the range checks the Lua setters make, as on
 // desktop; the decoder in ServerRpc.cpp rejects non-finite floats before they get here.
 namespace {
@@ -2192,6 +2206,7 @@ void RpcSetWorldSpecialProperty(int propertyIndex, bool enabled) {
     constexpr int kCount = static_cast<int>(sizeof(g_worldProps) / sizeof(g_worldProps[0]));
     if (propertyIndex >= 0 && propertyIndex < kCount) {
         g_worldProps[propertyIndex].enabled = enabled;
+        WorldNative::SetWorldSpecialProperty(g_worldProps[propertyIndex].name, enabled);
     }
 }
 
@@ -2253,7 +2268,10 @@ void RpcResetWorldProperties(bool resetSpecial, bool resetWorld, bool resetWeath
             true, true, true, true, true, true, false, true, true, true,
         };
         constexpr size_t kCount = sizeof(g_worldProps) / sizeof(g_worldProps[0]);
-        for (size_t i = 0; i < kCount; ++i) g_worldProps[i].enabled = kDefaultSpecial[i];
+        for (size_t i = 0; i < kCount; ++i) {
+            g_worldProps[i].enabled = kDefaultSpecial[i];
+            WorldNative::SetWorldSpecialProperty(g_worldProps[i].name, kDefaultSpecial[i]);
+        }
     }
     if (resetWorld) {
         g_gravity = 0.008f;

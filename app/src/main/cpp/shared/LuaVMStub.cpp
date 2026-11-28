@@ -2203,12 +2203,36 @@ static int l_setElementRotation(lua_State* L) {
 
 static int l_setElementFrozen(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
-    if (IsWorldObject(id)) {
-        lua_pushboolean(L, SetObjectFrozen(id, lua_toboolean(L, 2) != 0) ? 1 : 0);
+    if (id == 0) {
+        lua_pushboolean(L, 0);
         return 1;
     }
-    if (Game::ScriptPedAlive(id)) Game::NoteScriptFrozen(id, lua_toboolean(L, 2) != 0);
-    lua_pushboolean(L, 1);
+    const bool frozen = lua_toboolean(L, 2) != 0;
+    if (IsWorldObject(id)) {
+        const bool ok = SetObjectFrozen(id, frozen);
+        if (ok) SetElementFrozenField(id, frozen);
+        lua_pushboolean(L, ok ? 1 : 0);
+        return 1;
+    }
+    if (Game::ScriptPedAlive(id)) {
+        Game::NoteScriptFrozen(id, frozen);
+        SetElementFrozenField(id, frozen);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    const char* kind = ServerWorld::ElementKindName(id);
+    const bool isVeh = kind && std::strcmp(kind, "vehicle") == 0;
+    const bool isPedOrPlayer =
+        id == ServerWorld::LocalPlayer() ||
+        (kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0));
+    if (isVeh || isPedOrPlayer) {
+        SetElementFrozenField(id, frozen);
+        if (isVeh) NoteVehicleFrozenField(id, frozen);
+        Game::RpcSetFrozen(id, frozen);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
     return 1;
 }
 

@@ -24,6 +24,8 @@ void PublishClientObjects();
 // A client object, or a server object (adopted on first use).
 bool IsWorldObject(uint32_t id);
 int ObjectModelOf(uint32_t id);
+bool ObjectFrozenOf(uint32_t id);
+bool SetObjectModel(uint32_t id, uint16_t model);
 bool SetObjectRotation(uint32_t id, float rx, float ry, float rz);
 bool SetObjectFrozen(uint32_t id, bool frozen);
 

@@ -742,6 +742,9 @@ struct VehicleFlags {
     float trainSpeed = 0.f;
     float trainPosition = -1.f;
     bool chainEngine = false;
+    int nitroCount = -1;       // -1 = derive default count from installed nitro upgrade (1008->5, 1009->2, 1010->10)
+    float nitroLevel = 1.f;
+    bool nitroActivated = false;
     unsigned char variant = 255;
     unsigned char variant2 = 255;
     float wheelScale = 1.f;
@@ -927,7 +930,10 @@ int SetVehicleLocked(lua_State* L) {
     bool locked = false;
     if (!ReadElement(L, "setVehicleLocked", id)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleLocked", 2, locked)) return Fail(L);
-    lua_pushboolean(L, ServerWorld::SetVehicleDoorLockMode(id, locked ? 2 : 1));
+    const int mode = locked ? 2 : 1;
+    const bool ok = ServerWorld::SetVehicleDoorLockMode(id, mode);
+    if (ok) WorldNative::SetVehicleDoorLockMode(id, mode);
+    lua_pushboolean(L, ok);
     return 1;
 }
 
@@ -954,7 +960,10 @@ int SetVehicleDoorLockMode(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    lua_pushboolean(L, ServerWorld::SetVehicleDoorLockMode(ElementIdOf(L, 1), mode));
+    const uint32_t id = ElementIdOf(L, 1);
+    const bool ok = ServerWorld::SetVehicleDoorLockMode(id, mode);
+    if (ok) WorldNative::SetVehicleDoorLockMode(id, mode);
+    lua_pushboolean(L, ok);
     return 1;
 }
 
@@ -975,6 +984,7 @@ int SetVehicleEngineState(lua_State* L) {
     if (!ReadBoolArg(L, "setVehicleEngineState", 2, on)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     Game::SetTrafficVehicleEngine(id, on);
+    WorldNative::SetVehicleEngineState(id, on);
     auto flags = CopyFlags(id);
     flags.engine = on;
     UpdateFlags(id, flags);
@@ -997,7 +1007,7 @@ int SetVehicleOverrideLights(lua_State* L) {
     if (!ReadElement(L, "setVehicleOverrideLights", id)) return Fail(L);
     if (!ReadByteArg(L, "setVehicleOverrideLights", 2, lights)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0 || lights > 2) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehicleOverrideLights(id, lights);
     auto flags = CopyFlags(id);
     flags.overrideLights = lights;
     UpdateFlags(id, flags);
@@ -1022,7 +1032,7 @@ int SetVehiclePaintjob(lua_State* L) {
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     auto flags = CopyFlags(id);
     if (paint > 3 || paint == flags.paintjob) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehiclePaintjob(id, paint);
     flags.paintjob = paint;
     UpdateFlags(id, flags);
     lua_pushboolean(L, 1);
@@ -1071,7 +1081,7 @@ int SetVehicleDamageProof(lua_State* L) {
     if (!ReadElement(L, "setVehicleDamageProof", id)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleDamageProof", 2, proof)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehiclePhysicalProofs(id, proof, proof, proof, proof, proof);
     auto flags = CopyFlags(id);
     flags.damageProof = proof;
     UpdateFlags(id, flags);
@@ -1118,6 +1128,7 @@ int SetVehicleFrozen(lua_State* L) {
     if (!ReadBoolArg(L, "setVehicleFrozen", 2, frozen)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     Game::RpcSetFrozen(id, frozen);
+    SetElementFrozenField(id, frozen);
     auto flags = CopyFlags(id);
     flags.frozen = frozen;
     UpdateFlags(id, flags);
@@ -1169,7 +1180,7 @@ int SetVehicleSirensOn(lua_State* L) {
     const int model = ServerWorld::ModelOf(id);
     auto flags = CopyFlags(id);
     if (!ModelHasSirens(model) || on == flags.sirensOn) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehicleSirensOn(id, on);
     flags.sirensOn = on;
     UpdateFlags(id, flags);
     lua_pushboolean(L, 1);
@@ -1195,7 +1206,7 @@ int SetVehicleTaxiLightOn(lua_State* L) {
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     const int model = ServerWorld::ModelOf(id);
     if (model != 420 && model != 438) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehicleTaxiLightOn(id, on);
     auto flags = CopyFlags(id);
     flags.taxiLight = on;
     UpdateFlags(id, flags);
@@ -1214,10 +1225,12 @@ int SetVehicleTyresCanBurst(lua_State* L) {
     if (!IsElementArg(L, 1) || std::strcmp(ServerWorld::ElementKindName(ElementIdOf(L, 1)), "vehicle") != 0)
         return luaL_error(L, "%s", ParserError(L, "setVehicleTyresCanBurst", "vehicle", 1).c_str());
     if (lua_type(L, 2) != LUA_TBOOLEAN) return luaL_error(L, "%s", ParserError(L, "setVehicleTyresCanBurst", "boolean", 2).c_str());
-    NoteNativeVehicleGap();
-    auto flags = CopyFlags(ElementIdOf(L, 1));
-    flags.tyresCanBurst = lua_toboolean(L, 2) != 0;
-    UpdateFlags(ElementIdOf(L, 1), flags);
+    const uint32_t id = ElementIdOf(L, 1);
+    const bool canBurst = lua_toboolean(L, 2) != 0;
+    WorldNative::SetVehicleTyresCanBurst(id, canBurst);
+    auto flags = CopyFlags(id);
+    flags.tyresCanBurst = canBurst;
+    UpdateFlags(id, flags);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1429,7 +1442,11 @@ int SetVehicleWheelStates(lua_State* L) {
         if (values[i] >= 0 && values[i] <= 3) next[i] = static_cast<unsigned char>(values[i]);
     }
     if (next[0] == flags.wheels[0] && next[1] == flags.wheels[1] && next[2] == flags.wheels[2] && next[3] == flags.wheels[3]) return Fail(L);
-    NoteNativeVehicleGap();
+    for (int i = 0; i < 4; ++i) {
+        if (next[i] != flags.wheels[i] && (next[i] == 1 || next[i] == 2)) {
+            WorldNative::BurstVehicleTyre(id, static_cast<uint8_t>(i));
+        }
+    }
     flags.wheels[0] = next[0];
     flags.wheels[1] = next[1];
     flags.wheels[2] = next[2];
@@ -1535,13 +1552,13 @@ int BlowVehicle(lua_State* L) {
         return Fail(L);
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
     const bool withExplosion = lua_type(L, 2) == LUA_TBOOLEAN ? (lua_toboolean(L, 2) != 0) : true;
     auto flags = CopyFlags(id);
     flags.blown = true;
     UpdateFlags(id, flags);
     ServerWorld::NoteVehiclePose(id, false, nullptr, false, nullptr, true, 0.f);
     NoteClientElementHealth(id, 0.f);
+    WorldNative::BlowVehicle(id, withExplosion);
     Game::RpcBlowVehicle(id, withExplosion);
     lua_pushboolean(L, 1);
     return 1;
@@ -1718,7 +1735,7 @@ int SetTrainSpeed(lua_State* L) {
     if (!ReadVehicleId(L, "setTrainSpeed", id, model)) return Fail(L);
     if (!ReadFinite(L, "setTrainSpeed", 2, speed)) return Fail(L);
     if (!IsTrainModel(model)) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetTrainSpeed(id, static_cast<float>(speed));
     auto flags = CopyFlags(id);
     flags.trainSpeed = static_cast<float>(speed);
     UpdateFlags(id, flags);
@@ -1808,6 +1825,11 @@ int SetVehicleColor(lua_State* L) {
         for (int i = 0; i < count; ++i) colors.rgb[i / 3][i % 3] = values[i];
     }
     if (!ServerWorld::SetVehicleColors(id, colors)) return Fail(L);
+    const uint8_t p0 = colors.palette ? (*colors.palette)[0] : ClosestVehiclePalette(colors.rgb[0]);
+    const uint8_t p1 = colors.palette ? (*colors.palette)[1] : ClosestVehiclePalette(colors.rgb[1]);
+    const uint8_t p2 = colors.palette ? (*colors.palette)[2] : ClosestVehiclePalette(colors.rgb[2]);
+    const uint8_t p3 = colors.palette ? (*colors.palette)[3] : ClosestVehiclePalette(colors.rgb[3]);
+    WorldNative::SetVehicleColor(id, p0, p1, p2, p3);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2368,19 +2390,56 @@ int SpawnVehicleFlyingComponent(lua_State* L) {
     return 1;
 }
 
-int NitroMiss(lua_State* L, const char* function) {
-    int model = 0;
-    uint32_t id = 0;
-    if (!ReadVehicleId(L, function, id, model)) return Fail(L);
-    (void)model;
-    (void)id;
-    return Fail(L);
+int DefaultNitroCount(uint16_t upgrade) {
+    if (upgrade == 1009) return 2;
+    if (upgrade == 1008) return 5;
+    if (upgrade == 1010) return 10;
+    return 0;
 }
 
-int IsVehicleNitroRecharging(lua_State* L) { return NitroMiss(L, "isVehicleNitroRecharging"); }
-int IsVehicleNitroActivated(lua_State* L) { return NitroMiss(L, "isVehicleNitroActivated"); }
-int GetVehicleNitroCount(lua_State* L) { return NitroMiss(L, "getVehicleNitroCount"); }
-int GetVehicleNitroLevel(lua_State* L) { return NitroMiss(L, "getVehicleNitroLevel"); }
+int IsVehicleNitroRecharging(lua_State* L) {
+    int model = 0;
+    uint32_t id = 0;
+    if (!ReadVehicleId(L, "isVehicleNitroRecharging", id, model)) return Fail(L);
+    (void)model;
+    if (ServerWorld::VehicleNitroUpgrade(id) == 0) return Fail(L);
+    const auto flags = CopyFlags(id);
+    lua_pushboolean(L, (!flags.nitroActivated && flags.nitroLevel < 0.f) ? 1 : 0);
+    return 1;
+}
+
+int IsVehicleNitroActivated(lua_State* L) {
+    int model = 0;
+    uint32_t id = 0;
+    if (!ReadVehicleId(L, "isVehicleNitroActivated", id, model)) return Fail(L);
+    (void)model;
+    if (ServerWorld::VehicleNitroUpgrade(id) == 0) return Fail(L);
+    lua_pushboolean(L, CopyFlags(id).nitroActivated ? 1 : 0);
+    return 1;
+}
+
+int GetVehicleNitroCount(lua_State* L) {
+    int model = 0;
+    uint32_t id = 0;
+    if (!ReadVehicleId(L, "getVehicleNitroCount", id, model)) return Fail(L);
+    (void)model;
+    const uint16_t upgrade = ServerWorld::VehicleNitroUpgrade(id);
+    if (upgrade == 0) return Fail(L);
+    const auto flags = CopyFlags(id);
+    lua_pushinteger(L, flags.nitroCount >= 0 ? flags.nitroCount : DefaultNitroCount(upgrade));
+    return 1;
+}
+
+int GetVehicleNitroLevel(lua_State* L) {
+    int model = 0;
+    uint32_t id = 0;
+    if (!ReadVehicleId(L, "getVehicleNitroLevel", id, model)) return Fail(L);
+    (void)model;
+    if (ServerWorld::VehicleNitroUpgrade(id) == 0) return Fail(L);
+    lua_pushnumber(L, CopyFlags(id).nitroLevel);
+    return 1;
+}
+
 int SetVehicleNitroActivated(lua_State* L) {
     int model = 0;
     uint32_t id = 0;
@@ -2388,31 +2447,50 @@ int SetVehicleNitroActivated(lua_State* L) {
     if (!ReadVehicleId(L, "setVehicleNitroActivated", id, model)) return Fail(L);
     if (!ReadBoolArg(L, "setVehicleNitroActivated", 2, value)) return Fail(L);
     (void)model;
+    auto flags = CopyFlags(id);
+    flags.nitroActivated = value;
+    UpdateFlags(id, flags);
+    if (const uint16_t upgrade = ServerWorld::VehicleNitroUpgrade(id); upgrade != 0) {
+        const int count = flags.nitroCount >= 0 ? flags.nitroCount : DefaultNitroCount(upgrade);
+        WorldNative::SetVehicleNitroState(id, count, flags.nitroLevel);
+    }
     lua_pushboolean(L, value ? 1 : 0);
     ActiveVmFireElementEvent(L, "onClientVehicleNitroStateChange", id, 1);
     lua_pushboolean(L, 1);
     return 1;
 }
+
 int SetVehicleNitroCount(lua_State* L) {
-    int model = 0;
     uint32_t id = 0;
     unsigned char count = 0;
     if (!ReadElement(L, "setVehicleNitroCount", id)) return Fail(L);
     if (!ReadByteArg(L, "setVehicleNitroCount", 2, count)) return Fail(L);
-    if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0 || count > 127) return Fail(L);
-    (void)model;
-    return Fail(L);
+    if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0 || count > 100) return Fail(L);
+    if (ServerWorld::VehicleNitroUpgrade(id) == 0) return Fail(L);
+    auto flags = CopyFlags(id);
+    flags.nitroCount = static_cast<int>(count);
+    UpdateFlags(id, flags);
+    WorldNative::SetVehicleNitroState(id, flags.nitroCount, flags.nitroLevel);
+    lua_pushboolean(L, 1);
+    return 1;
 }
+
 int SetVehicleNitroLevel(lua_State* L) {
-    int model = 0;
     uint32_t id = 0;
     double level = 0;
     if (!ReadElement(L, "setVehicleNitroLevel", id)) return Fail(L);
     if (!ReadFinite(L, "setVehicleNitroLevel", 2, level)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    (void)model;
-    (void)level;
-    return Fail(L);
+    if (level < -1.0 || level > 1.0) return Fail(L);
+    const uint16_t upgrade = ServerWorld::VehicleNitroUpgrade(id);
+    if (upgrade == 0) return Fail(L);
+    auto flags = CopyFlags(id);
+    flags.nitroLevel = static_cast<float>(level);
+    UpdateFlags(id, flags);
+    const int count = flags.nitroCount >= 0 ? flags.nitroCount : DefaultNitroCount(upgrade);
+    WorldNative::SetVehicleNitroState(id, count, flags.nitroLevel);
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 bool IsAdjustableModel(int model) {
@@ -2509,7 +2587,7 @@ int SetVehicleDoorOpenRatio(lua_State* L) {
         return Fail(L);
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0 || door > 5) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehicleDoorOpenRatio(id, door, static_cast<float>(ratio));
     auto flags = CopyFlags(id);
     flags.doorRatio[door] = static_cast<float>(ratio);
     UpdateFlags(id, flags);
@@ -2679,7 +2757,13 @@ int SetVehiclePhysicalProofs(lua_State* L) {
         if (lua_type(L, index) != LUA_TBOOLEAN)
             return luaL_error(L, "%s", ParserError(L, "setVehiclePhysicalProofs", "boolean", index).c_str());
     }
-    NoteNativeVehicleGap();
+    const uint32_t id = ElementIdOf(L, 1);
+    const bool bullet = lua_toboolean(L, 2) != 0;
+    const bool fire = lua_toboolean(L, 3) != 0;
+    const bool explosion = lua_toboolean(L, 4) != 0;
+    const bool collision = lua_toboolean(L, 5) != 0;
+    const bool melee = lua_toboolean(L, 6) != 0;
+    WorldNative::SetVehiclePhysicalProofs(id, bullet, fire, explosion, collision, melee);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2837,7 +2921,16 @@ int AddVehicleUpgrade(lua_State* L) {
     if (!ReadUnsignedShortArg(L, "addVehicleUpgrade", 2, upgrade)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     if (Entity::VehicleModels::IsNitroUpgrade(upgrade)) {
-        lua_pushboolean(L, ServerWorld::SetVehicleNitroUpgrade(id, upgrade, true));
+        const bool ok = ServerWorld::SetVehicleNitroUpgrade(id, upgrade, true);
+        if (ok) {
+            auto flags = CopyFlags(id);
+            flags.nitroCount = DefaultNitroCount(upgrade);
+            flags.nitroLevel = 1.f;
+            UpdateFlags(id, flags);
+            WorldNative::SetVehicleUpgrade(id, upgrade, true);
+            WorldNative::SetVehicleNitroState(id, flags.nitroCount, flags.nitroLevel);
+        }
+        lua_pushboolean(L, ok);
         return 1;
     }
     const int model = ServerWorld::ModelOf(id);
@@ -2847,7 +2940,7 @@ int AddVehicleUpgrade(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    NoteNativeVehicleGap();
+    WorldNative::SetVehicleUpgrade(id, 1086, true);
     auto flags = CopyFlags(id);
     flags.upgrades[10] = 1086;
     UpdateFlags(id, flags);
@@ -2862,7 +2955,17 @@ int RemoveVehicleUpgrade(lua_State* L) {
     if (!ReadUnsignedShortArg(L, "removeVehicleUpgrade", 2, upgrade)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     if (Entity::VehicleModels::IsNitroUpgrade(upgrade)) {
-        lua_pushboolean(L, ServerWorld::SetVehicleNitroUpgrade(id, upgrade, false));
+        const bool ok = ServerWorld::SetVehicleNitroUpgrade(id, upgrade, false);
+        if (ok) {
+            auto flags = CopyFlags(id);
+            flags.nitroCount = -1;
+            flags.nitroLevel = 1.f;
+            flags.nitroActivated = false;
+            UpdateFlags(id, flags);
+            WorldNative::SetVehicleUpgrade(id, upgrade, false);
+            WorldNative::SetVehicleNitroState(id, 0, 0.f);
+        }
+        lua_pushboolean(L, ok);
         return 1;
     }
     unsigned char slot = 0;
@@ -2871,6 +2974,7 @@ int RemoveVehicleUpgrade(lua_State* L) {
     if (flags.upgrades[slot] != upgrade) return Fail(L);
     flags.upgrades[slot] = 0;
     UpdateFlags(id, flags);
+    WorldNative::SetVehicleUpgrade(id, upgrade, false);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -3064,7 +3168,7 @@ int SetVehicleDirtLevel(lua_State* L) {
         return Fail(L);
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
+    WorldNative::SetVehicleDirtLevel(id, static_cast<float>(number));
     auto flags = CopyFlags(id);
     flags.dirt = static_cast<float>(number);
     UpdateFlags(id, flags);
@@ -3258,6 +3362,13 @@ void Register(lua_State* L) {
 void BindVehicleLua(lua_State* L) { Register(L); }
 
 bool VehicleBodyFrozen(uint32_t id) { return VehicleFrozenOf(id); }
+
+void NoteVehicleFrozenField(uint32_t id, bool frozen) {
+    if (!id) return;
+    auto flags = CopyFlags(id);
+    flags.frozen = frozen;
+    UpdateFlags(id, flags);
+}
 
 void VehicleApplyDamageSync(uint32_t id, const bool doorChanged[6], const uint8_t doors[6],
                             const bool wheelChanged[4], const uint8_t wheels[4],

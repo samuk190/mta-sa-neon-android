@@ -282,6 +282,50 @@ FxPunchImpactFn g_fxPunchImpact = nullptr;
 FxDebrisFn g_fxDebris = nullptr;
 FxDebrisFn g_fxGlass = nullptr;
 
+// Verified libGTASA.so 2.10 arm64 Batch E native symbols & offsets.
+using CameraSetZoomFn = void (*)(void* cam, int16_t mode);
+using CameraTakeControlFn = void (*)(void* cam, void* target, int16_t mode, int16_t switchStyle, int32_t whoIsInControl);
+using AutoSetTaxiLightFn = void (*)(void* veh, bool on);
+using VehicleSetRemapFn = void (*)(void* veh, int32_t remap);
+using VehicleUpgradeFn = void (*)(void* veh, int32_t upgrade);
+using RequestUpgradeFn = void (*)(int32_t model, int32_t flags);
+using HasUpgradeLoadedFn = bool (*)(int32_t model);
+using TrainSetSpeedFn = void (*)(void* train, float speed);
+using VehicleOpenDoorFn = void (*)(void* veh, void* ped, int32_t compId, int32_t doorId, float ratio, bool playNoise);
+using VehicleBlowUpCarFn = void (*)(void* veh, void* damager, uint8_t hideExplosion);
+using VehicleBurstTyreFn = void (*)(void* veh, uint8_t wheelId, bool bUsedByCop);
+
+uint8_t* g_cheatsActive = nullptr;
+CameraSetZoomFn g_camSetZoomVeh = nullptr;
+CameraSetZoomFn g_camSetZoomPed = nullptr;
+CameraTakeControlFn g_camTakeControl = nullptr;
+AutoSetTaxiLightFn g_autoSetTaxiLight = nullptr;
+VehicleSetRemapFn g_vehSetRemap = nullptr;
+VehicleUpgradeFn g_vehAddUpgrade = nullptr;
+VehicleUpgradeFn g_vehRemoveUpgrade = nullptr;
+RequestUpgradeFn g_reqVehUpgrade = nullptr;
+HasUpgradeLoadedFn g_hasVehUpgradeLoaded = nullptr;
+TrainSetSpeedFn g_trainSetSpeed = nullptr;
+bool g_vehicleVtableOpenDoorVerified = false;
+bool g_vehicleVtableBlowUpVerified = false;
+bool g_vehicleVtableBurstTyreVerified = false;
+
+constexpr size_t kCheatsActiveSize = 0x6F;
+constexpr size_t kVehEngineFlagsOff = 0x568;       // bit 4 (0x10) = bEngineOn, bit 6 (0x40) = bLightsOn, bit 31 (0x80000000) = bTyresDontBurst
+constexpr size_t kVehSirenFlagByteOff = 0x56D;     // bit 7 (0x80) = bSirenOrAlarm (CVehicle::ProcessSirenAndHorn)
+constexpr size_t kVehColorOff = 0x574;             // 4 colour palette bytes (CVehicle::SetupRender)
+constexpr size_t kVehNitroBoostsOff = 0x5EE;       // int8_t m_nNitroBoosts (CAutomobile::NitrousControl)
+constexpr size_t kVehOverrideLightsOff = 0x61A;    // bits 3..4 (0x18): 0=auto, 1=off, 2=on (CVehicle::DoVehicleLights)
+constexpr size_t kVehDirtLevelOff = 0x624;         // float m_fDirtLevel (0..15, CVehicle::MakeDirty)
+constexpr size_t kVehDoorLockOff = 0x684;          // int32_t m_eDoorLock (CVehicle::CanPedOpenLocks)
+constexpr size_t kVehClassOff = 0x734;             // uint32_t m_dwVehicleClass (0=auto, 6=train)
+constexpr size_t kAutoHasNitroFlagsOff = 0x4B8;    // bit 19 (0x80000) = bHasNitro (CAutomobile::NitrousControl)
+constexpr size_t kAutoNitroValueOff = 0xAC0;       // float m_fNitroValue (CAutomobile::NitrousControl)
+constexpr size_t kPhysicalProofsByteOff = 0x66;    // bits: 0x04 bullet, 0x08 fire, 0x10 collision, 0x20 melee, 0x80 explosion
+constexpr size_t kVehicleVtableOpenDoorSlot = 28;  // +0xE0: CVehicle::OpenDoor
+constexpr size_t kVehicleVtableBlowUpSlot = 42;    // +0x150: CVehicle::BlowUpCar
+constexpr size_t kVehicleVtableBurstTyreSlot = 45; // +0x168: CVehicle::BurstTyre
+
 struct RemovedNativeEntity {
     void* entity = nullptr;
     uint16_t model = 0;
@@ -1615,6 +1659,332 @@ bool NativeFixVehicle(uint32_t id) {
     return true;
 }
 
+bool NativeSetWorldSpecialProperty(const char* name, bool enabled) {
+    if (!name || !g_cheatsActive) return false;
+    // Verified indices from CCheat::CheatLabelE (0x85ec00) in libGTASA.so 2.10 arm64:
+    //   [41] BACKTOTHEFUTURE (hovercars), [56] FLYINGCARS (aircars),
+    //   [57] CJPHONEHOME (extrabunny), [68] HIGHJUMP (extrajump).
+    int idx = -1;
+    if (std::strcmp(name, "hovercars") == 0) idx = 41;
+    else if (std::strcmp(name, "aircars") == 0) idx = 56;
+    else if (std::strcmp(name, "extrabunny") == 0) idx = 57;
+    else if (std::strcmp(name, "extrajump") == 0) idx = 68;
+    else return false;
+    if (idx < 0 || static_cast<size_t>(idx) >= kCheatsActiveSize) return false;
+    GameTasks::Defer([idx, enabled]() {
+        if (g_cheatsActive) g_cheatsActive[idx] = enabled ? 1u : 0u;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetCameraViewMode(int vehicleMode, int pedMode) {
+    if (!g_theCamera || (!g_camSetZoomVeh && !g_camSetZoomPed)) return false;
+    GameTasks::Defer([vehicleMode, pedMode]() {
+        if (!g_theCamera) return true;
+        if (g_camSetZoomVeh && vehicleMode >= 0 && vehicleMode <= 5) {
+            g_camSetZoomVeh(g_theCamera, static_cast<int16_t>(std::clamp(vehicleMode, 0, 2)));
+        }
+        if (g_camSetZoomPed && pedMode >= 0 && pedMode <= 3) {
+            g_camSetZoomPed(g_theCamera, static_cast<int16_t>(std::clamp(pedMode, 0, 2)));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetCameraTargetEntity(uint32_t id) {
+    if (!g_theCamera || !g_camTakeControl) return false;
+    GameTasks::Defer([id]() {
+        if (!g_theCamera || !g_camTakeControl) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        // Desktop CCameraSA::TakeControl: mode=4 (MODE_FOLLOWPED), switchStyle=1 (JUMP_CUT), who=1.
+        g_camTakeControl(g_theCamera, entity, 4, 1, 1);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleEngineState(uint32_t id, bool on) {
+    GameTasks::Defer([id, on]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t flags = 0;
+        std::memcpy(&flags, bytes + kVehEngineFlagsOff, sizeof(flags));
+        if (on) flags |= 0x10u;
+        else flags &= ~0x10u;
+        std::memcpy(bytes + kVehEngineFlagsOff, &flags, sizeof(flags));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleOverrideLights(uint32_t id, uint8_t mode) {
+    GameTasks::Defer([id, mode]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        const uint8_t clamped = mode <= 2u ? mode : 0u;
+        bytes[kVehOverrideLightsOff] = static_cast<uint8_t>((bytes[kVehOverrideLightsOff] & ~0x18u) | (clamped << 3));
+        if (clamped == 1u || clamped == 2u) {
+            uint32_t flags = 0;
+            std::memcpy(&flags, bytes + kVehEngineFlagsOff, sizeof(flags));
+            if (clamped == 2u) flags |= 0x40u;
+            else flags &= ~0x40u;
+            std::memcpy(bytes + kVehEngineFlagsOff, &flags, sizeof(flags));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleDoorLockMode(uint32_t id, int mode) {
+    GameTasks::Defer([id, mode]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        const int32_t v = static_cast<int32_t>(mode);
+        std::memcpy(bytes + kVehDoorLockOff, &v, sizeof(v));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleSirensOn(uint32_t id, bool on) {
+    GameTasks::Defer([id, on]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        if (on) bytes[kVehSirenFlagByteOff] |= 0x80u;
+        else bytes[kVehSirenFlagByteOff] &= ~0x80u;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleTaxiLightOn(uint32_t id, bool on) {
+    if (!g_autoSetTaxiLight) return false;
+    GameTasks::Defer([id, on]() {
+        if (!g_autoSetTaxiLight) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 0u) return true;  // CAutomobile only
+        g_autoSetTaxiLight(entity, on);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehiclePaintjob(uint32_t id, int paintjob) {
+    if (!g_vehSetRemap) return false;
+    GameTasks::Defer([id, paintjob]() {
+        if (!g_vehSetRemap) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        // MTA paintjob 3 means default/no remap (-1 in GTA CVehicle::SetRemap).
+        g_vehSetRemap(entity, paintjob == 3 ? -1 : paintjob);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleColor(uint32_t id, uint8_t c1, uint8_t c2, uint8_t c3, uint8_t c4) {
+    GameTasks::Defer([id, c1, c2, c3, c4]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        bytes[kVehColorOff + 0] = c1;
+        bytes[kVehColorOff + 1] = c2;
+        bytes[kVehColorOff + 2] = c3;
+        bytes[kVehColorOff + 3] = c4;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehiclePhysicalProofs(uint32_t id, bool bullet, bool fire, bool explosion,
+                                    bool collision, bool melee) {
+    GameTasks::Defer([id, bullet, fire, explosion, collision, melee]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint8_t proofs = bytes[kPhysicalProofsByteOff];
+        proofs = static_cast<uint8_t>((proofs & ~0xBCu) |
+                                      (bullet ? 0x04u : 0u) |
+                                      (fire ? 0x08u : 0u) |
+                                      (collision ? 0x10u : 0u) |
+                                      (melee ? 0x20u : 0u) |
+                                      (explosion ? 0x80u : 0u));
+        bytes[kPhysicalProofsByteOff] = proofs;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleTyresCanBurst(uint32_t id, bool canBurst) {
+    GameTasks::Defer([id, canBurst]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t flags = 0;
+        std::memcpy(&flags, bytes + kVehEngineFlagsOff, sizeof(flags));
+        // Bit 31 (0x80000000) is bTyresDontBurst.
+        if (canBurst) flags &= ~0x80000000u;
+        else flags |= 0x80000000u;
+        std::memcpy(bytes + kVehEngineFlagsOff, &flags, sizeof(flags));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleDirtLevel(uint32_t id, float level) {
+    const float clamped = std::clamp(level, 0.f, 15.f);
+    GameTasks::Defer([id, clamped]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        std::memcpy(bytes + kVehDirtLevelOff, &clamped, sizeof(clamped));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleDoorOpenRatio(uint32_t id, uint8_t door, float ratio) {
+    if (!g_vehicleVtableOpenDoorVerified || door > 5u) return false;
+    const float clamped = std::clamp(ratio, 0.f, 1.f);
+    GameTasks::Defer([id, door, clamped]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        auto** vtable = *reinterpret_cast<void***>(entity);
+        if (vtable && vtable[kVehicleVtableOpenDoorSlot]) {
+            // GTA eCarNodes door component IDs match MTA door 0..5 -> nodes 16,17,10,8,11,9 (CAR_BONNET..CAR_DOOR_RR).
+            static constexpr int32_t kDoorNodeIds[6] = {16, 17, 10, 8, 11, 9};
+            auto fn = reinterpret_cast<VehicleOpenDoorFn>(vtable[kVehicleVtableOpenDoorSlot]);
+            fn(entity, nullptr, kDoorNodeIds[door], static_cast<int32_t>(door), clamped, false);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeBlowVehicle(uint32_t id, bool withExplosion) {
+    if (!g_vehicleVtableBlowUpVerified) return false;
+    GameTasks::Defer([id, withExplosion]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        auto** vtable = *reinterpret_cast<void***>(entity);
+        if (vtable && vtable[kVehicleVtableBlowUpSlot]) {
+            auto fn = reinterpret_cast<VehicleBlowUpCarFn>(vtable[kVehicleVtableBlowUpSlot]);
+            fn(entity, nullptr, withExplosion ? 0u : 1u);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeBurstVehicleTyre(uint32_t id, uint8_t wheelId) {
+    if (!g_vehicleVtableBurstTyreVerified || wheelId > 3u) return false;
+    GameTasks::Defer([id, wheelId]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        auto** vtable = *reinterpret_cast<void***>(entity);
+        if (vtable && vtable[kVehicleVtableBurstTyreSlot]) {
+            auto fn = reinterpret_cast<VehicleBurstTyreFn>(vtable[kVehicleVtableBurstTyreSlot]);
+            fn(entity, wheelId, false);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleUpgrade(uint32_t id, uint16_t upgrade, bool add) {
+    if (add && (!g_vehAddUpgrade || !g_reqVehUpgrade || !g_hasVehUpgradeLoaded)) return false;
+    if (!add && !g_vehRemoveUpgrade) return false;
+    GameTasks::Defer([id, upgrade, add, retries = 0]() mutable -> bool {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        if (!add) {
+            g_vehRemoveUpgrade(entity, static_cast<int32_t>(upgrade));
+            return true;
+        }
+        if (!g_hasVehUpgradeLoaded(static_cast<int32_t>(upgrade))) {
+            if (retries == 0) g_reqVehUpgrade(static_cast<int32_t>(upgrade), 0);
+            return ++retries >= 120;  // wait up to ~2s for upgrade model streaming
+        }
+        g_vehAddUpgrade(entity, static_cast<int32_t>(upgrade));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleNitroState(uint32_t id, int count, float level) {
+    GameTasks::Defer([id, count, level]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 0u) return true;  // CAutomobile only
+        if (count >= 0) {
+            const int8_t c = static_cast<int8_t>(std::clamp(count, 0, 100));
+            bytes[kVehNitroBoostsOff] = static_cast<uint8_t>(c);
+            uint32_t autoFlags = 0;
+            std::memcpy(&autoFlags, bytes + kAutoHasNitroFlagsOff, sizeof(autoFlags));
+            if (c > 0) autoFlags |= 0x80000u;
+            else autoFlags &= ~0x80000u;
+            std::memcpy(bytes + kAutoHasNitroFlagsOff, &autoFlags, sizeof(autoFlags));
+        }
+        if (std::isfinite(level)) {
+            const float l = std::clamp(level, -1.f, 1.f);
+            std::memcpy(bytes + kAutoNitroValueOff, &l, sizeof(l));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetTrainSpeed(uint32_t id, float speed) {
+    if (!g_trainSetSpeed) return false;
+    GameTasks::Defer([id, speed]() {
+        if (!g_trainSetSpeed) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 6u) return true;  // CTrain only
+        g_trainSetSpeed(entity, speed);
+        return true;
+    });
+    return true;
+}
+
 }  // namespace
 
 void InstallWorldNativeHooks(void* gtasaHandle) {
@@ -1768,14 +2138,33 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     }
     g_entityGetComDist = ResolveAny<EntityGetComDistFn>(g_lib, {"_ZN7CEntity40GetDistanceFromCentreOfMassToBaseOfModelEv"});
     g_entityGetIsOnScreen = ResolveAny<EntityGetIsOnScreenFn>(g_lib, {"_ZN7CEntity13GetIsOnScreenEv"});
-    // Verify CVehicle vtable slots 51 (Fix) and 56 (GetNumContactWheels) against live _ZTV8CVehicle.
+    // Verify CVehicle vtable slots against live _ZTV8CVehicle:
+    //   28 (OpenDoor), 42 (BlowUpCar), 45 (BurstTyre), 51 (Fix), 56 (GetNumContactWheels).
     if (auto** vehZtv = reinterpret_cast<void**>(dlsym(g_lib, "_ZTV8CVehicle"))) {
         void** vptr = vehZtv + 2;  // Itanium ABI vtable address point is +0x10 past _ZTV
+        void* symOpenDoor = dlsym(g_lib, "_ZN8CVehicle8OpenDoorEP4CPedi6eDoorsfb");
+        void* symBlowUp = dlsym(g_lib, "_ZN8CVehicle9BlowUpCarEP7CEntityh");
+        void* symBurstTyre = dlsym(g_lib, "_ZN8CVehicle9BurstTyreEhb");
         void* symFix = dlsym(g_lib, "_ZN8CVehicle3FixEv");
         void* symWheels = dlsym(g_lib, "_ZN8CVehicle19GetNumContactWheelsEv");
+        g_vehicleVtableOpenDoorVerified = (symOpenDoor && vptr[kVehicleVtableOpenDoorSlot] == symOpenDoor);
+        g_vehicleVtableBlowUpVerified = (symBlowUp && vptr[kVehicleVtableBlowUpSlot] == symBlowUp);
+        g_vehicleVtableBurstTyreVerified = (symBurstTyre && vptr[kVehicleVtableBurstTyreSlot] == symBurstTyre);
         g_vehicleVtableFixVerified = (symFix && vptr[kVehicleVtableFixSlot] == symFix);
         g_vehicleVtableWheelsVerified = (symWheels && vptr[kVehicleVtableContactWheelsSlot] == symWheels);
     }
+
+    g_cheatsActive = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN6CCheat15m_aCheatsActiveE"));
+    g_camSetZoomVeh = ResolveAny<CameraSetZoomFn>(g_lib, {"_ZN7CCamera27SetZoomValueCamStringScriptEs"});
+    g_camSetZoomPed = ResolveAny<CameraSetZoomFn>(g_lib, {"_ZN7CCamera27SetZoomValueFollowPedScriptEs"});
+    g_camTakeControl = ResolveAny<CameraTakeControlFn>(g_lib, {"_ZN7CCamera11TakeControlEP7CEntityssi"});
+    g_autoSetTaxiLight = ResolveAny<AutoSetTaxiLightFn>(g_lib, {"_ZN11CAutomobile12SetTaxiLightEb"});
+    g_vehSetRemap = ResolveAny<VehicleSetRemapFn>(g_lib, {"_ZN8CVehicle8SetRemapEi"});
+    g_vehAddUpgrade = ResolveAny<VehicleUpgradeFn>(g_lib, {"_ZN8CVehicle17AddVehicleUpgradeEi"});
+    g_vehRemoveUpgrade = ResolveAny<VehicleUpgradeFn>(g_lib, {"_ZN8CVehicle20RemoveVehicleUpgradeEi"});
+    g_reqVehUpgrade = ResolveAny<RequestUpgradeFn>(g_lib, {"_ZN10CStreaming21RequestVehicleUpgradeEii"});
+    g_hasVehUpgradeLoaded = ResolveAny<HasUpgradeLoadedFn>(g_lib, {"_ZN10CStreaming23HasVehicleUpgradeLoadedEi"});
+    g_trainSetSpeed = ResolveAny<TrainSetSpeedFn>(g_lib, {"_ZN6CTrain13SetTrainSpeedEPS_f"});
 
     WorldNative::Hooks hooks;
     hooks.getPoolCapacity = &NativeGetPoolCapacity;
@@ -1845,6 +2234,25 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     hooks.isEntityOnScreen = &NativeIsEntityOnScreen;
     hooks.getVehicleContactWheels = &NativeGetVehicleContactWheels;
     hooks.fixVehicle = &NativeFixVehicle;
+    hooks.setWorldSpecialProperty = &NativeSetWorldSpecialProperty;
+    hooks.setCameraViewMode = &NativeSetCameraViewMode;
+    hooks.setCameraTargetEntity = &NativeSetCameraTargetEntity;
+    hooks.setVehicleEngineState = &NativeSetVehicleEngineState;
+    hooks.setVehicleOverrideLights = &NativeSetVehicleOverrideLights;
+    hooks.setVehicleDoorLockMode = &NativeSetVehicleDoorLockMode;
+    hooks.setVehicleSirensOn = &NativeSetVehicleSirensOn;
+    hooks.setVehicleTaxiLightOn = &NativeSetVehicleTaxiLightOn;
+    hooks.setVehiclePaintjob = &NativeSetVehiclePaintjob;
+    hooks.setVehicleColor = &NativeSetVehicleColor;
+    hooks.setVehiclePhysicalProofs = &NativeSetVehiclePhysicalProofs;
+    hooks.setVehicleTyresCanBurst = &NativeSetVehicleTyresCanBurst;
+    hooks.setVehicleDirtLevel = &NativeSetVehicleDirtLevel;
+    hooks.setVehicleDoorOpenRatio = &NativeSetVehicleDoorOpenRatio;
+    hooks.blowVehicle = &NativeBlowVehicle;
+    hooks.burstVehicleTyre = &NativeBurstVehicleTyre;
+    hooks.setVehicleUpgrade = &NativeSetVehicleUpgrade;
+    hooks.setVehicleNitroState = &NativeSetVehicleNitroState;
+    hooks.setTrainSpeed = &NativeSetTrainSpeed;
     hooks.fxAddBlood = &NativeFxAddBlood;
     hooks.fxAddBulletImpact = &NativeFxAddBulletImpact;
     hooks.fxAddSparks = &NativeFxAddSparks;

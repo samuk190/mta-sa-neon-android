@@ -1229,6 +1229,20 @@ int ObjectModelOf(uint32_t id) {
     return -1;
 }
 
+bool ObjectFrozenOf(uint32_t id) {
+    if (const Object* object = Find(id)) return object->frozen;
+    return false;
+}
+
+bool SetObjectModel(uint32_t id, uint16_t model) {
+    Object* object = Live(id);
+    if (!object) return false;
+    object->model = model;
+    if (!object->clientCreated) object->localOverride = true;
+    ServerWorld::NoteElementModel(id, static_cast<int>(model));
+    return true;
+}
+
 int EasingTypeFromName(const char* name) { return EasingFromName(name); }
 bool IsKnownEasingName(const char* name) { return EasingFromName(name) >= 0; }
 

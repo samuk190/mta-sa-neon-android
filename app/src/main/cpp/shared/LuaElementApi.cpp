@@ -29,6 +29,8 @@
 #include "LuaLightApi.h"
 #include "LuaWaterApi.h"
 #include "LuaWorldObjectApi.h"
+#include "WorldNativeBridge.h"
+#include "LuaWorldObjectApi.h"
 #include "LuaFireApi.h"
 #include "LuaBirdApi.h"
 #include "LuaRopeApi.h"
@@ -1093,50 +1095,78 @@ int CurrentModel(uint32_t id) {
     float heading = 0.f;
     bool frozen = false;
     if (Game::CopyScriptPedFacts(id, model, heading, frozen)) return model;
+    if (IsWorldObject(id)) {
+        const int objModel = ObjectModelOf(id);
+        if (objModel >= 0) return objModel;
+    }
     return ServerWorld::ModelOf(id);
 }
 
+static bool ElementPositionForWater(uint32_t id, float& x, float& y, float& z) {
+    if (CopyObjectPose(id, x, y, z)) return true;
+    ServerWorld::ActorSpawn visual;
+    if (ServerWorld::CopyVisual(id, visual)) {
+        x = visual.x;
+        y = visual.y;
+        z = visual.z;
+        return true;
+    }
+    Game::LocalCarState car;
+    if (Game::CopyLocalCar(car) && car.vehicleId == id) {
+        x = car.x;
+        y = car.y;
+        z = car.z;
+        return true;
+    }
+    if (id == ServerWorld::LocalPlayer()) {
+        float heading = 0.f, vx = 0.f, vy = 0.f, vz = 0.f, health = 100.f;
+        Game::CopyBody(x, y, z, heading, vx, vy, vz, health);
+        return true;
+    }
+    return false;
+}
+
+static bool ProbeElementInWater(uint32_t id) {
+    float x = 0.f, y = 0.f, z = 0.f, waterZ = 0.f;
+    if (!ElementPositionForWater(id, x, y, z)) return false;
+    if (!WorldNative::GetWaterLevel(x, y, z, false, waterZ)) return false;
+    return z < waterZ;
+}
+
 // CLuaElementDefs.cpp:1450-1470 and CStaticFunctionDefinitions.cpp:806-834.
-// A ped in a vehicle uses the vehicle's IsInWater. That bit is not stored.
 int IsElementInWater(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     const char* kind = ServerWorld::ElementKindName(id);
     const bool ped = kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0);
     const bool vehicle = kind && std::strcmp(kind, "vehicle") == 0;
-    if (!ped && !vehicle) {
+    const bool object = IsWorldObject(id) || (kind && std::strcmp(kind, "object") == 0);
+    if (!ped && !vehicle && !object) {
         lua_pushboolean(L, 0);
         return 1;
     }
     if (ped) {
         uint32_t occupied = 0;
         uint8_t seat = 0;
-        if (WorldRPG::RemoteVehicle::FindOccupant(id, occupied, seat) ||
-            (id == ServerWorld::LocalPlayer() && Game::LocalVehicleId() != 0 &&
-             Game::LocalVehicleId() != 0xFFFFFFFFu)) {
-            static bool once = false;
-            if (!once) {
-                once = true;
-                LUA_LOGI("DIAG isElementInWater: CClientVehicle::IsInWater is not stored");
-            }
-            lua_pushboolean(L, 0);
+        if (WorldRPG::RemoteVehicle::FindOccupant(id, occupied, seat)) {
+            lua_pushboolean(L, ProbeElementInWater(occupied) ? 1 : 0);
             return 1;
+        }
+        if (id == ServerWorld::LocalPlayer()) {
+            const uint32_t localVeh = Game::LocalVehicleId();
+            if (localVeh != 0 && localVeh != 0xFFFFFFFFu) {
+                lua_pushboolean(L, ProbeElementInWater(localVeh) ? 1 : 0);
+                return 1;
+            }
         }
         PedQueries::Presentation flags = PedQueries::ReadPresentation(id);
         lua_pushboolean(L, flags.inWater ? 1 : 0);
         return 1;
     }
-    static bool once = false;
-    if (!once) {
-        once = true;
-        LUA_LOGI("DIAG isElementInWater: CClientVehicle::IsInWater is not stored");
-    }
-    lua_pushboolean(L, 0);
+    lua_pushboolean(L, ProbeElementInWater(id) ? 1 : 0);
     return 1;
 }
 
 // CLuaElementDefs.cpp:2419-2430 and CStaticFunctionDefinitions.cpp:1530-1712.
-// Stock ped and vehicle ids are stored. Object models need CModelInfo. The native
-// body is not rebuilt and onClientElementModelChange is not fired. Children are not walked.
 int SetElementModel(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     if (!lua_isnumber(L, 2)) {
@@ -1154,12 +1184,8 @@ int SetElementModel(lua_State* L) {
     const bool scriptPed = Game::ScriptPedAlive(id);
     const bool ped = scriptPed || (kind && (std::strcmp(kind, "ped") == 0 || std::strcmp(kind, "player") == 0));
     const bool vehicle = kind && std::strcmp(kind, "vehicle") == 0;
-    if (!ped && !vehicle) {
-        static bool once = false;
-        if (!once) {
-            once = true;
-            LUA_LOGI("DIAG setElementModel: CModelInfo is not available for objects");
-        }
+    const bool object = IsWorldObject(id);
+    if (!ped && !vehicle && !object) {
         lua_pushboolean(L, 0);
         return 1;
     }
@@ -1178,6 +1204,7 @@ int SetElementModel(lua_State* L) {
     }
     bool stored = false;
     if (scriptPed) stored = Game::NoteScriptPedModel(id, static_cast<int>(model));
+    else if (object) stored = SetObjectModel(id, static_cast<uint16_t>(model));
     else if (kind && std::strcmp(kind, "player") == 0) {
         ServerWorld::NotePlayerSkin(id, static_cast<int>(model));
         stored = ServerWorld::ModelOf(id) == static_cast<int>(model);
@@ -1192,11 +1219,6 @@ int SetElementModel(lua_State* L) {
     lua_pushinteger(L, current);
     lua_pushinteger(L, static_cast<lua_Integer>(model));
     ActiveVmFireElementEvent(L, "onClientElementModelChange", id, 2);
-    static bool once = false;
-    if (!once) {
-        once = true;
-        LUA_LOGI("DIAG setElementModel: CPed/CVehicle::SetModel native rebuild is not run");
-    }
     lua_pushboolean(L, 1);
     return 1;
 }
