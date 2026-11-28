@@ -470,6 +470,18 @@ void Register(lua_State* L) {
 }  // namespace
 
 void LightRelease(uint32_t id) { g_lights.erase(id); }
+
+void PulseLights() {
+    if (g_lights.empty() || !WorldNative::CurrentHooks().addPointLight) return;
+    for (const auto& [id, light] : g_lights) {
+        if (light.search || !KnownClientElement(id)) continue;
+        WorldNative::AddPointLight(light.mode, light.x, light.y, light.z,
+                                   light.dx, light.dy, light.dz, light.radius,
+                                   light.r / 255.f, light.g / 255.f, light.b / 255.f,
+                                   false, false);
+    }
+}
+
 void InstallLightLua(lua_State* L) { Register(L); }
 
 }  // namespace WorldRPG::Script

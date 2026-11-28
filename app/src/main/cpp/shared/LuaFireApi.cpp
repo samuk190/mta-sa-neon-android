@@ -173,9 +173,11 @@ int CreateFire(lua_State* L) {
     created.source = TableElement(L, 4, "source");
     created.target = TableElement(L, 4, "target");
     g_fires[id] = created;
-    if (!g_diagManaged) {
-        g_diagManaged = true;
-        LUA_LOGE("DIAG createFire: CClientFireManager does not pulse; FxSystem is not created and remaining time stays stored");
+    if (!WorldNative::CreateFire(x, y, z, static_cast<float>(created.strength))) {
+        if (!g_diagManaged) {
+            g_diagManaged = true;
+            LUA_LOGE("DIAG createFire: CClientFireManager does not pulse; FxSystem is not created and remaining time stays stored");
+        }
     }
     PushElement(L, id);
     return 1;
@@ -186,14 +188,17 @@ int ExtinguishFire(lua_State* L) {
         Fire* fire = Find(ElementIdOf(L, 1));
         if (!fire) return Fail(L);
         const uint32_t id = fire->id;
+        WorldNative::ExtinguishFire(fire->x, fire->y, fire->z, std::max(1.f, static_cast<float>(fire->strength)));
         if (!DestroyClientElement(id)) return Fail(L);
         lua_pushboolean(L, 1);
         return 1;
     }
     if (lua_gettop(L) == 0) {
-        if (!g_diagExtinguish) {
-            g_diagExtinguish = true;
-            LUA_LOGE("DIAG extinguishFire: CFireManager::ExtinguishAllFires is not hooked");
+        if (!WorldNative::ExtinguishFire(0.f, 0.f, 0.f, 10000.f)) {
+            if (!g_diagExtinguish) {
+                g_diagExtinguish = true;
+                LUA_LOGE("DIAG extinguishFire: CFireManager::ExtinguishAllFires is not hooked");
+            }
         }
         lua_pushboolean(L, 1);
         return 1;

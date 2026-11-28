@@ -2,6 +2,7 @@
 
 #include "LuaApiExtra.h"
 #include "LuaAudioApi.h"
+#include "EngineModelLoader.h"
 #include "LuaElementTree.h"
 #include "LuaWeaponApi.h"
 #include "LuaWorldObjectApi.h"
@@ -603,10 +604,13 @@ bool ReadMoveAnimation(BitStreamReader& reader, Script::ServerObjectMove& move) 
     if (length && !reader.ReadBits(name.data(), static_cast<size_t>(length) * 8)) return false;
     double period = 0, amplitude = 0, overshoot = 0;
     if (!ReadDouble(reader, period) || !ReadDouble(reader, amplitude) || !ReadDouble(reader, overshoot)) return false;
-    // An unknown easing name becomes Linear (CPositionRotationAnimation.cpp:166-171). The curve types are not
-    // sampled on Android yet (the stored move stays linear), so only "Linear" is kept linear here.
     const std::string easing(name.begin(), name.end());
-    move.linear = easing.empty() || easing == "Linear" || !Script::IsKnownEasingName(easing.c_str());
+    const int easingIdx = Script::EasingTypeFromName(easing.c_str());
+    move.easing = easingIdx >= 0 ? easingIdx : 0;
+    move.linear = (move.easing == 0);
+    move.period = static_cast<float>(period);
+    move.amplitude = static_cast<float>(amplitude);
+    move.overshoot = static_cast<float>(overshoot);
     return true;
 }
 
@@ -1128,15 +1132,20 @@ Result HandleGlobalExtended(uint8_t func, BitStreamReader& reader) {
             if (!reader.Read(logicalId) || !reader.Read(parentId) || !reader.Read(rawType)) return Result::Malformed;
             std::string name;
             if (reader.GetRemainingBits() >= 16) ReadU16String(reader, name);
-            LUA_LOGI("DIAG ALLOCATE_SERVER_MODEL: logical=%u parent=%u type=%u name=%s",
-                     static_cast<unsigned>(logicalId), static_cast<unsigned>(parentId),
-                     static_cast<unsigned>(rawType), name.c_str());
+            Enqueue([logicalId, parentId, rawType, name] {
+                const int allocated = Script::NativeAllocateObjectModel(static_cast<int>(parentId));
+                if (allocated < 0) {
+                    LUA_LOGI("DIAG ALLOCATE_SERVER_MODEL: logical=%u parent=%u type=%u name=%s (allocation unavailable)",
+                             static_cast<unsigned>(logicalId), static_cast<unsigned>(parentId),
+                             static_cast<unsigned>(rawType), name.c_str());
+                }
+            });
             return Result::Handled;
         }
         case Rpc::FreeServerModel: {
             uint16_t logicalId = 0;
             if (!reader.Read(logicalId)) return Result::Malformed;
-            LUA_LOGI("DIAG FREE_SERVER_MODEL: logical=%u", static_cast<unsigned>(logicalId));
+            Enqueue([logicalId] { Script::NativeFreeModel(static_cast<int>(logicalId)); });
             return Result::Handled;
         }
         case Rpc::ToggleDevTools: {
@@ -1417,8 +1426,8 @@ Result HandleElementExtended(uint8_t func, uint32_t id, BitStreamReader& reader)
             uint8_t nodeIdx = 0, colType = 0;
             int32_t removalTime = 0;
             if (!reader.Read(nodeIdx) || !reader.Read(colType) || !reader.Read(removalTime)) return Result::Malformed;
-            LUA_LOGI("DIAG SPAWN_VEHICLE_FLYING_COMPONENT: veh=%u node=%u col=%u time=%d", id,
-                     static_cast<unsigned>(nodeIdx), static_cast<unsigned>(colType), removalTime);
+            (void)removalTime;
+            Game::RpcSpawnVehicleFlyingComponent(id, static_cast<int>(nodeIdx), static_cast<int>(colType));
             return Result::Handled;
         }
         case Rpc::SetVehicleNitroActivated: {

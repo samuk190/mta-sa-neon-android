@@ -10,6 +10,7 @@
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
+#include "WorldNativeBridge.h"
 #include "../gtasa/GameEngine.h"
 
 extern "C" {
@@ -352,7 +353,9 @@ int l_setCameraInterior(lua_State* L) {
         return 1;
     }
     g_cam.interior = static_cast<unsigned char>(value);
-    Diag(g_diagInterior, "DIAG setCameraInterior: CWorld::SetCurrentArea is not hooked");
+    if (!WorldNative::SetCurrentArea(g_cam.interior)) {
+        Diag(g_diagInterior, "DIAG setCameraInterior: CWorld::SetCurrentArea is not hooked");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -384,7 +387,9 @@ int l_fadeCamera(lua_State* L) {
     g_cam.fadeG = static_cast<unsigned char>(green < 0.f ? 0.f : (green > 255.f ? 255.f : green));
     g_cam.fadeB = static_cast<unsigned char>(blue < 0.f ? 0.f : (blue > 255.f ? 255.f : blue));
     g_cam.fadeStart = std::chrono::steady_clock::now();
-    Diag(g_diagFade, "DIAG fadeCamera: CCamera fade is not hooked; the timer still reports IsFading");
+    if (!WorldNative::FadeCamera(g_cam.fadeIn, g_cam.fadeSeconds, g_cam.fadeR, g_cam.fadeG, g_cam.fadeB)) {
+        Diag(g_diagFade, "DIAG fadeCamera: CCamera fade is not hooked; the timer still reports IsFading");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -448,7 +453,11 @@ int l_setCameraGoggleEffect(lua_State* L) {
         return 1;
     }
     g_cam.goggle = mode;
-    Diag(g_diagGoggle, "DIAG setCameraGoggleEffect: night vision and thermal vision are not hooked");
+    const int goggleCode = std::strcmp(mode, "nightvision") == 0 ? 1
+                         : (std::strcmp(mode, "thermalvision") == 0 ? 2 : 0);
+    if (!WorldNative::SetCameraGoggleEffect(goggleCode)) {
+        Diag(g_diagGoggle, "DIAG setCameraGoggleEffect: night vision and thermal vision are not hooked");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -461,7 +470,9 @@ int l_setCameraDrunkLevel(lua_State* L) {
         return 1;
     }
     g_cam.drunk = static_cast<unsigned char>(value);
-    Diag(g_diagDrunk, "DIAG setCameraDrunkLevel: CPlayerInfo::SetCamDrunkLevel is not hooked");
+    if (!WorldNative::SetCameraDrunkLevel(g_cam.drunk)) {
+        Diag(g_diagDrunk, "DIAG setCameraDrunkLevel: CPlayerInfo::SetCamDrunkLevel is not hooked");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -483,8 +494,9 @@ int l_shakeCamera(lua_State* L) {
         Game::CopyPose(at.x, at.y, at.z, heading);
     }
     g_cam.shake = radius;
-    (void)at;
-    Diag(g_diagShake, "DIAG shakeCamera: CCamera::ShakeCamera is not hooked");
+    if (!WorldNative::ShakeCamera(radius, at.x, at.y, at.z)) {
+        Diag(g_diagShake, "DIAG shakeCamera: CCamera::ShakeCamera is not hooked");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -492,6 +504,7 @@ int l_shakeCamera(lua_State* L) {
 int l_resetShakeCamera(lua_State* L) {
     (void)L;
     g_cam.shake = 0.f;
+    WorldNative::ShakeCamera(0.f, g_cam.position.x, g_cam.position.y, g_cam.position.z);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -981,7 +994,9 @@ bool RpcSetCameraTarget(uint32_t id) {
 
 void RpcSetCameraInterior(uint8_t interior) {
     g_cam.interior = interior;
-    Diag(g_diagInterior, "DIAG SET_CAMERA_INTERIOR: CWorld::SetCurrentArea is not hooked");
+    if (!WorldNative::SetCurrentArea(interior)) {
+        Diag(g_diagInterior, "DIAG SET_CAMERA_INTERIOR: CWorld::SetCurrentArea is not hooked");
+    }
 }
 
 void RpcFadeCamera(bool fadeIn, float seconds, uint8_t red, uint8_t green, uint8_t blue) {
@@ -994,7 +1009,9 @@ void RpcFadeCamera(bool fadeIn, float seconds, uint8_t red, uint8_t green, uint8
         g_cam.fadeB = blue;
     }
     g_cam.fadeStart = std::chrono::steady_clock::now();
-    Diag(g_diagFade, "DIAG FADE_CAMERA: CCamera fade and the HUD_AREA_NAME toggle are not hooked; the timer still reports IsFading");
+    if (!WorldNative::FadeCamera(fadeIn, seconds, g_cam.fadeR, g_cam.fadeG, g_cam.fadeB)) {
+        Diag(g_diagFade, "DIAG FADE_CAMERA: CCamera fade and the HUD_AREA_NAME toggle are not hooked; the timer still reports IsFading");
+    }
 }
 
 }  // namespace WorldRPG::Script

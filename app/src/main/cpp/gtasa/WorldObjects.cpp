@@ -63,6 +63,7 @@ struct Api {
     void** objectPool = nullptr;        // CPools::ms_pObjectPool (CPool<CObject>*)
     unsigned char* camera = nullptr;    // TheCamera (a CPlaceable)
     void (*setAlpha)(void*, int) = nullptr;
+    void (*objectDamage)(void*, float, void*, void*, void*, int) = nullptr;
 };
 
 Api& Engine() {
@@ -85,6 +86,8 @@ Api& Engine() {
     api.objectPool = static_cast<void**>(sym("_ZN6CPools14ms_pObjectPoolE"));
     api.camera = static_cast<unsigned char*>(sym("TheCamera"));
     api.setAlpha = reinterpret_cast<void (*)(void*, int)>(sym("_ZN7CEntity16SetRwObjectAlphaEi"));
+    api.objectDamage = reinterpret_cast<void (*)(void*, float, void*, void*, void*, int)>(
+        sym("_ZN7CObject12ObjectDamageEfP7CVectorS1_P7CEntity11eWeaponType"));
     api.ok = api.create && api.add && api.remove && api.setMatrix && api.setRotate && api.createRwObject &&
              api.requestModel && api.streamingInfo && api.objectPool;
     if (!api.ok) WO_LOGI("DIAG WorldObjects: a libGTASA entry is missing; objects are not created");
@@ -396,6 +399,18 @@ void* EntityOf(uint32_t id) {
 uint32_t ElementOf(void* entity) {
     const auto found = g_byEntity.find(entity);
     return found == g_byEntity.end() ? 0xFFFFFFFFu : found->second;
+}
+
+bool BreakObject(uint32_t id) {
+    Api& api = Engine();
+    if (!api.objectDamage) return false;
+    auto found = g_live.find(id);
+    if (found == g_live.end() || !found->second.entity) return false;
+    struct Vec3 { float x, y, z; };
+    Vec3 fxPos{found->second.state.x, found->second.state.y, found->second.state.z};
+    Vec3 fxDir{0.f, 0.f, 1.f};
+    api.objectDamage(found->second.entity, 9999.f, &fxPos, &fxDir, nullptr, 0);
+    return true;
 }
 
 void Reset() {

@@ -161,6 +161,49 @@ bool SetCurrentArea(int area) {
     return g_hooks.setCurrentArea ? g_hooks.setCurrentArea(area) : false;
 }
 
+bool FadeCamera(bool fadeIn, float duration, uint8_t r, uint8_t g, uint8_t b) {
+    return g_hooks.fadeCamera ? g_hooks.fadeCamera(fadeIn, duration, r, g, b) : false;
+}
+
+bool ShakeCamera(float strength, float x, float y, float z) {
+    return g_hooks.shakeCamera ? g_hooks.shakeCamera(strength, x, y, z) : false;
+}
+
+bool SetNearClipDistance(float distance, bool reset) {
+    return g_hooks.setNearClipDistance ? g_hooks.setNearClipDistance(distance, reset) : false;
+}
+
+bool SetCameraGoggleEffect(int mode) {
+    return g_hooks.setCameraGoggleEffect ? g_hooks.setCameraGoggleEffect(mode) : false;
+}
+
+bool SetCameraDrunkLevel(int level) {
+    return g_hooks.setCameraDrunkLevel ? g_hooks.setCameraDrunkLevel(level) : false;
+}
+
+bool SetColorFilter(int r1, int g1, int b1, int a1, int r2, int g2, int b2, int a2, bool reset) {
+    return g_hooks.setColorFilter ? g_hooks.setColorFilter(r1, g1, b1, a1, r2, g2, b2, a2, reset) : false;
+}
+
+bool GetWaterLevel(float x, float y, float z, bool ignoreWaves, float& outHeight) {
+    return g_hooks.getWaterLevel ? g_hooks.getWaterLevel(x, y, z, ignoreWaves, outHeight) : false;
+}
+
+bool TestLineAgainstWater(float x1, float y1, float z1, float x2, float y2, float z2,
+                          float& ox, float& oy, float& oz) {
+    return g_hooks.testLineAgainstWater
+               ? g_hooks.testLineAgainstWater(x1, y1, z1, x2, y2, z2, ox, oy, oz)
+               : false;
+}
+
+bool SetWorldWaterLevel(float height, bool reset) {
+    return g_hooks.setWorldWaterLevel ? g_hooks.setWorldWaterLevel(height, reset) : false;
+}
+
+bool BreakObject(uint32_t id) {
+    return g_hooks.breakObject ? g_hooks.breakObject(id) : false;
+}
+
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     return g_hooks.fxAddBlood ? g_hooks.fxAddBlood(x, y, z, dx, dy, dz, count, brightness) : false;
 }

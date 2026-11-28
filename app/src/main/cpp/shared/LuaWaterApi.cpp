@@ -11,6 +11,7 @@
 #include "LuaApiExtra.h"
 #include "LuaVMStub.h"
 #include "ResourceLoader.h"
+#include "WorldNativeBridge.h"
 
 #include "lua.hpp"
 
@@ -291,8 +292,6 @@ int GetWaterLevel(lua_State* L) {
     if (!ReadVec(L, "getWaterLevel", 1, pos)) return Fail(L);
     bool ignore = false;
     if (!ReadBool(L, "getWaterLevel", 4, ignore, true, false)) return Fail(L);
-    (void)ignore;
-    NoteSea();
     if (Water* water = PolyAt(pos.x, pos.y)) {
         float z = 0.f;
         if (PolyHeight(*water, pos.x, pos.y, z)) {
@@ -300,6 +299,12 @@ int GetWaterLevel(lua_State* L) {
             return 1;
         }
     }
+    float nativeHeight = 0.f;
+    if (WorldNative::GetWaterLevel(pos.x, pos.y, pos.z, ignore, nativeHeight)) {
+        lua_pushnumber(L, nativeHeight);
+        return 1;
+    }
+    if (!WorldNative::CurrentHooks().getWaterLevel) NoteSea();
     return Fail(L);
 }
 
@@ -367,9 +372,11 @@ int SetWaterLevel(lua_State* L) {
     }
     g_worldLevel = level;
     if (outside) g_outsideLevel = level;
-    if (!g_diagLevel) {
-        g_diagLevel = true;
-        LUA_LOGE("DIAG setWaterLevel: CWaterManager world vertices are not written; the level is stored");
+    if (!WorldNative::SetWorldWaterLevel(level, false)) {
+        if (!g_diagLevel) {
+            g_diagLevel = true;
+            LUA_LOGE("DIAG setWaterLevel: CWaterManager world vertices are not written; the level is stored");
+        }
     }
     lua_pushboolean(L, 1);
     return 1;
@@ -379,6 +386,7 @@ int ResetWaterLevel(lua_State* L) {
     (void)L;
     g_worldLevel = 0.f;
     g_outsideLevel = 0.f;
+    WorldNative::SetWorldWaterLevel(0.f, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -405,6 +413,15 @@ int TestLineAgainstWater(lua_State* L) {
             lua_pushnumber(L, hit.z);
             return 4;
         }
+    }
+    // Native GTA water mesh check before falling back to the outside ocean plane.
+    float nx = 0.f, ny = 0.f, nz = 0.f;
+    if (WorldNative::TestLineAgainstWater(start.x, start.y, start.z, end.x, end.y, end.z, nx, ny, nz)) {
+        lua_pushboolean(L, 1);
+        lua_pushnumber(L, nx);
+        lua_pushnumber(L, ny);
+        lua_pushnumber(L, nz);
+        return 4;
     }
     // CWaterManagerSA::TestLineAgainstWater: the outside ocean is an infinite plane,
     // and only a hit outside the -3000..3000 game square counts.

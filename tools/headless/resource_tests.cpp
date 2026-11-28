@@ -7237,6 +7237,141 @@ int main(int argc, char** argv) {
                 assert(getControlState("fire") == false, "server RPC cleared fire control")
             )LUA");
 
+            // Verify Camera/PostFX/Fire/Water/Light/BreakObject native hooks, Euler orders, and CEasingCurve.
+            struct ExtraHookLog {
+                int fadeCalls = 0; bool lastFadeIn = false; float lastFadeDur = 0.f; uint8_t lastFadeR = 0;
+                int shakeCalls = 0; float lastShake = 0.f;
+                int nearClipCalls = 0; float lastNearClip = 0.f; bool lastNearReset = false;
+                int goggleCalls = 0; int lastGoggle = -1;
+                int drunkCalls = 0; int lastDrunk = -1;
+                int colorFilterCalls = 0; int lastCfR1 = 0; bool lastCfReset = false;
+                int waterGetCalls = 0;
+                int waterLineCalls = 0;
+                int waterWorldCalls = 0; float lastWaterWorld = 0.f; bool lastWaterWorldReset = false;
+                int fireCreateCalls = 0;
+                int fireExtinguishCalls = 0;
+                int lightCalls = 0;
+                int breakCalls = 0; uint32_t lastBreakId = 0;
+            };
+            static ExtraHookLog gExtra;
+            gExtra = ExtraHookLog{};
+
+            h.fadeCamera = [](bool in, float dur, uint8_t r, uint8_t, uint8_t) {
+                ++gExtra.fadeCalls; gExtra.lastFadeIn = in; gExtra.lastFadeDur = dur; gExtra.lastFadeR = r; return true;
+            };
+            h.shakeCamera = [](float s, float, float, float) { ++gExtra.shakeCalls; gExtra.lastShake = s; return true; };
+            h.setNearClipDistance = [](float d, bool r) {
+                ++gExtra.nearClipCalls; gExtra.lastNearClip = d; gExtra.lastNearReset = r; return true;
+            };
+            h.setCameraGoggleEffect = [](int m) { ++gExtra.goggleCalls; gExtra.lastGoggle = m; return true; };
+            h.setCameraDrunkLevel = [](int l) { ++gExtra.drunkCalls; gExtra.lastDrunk = l; return true; };
+            h.setColorFilter = [](int r1, int, int, int, int, int, int, int, bool r) {
+                ++gExtra.colorFilterCalls; gExtra.lastCfR1 = r1; gExtra.lastCfReset = r; return true;
+            };
+            h.getWaterLevel = [](float, float, float, bool, float& outH) {
+                ++gExtra.waterGetCalls; outH = 4.25f; return true;
+            };
+            h.testLineAgainstWater = [](float, float, float, float, float, float, float& ox, float& oy, float& oz) {
+                ++gExtra.waterLineCalls; ox = 1.f; oy = 2.f; oz = 0.5f; return true;
+            };
+            h.setWorldWaterLevel = [](float lvl, bool r) {
+                ++gExtra.waterWorldCalls; gExtra.lastWaterWorld = lvl; gExtra.lastWaterWorldReset = r; return true;
+            };
+            h.createFire = [](float, float, float, float) { ++gExtra.fireCreateCalls; return true; };
+            h.extinguishFire = [](float, float, float, float) { ++gExtra.fireExtinguishCalls; return true; };
+            h.addPointLight = [](int, float, float, float, float, float, float, float, float, float, float, bool, bool) {
+                ++gExtra.lightCalls; return true;
+            };
+            h.breakObject = [](uint32_t id) { ++gExtra.breakCalls; gExtra.lastBreakId = id; return true; };
+            WorldRPG::WorldNative::RegisterHooks(h);
+
+            WorldRPG::Net::ResourceStartInfo cRes;
+            cRes.name = "camera_water_fire_easing_test";
+            cRes.resourceId = 211;
+            cRes.entityId = 0x5211;
+            cRes.dynamicEntityId = 0x5212;
+            cRes.noClientCacheScripts = 1;
+            cRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(cRes);
+
+            const std::vector<uint8_t> cBody = NoCacheScriptBody(211, R"LUA(
+                assert(setCameraInterior(5) == true)
+                assert(fadeCamera(false, 1.5, 200, 10, 20) == true)
+                assert(shakeCamera(2.5, 10, 20, 30) == true)
+                assert(setCameraGoggleEffect("thermalvision") == true)
+                assert(setCameraDrunkLevel(128) == true)
+                assert(setNearClipDistance(0.75) == true)
+                assert(resetNearClipDistance() == true)
+                assert(setGrainLevel(100) == true)
+                assert(setGrainMultiplier(0.5) == true)
+                assert(setColorFilter(111, 22, 33, 44, 55, 66, 77, 88) == true)
+                assert(resetColorFilter() == true)
+
+                local wl = getWaterLevel(100, 200, 10)
+                assert(wl and math.abs(wl - 4.25) < 0.01, "native getWaterLevel")
+                local wh, wx, wy, wz = testLineAgainstWater(0, 0, 5, 0, 0, -5)
+                assert(wh == true and math.abs(wx - 1.0) < 0.01 and math.abs(wz - 0.5) < 0.01, "native testLineAgainstWater")
+                assert(setWaterLevel(3.5) == true)
+                assert(resetWaterLevel() == true)
+
+                local f = createFire(1, 2, 3, { strength = 2.0 })
+                assert(isElement(f))
+                assert(extinguishFire(f) == true)
+                assert(extinguishFire() == true)
+
+                local lt = createLight(0, 10, 20, 30, 5.0, 255, 128, 64)
+                assert(isElement(lt))
+
+                local obj = createObject(1337, 0, 0, 5, 30, 45, 60)
+                assert(isElement(obj))
+                local dx, dy, dz = getElementRotation(obj, "default")
+                local zx, zy, zz = getElementRotation(obj, "ZYX")
+                local mx, my, mz = getElementRotation(obj, "-ZYX")
+                assert(dx and zx and mx, "Euler orders returned")
+                assert(math.abs(zx - dx) > 0.5 or math.abs(zy - dy) > 0.5, "ZXY->ZYX conversion applied")
+                assert(getElementRotation(obj, "INVALID_ORDER") == false, "invalid Euler order rejected")
+
+                -- Full 19 MTA CEasingCurve types in getEasingValue + interpolateBetween + moveObject
+                for _, curve in ipairs({
+                    "Linear", "InQuad", "OutQuad", "InOutQuad", "OutInQuad",
+                    "InElastic", "OutElastic", "InOutElastic", "OutInElastic",
+                    "InBack", "OutBack", "InOutBack", "OutInBack",
+                    "InBounce", "OutBounce", "InOutBounce", "OutInBounce",
+                    "SineCurve", "CosineCurve"
+                }) do
+                    local v = getEasingValue(0.35, curve, 0.3, 1.0, 1.70158)
+                    assert(type(v) == "number", "curve failed: " .. curve)
+                    local ix, iy, iz = interpolateBetween(0, 0, 0, 10, 20, 30, 0.35, curve)
+                    assert(type(ix) == "number" and type(iy) == "number" and type(iz) == "number")
+                end
+                assert(math.abs(getEasingValue(0.5, "OutInQuad") - 0.5) < 1e-4)
+                assert(getEasingValue(0.5, "SineCurve") > 0.99)
+                assert(moveObject(obj, 500, 10, 20, 30, 0, 0, 90, "OutElastic", 0.3, 1.0, 1.70158) == true)
+                assert(breakObject(obj) == true, "hooked breakObject returns true")
+                destroyElement(obj)
+                destroyElement(lt)
+                _G._cwfOk = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(cBody.data(), cBody.size(), cBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "camera-water-fire-easing-ok", "assert(_G._cwfOk == true, 'camera/water/fire/easing resource ran')");
+
+            CHECK(gLog.areaCalls == 2 && gLog.lastArea == 5);
+            CHECK(gExtra.fadeCalls == 1 && !gExtra.lastFadeIn && std::fabs(gExtra.lastFadeDur - 1.5f) < 0.01f && gExtra.lastFadeR == 200);
+            CHECK(gExtra.shakeCalls == 1 && std::fabs(gExtra.lastShake - 2.5f) < 0.01f);
+            CHECK(gExtra.goggleCalls == 1 && gExtra.lastGoggle == 2);
+            CHECK(gExtra.drunkCalls == 1 && gExtra.lastDrunk == 128);
+            CHECK(gExtra.nearClipCalls == 2 && gExtra.lastNearReset == true);
+            CHECK(gLog.grainCalls == 2 && gLog.lastGrain == 50);
+            CHECK(gExtra.colorFilterCalls == 2 && gExtra.lastCfReset == true);
+            CHECK(gExtra.waterGetCalls == 1);
+            CHECK(gExtra.waterLineCalls == 1);
+            CHECK(gExtra.waterWorldCalls == 2 && gExtra.lastWaterWorldReset == true);
+            CHECK(gExtra.fireCreateCalls == 1);
+            CHECK(gExtra.fireExtinguishCalls == 2);
+            CHECK(gExtra.lightCalls >= 1);
+            CHECK(gExtra.breakCalls == 1 && gExtra.lastBreakId != 0);
+
             WorldRPG::WorldNative::RegisterHooks({});
         }
     }

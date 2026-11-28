@@ -1,6 +1,7 @@
 #include "WorldNativeHooks.h"
 
 #include "GameTasks.h"
+#include "WorldObjects.h"
 #include "../shared/EngineWorld.h"
 #include "../shared/WorldNativeBridge.h"
 
@@ -187,6 +188,50 @@ bool g_savedWaterColor = false;
 std::array<uint8_t, kTimeCycleEntries> g_origWater[4]{};
 bool g_savedCloudAlpha = false;
 std::array<uint8_t, kTimeCycleEntries> g_origCloudAlpha{};
+
+// Verified libGTASA.so 2.10 arm64 Camera, PostFX color filter, Blur, and Water symbols/offsets.
+using CameraSetFadeColourFn = void (*)(void* cam, uint8_t r, uint8_t g, uint8_t b);
+using CameraFadeFn = void (*)(void* cam, float duration, int16_t inOut);
+using CameraCamShakeFn = void (*)(void* cam, float strength, float x, float y, float z);
+using CameraSetNearClipScriptFn = void (*)(void* cam, float dist);
+using PostFxVisionSwitchFn = void (*)(bool enable);
+using MBlurSetDrunkFn = void (*)(float intensity);
+using MBlurClearDrunkFn = void (*)();
+using WaterGetLevelFn = bool (*)(float x, float y, float z, float* outHeight, bool touchWaves, CVector* outNormal);
+using WaterGetLevelNoWavesFn = bool (*)(float x, float y, float z, float* outHeight, float* f1, float* f2);
+using WaterTestLineFn = bool (*)(CVector start, CVector end, CVector* outHit);
+
+// Verified from _ZN7CCamera17SetNearClipScriptEf (0x4ba948): strb w8, [x0, #0x37].
+constexpr size_t kCameraUseNearClipScriptOff = 0x37;
+// Verified from _ZN11CWaterLevel18AddWaterLevelVertexEiiifffh (0x6b99fc): stride 0x14, +0x04 float z, max 1021 verts.
+constexpr size_t kWaterVertexStride = 0x14;
+constexpr size_t kWaterVertexZOff = 0x04;
+constexpr int32_t kMaxWaterVertices = 1021;
+
+uint8_t* g_theCamera = nullptr;
+CameraSetFadeColourFn g_camSetFadeColour = nullptr;
+CameraFadeFn g_camFade = nullptr;
+CameraCamShakeFn g_camShake = nullptr;
+CameraSetNearClipScriptFn g_camSetNearClipScript = nullptr;
+PostFxVisionSwitchFn g_nightVisionSwitch = nullptr;
+PostFxVisionSwitchFn g_infraredVisionSwitch = nullptr;
+MBlurSetDrunkFn g_setDrunkBlur = nullptr;
+MBlurClearDrunkFn g_clearDrunkBlur = nullptr;
+
+bool* g_colorFilterEnable = nullptr;
+uint8_t* g_tcPostFx1[4] = {};
+uint8_t* g_tcPostFx2[4] = {};
+bool g_savedPostFx = false;
+std::array<uint8_t, kTimeCycleEntries> g_origPostFx1[4]{};
+std::array<uint8_t, kTimeCycleEntries> g_origPostFx2[4]{};
+
+WaterGetLevelFn g_waterGetLevel = nullptr;
+WaterGetLevelNoWavesFn g_waterGetLevelNoWaves = nullptr;
+WaterTestLineFn g_waterTestLine = nullptr;
+uint8_t* g_waterVertices = nullptr;
+int32_t* g_numWaterVertices = nullptr;
+bool g_savedWaterVerts = false;
+std::vector<float> g_origWaterVertsZ;
 
 void* g_fx = nullptr;
 FxBloodFn g_fxBlood = nullptr;
@@ -800,6 +845,170 @@ bool NativeSetCurrentArea(int area) {
     return true;
 }
 
+bool NativeFadeCamera(bool fadeIn, float duration, uint8_t r, uint8_t g, uint8_t b) {
+    if (!g_theCamera || !g_camFade) return false;
+    GameTasks::Defer([fadeIn, duration, r, g, b]() {
+        if (!g_theCamera || !g_camFade) return true;
+        if (!fadeIn && g_camSetFadeColour) {
+            g_camSetFadeColour(g_theCamera, r, g, b);
+        }
+        g_camFade(g_theCamera, duration, fadeIn ? static_cast<int16_t>(1) : static_cast<int16_t>(0));
+        return true;
+    });
+    return true;
+}
+
+bool NativeShakeCamera(float strength, float x, float y, float z) {
+    if (!g_theCamera || !g_camShake) return false;
+    GameTasks::Defer([strength, x, y, z]() {
+        if (g_theCamera && g_camShake) {
+            g_camShake(g_theCamera, strength, x, y, z);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetNearClipDistance(float distance, bool reset) {
+    if (!g_theCamera || !g_camSetNearClipScript) return false;
+    GameTasks::Defer([distance, reset]() {
+        if (!g_theCamera || !g_camSetNearClipScript) return true;
+        if (reset) {
+            g_theCamera[kCameraUseNearClipScriptOff] = 0;
+        } else {
+            g_camSetNearClipScript(g_theCamera, distance);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetCameraGoggleEffect(int mode) {
+    if (!g_nightVisionSwitch && !g_infraredVisionSwitch) return false;
+    GameTasks::Defer([mode]() {
+        if (mode == 1) {
+            if (g_infraredVisionSwitch) g_infraredVisionSwitch(false);
+            if (g_nightVisionSwitch) g_nightVisionSwitch(true);
+        } else if (mode == 2) {
+            if (g_nightVisionSwitch) g_nightVisionSwitch(false);
+            if (g_infraredVisionSwitch) g_infraredVisionSwitch(true);
+        } else {
+            if (g_nightVisionSwitch) g_nightVisionSwitch(false);
+            if (g_infraredVisionSwitch) g_infraredVisionSwitch(false);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetCameraDrunkLevel(int level) {
+    if (!g_setDrunkBlur && !g_clearDrunkBlur) return false;
+    GameTasks::Defer([level]() {
+        if (level <= 0) {
+            if (g_clearDrunkBlur) g_clearDrunkBlur();
+            else if (g_setDrunkBlur) g_setDrunkBlur(0.f);
+        } else if (g_setDrunkBlur) {
+            g_setDrunkBlur(std::clamp(static_cast<float>(level) / 255.f, 0.f, 1.f));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetColorFilter(int r1, int g1, int b1, int a1, int r2, int g2, int b2, int a2, bool reset) {
+    if (!g_tcPostFx1[0] && !g_colorFilterEnable) return false;
+    GameTasks::Defer([=]() {
+        if (!g_savedPostFx && g_tcPostFx1[0]) {
+            for (int c = 0; c < 4; ++c) {
+                if (g_tcPostFx1[c]) std::memcpy(g_origPostFx1[c].data(), g_tcPostFx1[c], kTimeCycleEntries);
+                if (g_tcPostFx2[c]) std::memcpy(g_origPostFx2[c].data(), g_tcPostFx2[c], kTimeCycleEntries);
+            }
+            g_savedPostFx = true;
+        }
+        const int c1[4] = {r1, g1, b1, a1};
+        const int c2[4] = {r2, g2, b2, a2};
+        for (int c = 0; c < 4; ++c) {
+            if (reset) {
+                if (g_tcPostFx1[c]) std::memcpy(g_tcPostFx1[c], g_origPostFx1[c].data(), kTimeCycleEntries);
+                if (g_tcPostFx2[c]) std::memcpy(g_tcPostFx2[c], g_origPostFx2[c].data(), kTimeCycleEntries);
+            } else {
+                if (g_tcPostFx1[c]) std::fill_n(g_tcPostFx1[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(c1[c], 0, 255)));
+                if (g_tcPostFx2[c]) std::fill_n(g_tcPostFx2[c], kTimeCycleEntries, static_cast<uint8_t>(std::clamp(c2[c], 0, 255)));
+            }
+        }
+        if (g_colorFilterEnable) {
+            *g_colorFilterEnable = !reset && (a1 > 0 || a2 > 0);
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeGetWaterLevel(float x, float y, float z, bool ignoreWaves, float& outHeight) {
+    if (!g_waterGetLevel && !g_waterGetLevelNoWaves) return false;
+    bool hit = false;
+    float height = 0.f;
+    const bool ok = GameTasks::RunQuery([&]() {
+        if (ignoreWaves && g_waterGetLevelNoWaves) {
+            float f1 = 0.f, f2 = 0.f;
+            hit = g_waterGetLevelNoWaves(x, y, z, &height, &f1, &f2);
+        } else if (g_waterGetLevel) {
+            hit = g_waterGetLevel(x, y, z, &height, !ignoreWaves, nullptr);
+        }
+    });
+    if (!ok || !hit) return false;
+    outHeight = height;
+    return true;
+}
+
+bool NativeTestLineAgainstWater(float x1, float y1, float z1, float x2, float y2, float z2,
+                                float& ox, float& oy, float& oz) {
+    if (!g_waterTestLine) return false;
+    bool hit = false;
+    CVector out{0.f, 0.f, 0.f};
+    const bool ok = GameTasks::RunQuery([&]() {
+        hit = g_waterTestLine(CVector{x1, y1, z1}, CVector{x2, y2, z2}, &out);
+    });
+    if (!ok || !hit) return false;
+    ox = out.x;
+    oy = out.y;
+    oz = out.z;
+    return true;
+}
+
+bool NativeSetWorldWaterLevel(float height, bool reset) {
+    if (!g_waterVertices || !g_numWaterVertices) return false;
+    GameTasks::Defer([height, reset]() {
+        if (!g_waterVertices || !g_numWaterVertices) return true;
+        const int32_t count = std::clamp(*g_numWaterVertices, 0, kMaxWaterVertices);
+        if (count <= 0) return true;
+        if (!g_savedWaterVerts) {
+            g_origWaterVertsZ.resize(static_cast<size_t>(count));
+            for (int32_t i = 0; i < count; ++i) {
+                float z = 0.f;
+                std::memcpy(&z, g_waterVertices + static_cast<size_t>(i) * kWaterVertexStride + kWaterVertexZOff, sizeof(float));
+                g_origWaterVertsZ[static_cast<size_t>(i)] = z;
+            }
+            g_savedWaterVerts = true;
+        }
+        const int32_t limit = reset ? std::min(count, static_cast<int32_t>(g_origWaterVertsZ.size())) : count;
+        for (int32_t i = 0; i < limit; ++i) {
+            const float z = reset ? g_origWaterVertsZ[static_cast<size_t>(i)] : height;
+            std::memcpy(g_waterVertices + static_cast<size_t>(i) * kWaterVertexStride + kWaterVertexZOff, &z, sizeof(float));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeBreakObject(uint32_t id) {
+    GameTasks::Defer([id]() {
+        Game::WorldObjects::BreakObject(id);
+        return true;
+    });
+    return true;
+}
+
 bool NativeFxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     if (!g_fx || !g_fxBlood) return false;
     GameTasks::Defer([x, y, z, dx, dy, dz, count, brightness]() {
@@ -993,6 +1202,30 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     g_tcWater[3] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fWaterAlphaE"));
     g_tcCloudAlpha = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fCloudAlphaE"));
 
+    g_theCamera = reinterpret_cast<uint8_t*>(dlsym(g_lib, "TheCamera"));
+    g_camSetFadeColour = ResolveAny<CameraSetFadeColourFn>(g_lib, {"_ZN7CCamera13SetFadeColourEhhh"});
+    g_camFade = ResolveAny<CameraFadeFn>(g_lib, {"_ZN7CCamera4FadeEfs"});
+    g_camShake = ResolveAny<CameraCamShakeFn>(g_lib, {"_ZN7CCamera8CamShakeEffff"});
+    g_camSetNearClipScript = ResolveAny<CameraSetNearClipScriptFn>(g_lib, {"_ZN7CCamera17SetNearClipScriptEf"});
+    g_nightVisionSwitch = ResolveAny<PostFxVisionSwitchFn>(g_lib, {"_ZN12CPostEffects23ScriptNightVisionSwitchEb"});
+    g_infraredVisionSwitch = ResolveAny<PostFxVisionSwitchFn>(g_lib, {"_ZN12CPostEffects26ScriptInfraredVisionSwitchEb"});
+    g_setDrunkBlur = ResolveAny<MBlurSetDrunkFn>(g_lib, {"_ZN6CMBlur12SetDrunkBlurEf"});
+    g_clearDrunkBlur = ResolveAny<MBlurClearDrunkFn>(g_lib, {"_ZN6CMBlur14ClearDrunkBlurEv"});
+    g_colorFilterEnable = reinterpret_cast<bool*>(dlsym(g_lib, "_ZN12CPostEffects14m_bColorEnableE"));
+    g_tcPostFx1[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fPostFx1RedE"));
+    g_tcPostFx1[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_fPostFx1GreenE"));
+    g_tcPostFx1[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle14m_fPostFx1BlueE"));
+    g_tcPostFx1[3] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_fPostFx1AlphaE"));
+    g_tcPostFx2[0] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle13m_fPostFx2RedE"));
+    g_tcPostFx2[1] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_fPostFx2GreenE"));
+    g_tcPostFx2[2] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle14m_fPostFx2BlueE"));
+    g_tcPostFx2[3] = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN10CTimeCycle15m_fPostFx2AlphaE"));
+    g_waterGetLevel = ResolveAny<WaterGetLevelFn>(g_lib, {"_ZN11CWaterLevel13GetWaterLevelEfffPfbP7CVector"});
+    g_waterGetLevelNoWaves = ResolveAny<WaterGetLevelNoWavesFn>(g_lib, {"_ZN11CWaterLevel20GetWaterLevelNoWavesEfffPfS0_S0_"});
+    g_waterTestLine = ResolveAny<WaterTestLineFn>(g_lib, {"_ZN11CWaterLevel20TestLineAgainstWaterE7CVectorS0_PS0_"});
+    g_waterVertices = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN11CWaterLevel11m_aVerticesE"));
+    g_numWaterVertices = reinterpret_cast<int32_t*>(dlsym(g_lib, "_ZN11CWaterLevel21m_nNumOfWaterVerticesE"));
+
     g_fx = dlsym(g_lib, "g_fx");
     g_fxBlood = ResolveAny<FxBloodFn>(g_lib, {"_ZN4Fx_c8AddBloodER7CVectorS1_if"});
     g_fxWood = ResolveAny<FxBloodFn>(g_lib, {"_ZN4Fx_c7AddWoodER7CVectorS1_if"});
@@ -1038,6 +1271,16 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     hooks.setGarageOpen = &NativeSetGarageOpen;
     hooks.isGarageOpen = &NativeIsGarageOpen;
     hooks.setCurrentArea = &NativeSetCurrentArea;
+    hooks.fadeCamera = &NativeFadeCamera;
+    hooks.shakeCamera = &NativeShakeCamera;
+    hooks.setNearClipDistance = &NativeSetNearClipDistance;
+    hooks.setCameraGoggleEffect = &NativeSetCameraGoggleEffect;
+    hooks.setCameraDrunkLevel = &NativeSetCameraDrunkLevel;
+    hooks.setColorFilter = &NativeSetColorFilter;
+    hooks.getWaterLevel = &NativeGetWaterLevel;
+    hooks.testLineAgainstWater = &NativeTestLineAgainstWater;
+    hooks.setWorldWaterLevel = &NativeSetWorldWaterLevel;
+    hooks.breakObject = &NativeBreakObject;
     hooks.fxAddBlood = &NativeFxAddBlood;
     hooks.fxAddBulletImpact = &NativeFxAddBulletImpact;
     hooks.fxAddSparks = &NativeFxAddSparks;

@@ -378,26 +378,26 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 
 | Event | Status | Port dispatch site(s) | Desktop registration |
 |---|---|---|---|
-| onClientBirdShot | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3865 | Client/mods/deathmatch/logic/CClientBirdManager.cpp:84 |
-| onClientFireDamage | fired | app/src/main/cpp/shared/LuaFireApi.cpp:422 | Client/mods/deathmatch/logic/CClientFireManager.cpp:99 |
+| onClientBirdShot | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3866 | Client/mods/deathmatch/logic/CClientBirdManager.cpp:84 |
+| onClientFireDamage | fired | app/src/main/cpp/shared/LuaFireApi.cpp:427 | Client/mods/deathmatch/logic/CClientFireManager.cpp:99 |
 | onClientResourceStart | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3063 | Client/mods/deathmatch/logic/CClientGame.cpp:2730 |
-| onClientResourceStop | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3971, app/src/main/cpp/shared/LuaVMStub.cpp:3977 | Client/mods/deathmatch/logic/CClientGame.cpp:2731 |
+| onClientResourceStop | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3972, app/src/main/cpp/shared/LuaVMStub.cpp:3978 | Client/mods/deathmatch/logic/CClientGame.cpp:2731 |
 | onClientElementDataChange | fired | app/src/main/cpp/shared/LuaApiExtra.cpp:478, app/src/main/cpp/shared/LuaApiExtra.cpp:869 | Client/mods/deathmatch/logic/CClientGame.cpp:2734 |
-| onClientElementStreamIn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3835, app/src/main/cpp/shared/LuaVMStub.cpp:3835 | Client/mods/deathmatch/logic/CClientGame.cpp:2735 |
-| onClientElementStreamOut | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3835 | Client/mods/deathmatch/logic/CClientGame.cpp:2736 |
-| onClientElementDestroy | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3761, app/src/main/cpp/shared/LuaVMStub.cpp:3774 | Client/mods/deathmatch/logic/CClientGame.cpp:2737 |
+| onClientElementStreamIn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3836, app/src/main/cpp/shared/LuaVMStub.cpp:3836 | Client/mods/deathmatch/logic/CClientGame.cpp:2735 |
+| onClientElementStreamOut | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3836 | Client/mods/deathmatch/logic/CClientGame.cpp:2736 |
+| onClientElementDestroy | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3762, app/src/main/cpp/shared/LuaVMStub.cpp:3775 | Client/mods/deathmatch/logic/CClientGame.cpp:2737 |
 | onClientElementModelChange | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1194 | Client/mods/deathmatch/logic/CClientGame.cpp:2738 |
-| onClientElementDimensionChange | fired | app/src/main/cpp/shared/LuaFieldApi.cpp:533 | Client/mods/deathmatch/logic/CClientGame.cpp:2739 |
-| onClientElementInteriorChange | fired | app/src/main/cpp/shared/LuaFieldApi.cpp:474 | Client/mods/deathmatch/logic/CClientGame.cpp:2740 |
-| onClientElementAttach | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1299, app/src/main/cpp/shared/ServerRpc.cpp:633 | Client/mods/deathmatch/logic/CClientGame.cpp:2741 |
-| onClientElementDetach | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1346, app/src/main/cpp/shared/ServerRpc.cpp:659 | Client/mods/deathmatch/logic/CClientGame.cpp:2743 |
-| onClientPlayerJoin | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3751 | Client/mods/deathmatch/logic/CClientGame.cpp:2747 |
-| onClientPlayerQuit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3756 | Client/mods/deathmatch/logic/CClientGame.cpp:2748 |
+| onClientElementDimensionChange | fired | app/src/main/cpp/shared/LuaFieldApi.cpp:566 | Client/mods/deathmatch/logic/CClientGame.cpp:2739 |
+| onClientElementInteriorChange | fired | app/src/main/cpp/shared/LuaFieldApi.cpp:507 | Client/mods/deathmatch/logic/CClientGame.cpp:2740 |
+| onClientElementAttach | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1299, app/src/main/cpp/shared/ServerRpc.cpp:637 | Client/mods/deathmatch/logic/CClientGame.cpp:2741 |
+| onClientElementDetach | fired | app/src/main/cpp/shared/LuaElementApi.cpp:1346, app/src/main/cpp/shared/ServerRpc.cpp:663 | Client/mods/deathmatch/logic/CClientGame.cpp:2743 |
+| onClientPlayerJoin | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3752 | Client/mods/deathmatch/logic/CClientGame.cpp:2747 |
+| onClientPlayerQuit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3757 | Client/mods/deathmatch/logic/CClientGame.cpp:2748 |
 | onClientPlayerTarget | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3272 | Client/mods/deathmatch/logic/CClientGame.cpp:2749 |
-| onClientPlayerSpawn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3732 | Client/mods/deathmatch/logic/CClientGame.cpp:2750 |
+| onClientPlayerSpawn | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3733 | Client/mods/deathmatch/logic/CClientGame.cpp:2750 |
 | onClientPlayerChangeNick | fired | app/src/main/cpp/shared/CorePackets.cpp:1101 | Client/mods/deathmatch/logic/CClientGame.cpp:2751 |
-| onClientPlayerVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3803, app/src/main/cpp/shared/LuaVMStub.cpp:3803 | Client/mods/deathmatch/logic/CClientGame.cpp:2752 |
-| onClientPlayerVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3806, app/src/main/cpp/shared/LuaVMStub.cpp:3806 | Client/mods/deathmatch/logic/CClientGame.cpp:2753 |
+| onClientPlayerVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3804, app/src/main/cpp/shared/LuaVMStub.cpp:3804 | Client/mods/deathmatch/logic/CClientGame.cpp:2752 |
+| onClientPlayerVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3807, app/src/main/cpp/shared/LuaVMStub.cpp:3807 | Client/mods/deathmatch/logic/CClientGame.cpp:2753 |
 | onClientPlayerTask | fired | app/src/main/cpp/shared/CorePackets.cpp:1042 | Client/mods/deathmatch/logic/CClientGame.cpp:2754 |
 | onClientPlayerWeaponSwitch | fired | app/src/main/cpp/shared/LuaPedApi.cpp:1061 | Client/mods/deathmatch/logic/CClientGame.cpp:2755 |
 | onClientPlayerStuntStart | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3282 | Client/mods/deathmatch/logic/CClientGame.cpp:2756 |
@@ -408,7 +408,7 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientPlayerNativeDamageAttempt | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3299 | Client/mods/deathmatch/logic/CClientGame.cpp:2761 |
 | onClientPlayerWeaponFire | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3482, app/src/main/cpp/shared/LuaVMStub.cpp:3482 | Client/mods/deathmatch/logic/CClientGame.cpp:2762 |
 | onClientPlayerWeaponReload | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3308 | Client/mods/deathmatch/logic/CClientGame.cpp:2763 |
-| onClientPlayerWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3748, app/src/main/cpp/shared/LuaVMStub.cpp:3748 | Client/mods/deathmatch/logic/CClientGame.cpp:2764 |
+| onClientPlayerWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3749, app/src/main/cpp/shared/LuaVMStub.cpp:3749 | Client/mods/deathmatch/logic/CClientGame.cpp:2764 |
 | onClientPlayerChoke | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3318 | Client/mods/deathmatch/logic/CClientGame.cpp:2765 |
 | onClientPlayerVoiceStart | fired | app/src/main/cpp/shared/VoiceRuntime.cpp:364 | Client/mods/deathmatch/logic/CClientGame.cpp:2766 |
 | onClientPlayerVoiceStop | fired | app/src/main/cpp/shared/VoiceRuntime.cpp:202, app/src/main/cpp/shared/VoiceRuntime.cpp:401 | Client/mods/deathmatch/logic/CClientGame.cpp:2767 |
@@ -419,24 +419,24 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientPlayerHeliKilled | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3344 | Client/mods/deathmatch/logic/CClientGame.cpp:2772 |
 | onClientPlayerPickupHit | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:344, app/src/main/cpp/shared/LuaSpatialApi.cpp:344 | Client/mods/deathmatch/logic/CClientGame.cpp:2773 |
 | onClientPlayerPickupLeave | fired | app/src/main/cpp/shared/LuaSpatialApi.cpp:344 | Client/mods/deathmatch/logic/CClientGame.cpp:2774 |
-| onClientPlayerNetworkStatus | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3697 | Client/mods/deathmatch/logic/CClientGame.cpp:2775 |
+| onClientPlayerNetworkStatus | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3698 | Client/mods/deathmatch/logic/CClientGame.cpp:2775 |
 | onClientPedDamage | fired | app/src/main/cpp/shared/PacketHandler.cpp:372 | Client/mods/deathmatch/logic/CClientGame.cpp:2778 |
 | onClientPedNativeBikeJackAttempt | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3353 | Client/mods/deathmatch/logic/CClientGame.cpp:2779 |
-| onClientPedVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3803 | Client/mods/deathmatch/logic/CClientGame.cpp:2780 |
-| onClientPedVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3806 | Client/mods/deathmatch/logic/CClientGame.cpp:2781 |
+| onClientPedVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3804 | Client/mods/deathmatch/logic/CClientGame.cpp:2780 |
+| onClientPedVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3807 | Client/mods/deathmatch/logic/CClientGame.cpp:2781 |
 | onClientPedWeaponFire | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3482 | Client/mods/deathmatch/logic/CClientGame.cpp:2782 |
 | onClientPedWeaponReload | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3309 | Client/mods/deathmatch/logic/CClientGame.cpp:2783 |
-| onClientPedWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3748 | Client/mods/deathmatch/logic/CClientGame.cpp:2784 |
+| onClientPedWasted | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3749 | Client/mods/deathmatch/logic/CClientGame.cpp:2784 |
 | onClientPedChoke | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3319 | Client/mods/deathmatch/logic/CClientGame.cpp:2785 |
 | onClientPedHeliKilled | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3345 | Client/mods/deathmatch/logic/CClientGame.cpp:2786 |
 | onClientPedCarryStateChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3362 | Client/mods/deathmatch/logic/CClientGame.cpp:2787 |
 | onClientPedHitByWaterCannon | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3336 | Client/mods/deathmatch/logic/CClientGame.cpp:2788 |
 | onClientPedStep | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3369 | Client/mods/deathmatch/logic/CClientGame.cpp:2789 |
 | onClientVehicleRespawn | fired | app/src/main/cpp/shared/CorePackets.cpp:700 | Client/mods/deathmatch/logic/CClientGame.cpp:2792 |
-| onClientVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3804 | Client/mods/deathmatch/logic/CClientGame.cpp:2793 |
-| onClientVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3807 | Client/mods/deathmatch/logic/CClientGame.cpp:2794 |
-| onClientVehicleStartEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3823, app/src/main/cpp/shared/LuaVMStub.cpp:3823 | Client/mods/deathmatch/logic/CClientGame.cpp:2795 |
-| onClientVehicleStartExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3823 | Client/mods/deathmatch/logic/CClientGame.cpp:2796 |
+| onClientVehicleEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3805 | Client/mods/deathmatch/logic/CClientGame.cpp:2793 |
+| onClientVehicleExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3808 | Client/mods/deathmatch/logic/CClientGame.cpp:2794 |
+| onClientVehicleStartEnter | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3824, app/src/main/cpp/shared/LuaVMStub.cpp:3824 | Client/mods/deathmatch/logic/CClientGame.cpp:2795 |
+| onClientVehicleStartExit | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3824 | Client/mods/deathmatch/logic/CClientGame.cpp:2796 |
 | onClientTrailerAttach | fired | app/src/main/cpp/shared/CorePackets.cpp:776 | Client/mods/deathmatch/logic/CClientGame.cpp:2797 |
 | onClientTrailerDetach | fired | app/src/main/cpp/shared/CorePackets.cpp:785 | Client/mods/deathmatch/logic/CClientGame.cpp:2798 |
 | onClientVehicleExplode | fired | app/src/main/cpp/shared/CorePackets.cpp:470 | Client/mods/deathmatch/logic/CClientGame.cpp:2799 |
@@ -467,13 +467,13 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientPaste | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3254 | Client/mods/deathmatch/logic/CClientGame.cpp:2830 |
 | onClientConsole | fired | app/src/main/cpp/shared/CorePackets.cpp:1159, app/src/main/cpp/shared/LuaVMStub.cpp:614 | Client/mods/deathmatch/logic/CClientGame.cpp:2833 |
 | onClientCoreCommand | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3262 | Client/mods/deathmatch/logic/CClientGame.cpp:2834 |
-| onClientChatMessage | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3071, app/src/main/cpp/shared/LuaVMStub.cpp:3079, app/src/main/cpp/shared/LuaVMStub.cpp:3091, app/src/main/cpp/shared/LuaVMStub.cpp:3099, app/src/main/cpp/shared/LuaVMStub.cpp:3962 | Client/mods/deathmatch/logic/CClientGame.cpp:2837 |
+| onClientChatMessage | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3071, app/src/main/cpp/shared/LuaVMStub.cpp:3079, app/src/main/cpp/shared/LuaVMStub.cpp:3091, app/src/main/cpp/shared/LuaVMStub.cpp:3099, app/src/main/cpp/shared/LuaVMStub.cpp:3963 | Client/mods/deathmatch/logic/CClientGame.cpp:2837 |
 | onClientDebugMessage | fired | app/src/main/cpp/shared/CorePackets.cpp:1191 | Client/mods/deathmatch/logic/CClientGame.cpp:2840 |
-| onClientPreRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3505 | Client/mods/deathmatch/logic/CClientGame.cpp:2843 |
-| onClientPedsProcessed | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3507 | Client/mods/deathmatch/logic/CClientGame.cpp:2844 |
+| onClientPreRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3506 | Client/mods/deathmatch/logic/CClientGame.cpp:2843 |
+| onClientPedsProcessed | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3508 | Client/mods/deathmatch/logic/CClientGame.cpp:2844 |
 | onClientNativeUI | fired | app/src/main/cpp/shared/LuaNativeUiApi.cpp:812 | Client/mods/deathmatch/logic/CClientGame.cpp:2845 |
-| onClientHUDRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3510 | Client/mods/deathmatch/logic/CClientGame.cpp:2846 |
-| onClientRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3513 | Client/mods/deathmatch/logic/CClientGame.cpp:2847 |
+| onClientHUDRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3511 | Client/mods/deathmatch/logic/CClientGame.cpp:2846 |
+| onClientRender | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3514 | Client/mods/deathmatch/logic/CClientGame.cpp:2847 |
 | onClientMinimize | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3427 | Client/mods/deathmatch/logic/CClientGame.cpp:2848 |
 | onClientRestore | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3430 | Client/mods/deathmatch/logic/CClientGame.cpp:2849 |
 | onClientMTAFocusChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:3425 | Client/mods/deathmatch/logic/CClientGame.cpp:2850 |
@@ -498,10 +498,10 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientSoundStopped | fired | app/src/main/cpp/shared/LuaVMStub.cpp:736 | Client/mods/deathmatch/logic/CClientGame.cpp:2884 |
 | onClientSoundBeat | fired | app/src/main/cpp/shared/LuaVMStub.cpp:733 | Client/mods/deathmatch/logic/CClientGame.cpp:2885 |
 | onClientObjectDamage | fired | app/src/main/cpp/shared/PacketHandler.cpp:343 | Client/mods/deathmatch/logic/CClientGame.cpp:2888 |
-| onClientObjectGangTagProgress | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:949 | Client/mods/deathmatch/logic/CClientGame.cpp:2889 |
-| onClientObjectBreak | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:808 | Client/mods/deathmatch/logic/CClientGame.cpp:2890 |
-| onClientObjectMoveStart | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:780 | Client/mods/deathmatch/logic/CClientGame.cpp:2891 |
-| onClientObjectMoveStop | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:795 | Client/mods/deathmatch/logic/CClientGame.cpp:2892 |
+| onClientObjectGangTagProgress | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:1021 | Client/mods/deathmatch/logic/CClientGame.cpp:2889 |
+| onClientObjectBreak | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:880 | Client/mods/deathmatch/logic/CClientGame.cpp:2890 |
+| onClientObjectMoveStart | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:845 | Client/mods/deathmatch/logic/CClientGame.cpp:2891 |
+| onClientObjectMoveStop | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:860 | Client/mods/deathmatch/logic/CClientGame.cpp:2892 |
 | onClientBrowserWhitelistChange | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1119 | Client/mods/deathmatch/logic/CClientGame.cpp:2895 |
 | onClientBrowserCreated | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1126 | Client/mods/deathmatch/logic/CClientGame.cpp:2896 |
 | onClientBrowserLoadingStart | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1131 | Client/mods/deathmatch/logic/CClientGame.cpp:2897 |
@@ -514,14 +514,14 @@ Desktop: literal `AddEvent("name", ...)` calls under `Client/mods/deathmatch/log
 | onClientBrowserInputFocusChanged | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1160 | Client/mods/deathmatch/logic/CClientGame.cpp:2904 |
 | onClientBrowserResourceBlocked | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1166 | Client/mods/deathmatch/logic/CClientGame.cpp:2905 |
 | onClientBrowserConsoleMessage | fired | app/src/main/cpp/shared/LuaBrowserApi.cpp:1170 | Client/mods/deathmatch/logic/CClientGame.cpp:2906 |
-| onClientFileDownloadComplete | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4064 | Client/mods/deathmatch/logic/CClientGame.cpp:2909 |
-| onClientResourceFileDownload | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4070 | Client/mods/deathmatch/logic/CClientGame.cpp:2911 |
-| onClientTransferBoxProgressChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4155, app/src/main/cpp/shared/LuaVMStub.cpp:4161 | Client/mods/deathmatch/logic/CClientGame.cpp:2912 |
-| onClientTransferBoxVisibilityChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4166, app/src/main/cpp/shared/LuaVMStub.cpp:4171 | Client/mods/deathmatch/logic/CClientGame.cpp:2913 |
+| onClientFileDownloadComplete | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4065 | Client/mods/deathmatch/logic/CClientGame.cpp:2909 |
+| onClientResourceFileDownload | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4071 | Client/mods/deathmatch/logic/CClientGame.cpp:2911 |
+| onClientTransferBoxProgressChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4156, app/src/main/cpp/shared/LuaVMStub.cpp:4162 | Client/mods/deathmatch/logic/CClientGame.cpp:2912 |
+| onClientTransferBoxVisibilityChange | fired | app/src/main/cpp/shared/LuaVMStub.cpp:4167, app/src/main/cpp/shared/LuaVMStub.cpp:4172 | Client/mods/deathmatch/logic/CClientGame.cpp:2913 |
 | onClientWeaponFire | fired | app/src/main/cpp/shared/PacketHandler.cpp:1238 | Client/mods/deathmatch/logic/CClientGame.cpp:2915 |
 | onClientWorldSound | fired | app/src/main/cpp/shared/LuaAudioApi.cpp:2224 | Client/mods/deathmatch/logic/CClientGame.cpp:2917 |
-| onClientWorldObjectDamage | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:1264 | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:140 |
-| onClientWorldObjectBreak | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:1279 | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:141 |
+| onClientWorldObjectDamage | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:1339 | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:140 |
+| onClientWorldObjectBreak | fired | app/src/main/cpp/shared/LuaWorldObjectApi.cpp:1354 | Client/mods/deathmatch/logic/CClientWorldObjectManager.cpp:141 |
 
 ## C. Network packets
 
@@ -642,230 +642,230 @@ Desktop ids come from `Shared/sdk/net/rpc_enums.h` (`eElementRPCFunctions`, 224 
 
 | Id | RPC | Desktop handler (file:line) | Desktop function | Port status | Port site |
 |---|---|---|---|---|---|
-| 1 | SET_TIME | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:25 | SetTime | handled | MtaIds::Rpc::SetTime (shared/ServerRpc.cpp:103) |
-| 2 | SET_WEATHER | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:26 | SetWeather | handled | MtaIds::Rpc::SetWeather (shared/ServerRpc.cpp:110) |
-| 3 | SET_WEATHER_BLENDED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:27 | SetWeatherBlended | handled | MtaIds::Rpc::SetWeatherBlended (shared/ServerRpc.cpp:117) |
-| 4 | SET_MINUTE_DURATION | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:28 | SetMinuteDuration | handled | MtaIds::Rpc::SetMinuteDuration (shared/ServerRpc.cpp:124) |
-| 5 | SET_ELEMENT_PARENT | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:20 | SetElementParent | handled | MtaIds::Rpc::SetElementParent (shared/ServerRpc.cpp:770) |
-| 6 | SET_ELEMENT_DATA | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:21 | SetElementData | handled | MtaIds::Rpc::6 (shared/ServerRpc.cpp:1017) |
-| 7 | SET_ELEMENT_POSITION | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:23 | SetElementPosition | handled | MtaIds::Rpc::7 (shared/ServerRpc.cpp:1466) |
-| 8 | SET_ELEMENT_VELOCITY | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:24 | SetElementVelocity | handled | MtaIds::Rpc::8 (shared/ServerRpc.cpp:1467) |
-| 9 | SET_ELEMENT_INTERIOR | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:26 | SetElementInterior | handled | MtaIds::Rpc::9 (shared/ServerRpc.cpp:1018) |
-| 10 | SET_ELEMENT_DIMENSION | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:27 | SetElementDimension | handled | MtaIds::Rpc::10 (shared/ServerRpc.cpp:1473) |
-| 11 | ATTACH_ELEMENTS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:28 | AttachElements | handled | MtaIds::Rpc::AttachElements (shared/ServerRpc.cpp:1677) |
-| 12 | DETACH_ELEMENTS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:29 | DetachElements | handled | MtaIds::Rpc::DetachElements (shared/ServerRpc.cpp:1678) |
-| 13 | SET_ELEMENT_ALPHA | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:30 | SetElementAlpha | handled | MtaIds::Rpc::13 (shared/ServerRpc.cpp:1473) |
-| 14 | SET_ELEMENT_NAME | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:31 | SetElementName | handled | MtaIds::Rpc::SetElementName (shared/ServerRpc.cpp:776) |
-| 15 | SET_ELEMENT_HEALTH | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:32 | SetElementHealth | handled | MtaIds::Rpc::15 (shared/ServerRpc.cpp:1469) |
-| 16 | SET_ELEMENT_MODEL | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:33 | SetElementModel | handled | MtaIds::Rpc::16 (shared/ServerRpc.cpp:1473) |
-| 17 | SET_ELEMENT_ATTACHED_OFFSETS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:34 | SetElementAttachedOffsets | handled | MtaIds::Rpc::SetElementAttachedOffsets (shared/ServerRpc.cpp:1679) |
-| 18 | SET_PLAYER_MONEY | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:17 | SetPlayerMoney | handled | MtaIds::Rpc::SetPlayerMoney (shared/ServerRpc.cpp:398) |
-| 19 | SHOW_PLAYER_HUD_COMPONENT | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:18 | ShowPlayerHudComponent | handled | MtaIds::Rpc::ShowPlayerHudComponent (shared/ServerRpc.cpp:407) |
-| 20 | FORCE_PLAYER_MAP | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:19 | ForcePlayerMap | handled | MtaIds::Rpc::ForcePlayerMap (shared/ServerRpc.cpp:975) |
-| 21 | SET_PLAYER_NAMETAG_TEXT | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:20 | SetPlayerNametagText | handled | MtaIds::Rpc::SetPlayerNametagText (shared/ServerRpc.cpp:788) |
-| 22 | REMOVE_PLAYER_NAMETAG_COLOR | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:21 | RemovePlayerNametagColor | handled | MtaIds::Rpc::RemovePlayerNametagColor (shared/ServerRpc.cpp:801) |
-| 23 | SET_PLAYER_NAMETAG_COLOR | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:22 | SetPlayerNametagColor | handled | MtaIds::Rpc::SetPlayerNametagColor (shared/ServerRpc.cpp:795) |
-| 24 | SET_PLAYER_NAMETAG_SHOWING | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:23 | SetPlayerNametagShowing | handled | MtaIds::Rpc::SetPlayerNametagShowing (shared/ServerRpc.cpp:804) |
-| 25 | SET_PED_ARMOR | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:21 | SetPedArmor | handled | MtaIds::Rpc::25 (shared/ServerRpc.cpp:1023) |
-| 26 | SET_PED_ROTATION | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:22 | SetPedRotation | handled | MtaIds::Rpc::26 (shared/ServerRpc.cpp:1024) |
-| 27 | GIVE_PED_JETPACK | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:23 | GivePedJetPack | handled | MtaIds::Rpc::GivePedJetpack (shared/ServerRpc.cpp:1157) |
-| 28 | REMOVE_PED_JETPACK | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:24 | RemovePedJetPack | handled | MtaIds::Rpc::RemovePedJetpack (shared/ServerRpc.cpp:1161) |
-| 29 | REMOVE_PED_CLOTHES | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:25 | RemovePedClothes | handled | MtaIds::Rpc::RemovePedClothes (shared/ServerRpc.cpp:1165) |
-| 30 | SET_PED_GRAVITY | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:26 | SetPedGravity | handled | MtaIds::Rpc::SetPedGravity (shared/ServerRpc.cpp:1171) |
-| 31 | SET_PED_CHOKING | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:27 | SetPedChoking | handled | MtaIds::Rpc::SetPedChoking (shared/ServerRpc.cpp:1177) |
-| 32 | SET_PED_FIGHTING_STYLE | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:28 | SetPedFightingStyle | handled | MtaIds::Rpc::SetPedFightingStyle (shared/ServerRpc.cpp:1183) |
-| 33 | SET_PED_MOVE_ANIM | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:29 | SetPedMoveAnim | handled | MtaIds::Rpc::SetPedMoveAnim (shared/ServerRpc.cpp:1189) |
+| 1 | SET_TIME | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:25 | SetTime | handled | MtaIds::Rpc::SetTime (shared/ServerRpc.cpp:104) |
+| 2 | SET_WEATHER | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:26 | SetWeather | handled | MtaIds::Rpc::SetWeather (shared/ServerRpc.cpp:111) |
+| 3 | SET_WEATHER_BLENDED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:27 | SetWeatherBlended | handled | MtaIds::Rpc::SetWeatherBlended (shared/ServerRpc.cpp:118) |
+| 4 | SET_MINUTE_DURATION | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:28 | SetMinuteDuration | handled | MtaIds::Rpc::SetMinuteDuration (shared/ServerRpc.cpp:125) |
+| 5 | SET_ELEMENT_PARENT | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:20 | SetElementParent | handled | MtaIds::Rpc::SetElementParent (shared/ServerRpc.cpp:774) |
+| 6 | SET_ELEMENT_DATA | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:21 | SetElementData | handled | MtaIds::Rpc::6 (shared/ServerRpc.cpp:1021) |
+| 7 | SET_ELEMENT_POSITION | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:23 | SetElementPosition | handled | MtaIds::Rpc::7 (shared/ServerRpc.cpp:1475) |
+| 8 | SET_ELEMENT_VELOCITY | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:24 | SetElementVelocity | handled | MtaIds::Rpc::8 (shared/ServerRpc.cpp:1476) |
+| 9 | SET_ELEMENT_INTERIOR | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:26 | SetElementInterior | handled | MtaIds::Rpc::9 (shared/ServerRpc.cpp:1022) |
+| 10 | SET_ELEMENT_DIMENSION | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:27 | SetElementDimension | handled | MtaIds::Rpc::10 (shared/ServerRpc.cpp:1482) |
+| 11 | ATTACH_ELEMENTS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:28 | AttachElements | handled | MtaIds::Rpc::AttachElements (shared/ServerRpc.cpp:1686) |
+| 12 | DETACH_ELEMENTS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:29 | DetachElements | handled | MtaIds::Rpc::DetachElements (shared/ServerRpc.cpp:1687) |
+| 13 | SET_ELEMENT_ALPHA | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:30 | SetElementAlpha | handled | MtaIds::Rpc::13 (shared/ServerRpc.cpp:1482) |
+| 14 | SET_ELEMENT_NAME | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:31 | SetElementName | handled | MtaIds::Rpc::SetElementName (shared/ServerRpc.cpp:780) |
+| 15 | SET_ELEMENT_HEALTH | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:32 | SetElementHealth | handled | MtaIds::Rpc::15 (shared/ServerRpc.cpp:1478) |
+| 16 | SET_ELEMENT_MODEL | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:33 | SetElementModel | handled | MtaIds::Rpc::16 (shared/ServerRpc.cpp:1482) |
+| 17 | SET_ELEMENT_ATTACHED_OFFSETS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:34 | SetElementAttachedOffsets | handled | MtaIds::Rpc::SetElementAttachedOffsets (shared/ServerRpc.cpp:1688) |
+| 18 | SET_PLAYER_MONEY | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:17 | SetPlayerMoney | handled | MtaIds::Rpc::SetPlayerMoney (shared/ServerRpc.cpp:399) |
+| 19 | SHOW_PLAYER_HUD_COMPONENT | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:18 | ShowPlayerHudComponent | handled | MtaIds::Rpc::ShowPlayerHudComponent (shared/ServerRpc.cpp:408) |
+| 20 | FORCE_PLAYER_MAP | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:19 | ForcePlayerMap | handled | MtaIds::Rpc::ForcePlayerMap (shared/ServerRpc.cpp:979) |
+| 21 | SET_PLAYER_NAMETAG_TEXT | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:20 | SetPlayerNametagText | handled | MtaIds::Rpc::SetPlayerNametagText (shared/ServerRpc.cpp:792) |
+| 22 | REMOVE_PLAYER_NAMETAG_COLOR | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:21 | RemovePlayerNametagColor | handled | MtaIds::Rpc::RemovePlayerNametagColor (shared/ServerRpc.cpp:805) |
+| 23 | SET_PLAYER_NAMETAG_COLOR | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:22 | SetPlayerNametagColor | handled | MtaIds::Rpc::SetPlayerNametagColor (shared/ServerRpc.cpp:799) |
+| 24 | SET_PLAYER_NAMETAG_SHOWING | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:23 | SetPlayerNametagShowing | handled | MtaIds::Rpc::SetPlayerNametagShowing (shared/ServerRpc.cpp:808) |
+| 25 | SET_PED_ARMOR | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:21 | SetPedArmor | handled | MtaIds::Rpc::25 (shared/ServerRpc.cpp:1027) |
+| 26 | SET_PED_ROTATION | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:22 | SetPedRotation | handled | MtaIds::Rpc::26 (shared/ServerRpc.cpp:1028) |
+| 27 | GIVE_PED_JETPACK | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:23 | GivePedJetPack | handled | MtaIds::Rpc::GivePedJetpack (shared/ServerRpc.cpp:1166) |
+| 28 | REMOVE_PED_JETPACK | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:24 | RemovePedJetPack | handled | MtaIds::Rpc::RemovePedJetpack (shared/ServerRpc.cpp:1170) |
+| 29 | REMOVE_PED_CLOTHES | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:25 | RemovePedClothes | handled | MtaIds::Rpc::RemovePedClothes (shared/ServerRpc.cpp:1174) |
+| 30 | SET_PED_GRAVITY | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:26 | SetPedGravity | handled | MtaIds::Rpc::SetPedGravity (shared/ServerRpc.cpp:1180) |
+| 31 | SET_PED_CHOKING | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:27 | SetPedChoking | handled | MtaIds::Rpc::SetPedChoking (shared/ServerRpc.cpp:1186) |
+| 32 | SET_PED_FIGHTING_STYLE | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:28 | SetPedFightingStyle | handled | MtaIds::Rpc::SetPedFightingStyle (shared/ServerRpc.cpp:1192) |
+| 33 | SET_PED_MOVE_ANIM | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:29 | SetPedMoveAnim | handled | MtaIds::Rpc::SetPedMoveAnim (shared/ServerRpc.cpp:1198) |
 | 34 | WARP_PED_INTO_VEHICLE | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:30 | WarpPedIntoVehicle | handled | MtaIds::Rpc::WarpPedIntoVehicle (shared/PacketHandler.cpp:407) |
 | 35 | REMOVE_PED_FROM_VEHICLE | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:31 | RemovePedFromVehicle | handled | MtaIds::Rpc::RemovePedFromVehicle (shared/PacketHandler.cpp:420) |
 | 36 | SET_PED_DOING_GANG_DRIVEBY | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:32 | SetPedDoingGangDriveby | handled | MtaIds::Rpc::SetPedDoingGangDriveby (shared/PacketHandler.cpp:397) |
 | 37 | SET_PED_ANIMATION | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:33 | SetPedAnimation | handled | MtaIds::Rpc::SetPedAnimation (shared/PacketHandler.cpp:469) |
 | 38 | SET_PED_ANIMATION_PROGRESS | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:34 | SetPedAnimationProgress | handled | MtaIds::Rpc::SetPedAnimationProgress (shared/PacketHandler.cpp:494) |
-| 39 | SET_PED_ON_FIRE | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:36 | SetPedOnFire | handled | MtaIds::Rpc::SetPedOnFire (shared/ServerRpc.cpp:1195) |
-| 40 | SET_PED_HEADLESS | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:37 | SetPedHeadless | handled | MtaIds::Rpc::SetPedHeadless (shared/ServerRpc.cpp:1201) |
-| 41 | SET_PED_FROZEN | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:38 | SetPedFrozen | handled | MtaIds::Rpc::SetPedFrozen (shared/ServerRpc.cpp:1207) |
-| 42 | RELOAD_PED_WEAPON | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:39 | ReloadPedWeapon | handled | MtaIds::Rpc::ReloadPedWeapon (shared/ServerRpc.cpp:1213) |
-| 43 | DESTROY_ALL_VEHICLES | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:17 | DestroyAllVehicles | handled | MtaIds::Rpc::DestroyAllVehicles (shared/ServerRpc.cpp:313) |
-| 44 | FIX_VEHICLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:18 | FixVehicle | handled | MtaIds::Rpc::FixVehicle (shared/ServerRpc.cpp:1680) |
-| 45 | BLOW_VEHICLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:19 | BlowVehicle | handled | MtaIds::Rpc::BlowVehicle (shared/ServerRpc.cpp:1681) |
+| 39 | SET_PED_ON_FIRE | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:36 | SetPedOnFire | handled | MtaIds::Rpc::SetPedOnFire (shared/ServerRpc.cpp:1204) |
+| 40 | SET_PED_HEADLESS | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:37 | SetPedHeadless | handled | MtaIds::Rpc::SetPedHeadless (shared/ServerRpc.cpp:1210) |
+| 41 | SET_PED_FROZEN | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:38 | SetPedFrozen | handled | MtaIds::Rpc::SetPedFrozen (shared/ServerRpc.cpp:1216) |
+| 42 | RELOAD_PED_WEAPON | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:39 | ReloadPedWeapon | handled | MtaIds::Rpc::ReloadPedWeapon (shared/ServerRpc.cpp:1222) |
+| 43 | DESTROY_ALL_VEHICLES | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:17 | DestroyAllVehicles | handled | MtaIds::Rpc::DestroyAllVehicles (shared/ServerRpc.cpp:314) |
+| 44 | FIX_VEHICLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:18 | FixVehicle | handled | MtaIds::Rpc::FixVehicle (shared/ServerRpc.cpp:1689) |
+| 45 | BLOW_VEHICLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:19 | BlowVehicle | handled | MtaIds::Rpc::BlowVehicle (shared/ServerRpc.cpp:1690) |
 | 46 | SET_VEHICLE_ROTATION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:20 | SetVehicleRotation | handled | MtaIds::Rpc::SetVehicleRotation (shared/PacketHandler.cpp:280) |
 | 47 | SET_VEHICLE_TURNSPEED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:21 | SetVehicleTurnSpeed | handled | MtaIds::Rpc::SetVehicleTurnSpeed (shared/PacketHandler.cpp:272) |
 | 48 | SET_VEHICLE_COLOR | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:22 | SetVehicleColor | handled | MtaIds::Rpc::SetVehicleColor (shared/PacketHandler.cpp:219) |
 | 49 | SET_VEHICLE_LOCKED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:23 | SetVehicleLocked | handled | MtaIds::Rpc::SetVehicleLocked (shared/PacketHandler.cpp:225) |
-| 50 | SET_VEHICLE_DOORS_UNDAMAGEABLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:24 | SetVehicleDoorsUndamageable | handled | MtaIds::Rpc::SetVehicleDoorsUndamageable (shared/ServerRpc.cpp:1219) |
-| 51 | SET_VEHICLE_SIRENE_ON | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:25 | SetVehicleSireneOn | handled | MtaIds::Rpc::SetVehicleSireneOn (shared/ServerRpc.cpp:1225) |
-| 52 | SET_VEHICLE_LANDING_GEAR_DOWN | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:26 | SetVehicleLandingGearDown | handled | MtaIds::Rpc::SetVehicleLandingGearDown (shared/ServerRpc.cpp:1231) |
-| 53 | SET_HELICOPTER_ROTOR_SPEED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:27 | SetHelicopterRotorSpeed | handled | MtaIds::Rpc::SetHelicopterRotorSpeed (shared/ServerRpc.cpp:1237) |
+| 50 | SET_VEHICLE_DOORS_UNDAMAGEABLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:24 | SetVehicleDoorsUndamageable | handled | MtaIds::Rpc::SetVehicleDoorsUndamageable (shared/ServerRpc.cpp:1228) |
+| 51 | SET_VEHICLE_SIRENE_ON | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:25 | SetVehicleSireneOn | handled | MtaIds::Rpc::SetVehicleSireneOn (shared/ServerRpc.cpp:1234) |
+| 52 | SET_VEHICLE_LANDING_GEAR_DOWN | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:26 | SetVehicleLandingGearDown | handled | MtaIds::Rpc::SetVehicleLandingGearDown (shared/ServerRpc.cpp:1240) |
+| 53 | SET_HELICOPTER_ROTOR_SPEED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:27 | SetHelicopterRotorSpeed | handled | MtaIds::Rpc::SetHelicopterRotorSpeed (shared/ServerRpc.cpp:1246) |
 | 54 | ADD_VEHICLE_UPGRADE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:28 | AddVehicleUpgrade | handled | MtaIds::Rpc::AddVehicleUpgrade (shared/PacketHandler.cpp:232) |
 | 55 | ADD_ALL_VEHICLE_UPGRADES | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:29 | AddAllVehicleUpgrades | handled | MtaIds::Rpc::AddAllVehicleUpgrades (shared/PacketHandler.cpp:242) |
 | 56 | REMOVE_VEHICLE_UPGRADE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:30 | RemoveVehicleUpgrade | handled | MtaIds::Rpc::RemoveVehicleUpgrade (shared/PacketHandler.cpp:247) |
-| 57 | SET_VEHICLE_DAMAGE_STATE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:31 | SetVehicleDamageState | handled | MtaIds::Rpc::SetVehicleDamageState (shared/ServerRpc.cpp:1244) |
-| 58 | SET_VEHICLE_OVERRIDE_LIGHTS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:32 | SetVehicleOverrideLights | handled | MtaIds::Rpc::SetVehicleOverrideLights (shared/ServerRpc.cpp:1256) |
+| 57 | SET_VEHICLE_DAMAGE_STATE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:31 | SetVehicleDamageState | handled | MtaIds::Rpc::SetVehicleDamageState (shared/ServerRpc.cpp:1253) |
+| 58 | SET_VEHICLE_OVERRIDE_LIGHTS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:32 | SetVehicleOverrideLights | handled | MtaIds::Rpc::SetVehicleOverrideLights (shared/ServerRpc.cpp:1265) |
 | 59 | SET_VEHICLE_ENGINE_STATE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:33 | SetVehicleEngineState | handled | MtaIds::Rpc::SetVehicleEngineState (shared/PacketHandler.cpp:290) |
-| 60 | SET_VEHICLE_DIRT_LEVEL | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:34 | SetVehicleDirtLevel | handled | MtaIds::Rpc::SetVehicleDirtLevel (shared/ServerRpc.cpp:1262) |
-| 61 | SET_VEHICLE_DAMAGE_PROOF | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:35 | SetVehicleDamageProof | handled | MtaIds::Rpc::SetVehicleDamageProof (shared/ServerRpc.cpp:1268) |
-| 62 | SET_VEHICLE_PAINTJOB | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:36 | SetVehiclePaintjob | handled | MtaIds::Rpc::SetVehiclePaintjob (shared/ServerRpc.cpp:1274) |
-| 63 | SET_VEHICLE_FUEL_TANK_EXPLODABLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:37 | SetVehicleFuelTankExplodable | handled | MtaIds::Rpc::SetVehicleFuelTankExplodable (shared/ServerRpc.cpp:1280) |
-| 64 | SET_VEHICLE_WHEEL_STATES | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:38 | SetVehicleWheelStates | handled | MtaIds::Rpc::SetVehicleWheelStates (shared/ServerRpc.cpp:1286) |
+| 60 | SET_VEHICLE_DIRT_LEVEL | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:34 | SetVehicleDirtLevel | handled | MtaIds::Rpc::SetVehicleDirtLevel (shared/ServerRpc.cpp:1271) |
+| 61 | SET_VEHICLE_DAMAGE_PROOF | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:35 | SetVehicleDamageProof | handled | MtaIds::Rpc::SetVehicleDamageProof (shared/ServerRpc.cpp:1277) |
+| 62 | SET_VEHICLE_PAINTJOB | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:36 | SetVehiclePaintjob | handled | MtaIds::Rpc::SetVehiclePaintjob (shared/ServerRpc.cpp:1283) |
+| 63 | SET_VEHICLE_FUEL_TANK_EXPLODABLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:37 | SetVehicleFuelTankExplodable | handled | MtaIds::Rpc::SetVehicleFuelTankExplodable (shared/ServerRpc.cpp:1289) |
+| 64 | SET_VEHICLE_WHEEL_STATES | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:38 | SetVehicleWheelStates | handled | MtaIds::Rpc::SetVehicleWheelStates (shared/ServerRpc.cpp:1295) |
 | 65 | SET_VEHICLE_FROZEN | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:39 | SetVehicleFrozen | handled | MtaIds::Rpc::SetVehicleFrozen (shared/PacketHandler.cpp:296) |
-| 66 | SET_TRAIN_DERAILED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:40 | SetTrainDerailed | handled | MtaIds::Rpc::SetTrainDerailed (shared/ServerRpc.cpp:1292) |
-| 67 | SET_TRAIN_DERAILABLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:41 | SetTrainDerailable | handled | MtaIds::Rpc::SetTrainDerailable (shared/ServerRpc.cpp:1298) |
-| 68 | SET_TRAIN_DIRECTION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:42 | SetTrainDirection | handled | MtaIds::Rpc::SetTrainDirection (shared/ServerRpc.cpp:1304) |
-| 69 | SET_TRAIN_SPEED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:43 | SetTrainSpeed | handled | MtaIds::Rpc::SetTrainSpeed (shared/ServerRpc.cpp:1310) |
-| 70 | SET_TAXI_LIGHT_ON | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:46 | SetVehicleTaxiLightOn | handled | MtaIds::Rpc::SetTaxiLightOn (shared/ServerRpc.cpp:1316) |
-| 71 | SET_VEHICLE_HEADLIGHT_COLOR | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:47 | SetVehicleHeadLightColor | handled | MtaIds::Rpc::SetVehicleHeadlightColor (shared/ServerRpc.cpp:1322) |
-| 72 | SET_VEHICLE_DOOR_OPEN_RATIO | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:49 | SetVehicleDoorOpenRatio | handled | MtaIds::Rpc::SetVehicleDoorOpenRatio (shared/ServerRpc.cpp:1328) |
+| 66 | SET_TRAIN_DERAILED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:40 | SetTrainDerailed | handled | MtaIds::Rpc::SetTrainDerailed (shared/ServerRpc.cpp:1301) |
+| 67 | SET_TRAIN_DERAILABLE | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:41 | SetTrainDerailable | handled | MtaIds::Rpc::SetTrainDerailable (shared/ServerRpc.cpp:1307) |
+| 68 | SET_TRAIN_DIRECTION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:42 | SetTrainDirection | handled | MtaIds::Rpc::SetTrainDirection (shared/ServerRpc.cpp:1313) |
+| 69 | SET_TRAIN_SPEED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:43 | SetTrainSpeed | handled | MtaIds::Rpc::SetTrainSpeed (shared/ServerRpc.cpp:1319) |
+| 70 | SET_TAXI_LIGHT_ON | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:46 | SetVehicleTaxiLightOn | handled | MtaIds::Rpc::SetTaxiLightOn (shared/ServerRpc.cpp:1325) |
+| 71 | SET_VEHICLE_HEADLIGHT_COLOR | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:47 | SetVehicleHeadLightColor | handled | MtaIds::Rpc::SetVehicleHeadlightColor (shared/ServerRpc.cpp:1331) |
+| 72 | SET_VEHICLE_DOOR_OPEN_RATIO | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:49 | SetVehicleDoorOpenRatio | handled | MtaIds::Rpc::SetVehicleDoorOpenRatio (shared/ServerRpc.cpp:1337) |
 | 73 | GIVE_WEAPON | Client/mods/deathmatch/logic/rpc/CWeaponRPCs.cpp:19 | GiveWeapon | handled | MtaIds::Rpc::GiveWeapon (shared/PacketHandler.cpp:514) |
 | 74 | TAKE_WEAPON | Client/mods/deathmatch/logic/rpc/CWeaponRPCs.cpp:20 | TakeWeapon | handled | MtaIds::Rpc::TakeWeapon (shared/PacketHandler.cpp:534) |
 | 75 | TAKE_ALL_WEAPONS | Client/mods/deathmatch/logic/rpc/CWeaponRPCs.cpp:21 | TakeAllWeapons | handled | MtaIds::Rpc::TakeAllWeapons (shared/PacketHandler.cpp:556) |
 | 76 | SET_WEAPON_AMMO | Client/mods/deathmatch/logic/rpc/CWeaponRPCs.cpp:22 | SetWeaponAmmo | handled | MtaIds::Rpc::SetWeaponAmmo (shared/PacketHandler.cpp:565) |
 | 77 | SET_WEAPON_SLOT | Client/mods/deathmatch/logic/rpc/CWeaponRPCs.cpp:23 | SetWeaponSlot | handled | MtaIds::Rpc::SetWeaponSlot (shared/PacketHandler.cpp:584) |
-| 78 | DESTROY_ALL_BLIPS | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:18 | DestroyAllBlips | handled | MtaIds::Rpc::DestroyAllBlips (shared/ServerRpc.cpp:316) |
-| 79 | SET_BLIP_ICON | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:19 | SetBlipIcon | handled | MtaIds::Rpc::SetBlipIcon (shared/ServerRpc.cpp:834) |
-| 80 | SET_BLIP_SIZE | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:20 | SetBlipSize | handled | MtaIds::Rpc::SetBlipSize (shared/ServerRpc.cpp:841) |
-| 81 | SET_BLIP_COLOR | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:21 | SetBlipColor | handled | MtaIds::Rpc::SetBlipColor (shared/ServerRpc.cpp:848) |
-| 82 | SET_BLIP_ORDERING | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:22 | SetBlipOrdering | handled | MtaIds::Rpc::SetBlipOrdering (shared/ServerRpc.cpp:854) |
-| 83 | DESTROY_ALL_OBJECTS | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:18 | DestroyAllObjects | handled | MtaIds::Rpc::DestroyAllObjects (shared/ServerRpc.cpp:314) |
-| 84 | SET_OBJECT_ROTATION | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:19 | SetObjectRotation | handled | MtaIds::Rpc::SetObjectRotation (shared/ServerRpc.cpp:727) |
-| 85 | MOVE_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:20 | MoveObject | handled | MtaIds::Rpc::MoveObject (shared/ServerRpc.cpp:733) |
-| 86 | STOP_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:21 | StopObject | handled | MtaIds::Rpc::StopObject (shared/ServerRpc.cpp:739) |
-| 87 | DESTROY_ALL_RADAR_AREAS | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:17 | DestroyAllRadarAreas | handled | MtaIds::Rpc::DestroyAllRadarAreas (shared/ServerRpc.cpp:318) |
-| 88 | SET_RADAR_AREA_SIZE | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:18 | SetRadarAreaSize | handled | MtaIds::Rpc::SetRadarAreaSize (shared/ServerRpc.cpp:868) |
-| 89 | SET_RADAR_AREA_COLOR | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:19 | SetRadarAreaColor | handled | MtaIds::Rpc::SetRadarAreaColor (shared/ServerRpc.cpp:874) |
-| 90 | SET_RADAR_AREA_FLASHING | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:20 | SetRadarAreaFlashing | handled | MtaIds::Rpc::SetRadarAreaFlashing (shared/ServerRpc.cpp:881) |
-| 91 | DESTROY_ALL_MARKERS | - | - | handled | MtaIds::Rpc::DestroyAllMarkers (shared/ServerRpc.cpp:315) |
-| 92 | SET_MARKER_TYPE | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:17 | SetMarkerType | handled | MtaIds::Rpc::SetMarkerType (shared/ServerRpc.cpp:887) |
-| 93 | SET_MARKER_COLOR | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:18 | SetMarkerColor | handled | MtaIds::Rpc::SetMarkerColor (shared/ServerRpc.cpp:894) |
-| 94 | SET_MARKER_SIZE | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:19 | SetMarkerSize | handled | MtaIds::Rpc::SetMarkerSize (shared/ServerRpc.cpp:902) |
-| 95 | SET_MARKER_TARGET | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:20 | SetMarkerTarget | handled | MtaIds::Rpc::SetMarkerTarget (shared/ServerRpc.cpp:908) |
-| 96 | SET_MARKER_ICON | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:21 | SetMarkerIcon | handled | MtaIds::Rpc::SetMarkerIcon (shared/ServerRpc.cpp:926) |
-| 97 | DESTROY_ALL_PICKUPS | Client/mods/deathmatch/logic/rpc/CPickupRPCs.cpp:17 | DestroyAllPickups | handled | MtaIds::Rpc::DestroyAllPickups (shared/ServerRpc.cpp:317) |
-| 98 | SET_PICKUP_TYPE | Client/mods/deathmatch/logic/rpc/CPickupRPCs.cpp:18 | SetPickupType | handled | MtaIds::Rpc::SetPickupType (shared/ServerRpc.cpp:933) |
-| 99 | SET_PICKUP_VISIBLE | Client/mods/deathmatch/logic/rpc/CPickupRPCs.cpp:19 | SetPickupVisible | handled | MtaIds::Rpc::SetPickupVisible (shared/ServerRpc.cpp:950) |
-| 100 | PLAY_SOUND | Client/mods/deathmatch/logic/rpc/CAudioRPCs.cpp:18 | PlaySound | handled | MtaIds::Rpc::PlaySound (shared/ServerRpc.cpp:431) |
-| 101 | BIND_KEY | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:16 | BindKey | handled | MtaIds::Rpc::BindKey (shared/ServerRpc.cpp:470) |
-| 102 | UNBIND_KEY | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:18 | UnbindKey | handled | MtaIds::Rpc::UnbindKey (shared/ServerRpc.cpp:471) |
-| 103 | BIND_COMMAND | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:17 | BindCommand | handled | MtaIds::Rpc::BindCommand (shared/ServerRpc.cpp:492) |
-| 104 | UNBIND_COMMAND | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:19 | UnbindCommand | handled | MtaIds::Rpc::UnbindCommand (shared/ServerRpc.cpp:503) |
+| 78 | DESTROY_ALL_BLIPS | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:18 | DestroyAllBlips | handled | MtaIds::Rpc::DestroyAllBlips (shared/ServerRpc.cpp:317) |
+| 79 | SET_BLIP_ICON | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:19 | SetBlipIcon | handled | MtaIds::Rpc::SetBlipIcon (shared/ServerRpc.cpp:838) |
+| 80 | SET_BLIP_SIZE | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:20 | SetBlipSize | handled | MtaIds::Rpc::SetBlipSize (shared/ServerRpc.cpp:845) |
+| 81 | SET_BLIP_COLOR | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:21 | SetBlipColor | handled | MtaIds::Rpc::SetBlipColor (shared/ServerRpc.cpp:852) |
+| 82 | SET_BLIP_ORDERING | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:22 | SetBlipOrdering | handled | MtaIds::Rpc::SetBlipOrdering (shared/ServerRpc.cpp:858) |
+| 83 | DESTROY_ALL_OBJECTS | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:18 | DestroyAllObjects | handled | MtaIds::Rpc::DestroyAllObjects (shared/ServerRpc.cpp:315) |
+| 84 | SET_OBJECT_ROTATION | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:19 | SetObjectRotation | handled | MtaIds::Rpc::SetObjectRotation (shared/ServerRpc.cpp:731) |
+| 85 | MOVE_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:20 | MoveObject | handled | MtaIds::Rpc::MoveObject (shared/ServerRpc.cpp:737) |
+| 86 | STOP_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:21 | StopObject | handled | MtaIds::Rpc::StopObject (shared/ServerRpc.cpp:743) |
+| 87 | DESTROY_ALL_RADAR_AREAS | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:17 | DestroyAllRadarAreas | handled | MtaIds::Rpc::DestroyAllRadarAreas (shared/ServerRpc.cpp:319) |
+| 88 | SET_RADAR_AREA_SIZE | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:18 | SetRadarAreaSize | handled | MtaIds::Rpc::SetRadarAreaSize (shared/ServerRpc.cpp:872) |
+| 89 | SET_RADAR_AREA_COLOR | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:19 | SetRadarAreaColor | handled | MtaIds::Rpc::SetRadarAreaColor (shared/ServerRpc.cpp:878) |
+| 90 | SET_RADAR_AREA_FLASHING | Client/mods/deathmatch/logic/rpc/CRadarRPCs.cpp:20 | SetRadarAreaFlashing | handled | MtaIds::Rpc::SetRadarAreaFlashing (shared/ServerRpc.cpp:885) |
+| 91 | DESTROY_ALL_MARKERS | - | - | handled | MtaIds::Rpc::DestroyAllMarkers (shared/ServerRpc.cpp:316) |
+| 92 | SET_MARKER_TYPE | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:17 | SetMarkerType | handled | MtaIds::Rpc::SetMarkerType (shared/ServerRpc.cpp:891) |
+| 93 | SET_MARKER_COLOR | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:18 | SetMarkerColor | handled | MtaIds::Rpc::SetMarkerColor (shared/ServerRpc.cpp:898) |
+| 94 | SET_MARKER_SIZE | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:19 | SetMarkerSize | handled | MtaIds::Rpc::SetMarkerSize (shared/ServerRpc.cpp:906) |
+| 95 | SET_MARKER_TARGET | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:20 | SetMarkerTarget | handled | MtaIds::Rpc::SetMarkerTarget (shared/ServerRpc.cpp:912) |
+| 96 | SET_MARKER_ICON | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:21 | SetMarkerIcon | handled | MtaIds::Rpc::SetMarkerIcon (shared/ServerRpc.cpp:930) |
+| 97 | DESTROY_ALL_PICKUPS | Client/mods/deathmatch/logic/rpc/CPickupRPCs.cpp:17 | DestroyAllPickups | handled | MtaIds::Rpc::DestroyAllPickups (shared/ServerRpc.cpp:318) |
+| 98 | SET_PICKUP_TYPE | Client/mods/deathmatch/logic/rpc/CPickupRPCs.cpp:18 | SetPickupType | handled | MtaIds::Rpc::SetPickupType (shared/ServerRpc.cpp:937) |
+| 99 | SET_PICKUP_VISIBLE | Client/mods/deathmatch/logic/rpc/CPickupRPCs.cpp:19 | SetPickupVisible | handled | MtaIds::Rpc::SetPickupVisible (shared/ServerRpc.cpp:954) |
+| 100 | PLAY_SOUND | Client/mods/deathmatch/logic/rpc/CAudioRPCs.cpp:18 | PlaySound | handled | MtaIds::Rpc::PlaySound (shared/ServerRpc.cpp:432) |
+| 101 | BIND_KEY | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:16 | BindKey | handled | MtaIds::Rpc::BindKey (shared/ServerRpc.cpp:471) |
+| 102 | UNBIND_KEY | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:18 | UnbindKey | handled | MtaIds::Rpc::UnbindKey (shared/ServerRpc.cpp:472) |
+| 103 | BIND_COMMAND | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:17 | BindCommand | handled | MtaIds::Rpc::BindCommand (shared/ServerRpc.cpp:493) |
+| 104 | UNBIND_COMMAND | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:19 | UnbindCommand | handled | MtaIds::Rpc::UnbindCommand (shared/ServerRpc.cpp:504) |
 | 105 | TOGGLE_CONTROL_ABILITY | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:20 | ToggleControl | handled | MtaIds::Rpc::ToggleControlAbility (shared/PacketHandler.cpp:684) |
 | 106 | TOGGLE_ALL_CONTROL_ABILITY | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:21 | ToggleAllControls | handled | MtaIds::Rpc::ToggleAllControlAbility (shared/PacketHandler.cpp:696) |
-| 107 | SET_CONTROL_STATE | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:22 | SetControlState | handled | MtaIds::Rpc::SetControlState (shared/ServerRpc.cpp:514) |
-| 108 | FORCE_RECONNECT | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:23 | ForceReconnect | handled | MtaIds::Rpc::ForceReconnect (shared/ServerRpc.cpp:982) |
-| 109 | SET_TEAM_NAME | Client/mods/deathmatch/logic/rpc/CTeamRPCs.cpp:17 | SetTeamName | handled | MtaIds::Rpc::SetTeamName (shared/ServerRpc.cpp:816) |
-| 110 | SET_TEAM_COLOR | Client/mods/deathmatch/logic/rpc/CTeamRPCs.cpp:18 | SetTeamColor | handled | MtaIds::Rpc::SetTeamColor (shared/ServerRpc.cpp:822) |
-| 111 | SET_PLAYER_TEAM | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:24 | SetPlayerTeam | handled | MtaIds::Rpc::SetPlayerTeam (shared/ServerRpc.cpp:810) |
-| 112 | SET_TEAM_FRIENDLY_FIRE | Client/mods/deathmatch/logic/rpc/CTeamRPCs.cpp:19 | SetTeamFriendlyFire | handled | MtaIds::Rpc::SetTeamFriendlyFire (shared/ServerRpc.cpp:828) |
-| 113 | SET_WANTED_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:37 | SetWantedLevel | handled | MtaIds::Rpc::SetWantedLevel (shared/ServerRpc.cpp:204) |
-| 114 | SET_CAMERA_MATRIX | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:18 | SetCameraMatrix | handled | MtaIds::Rpc::SetCameraMatrix (shared/ServerRpc.cpp:327) |
-| 115 | SET_CAMERA_TARGET | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:19 | SetCameraTarget | handled | MtaIds::Rpc::SetCameraTarget (shared/ServerRpc.cpp:352) |
-| 116 | SET_CAMERA_INTERIOR | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:20 | SetCameraInterior | handled | MtaIds::Rpc::SetCameraInterior (shared/ServerRpc.cpp:361) |
-| 117 | FADE_CAMERA | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:21 | FadeCamera | handled | MtaIds::Rpc::FadeCamera (shared/ServerRpc.cpp:367) |
-| 118 | SHOW_CURSOR | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:24 | ShowCursor | handled | MtaIds::Rpc::ShowCursor (shared/ServerRpc.cpp:524) |
-| 119 | SHOW_CHAT | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:25 | ShowChat | handled | MtaIds::Rpc::ShowChat (shared/ServerRpc.cpp:440) |
-| 120 | SET_GRAVITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:29 | SetGravity | handled | MtaIds::Rpc::SetGravity (shared/ServerRpc.cpp:131) |
-| 121 | SET_GAME_SPEED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:30 | SetGameSpeed | handled | MtaIds::Rpc::SetGameSpeed (shared/ServerRpc.cpp:133) |
-| 122 | SET_WAVE_HEIGHT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:31 | SetWaveHeight | handled | MtaIds::Rpc::SetWaveHeight (shared/ServerRpc.cpp:135) |
-| 123 | SET_SKY_GRADIENT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:32 | SetSkyGradient | handled | MtaIds::Rpc::SetSkyGradient (shared/ServerRpc.cpp:210) |
-| 124 | RESET_SKY_GRADIENT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:33 | ResetSkyGradient | handled | MtaIds::Rpc::ResetSkyGradient (shared/ServerRpc.cpp:218) |
-| 125 | SET_HEAT_HAZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:34 | SetHeatHaze | handled | MtaIds::Rpc::SetHeatHaze (shared/ServerRpc.cpp:219) |
-| 126 | RESET_HEAT_HAZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:35 | ResetHeatHaze | handled | MtaIds::Rpc::ResetHeatHaze (shared/ServerRpc.cpp:239) |
-| 127 | SET_BLUR_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:36 | SetBlurLevel | handled | MtaIds::Rpc::SetBlurLevel (shared/ServerRpc.cpp:137) |
-| 128 | SET_FPS_LIMIT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:39 | SetFPSLimit | handled | MtaIds::Rpc::SetFpsLimit (shared/ServerRpc.cpp:240) |
-| 129 | SET_GARAGE_OPEN | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:40 | SetGarageOpen | handled | MtaIds::Rpc::SetGarageOpen (shared/ServerRpc.cpp:246) |
-| 130 | RESET_MAP_INFO | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:38 | ResetMapInfo | handled | MtaIds::Rpc::ResetMapInfo (shared/ServerRpc.cpp:992) |
-| 131 | SET_GLITCH_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:41 | SetGlitchEnabled | handled | MtaIds::Rpc::SetGlitchEnabled (shared/ServerRpc.cpp:252) |
-| 132 | SET_CLOUDS_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:43 | SetCloudsEnabled | handled | MtaIds::Rpc::SetCloudsEnabled (shared/ServerRpc.cpp:143) |
+| 107 | SET_CONTROL_STATE | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:22 | SetControlState | handled | MtaIds::Rpc::SetControlState (shared/ServerRpc.cpp:515) |
+| 108 | FORCE_RECONNECT | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:23 | ForceReconnect | handled | MtaIds::Rpc::ForceReconnect (shared/ServerRpc.cpp:986) |
+| 109 | SET_TEAM_NAME | Client/mods/deathmatch/logic/rpc/CTeamRPCs.cpp:17 | SetTeamName | handled | MtaIds::Rpc::SetTeamName (shared/ServerRpc.cpp:820) |
+| 110 | SET_TEAM_COLOR | Client/mods/deathmatch/logic/rpc/CTeamRPCs.cpp:18 | SetTeamColor | handled | MtaIds::Rpc::SetTeamColor (shared/ServerRpc.cpp:826) |
+| 111 | SET_PLAYER_TEAM | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:24 | SetPlayerTeam | handled | MtaIds::Rpc::SetPlayerTeam (shared/ServerRpc.cpp:814) |
+| 112 | SET_TEAM_FRIENDLY_FIRE | Client/mods/deathmatch/logic/rpc/CTeamRPCs.cpp:19 | SetTeamFriendlyFire | handled | MtaIds::Rpc::SetTeamFriendlyFire (shared/ServerRpc.cpp:832) |
+| 113 | SET_WANTED_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:37 | SetWantedLevel | handled | MtaIds::Rpc::SetWantedLevel (shared/ServerRpc.cpp:205) |
+| 114 | SET_CAMERA_MATRIX | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:18 | SetCameraMatrix | handled | MtaIds::Rpc::SetCameraMatrix (shared/ServerRpc.cpp:328) |
+| 115 | SET_CAMERA_TARGET | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:19 | SetCameraTarget | handled | MtaIds::Rpc::SetCameraTarget (shared/ServerRpc.cpp:353) |
+| 116 | SET_CAMERA_INTERIOR | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:20 | SetCameraInterior | handled | MtaIds::Rpc::SetCameraInterior (shared/ServerRpc.cpp:362) |
+| 117 | FADE_CAMERA | Client/mods/deathmatch/logic/rpc/CCameraRPCs.cpp:21 | FadeCamera | handled | MtaIds::Rpc::FadeCamera (shared/ServerRpc.cpp:368) |
+| 118 | SHOW_CURSOR | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:24 | ShowCursor | handled | MtaIds::Rpc::ShowCursor (shared/ServerRpc.cpp:525) |
+| 119 | SHOW_CHAT | Client/mods/deathmatch/logic/rpc/CInputRPCs.cpp:25 | ShowChat | handled | MtaIds::Rpc::ShowChat (shared/ServerRpc.cpp:441) |
+| 120 | SET_GRAVITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:29 | SetGravity | handled | MtaIds::Rpc::SetGravity (shared/ServerRpc.cpp:132) |
+| 121 | SET_GAME_SPEED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:30 | SetGameSpeed | handled | MtaIds::Rpc::SetGameSpeed (shared/ServerRpc.cpp:134) |
+| 122 | SET_WAVE_HEIGHT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:31 | SetWaveHeight | handled | MtaIds::Rpc::SetWaveHeight (shared/ServerRpc.cpp:136) |
+| 123 | SET_SKY_GRADIENT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:32 | SetSkyGradient | handled | MtaIds::Rpc::SetSkyGradient (shared/ServerRpc.cpp:211) |
+| 124 | RESET_SKY_GRADIENT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:33 | ResetSkyGradient | handled | MtaIds::Rpc::ResetSkyGradient (shared/ServerRpc.cpp:219) |
+| 125 | SET_HEAT_HAZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:34 | SetHeatHaze | handled | MtaIds::Rpc::SetHeatHaze (shared/ServerRpc.cpp:220) |
+| 126 | RESET_HEAT_HAZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:35 | ResetHeatHaze | handled | MtaIds::Rpc::ResetHeatHaze (shared/ServerRpc.cpp:240) |
+| 127 | SET_BLUR_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:36 | SetBlurLevel | handled | MtaIds::Rpc::SetBlurLevel (shared/ServerRpc.cpp:138) |
+| 128 | SET_FPS_LIMIT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:39 | SetFPSLimit | handled | MtaIds::Rpc::SetFpsLimit (shared/ServerRpc.cpp:241) |
+| 129 | SET_GARAGE_OPEN | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:40 | SetGarageOpen | handled | MtaIds::Rpc::SetGarageOpen (shared/ServerRpc.cpp:247) |
+| 130 | RESET_MAP_INFO | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:38 | ResetMapInfo | handled | MtaIds::Rpc::ResetMapInfo (shared/ServerRpc.cpp:996) |
+| 131 | SET_GLITCH_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:41 | SetGlitchEnabled | handled | MtaIds::Rpc::SetGlitchEnabled (shared/ServerRpc.cpp:253) |
+| 132 | SET_CLOUDS_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:43 | SetCloudsEnabled | handled | MtaIds::Rpc::SetCloudsEnabled (shared/ServerRpc.cpp:144) |
 | 133 | REMOVE_ELEMENT_DATA | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:22 | RemoveElementData | handled | MtaIds::Rpc::RemoveElementData (shared/PacketHandler.cpp:217) |
-| 134 | SET_VEHICLE_HANDLING | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:19 | SetVehicleHandling | handled | MtaIds::Rpc::SetVehicleHandling (shared/ServerRpc.cpp:1432) |
-| 135 | SET_VEHICLE_HANDLING_PROPERTY | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:20 | SetVehicleHandlingProperty | handled | MtaIds::Rpc::SetVehicleHandlingProperty (shared/ServerRpc.cpp:1450) |
-| 136 | RESET_VEHICLE_HANDLING_PROPERTY | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:21 | RestoreVehicleHandlingProperty | handled | MtaIds::Rpc::ResetVehicleHandlingProperty (shared/ServerRpc.cpp:1483) |
-| 137 | RESET_VEHICLE_HANDLING | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:22 | RestoreVehicleHandling | handled | MtaIds::Rpc::ResetVehicleHandling (shared/ServerRpc.cpp:1488) |
-| 138 | TOGGLE_DEBUGGER | Client/mods/deathmatch/logic/rpc/COutputRPCs.cpp:17 | ToggleDebugger | handled | MtaIds::Rpc::ToggleDebugger (shared/ServerRpc.cpp:996) |
-| 139 | SET_ELEMENT_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:19 | SetElementWaterLevel | handled | MtaIds::Rpc::SetElementWaterLevel (shared/ServerRpc.cpp:1493) |
-| 140 | SET_ALL_ELEMENT_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:20 | SetAllElementWaterLevel | handled | MtaIds::Rpc::SetAllElementWaterLevel (shared/ServerRpc.cpp:1002) |
-| 141 | SET_WORLD_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:17 | SetWorldWaterLevel | handled | MtaIds::Rpc::SetWorldWaterLevel (shared/ServerRpc.cpp:274) |
-| 142 | RESET_WORLD_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:18 | ResetWorldWaterLevel | handled | MtaIds::Rpc::ResetWorldWaterLevel (shared/ServerRpc.cpp:285) |
-| 143 | SET_WATER_VERTEX_POSITION | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:21 | SetWaterVertexPosition | handled | MtaIds::Rpc::SetWaterVertexPosition (shared/ServerRpc.cpp:1499) |
-| 144 | SET_ELEMENT_DOUBLESIDED | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:35 | SetElementDoubleSided | handled | MtaIds::Rpc::SetElementDoubleSided (shared/ServerRpc.cpp:782) |
-| 145 | SET_TRAFFIC_LIGHT_STATE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:44 | SetTrafficLightState | handled | MtaIds::Rpc::SetTrafficLightState (shared/ServerRpc.cpp:258) |
-| 146 | SET_VEHICLE_TURRET_POSITION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:48 | SetVehicleTurretPosition | handled | MtaIds::Rpc::SetVehicleTurretPosition (shared/ServerRpc.cpp:1349) |
-| 147 | SET_OBJECT_SCALE | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:22 | SetObjectScale | handled | MtaIds::Rpc::SetObjectScale (shared/ServerRpc.cpp:745) |
+| 134 | SET_VEHICLE_HANDLING | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:19 | SetVehicleHandling | handled | MtaIds::Rpc::SetVehicleHandling (shared/ServerRpc.cpp:1441) |
+| 135 | SET_VEHICLE_HANDLING_PROPERTY | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:20 | SetVehicleHandlingProperty | handled | MtaIds::Rpc::SetVehicleHandlingProperty (shared/ServerRpc.cpp:1459) |
+| 136 | RESET_VEHICLE_HANDLING_PROPERTY | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:21 | RestoreVehicleHandlingProperty | handled | MtaIds::Rpc::ResetVehicleHandlingProperty (shared/ServerRpc.cpp:1492) |
+| 137 | RESET_VEHICLE_HANDLING | Client/mods/deathmatch/logic/rpc/CHandlingRPCs.cpp:22 | RestoreVehicleHandling | handled | MtaIds::Rpc::ResetVehicleHandling (shared/ServerRpc.cpp:1497) |
+| 138 | TOGGLE_DEBUGGER | Client/mods/deathmatch/logic/rpc/COutputRPCs.cpp:17 | ToggleDebugger | handled | MtaIds::Rpc::ToggleDebugger (shared/ServerRpc.cpp:1000) |
+| 139 | SET_ELEMENT_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:19 | SetElementWaterLevel | handled | MtaIds::Rpc::SetElementWaterLevel (shared/ServerRpc.cpp:1502) |
+| 140 | SET_ALL_ELEMENT_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:20 | SetAllElementWaterLevel | handled | MtaIds::Rpc::SetAllElementWaterLevel (shared/ServerRpc.cpp:1006) |
+| 141 | SET_WORLD_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:17 | SetWorldWaterLevel | handled | MtaIds::Rpc::SetWorldWaterLevel (shared/ServerRpc.cpp:275) |
+| 142 | RESET_WORLD_WATER_LEVEL | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:18 | ResetWorldWaterLevel | handled | MtaIds::Rpc::ResetWorldWaterLevel (shared/ServerRpc.cpp:286) |
+| 143 | SET_WATER_VERTEX_POSITION | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:21 | SetWaterVertexPosition | handled | MtaIds::Rpc::SetWaterVertexPosition (shared/ServerRpc.cpp:1508) |
+| 144 | SET_ELEMENT_DOUBLESIDED | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:35 | SetElementDoubleSided | handled | MtaIds::Rpc::SetElementDoubleSided (shared/ServerRpc.cpp:786) |
+| 145 | SET_TRAFFIC_LIGHT_STATE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:44 | SetTrafficLightState | handled | MtaIds::Rpc::SetTrafficLightState (shared/ServerRpc.cpp:259) |
+| 146 | SET_VEHICLE_TURRET_POSITION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:48 | SetVehicleTurretPosition | handled | MtaIds::Rpc::SetVehicleTurretPosition (shared/ServerRpc.cpp:1358) |
+| 147 | SET_OBJECT_SCALE | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:22 | SetObjectScale | handled | MtaIds::Rpc::SetObjectScale (shared/ServerRpc.cpp:749) |
 | 148 | SET_ELEMENT_COLLISIONS_ENABLED | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:36 | SetElementCollisionsEnabled | handled | MtaIds::Rpc::SetElementCollisionsEnabled (shared/PacketHandler.cpp:604) |
-| 149 | SET_JETPACK_MAXHEIGHT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:45 | SetJetpackMaxHeight | handled | MtaIds::Rpc::SetJetpackMaxHeight (shared/ServerRpc.cpp:150) |
-| 150 | SET_WATER_COLOR | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:22 | SetWaterColor | handled | MtaIds::Rpc::SetWaterColor (shared/ServerRpc.cpp:267) |
-| 151 | RESET_WATER_COLOR | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:23 | ResetWaterColor | handled | MtaIds::Rpc::ResetWaterColor (shared/ServerRpc.cpp:273) |
+| 149 | SET_JETPACK_MAXHEIGHT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:45 | SetJetpackMaxHeight | handled | MtaIds::Rpc::SetJetpackMaxHeight (shared/ServerRpc.cpp:151) |
+| 150 | SET_WATER_COLOR | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:22 | SetWaterColor | handled | MtaIds::Rpc::SetWaterColor (shared/ServerRpc.cpp:268) |
+| 151 | RESET_WATER_COLOR | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:23 | ResetWaterColor | handled | MtaIds::Rpc::ResetWaterColor (shared/ServerRpc.cpp:274) |
 | 152 | SET_ELEMENT_FROZEN | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:37 | SetElementFrozen | handled | MtaIds::Rpc::SetElementFrozen (shared/PacketHandler.cpp:297) |
-| 153 | SET_LOW_LOD_ELEMENT | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:38 | SetLowLodElement | handled | MtaIds::Rpc::SetLowLodElement (shared/ServerRpc.cpp:1512) |
-| 154 | SET_BLIP_VISIBLE_DISTANCE | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:23 | SetBlipVisibleDistance | handled | MtaIds::Rpc::SetBlipVisibleDistance (shared/ServerRpc.cpp:861) |
-| 155 | SET_INTERIOR_SOUNDS_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:50 | SetInteriorSoundsEnabled | handled | MtaIds::Rpc::SetInteriorSoundsEnabled (shared/ServerRpc.cpp:152) |
-| 156 | SET_RAIN_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:51 | SetRainLevel | handled | MtaIds::Rpc::SetRainLevel (shared/ServerRpc.cpp:158) |
-| 157 | SET_SUN_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:52 | SetSunSize | handled | MtaIds::Rpc::SetSunSize (shared/ServerRpc.cpp:160) |
-| 158 | SET_SUN_COLOR | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:53 | SetSunColor | handled | MtaIds::Rpc::SetSunColor (shared/ServerRpc.cpp:162) |
-| 159 | SET_WIND_VELOCITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:54 | SetWindVelocity | handled | MtaIds::Rpc::SetWindVelocity (shared/ServerRpc.cpp:169) |
-| 160 | SET_FAR_CLIP_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:55 | SetFarClipDistance | handled | MtaIds::Rpc::SetFarClipDistance (shared/ServerRpc.cpp:176) |
-| 161 | SET_FOG_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:56 | SetFogDistance | handled | MtaIds::Rpc::SetFogDistance (shared/ServerRpc.cpp:178) |
-| 162 | RESET_RAIN_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:57 | ResetRainLevel | handled | MtaIds::Rpc::ResetRainLevel (shared/ServerRpc.cpp:197) |
-| 163 | RESET_SUN_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:58 | ResetSunSize | handled | MtaIds::Rpc::ResetSunSize (shared/ServerRpc.cpp:198) |
-| 164 | RESET_SUN_COLOR | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:59 | ResetSunColor | handled | MtaIds::Rpc::ResetSunColor (shared/ServerRpc.cpp:199) |
-| 165 | RESET_WIND_VELOCITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:60 | ResetWindVelocity | handled | MtaIds::Rpc::ResetWindVelocity (shared/ServerRpc.cpp:200) |
-| 166 | RESET_FAR_CLIP_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:61 | ResetFarClipDistance | handled | MtaIds::Rpc::ResetFarClipDistance (shared/ServerRpc.cpp:201) |
-| 167 | RESET_FOG_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:62 | ResetFogDistance | handled | MtaIds::Rpc::ResetFogDistance (shared/ServerRpc.cpp:202) |
-| 168 | SET_AIRCRAFT_MAXHEIGHT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:46 | SetAircraftMaxHeight | handled | MtaIds::Rpc::SetAircraftMaxHeight (shared/ServerRpc.cpp:180) |
-| 169 | SET_WEAPON_PROPERTY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:63 | SetWeaponProperty | handled | MtaIds::Rpc::SetWeaponProperty (shared/ServerRpc.cpp:1008) |
-| 170 | SET_VEHICLE_VARIANT | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:50 | SetVehicleVariant | handled | MtaIds::Rpc::SetVehicleVariant (shared/ServerRpc.cpp:1355) |
-| 171 | REMOVE_WORLD_MODEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:65 | RemoveWorldModel | handled | MtaIds::Rpc::RemoveWorldModel (shared/ServerRpc.cpp:286) |
-| 172 | RESTORE_WORLD_MODEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:66 | RestoreWorldModel | handled | MtaIds::Rpc::RestoreWorldModel (shared/ServerRpc.cpp:299) |
-| 173 | RESTORE_ALL_WORLD_MODELS | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:67 | RestoreAllWorldModels | handled | MtaIds::Rpc::RestoreAllWorldModels (shared/ServerRpc.cpp:312) |
-| 174 | TAKE_PLAYER_SCREEN_SHOT | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:25 | TakePlayerScreenShot | handled | MtaIds::Rpc::TakePlayerScreenShot (shared/ServerRpc.cpp:1057) |
-| 175 | SET_OCCLUSIONS_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:48 | SetOcclusionsEnabled | handled | MtaIds::Rpc::SetOcclusionsEnabled (shared/ServerRpc.cpp:184) |
-| 176 | GIVE_VEHICLE_SIRENS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:51 | GiveVehicleSirens | handled | MtaIds::Rpc::GiveVehicleSirens (shared/ServerRpc.cpp:1361) |
-| 177 | REMOVE_VEHICLE_SIRENS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:52 | RemoveVehicleSirens | handled | MtaIds::Rpc::RemoveVehicleSirens (shared/ServerRpc.cpp:1374) |
-| 178 | SET_VEHICLE_SIRENS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:53 | SetVehicleSirens | handled | MtaIds::Rpc::SetVehicleSirens (shared/ServerRpc.cpp:1378) |
-| 179 | SET_SYNC_INTERVALS | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:68 | SetSyncIntervals | handled | MtaIds::Rpc::SetSyncIntervals (shared/ServerRpc.cpp:1070) |
-| 180 | SET_JETPACK_WEAPON_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:42 | SetJetpackWeaponEnabled | handled | MtaIds::Rpc::SetJetpackWeaponEnabled (shared/ServerRpc.cpp:1079) |
-| 181 | FIRE_CUSTOM_WEAPON | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:39 | FireCustomWeapon | handled | MtaIds::Rpc::FireCustomWeapon (shared/ServerRpc.cpp:1580) |
-| 182 | SET_CUSTOM_WEAPON_STATE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:40 | SetCustomWeaponState | handled | MtaIds::Rpc::SetCustomWeaponState (shared/ServerRpc.cpp:1584) |
-| 183 | SET_CUSTOM_WEAPON_AMMO | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:42 | SetCustomWeaponAmmo | handled | MtaIds::Rpc::SetCustomWeaponAmmo (shared/ServerRpc.cpp:1591) |
-| 184 | SET_CUSTOM_WEAPON_CLIP_AMMO | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:41 | SetCustomWeaponClipAmmo | handled | MtaIds::Rpc::SetCustomWeaponClipAmmo (shared/ServerRpc.cpp:1597) |
-| 185 | SET_CUSTOM_WEAPON_TARGET | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:43 | SetCustomWeaponTarget | handled | MtaIds::Rpc::SetCustomWeaponTarget (shared/ServerRpc.cpp:1603) |
-| 186 | RESET_CUSTOM_WEAPON_TARGET | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:44 | ResetCustomWeaponTarget | handled | MtaIds::Rpc::ResetCustomWeaponTarget (shared/ServerRpc.cpp:1620) |
-| 187 | SET_CUSTOM_WEAPON_FLAGS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:45 | SetCustomWeaponFlags | handled | MtaIds::Rpc::SetCustomWeaponFlags (shared/ServerRpc.cpp:1624) |
-| 188 | SET_CUSTOM_WEAPON_FIRING_RATE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:46 | SetCustomWeaponFiringRate | handled | MtaIds::Rpc::SetCustomWeaponFiringRate (shared/ServerRpc.cpp:1636) |
-| 189 | RESET_CUSTOM_WEAPON_FIRING_RATE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:47 | ResetCustomWeaponFiringRate | handled | MtaIds::Rpc::ResetCustomWeaponFiringRate (shared/ServerRpc.cpp:1642) |
-| 190 | SET_WEAPON_OWNER | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:48 | SetWeaponOwner | handled | MtaIds::Rpc::SetWeaponOwner (shared/ServerRpc.cpp:1646) |
-| 191 | SET_AIRCRAFT_MAXVELOCITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:47 | SetAircraftMaxVelocity | handled | MtaIds::Rpc::SetAircraftMaxVelocity (shared/ServerRpc.cpp:182) |
-| 192 | RESET_MOON_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:71 | ResetMoonSize | handled | MtaIds::Rpc::ResetMoonSize (shared/ServerRpc.cpp:203) |
-| 193 | SET_MOON_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:70 | SetMoonSize | handled | MtaIds::Rpc::SetMoonSize (shared/ServerRpc.cpp:190) |
-| 194 | SET_VEHICLE_PLATE_TEXT | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:54 | SetVehiclePlateText | handled | MtaIds::Rpc::SetVehiclePlateText (shared/ServerRpc.cpp:1398) |
-| 195 | SET_PROPAGATE_CALLS_ENABLED | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:50 | SetCallPropagationEnabled | handled | MtaIds::Rpc::SetPropagateCallsEnabled (shared/ServerRpc.cpp:1518) |
-| 196 | SET_TRAIN_TRACK | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:44 | SetTrainTrack | handled | MtaIds::Rpc::SetTrainTrack (shared/ServerRpc.cpp:1404) |
-| 197 | SET_TRAIN_POSITION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:45 | SetTrainPosition | handled | MtaIds::Rpc::SetTrainPosition (shared/ServerRpc.cpp:1410) |
-| 198 | SET_OBJECT_VISIBLE_IN_ALL_DIMENSIONS | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:23 | SetObjectVisibleInAllDimensions | handled | MtaIds::Rpc::SetObjectVisibleInAllDimensions (shared/ServerRpc.cpp:1537) |
-| 199 | SET_ELEMENT_ANGULAR_VELOCITY | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:25 | SetElementAngularVelocity | handled | MtaIds::Rpc::SetElementAngularVelocity (shared/ServerRpc.cpp:1524) |
+| 153 | SET_LOW_LOD_ELEMENT | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:38 | SetLowLodElement | handled | MtaIds::Rpc::SetLowLodElement (shared/ServerRpc.cpp:1521) |
+| 154 | SET_BLIP_VISIBLE_DISTANCE | Client/mods/deathmatch/logic/rpc/CBlipRPCs.cpp:23 | SetBlipVisibleDistance | handled | MtaIds::Rpc::SetBlipVisibleDistance (shared/ServerRpc.cpp:865) |
+| 155 | SET_INTERIOR_SOUNDS_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:50 | SetInteriorSoundsEnabled | handled | MtaIds::Rpc::SetInteriorSoundsEnabled (shared/ServerRpc.cpp:153) |
+| 156 | SET_RAIN_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:51 | SetRainLevel | handled | MtaIds::Rpc::SetRainLevel (shared/ServerRpc.cpp:159) |
+| 157 | SET_SUN_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:52 | SetSunSize | handled | MtaIds::Rpc::SetSunSize (shared/ServerRpc.cpp:161) |
+| 158 | SET_SUN_COLOR | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:53 | SetSunColor | handled | MtaIds::Rpc::SetSunColor (shared/ServerRpc.cpp:163) |
+| 159 | SET_WIND_VELOCITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:54 | SetWindVelocity | handled | MtaIds::Rpc::SetWindVelocity (shared/ServerRpc.cpp:170) |
+| 160 | SET_FAR_CLIP_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:55 | SetFarClipDistance | handled | MtaIds::Rpc::SetFarClipDistance (shared/ServerRpc.cpp:177) |
+| 161 | SET_FOG_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:56 | SetFogDistance | handled | MtaIds::Rpc::SetFogDistance (shared/ServerRpc.cpp:179) |
+| 162 | RESET_RAIN_LEVEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:57 | ResetRainLevel | handled | MtaIds::Rpc::ResetRainLevel (shared/ServerRpc.cpp:198) |
+| 163 | RESET_SUN_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:58 | ResetSunSize | handled | MtaIds::Rpc::ResetSunSize (shared/ServerRpc.cpp:199) |
+| 164 | RESET_SUN_COLOR | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:59 | ResetSunColor | handled | MtaIds::Rpc::ResetSunColor (shared/ServerRpc.cpp:200) |
+| 165 | RESET_WIND_VELOCITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:60 | ResetWindVelocity | handled | MtaIds::Rpc::ResetWindVelocity (shared/ServerRpc.cpp:201) |
+| 166 | RESET_FAR_CLIP_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:61 | ResetFarClipDistance | handled | MtaIds::Rpc::ResetFarClipDistance (shared/ServerRpc.cpp:202) |
+| 167 | RESET_FOG_DISTANCE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:62 | ResetFogDistance | handled | MtaIds::Rpc::ResetFogDistance (shared/ServerRpc.cpp:203) |
+| 168 | SET_AIRCRAFT_MAXHEIGHT | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:46 | SetAircraftMaxHeight | handled | MtaIds::Rpc::SetAircraftMaxHeight (shared/ServerRpc.cpp:181) |
+| 169 | SET_WEAPON_PROPERTY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:63 | SetWeaponProperty | handled | MtaIds::Rpc::SetWeaponProperty (shared/ServerRpc.cpp:1012) |
+| 170 | SET_VEHICLE_VARIANT | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:50 | SetVehicleVariant | handled | MtaIds::Rpc::SetVehicleVariant (shared/ServerRpc.cpp:1364) |
+| 171 | REMOVE_WORLD_MODEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:65 | RemoveWorldModel | handled | MtaIds::Rpc::RemoveWorldModel (shared/ServerRpc.cpp:287) |
+| 172 | RESTORE_WORLD_MODEL | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:66 | RestoreWorldModel | handled | MtaIds::Rpc::RestoreWorldModel (shared/ServerRpc.cpp:300) |
+| 173 | RESTORE_ALL_WORLD_MODELS | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:67 | RestoreAllWorldModels | handled | MtaIds::Rpc::RestoreAllWorldModels (shared/ServerRpc.cpp:313) |
+| 174 | TAKE_PLAYER_SCREEN_SHOT | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:25 | TakePlayerScreenShot | handled | MtaIds::Rpc::TakePlayerScreenShot (shared/ServerRpc.cpp:1061) |
+| 175 | SET_OCCLUSIONS_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:48 | SetOcclusionsEnabled | handled | MtaIds::Rpc::SetOcclusionsEnabled (shared/ServerRpc.cpp:185) |
+| 176 | GIVE_VEHICLE_SIRENS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:51 | GiveVehicleSirens | handled | MtaIds::Rpc::GiveVehicleSirens (shared/ServerRpc.cpp:1370) |
+| 177 | REMOVE_VEHICLE_SIRENS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:52 | RemoveVehicleSirens | handled | MtaIds::Rpc::RemoveVehicleSirens (shared/ServerRpc.cpp:1383) |
+| 178 | SET_VEHICLE_SIRENS | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:53 | SetVehicleSirens | handled | MtaIds::Rpc::SetVehicleSirens (shared/ServerRpc.cpp:1387) |
+| 179 | SET_SYNC_INTERVALS | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:68 | SetSyncIntervals | handled | MtaIds::Rpc::SetSyncIntervals (shared/ServerRpc.cpp:1074) |
+| 180 | SET_JETPACK_WEAPON_ENABLED | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:42 | SetJetpackWeaponEnabled | handled | MtaIds::Rpc::SetJetpackWeaponEnabled (shared/ServerRpc.cpp:1083) |
+| 181 | FIRE_CUSTOM_WEAPON | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:39 | FireCustomWeapon | handled | MtaIds::Rpc::FireCustomWeapon (shared/ServerRpc.cpp:1589) |
+| 182 | SET_CUSTOM_WEAPON_STATE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:40 | SetCustomWeaponState | handled | MtaIds::Rpc::SetCustomWeaponState (shared/ServerRpc.cpp:1593) |
+| 183 | SET_CUSTOM_WEAPON_AMMO | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:42 | SetCustomWeaponAmmo | handled | MtaIds::Rpc::SetCustomWeaponAmmo (shared/ServerRpc.cpp:1600) |
+| 184 | SET_CUSTOM_WEAPON_CLIP_AMMO | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:41 | SetCustomWeaponClipAmmo | handled | MtaIds::Rpc::SetCustomWeaponClipAmmo (shared/ServerRpc.cpp:1606) |
+| 185 | SET_CUSTOM_WEAPON_TARGET | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:43 | SetCustomWeaponTarget | handled | MtaIds::Rpc::SetCustomWeaponTarget (shared/ServerRpc.cpp:1612) |
+| 186 | RESET_CUSTOM_WEAPON_TARGET | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:44 | ResetCustomWeaponTarget | handled | MtaIds::Rpc::ResetCustomWeaponTarget (shared/ServerRpc.cpp:1629) |
+| 187 | SET_CUSTOM_WEAPON_FLAGS | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:45 | SetCustomWeaponFlags | handled | MtaIds::Rpc::SetCustomWeaponFlags (shared/ServerRpc.cpp:1633) |
+| 188 | SET_CUSTOM_WEAPON_FIRING_RATE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:46 | SetCustomWeaponFiringRate | handled | MtaIds::Rpc::SetCustomWeaponFiringRate (shared/ServerRpc.cpp:1645) |
+| 189 | RESET_CUSTOM_WEAPON_FIRING_RATE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:47 | ResetCustomWeaponFiringRate | handled | MtaIds::Rpc::ResetCustomWeaponFiringRate (shared/ServerRpc.cpp:1651) |
+| 190 | SET_WEAPON_OWNER | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:48 | SetWeaponOwner | handled | MtaIds::Rpc::SetWeaponOwner (shared/ServerRpc.cpp:1655) |
+| 191 | SET_AIRCRAFT_MAXVELOCITY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:47 | SetAircraftMaxVelocity | handled | MtaIds::Rpc::SetAircraftMaxVelocity (shared/ServerRpc.cpp:183) |
+| 192 | RESET_MOON_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:71 | ResetMoonSize | handled | MtaIds::Rpc::ResetMoonSize (shared/ServerRpc.cpp:204) |
+| 193 | SET_MOON_SIZE | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:70 | SetMoonSize | handled | MtaIds::Rpc::SetMoonSize (shared/ServerRpc.cpp:191) |
+| 194 | SET_VEHICLE_PLATE_TEXT | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:54 | SetVehiclePlateText | handled | MtaIds::Rpc::SetVehiclePlateText (shared/ServerRpc.cpp:1407) |
+| 195 | SET_PROPAGATE_CALLS_ENABLED | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:50 | SetCallPropagationEnabled | handled | MtaIds::Rpc::SetPropagateCallsEnabled (shared/ServerRpc.cpp:1527) |
+| 196 | SET_TRAIN_TRACK | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:44 | SetTrainTrack | handled | MtaIds::Rpc::SetTrainTrack (shared/ServerRpc.cpp:1413) |
+| 197 | SET_TRAIN_POSITION | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:45 | SetTrainPosition | handled | MtaIds::Rpc::SetTrainPosition (shared/ServerRpc.cpp:1419) |
+| 198 | SET_OBJECT_VISIBLE_IN_ALL_DIMENSIONS | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:23 | SetObjectVisibleInAllDimensions | handled | MtaIds::Rpc::SetObjectVisibleInAllDimensions (shared/ServerRpc.cpp:1546) |
+| 199 | SET_ELEMENT_ANGULAR_VELOCITY | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:25 | SetElementAngularVelocity | handled | MtaIds::Rpc::SetElementAngularVelocity (shared/ServerRpc.cpp:1533) |
 | 200 | SET_PED_ANIMATION_SPEED | Client/mods/deathmatch/logic/rpc/CPedRPCs.cpp:35 | SetPedAnimationSpeed | handled | MtaIds::Rpc::SetPedAnimationSpeed (shared/PacketHandler.cpp:495) |
 | 201 | SET_COLSHAPE_RADIUS | Client/mods/deathmatch/logic/rpc/CColShapeRPCs.cpp:17 | SetColShapeRadius | handled | MtaIds::Rpc::SetColshapeRadius (shared/PacketHandler.cpp:163) |
 | 202 | SET_COLSHAPE_SIZE | Client/mods/deathmatch/logic/rpc/CColShapeRPCs.cpp:18 | SetColShapeSize | handled | MtaIds::Rpc::SetColshapeSize (shared/PacketHandler.cpp:171) |
 | 203 | ADD_COLPOLYGON_POINT | Client/mods/deathmatch/logic/rpc/CColShapeRPCs.cpp:20 | AddColPolygonPoint | handled | MtaIds::Rpc::AddColPolygonPoint (shared/PacketHandler.cpp:188) |
 | 204 | REMOVE_COLPOLYGON_POINT | Client/mods/deathmatch/logic/rpc/CColShapeRPCs.cpp:21 | RemoveColPolygonPoint | handled | MtaIds::Rpc::RemoveColPolygonPoint (shared/PacketHandler.cpp:203) |
 | 205 | UPDATE_COLPOLYGON_POINT | Client/mods/deathmatch/logic/rpc/CColShapeRPCs.cpp:19 | UpdateColPolygonPoint | handled | MtaIds::Rpc::UpdateColPolygonPoint (shared/PacketHandler.cpp:189) |
-| 206 | SET_DISCORD_JOIN_PARAMETERS | - | - | handled | MtaIds::Rpc::SetDiscordJoinParameters (shared/ServerRpc.cpp:1086) |
-| 207 | SET_TRANSFER_BOX_VISIBILITY | Client/mods/deathmatch/logic/rpc/COutputRPCs.cpp:19 | SetTransferBoxVisibility | handled | MtaIds::Rpc::SetTransferBoxVisibility (shared/ServerRpc.cpp:1090) |
+| 206 | SET_DISCORD_JOIN_PARAMETERS | - | - | handled | MtaIds::Rpc::SetDiscordJoinParameters (shared/ServerRpc.cpp:1090) |
+| 207 | SET_TRANSFER_BOX_VISIBILITY | Client/mods/deathmatch/logic/rpc/COutputRPCs.cpp:19 | SetTransferBoxVisibility | handled | MtaIds::Rpc::SetTransferBoxVisibility (shared/ServerRpc.cpp:1094) |
 | 208 | SET_COLPOLYGON_HEIGHT | Client/mods/deathmatch/logic/rpc/CColShapeRPCs.cpp:22 | SetColShapePolygonHeight | handled | MtaIds::Rpc::SetColPolygonHeight (shared/PacketHandler.cpp:180) |
-| 209 | SET_OBJECT_BREAKABLE | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:24 | SetObjectBreakable | handled | MtaIds::Rpc::SetObjectBreakable (shared/ServerRpc.cpp:1544) |
-| 210 | SET_WORLD_SPECIAL_PROPERTY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:73 | SetWorldSpecialPropertyEnabled | handled | MtaIds::Rpc::SetWorldSpecialProperty (shared/ServerRpc.cpp:1096) |
-| 211 | BREAK_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:26 | BreakObject | handled | MtaIds::Rpc::BreakObject (shared/ServerRpc.cpp:1550) |
-| 212 | SET_PLAYER_SCRIPT_DEBUG_LEVEL | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:26 | SetPlayerScriptDebugLevel | handled | MtaIds::Rpc::SetPlayerScriptDebugLevel (shared/ServerRpc.cpp:1103) |
-| 213 | SET_MARKER_TARGET_ARROW_PROPERTIES | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:22 | SetMarkerTargetArrowProperties | handled | MtaIds::Rpc::SetMarkerTargetArrowProperties (shared/ServerRpc.cpp:1570) |
-| 214 | RESPAWN_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:27 | RespawnObject | handled | MtaIds::Rpc::RespawnObject (shared/ServerRpc.cpp:1554) |
-| 215 | TOGGLE_OBJECT_RESPAWN | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:28 | ToggleObjectRespawn | handled | MtaIds::Rpc::ToggleObjectRespawn (shared/ServerRpc.cpp:1558) |
-| 216 | RESET_WORLD_PROPERTIES | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:75 | ResetWorldProperties | handled | MtaIds::Rpc::ResetWorldProperties (shared/ServerRpc.cpp:1109) |
-| 217 | SPAWN_VEHICLE_FLYING_COMPONENT | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:55 | SpawnVehicleFlyingComponent | handled | MtaIds::Rpc::SpawnVehicleFlyingComponent (shared/ServerRpc.cpp:1416) |
-| 218 | SET_VEHICLE_NITRO_ACTIVATED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:56 | SetVehicleNitroActivated | handled | MtaIds::Rpc::SetVehicleNitroActivated (shared/ServerRpc.cpp:1424) |
-| 219 | SET_ELEMENT_ON_FIRE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:52 | SetElementOnFire | handled | MtaIds::Rpc::SetElementOnFire (shared/ServerRpc.cpp:1531) |
-| 220 | SET_WORLD_SEABED_OUTER_BOUNDARY | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:24 | SetWorldSeaBedOuterBoundary | handled | MtaIds::Rpc::SetWorldSeabedOuterBoundary (shared/ServerRpc.cpp:1119) |
-| 221 | ALLOCATE_SERVER_MODEL | Client/mods/deathmatch/logic/rpc/CModelRPCs.cpp:16 | AllocateServerModel | handled | MtaIds::Rpc::AllocateServerModel (shared/ServerRpc.cpp:1125) |
-| 222 | FREE_SERVER_MODEL | Client/mods/deathmatch/logic/rpc/CModelRPCs.cpp:17 | FreeServerModel | handled | MtaIds::Rpc::FreeServerModel (shared/ServerRpc.cpp:1136) |
-| 223 | SET_OBJECT_DYNAMIC_PHYSICS | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:25 | SetObjectDynamicPhysics | handled | MtaIds::Rpc::SetObjectDynamicPhysics (shared/ServerRpc.cpp:1564) |
-| 224 | TOGGLE_DEVTOOLS | Client/mods/deathmatch/logic/rpc/COutputRPCs.cpp:18 | ToggleDevTools | handled | MtaIds::Rpc::ToggleDevTools (shared/ServerRpc.cpp:1142) |
+| 209 | SET_OBJECT_BREAKABLE | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:24 | SetObjectBreakable | handled | MtaIds::Rpc::SetObjectBreakable (shared/ServerRpc.cpp:1553) |
+| 210 | SET_WORLD_SPECIAL_PROPERTY | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:73 | SetWorldSpecialPropertyEnabled | handled | MtaIds::Rpc::SetWorldSpecialProperty (shared/ServerRpc.cpp:1100) |
+| 211 | BREAK_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:26 | BreakObject | handled | MtaIds::Rpc::BreakObject (shared/ServerRpc.cpp:1559) |
+| 212 | SET_PLAYER_SCRIPT_DEBUG_LEVEL | Client/mods/deathmatch/logic/rpc/CPlayerRPCs.cpp:26 | SetPlayerScriptDebugLevel | handled | MtaIds::Rpc::SetPlayerScriptDebugLevel (shared/ServerRpc.cpp:1107) |
+| 213 | SET_MARKER_TARGET_ARROW_PROPERTIES | Client/mods/deathmatch/logic/rpc/CMarkerRPCs.cpp:22 | SetMarkerTargetArrowProperties | handled | MtaIds::Rpc::SetMarkerTargetArrowProperties (shared/ServerRpc.cpp:1579) |
+| 214 | RESPAWN_OBJECT | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:27 | RespawnObject | handled | MtaIds::Rpc::RespawnObject (shared/ServerRpc.cpp:1563) |
+| 215 | TOGGLE_OBJECT_RESPAWN | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:28 | ToggleObjectRespawn | handled | MtaIds::Rpc::ToggleObjectRespawn (shared/ServerRpc.cpp:1567) |
+| 216 | RESET_WORLD_PROPERTIES | Client/mods/deathmatch/logic/rpc/CWorldRPCs.cpp:75 | ResetWorldProperties | handled | MtaIds::Rpc::ResetWorldProperties (shared/ServerRpc.cpp:1113) |
+| 217 | SPAWN_VEHICLE_FLYING_COMPONENT | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:55 | SpawnVehicleFlyingComponent | handled | MtaIds::Rpc::SpawnVehicleFlyingComponent (shared/ServerRpc.cpp:1425) |
+| 218 | SET_VEHICLE_NITRO_ACTIVATED | Client/mods/deathmatch/logic/rpc/CVehicleRPCs.cpp:56 | SetVehicleNitroActivated | handled | MtaIds::Rpc::SetVehicleNitroActivated (shared/ServerRpc.cpp:1433) |
+| 219 | SET_ELEMENT_ON_FIRE | Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:52 | SetElementOnFire | handled | MtaIds::Rpc::SetElementOnFire (shared/ServerRpc.cpp:1540) |
+| 220 | SET_WORLD_SEABED_OUTER_BOUNDARY | Client/mods/deathmatch/logic/rpc/CWaterRPCs.cpp:24 | SetWorldSeaBedOuterBoundary | handled | MtaIds::Rpc::SetWorldSeabedOuterBoundary (shared/ServerRpc.cpp:1123) |
+| 221 | ALLOCATE_SERVER_MODEL | Client/mods/deathmatch/logic/rpc/CModelRPCs.cpp:16 | AllocateServerModel | handled | MtaIds::Rpc::AllocateServerModel (shared/ServerRpc.cpp:1129) |
+| 222 | FREE_SERVER_MODEL | Client/mods/deathmatch/logic/rpc/CModelRPCs.cpp:17 | FreeServerModel | handled | MtaIds::Rpc::FreeServerModel (shared/ServerRpc.cpp:1145) |
+| 223 | SET_OBJECT_DYNAMIC_PHYSICS | Client/mods/deathmatch/logic/rpc/CObjectRPCs.cpp:25 | SetObjectDynamicPhysics | handled | MtaIds::Rpc::SetObjectDynamicPhysics (shared/ServerRpc.cpp:1573) |
+| 224 | TOGGLE_DEVTOOLS | Client/mods/deathmatch/logic/rpc/COutputRPCs.cpp:18 | ToggleDevTools | handled | MtaIds::Rpc::ToggleDevTools (shared/ServerRpc.cpp:1151) |
 
 ## D. Element types (ENTITY_ADD)
 

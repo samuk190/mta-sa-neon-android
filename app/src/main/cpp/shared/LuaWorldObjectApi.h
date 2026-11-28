@@ -39,9 +39,15 @@ struct ServerObjectMove {
     float targetPos[3] = {}, targetRot[3] = {};
     bool deltaRotation = false;
     bool linear = true;
+    int easing = 0;
+    float period = 0.3f;
+    float amplitude = 1.f;
+    float overshoot = 1.70158f;
     uint32_t elapsedMs = 0;
     uint32_t totalMs = 0;
 };
+// CEasingCurve::GetEasingTypeFromString: index (0..18), or -1 if unknown.
+int EasingTypeFromName(const char* name);
 // CEasingCurve::GetEasingTypeFromString: true when name is one of the easing types.
 bool IsKnownEasingName(const char* name);
 bool ServerMoveObject(uint32_t id, const ServerObjectMove& move);

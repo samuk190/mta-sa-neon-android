@@ -3499,6 +3499,7 @@ std::string LuaVMStub::pumpDx(bool renderFrame) {
     DxBeginFrame(g_dx.frame);
     PulseCamera();
     PulseSpatial();
+    PulseLights();
     // login_camera.lua moves the tour in onClientPreRender, before the DX menu.
     // CClientGame.cpp:915 + CMapEvent.cpp:26: fire onClientHUDRender before onClientRender.
     DxSetAspectRatioAdjustmentAllowed(true);

@@ -17,6 +17,7 @@
 #include "ServerWorld.h"
 #include "LuaFieldApi.h"
 #include "EngineAssets.h"
+#include "WorldNativeBridge.h"
 #include "WorldObjectFeed.h"
 
 #include "lua.hpp"
@@ -55,7 +56,10 @@ struct Move {
     Vec3 sourceRot{};
     Vec3 targetPos{};
     Vec3 targetRot{};
-    bool linear = true;
+    int easing = 0;
+    float period = 0.3f;
+    float amplitude = 1.f;
+    float overshoot = 1.70158f;
 };
 
 struct Material {
@@ -388,6 +392,69 @@ Object* Live(uint32_t id) {
     return Adopt(id);
 }
 
+double EvalMoveEasing(int easing, double t, double period, double amplitude, double overshoot) {
+    if (t <= 0.0) return 0.0;
+    if (t >= 1.0) return 1.0;
+    if (period <= 0.0) period = 0.3;
+    constexpr double kPiD = 3.14159265358979323846;
+    constexpr double kPi2D = kPiD * 0.5;
+    auto outBounce = [](double x, double c, double a) {
+        if (x == 1.0) return c;
+        if (x < (4.0 / 11.0)) return c * (7.5625 * x * x);
+        if (x < (8.0 / 11.0)) { x -= (6.0 / 11.0); return -a * (1.0 - (7.5625 * x * x + 0.75)) + c; }
+        if (x < (10.0 / 11.0)) { x -= (9.0 / 11.0); return -a * (1.0 - (7.5625 * x * x + 0.9375)) + c; }
+        x -= (21.0 / 22.0);
+        return -a * (1.0 - (7.5625 * x * x + 0.984375)) + c;
+    };
+    auto inElastic = [&](double x, double b, double c, double a, double p) {
+        if (x == 0.0) return b;
+        if (x == 1.0) return b + c;
+        double s = (a < std::fabs(c)) ? (a = c, p / 4.0) : (p / (2.0 * kPiD) * std::asin(c / a));
+        x -= 1.0;
+        return -(a * std::pow(2.0, 10.0 * x) * std::sin((x - s) * (2.0 * kPiD) / p)) + b;
+    };
+    auto outElastic = [&](double x, double c, double a, double p) {
+        if (x == 0.0) return 0.0;
+        if (x == 1.0) return c;
+        double s = (a < c) ? (a = c, p / 4.0) : (p / (2.0 * kPiD) * std::asin(c / a));
+        return a * std::pow(2.0, -10.0 * x) * std::sin((x - s) * (2.0 * kPiD) / p) + c;
+    };
+    auto inBack = [](double x, double s) { return x * x * ((s + 1.0) * x - s); };
+    auto outBack = [](double x, double s) { x -= 1.0; return x * x * ((s + 1.0) * x + s) + 1.0; };
+    switch (easing) {
+        case 0: return t;  // Linear
+        case 1: return t * t;  // InQuad
+        case 2: return -t * (t - 2.0);  // OutQuad
+        case 3: { double u = t * 2.0; return u < 1.0 ? u * u * 0.5 : -0.5 * ((u - 1.0) * ((u - 1.0) - 2.0) - 1.0); }  // InOutQuad
+        case 4: return t < 0.5 ? (-(2.0 * t) * (2.0 * t - 2.0)) * 0.5 : ((2.0 * t - 1.0) * (2.0 * t - 1.0)) * 0.5 + 0.5;  // OutInQuad
+        case 5: return inElastic(t, 0.0, 1.0, amplitude, period);  // InElastic
+        case 6: return outElastic(t, 1.0, amplitude, period);  // OutElastic
+        case 7: {  // InOutElastic
+            double u = t * 2.0, a = amplitude;
+            double s = (a < 1.0) ? (a = 1.0, period / 4.0) : (period / (2.0 * kPiD) * std::asin(1.0 / a));
+            if (u < 1.0) return -0.5 * (a * std::pow(2.0, 10.0 * (u - 1.0)) * std::sin((u - 1.0 - s) * (2.0 * kPiD) / period));
+            return a * std::pow(2.0, -10.0 * (u - 1.0)) * std::sin((u - 1.0 - s) * (2.0 * kPiD) / period) * 0.5 + 1.0;
+        }
+        case 8: return t < 0.5 ? outElastic(t * 2.0, 0.5, amplitude, period) : inElastic(2.0 * t - 1.0, 0.5, 0.5, amplitude, period);  // OutInElastic
+        case 9: return inBack(t, overshoot);  // InBack
+        case 10: return outBack(t, overshoot);  // OutBack
+        case 11: {  // InOutBack
+            double u = t * 2.0, s = overshoot * 1.525;
+            if (u < 1.0) return 0.5 * (u * u * ((s + 1.0) * u - s));
+            u -= 2.0;
+            return 0.5 * (u * u * ((s + 1.0) * u + s) + 2.0);
+        }
+        case 12: return t < 0.5 ? outBack(2.0 * t, overshoot) * 0.5 : inBack(2.0 * t - 1.0, overshoot) * 0.5 + 0.5;  // OutInBack
+        case 13: return 1.0 - outBounce(1.0 - t, 1.0, amplitude);  // InBounce
+        case 14: return outBounce(t, 1.0, amplitude);  // OutBounce
+        case 15: return t < 0.5 ? (1.0 - outBounce(1.0 - 2.0 * t, 1.0, amplitude)) * 0.5 : outBounce(2.0 * t - 1.0, 1.0, amplitude) * 0.5 + 0.5;  // InOutBounce
+        case 16: return t < 0.5 ? outBounce(t * 2.0, 0.5, amplitude) : 1.0 - outBounce(2.0 - 2.0 * t, 0.5, amplitude);  // OutInBounce
+        case 17: return (std::sin(t * kPiD * 2.0 - kPi2D) + 1.0) * 0.5;  // SineCurve
+        case 18: return (std::cos(t * kPiD * 2.0 - kPi2D) + 1.0) * 0.5;  // CosineCurve
+        default: return t;
+    }
+}
+
 void Sample(Object& object) {
     if (!object.move.active) return;
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - object.move.start);
@@ -398,7 +465,9 @@ void Sample(Object& object) {
         object.move.active = false;
         return;
     }
-    const float t = static_cast<float>(ms) / static_cast<float>(object.move.durationMs);
+    const double raw = static_cast<double>(ms) / static_cast<double>(object.move.durationMs);
+    const float t = static_cast<float>(EvalMoveEasing(object.move.easing, raw, object.move.period,
+                                                      object.move.amplitude, object.move.overshoot));
     auto lerp = [t](float from, float to) { return from + (to - from) * t; };
     object.pos = {lerp(object.move.sourcePos.x, object.move.targetPos.x), lerp(object.move.sourcePos.y, object.move.targetPos.y),
                   lerp(object.move.sourcePos.z, object.move.targetPos.z)};
@@ -464,16 +533,11 @@ void NoteMoveGap() {
     (void)g_diagMove;
 }
 
-void NoteCurveGap() {
-    if (g_diagCurve) return;
-    g_diagCurve = true;
-    LUA_LOGE("DIAG moveObject: non-linear CEasingCurve samples are stored as Linear until the move ends");
-}
-
-bool StartMove(Object& object, uint32_t durationMs, const Vec3& target, const Vec3& deltaDeg, bool linear) {
+bool StartMove(Object& object, uint32_t durationMs, const Vec3& target, const Vec3& deltaDeg,
+               int easing, float period, float amplitude, float overshoot) {
     NoteMoveGap();
+    (void)g_diagCurve;
     object.localOverride = true;
-    if (!linear) NoteCurveGap();
     Vec3 source = object.rot;
     source.x = WrapOnce(source.x);
     source.y = WrapOnce(source.y);
@@ -493,7 +557,10 @@ bool StartMove(Object& object, uint32_t durationMs, const Vec3& target, const Ve
     object.move.sourceRot = source;
     object.move.targetPos = target;
     object.move.targetRot = finalRot;
-    object.move.linear = linear;
+    object.move.easing = easing;
+    object.move.period = period;
+    object.move.amplitude = amplitude;
+    object.move.overshoot = overshoot;
     return true;
 }
 
@@ -771,12 +838,10 @@ int MoveObject(lua_State* L) {
     if (!ReadOptionalFinite(L, "moveObject", 10, period, 0.3f) || !ReadOptionalFinite(L, "moveObject", 11, amplitude, 1.f) ||
         !ReadOptionalFinite(L, "moveObject", 12, overshoot, 1.70158f))
         return Fail(L);
-    (void)period;
-    (void)amplitude;
-    (void)overshoot;
     const uint32_t duration = static_cast<uint32_t>(time);
-    const bool linear = easing == 0;
-    ApplyTree(object->id, [&](Object& item) { return StartMove(item, duration, target, delta, linear); });
+    ApplyTree(object->id, [&](Object& item) {
+        return StartMove(item, duration, target, delta, easing, period, amplitude, overshoot);
+    });
     ActiveVmFireElementEvent(L, "onClientObjectMoveStart", object->id, 0);
     lua_pushboolean(L, 1);
     return 1;
@@ -800,14 +865,21 @@ int StopObject(lua_State* L) {
 int BreakObject(lua_State* L) {
     Object* object = nullptr;
     if (!ReadObject(L, "breakObject", object)) return Fail(L);
-    if (!g_diagBreak) {
+    if (object->breakDisabled) return Fail(L);
+    bool broken = false;
+    ApplyTree(object->id, [&](Object& item) {
+        if (item.breakDisabled) return false;
+        if (WorldNative::BreakObject(item.id)) broken = true;
+        return broken;
+    });
+    if (!broken && !g_diagBreak) {
         g_diagBreak = true;
-        LUA_LOGE("DIAG breakObject: CObject::Break is not hooked");
+        LUA_LOGE("DIAG breakObject: CObject::ObjectDamage is not hooked");
     }
     lua_pushnil(L);  // attacker
     ActiveVmFireElementEvent(L, "onClientObjectBreak", object->id, 1);
-    ApplyTree(object->id, [](Object&) { return false; });
-    return Fail(L);
+    lua_pushboolean(L, broken ? 1 : 0);
+    return 1;
 }
 
 int RespawnObject(lua_State* L) {
@@ -1150,13 +1222,13 @@ void PublishClientObjects() {
 
 bool IsWorldObject(uint32_t id) { return Live(id) != nullptr; }
 
+int EasingTypeFromName(const char* name) { return EasingFromName(name); }
 bool IsKnownEasingName(const char* name) { return EasingFromName(name) >= 0; }
 
 bool ServerMoveObject(uint32_t id, const ServerObjectMove& move) {
     Object* object = Live(id);
     if (!object) return false;
     NoteMoveGap();
-    if (!move.linear) NoteCurveGap();
     object->localOverride = true;
     const Vec3 sourcePos{move.sourcePos[0], move.sourcePos[1], move.sourcePos[2]};
     const Vec3 sourceRot{move.sourceRot[0], move.sourceRot[1], move.sourceRot[2]};
@@ -1179,7 +1251,10 @@ bool ServerMoveObject(uint32_t id, const ServerObjectMove& move) {
     object->move.sourceRot = sourceRot;
     object->move.targetPos = targetPos;
     object->move.targetRot = targetRot;
-    object->move.linear = move.linear;
+    object->move.easing = move.easing;
+    object->move.period = move.period;
+    object->move.amplitude = move.amplitude;
+    object->move.overshoot = move.overshoot;
     return true;
 }
 

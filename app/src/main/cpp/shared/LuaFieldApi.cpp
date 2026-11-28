@@ -24,6 +24,7 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -75,7 +76,6 @@ bool g_diagSpeed = false;
 bool g_diagMinute = false;
 bool g_diagFar = false;
 bool g_diagFog = false;
-bool g_diagOrder = false;
 bool g_diagCollision = false;
 bool g_nearSet = false;
 float g_near = 0.3f;
@@ -228,14 +228,53 @@ int l_getElementModel(lua_State* L) {
     return 1;
 }
 
+// Desktop Shared/mods/deathmatch/logic/Utils.cpp:1012-1110 (ConvertEulerRotationOrder).
+void ConvertEulerZXYToOrder(const char* order, float& rx, float& ry, float& rz) {
+    if (!order || std::strcmp(order, "default") == 0 || std::strcmp(order, "ZXY") == 0) return;
+    constexpr float kDegToRad = 3.14159265358979323846f / 180.f;
+    constexpr float kRadToDeg = 180.f / 3.14159265358979323846f;
+    const float cx = std::cos(rx * kDegToRad), sx = std::sin(rx * kDegToRad);
+    const float cy = std::cos(ry * kDegToRad), sy = std::sin(ry * kDegToRad);
+    const float cz = std::cos(rz * kDegToRad), sz = std::sin(rz * kDegToRad);
+    const float zyxX = std::atan2(sx, cx * cy) * kRadToDeg;
+    const float zyxY = std::asin(std::clamp(cx * sy, -1.f, 1.f)) * kRadToDeg;
+    const float zyxZ = std::atan2(cy * sz + sx * sy * cz, cy * cz - sx * sy * sz) * kRadToDeg;
+    auto wrapDeg = [](float d) {
+        d = std::fmod(d, 360.f);
+        return d < 0.f ? d + 360.f : d;
+    };
+    if (std::strcmp(order, "ZYX") == 0) {
+        rx = wrapDeg(zyxX);
+        ry = wrapDeg(zyxY);
+        rz = wrapDeg(zyxZ);
+    } else if (std::strcmp(order, "-ZYX") == 0) {
+        rx = wrapDeg(-zyxX);
+        ry = wrapDeg(-zyxY);
+        rz = wrapDeg(-zyxZ);
+    }
+}
+
 int l_getElementRotation(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
-    if (lua_type(L, 2) == LUA_TSTRING && std::strcmp(lua_tostring(L, 2), "default") != 0)
-        Diag(g_diagOrder, "DIAG getElementRotation: non-default Euler order is not converted");
-    else if (!lua_isnoneornil(L, 2) && lua_type(L, 2) != LUA_TSTRING) {
+    const char* order = "default";
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        order = lua_tostring(L, 2);
+        if (std::strcmp(order, "default") != 0 && std::strcmp(order, "ZXY") != 0 &&
+            std::strcmp(order, "ZYX") != 0 && std::strcmp(order, "-ZYX") != 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+    } else if (!lua_isnoneornil(L, 2)) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    auto pushRot = [&](float rx, float ry, float rz) {
+        ConvertEulerZXYToOrder(order, rx, ry, rz);
+        lua_pushnumber(L, rx);
+        lua_pushnumber(L, ry);
+        lua_pushnumber(L, rz);
+        return 3;
+    };
     float attPos[3] = {}, attRot[3] = {};
     if (id != 0 && ServerWorld::ResolveAttachedTransform(
             id,
@@ -286,24 +325,21 @@ int l_getElementRotation(lua_State* L) {
                 return false;
             },
             attPos, attRot)) {
-        lua_pushnumber(L, attRot[0]);
-        lua_pushnumber(L, attRot[1]);
-        lua_pushnumber(L, attRot[2]);
-        return 3;
+        return pushRot(attRot[0], attRot[1], attRot[2]);
     }
     Game::LocalCarState car;
     if (Game::CopyLocalCar(car) && car.vehicleId == id) {
-        lua_pushnumber(L, car.rotX);
-        lua_pushnumber(L, car.rotY);
-        lua_pushnumber(L, car.rotZ);
-        return 3;
+        return pushRot(car.rotX, car.rotY, car.rotZ);
     }
     Game::HostedCar traffic;
     if (Game::CopyTrafficVehicleState(id, traffic)) {
-        lua_pushnumber(L, traffic.rotX);
-        lua_pushnumber(L, traffic.rotY);
-        lua_pushnumber(L, traffic.rotZ);
-        return 3;
+        return pushRot(traffic.rotX, traffic.rotY, traffic.rotZ);
+    }
+    float objPos[3] = {}, objRotRad[3] = {}, objScale[3] = {};
+    bool objMoving = false;
+    if (CopyObjectState(id, objPos, objRotRad, objScale, objMoving)) {
+        constexpr float kRadToDeg = 57.29577951308232f;
+        return pushRot(objRotRad[0] * kRadToDeg, objRotRad[1] * kRadToDeg, objRotRad[2] * kRadToDeg);
     }
     float z = 0.f;
     if (!HeadingOf(id, z)) {
@@ -312,10 +348,7 @@ int l_getElementRotation(lua_State* L) {
     }
     float rx = 0.f, ry = 0.f;
     VehicleTilt(id, rx, ry);
-    lua_pushnumber(L, rx);
-    lua_pushnumber(L, ry);
-    lua_pushnumber(L, z);
-    return 3;
+    return pushRot(rx, ry, z);
 }
 
 int l_getElementMatrix(lua_State* L) {
@@ -833,7 +866,9 @@ int l_setNearClipDistance(lua_State* L) {
     }
     g_near = distance;
     g_nearSet = true;
-    Diag(g_diagWorld, "DIAG setNearClipDistance: CMultiplayer::SetNearClipDistance is not hooked; the value is stored");
+    if (!WorldNative::SetNearClipDistance(distance, false)) {
+        Diag(g_diagWorld, "DIAG setNearClipDistance: CCamera::SetNearClipScript is not hooked; the value is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -842,6 +877,7 @@ int l_resetNearClipDistance(lua_State* L) {
     (void)L;
     g_near = 0.3f;
     g_nearSet = false;
+    WorldNative::SetNearClipDistance(0.3f, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1162,7 +1198,8 @@ int l_setGrainMultiplier(lua_State* L) {
         return 1;
     }
     g_grainMul = value;
-    Diag(g_diagWorld, "DIAG setGrainMultiplier: CGame::SetGrainMultiplier is not hooked; the value is stored");
+    const int scaledGrain = static_cast<int>(std::clamp(static_cast<float>(g_grain) * value, 0.f, 255.f));
+    WorldNative::SetGrainLevel(scaledGrain);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1456,7 +1493,10 @@ int l_setColorFilter(lua_State* L) {
         }
     }
     for (int i = 0; i < 8; ++i) g_filter[i] = static_cast<int>(color[i]);
-    Diag(g_diagWorld, "DIAG setColorFilter: CMultiplayer::SetColorFilter is not hooked; the value is stored");
+    if (!WorldNative::SetColorFilter(g_filter[0], g_filter[1], g_filter[2], g_filter[3],
+                                     g_filter[4], g_filter[5], g_filter[6], g_filter[7], false)) {
+        Diag(g_diagWorld, "DIAG setColorFilter: CTimeCycle postfx filter is not hooked; the value is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1470,6 +1510,7 @@ int l_getColorFilter(lua_State* L) {
 int l_resetColorFilter(lua_State* L) {
     (void)L;
     for (int& value : g_filter) value = 0;
+    WorldNative::SetColorFilter(0, 0, 0, 0, 0, 0, 0, 0, true);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1634,7 +1675,9 @@ int l_setWaterLevel(lua_State* L) {
         return 1;
     }
     g_waterLevel = level;
-    Diag(g_diagWorld, "DIAG setWaterLevel: CWaterManager::SetWorldWaterLevel is not hooked; the level is stored");
+    if (!WorldNative::SetWorldWaterLevel(level, false)) {
+        Diag(g_diagWorld, "DIAG setWaterLevel: CWaterLevel world vertices are not hooked; the level is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1642,6 +1685,7 @@ int l_setWaterLevel(lua_State* L) {
 int l_resetWaterLevel(lua_State* L) {
     (void)L;
     g_waterLevel = 0.f;
+    WorldNative::SetWorldWaterLevel(0.f, true);
     lua_pushboolean(L, 1);
     return 1;
 }

@@ -38,38 +38,122 @@ bool Number(lua_State* L, int index, double& out) {
     return std::isfinite(out);
 }
 
-double Ease(const char* name, double t) {
-    if (t < 0) t = 0;
-    if (t > 1) t = 1;
+// Desktop Shared/animation/EasingEquations.hpp (all 19 MTA CEasingCurve types + cubic/sine extras).
+constexpr double kEasePi = 3.14159265358979323846;
+constexpr double kEasePi2 = kEasePi * 0.5;
+
+double EaseOutBounceHelper(double t, double c, double a) {
+    if (t == 1.0) return c;
+    if (t < (4.0 / 11.0)) return c * (7.5625 * t * t);
+    if (t < (8.0 / 11.0)) { t -= (6.0 / 11.0); return -a * (1.0 - (7.5625 * t * t + 0.75)) + c; }
+    if (t < (10.0 / 11.0)) { t -= (9.0 / 11.0); return -a * (1.0 - (7.5625 * t * t + 0.9375)) + c; }
+    t -= (21.0 / 22.0);
+    return -a * (1.0 - (7.5625 * t * t + 0.984375)) + c;
+}
+
+double EaseInElasticHelper(double t, double b, double c, double d, double a, double p) {
+    if (t == 0.0) return b;
+    double tAdj = t / d;
+    if (tAdj == 1.0) return b + c;
+    double s = 0.0;
+    if (a < std::fabs(c)) { a = c; s = p / 4.0; }
+    else s = p / (2.0 * kEasePi) * std::asin(c / a);
+    tAdj -= 1.0;
+    return -(a * std::pow(2.0, 10.0 * tAdj) * std::sin((tAdj * d - s) * (2.0 * kEasePi) / p)) + b;
+}
+
+double EaseOutElasticHelper(double t, double c, double a, double p) {
+    if (t == 0.0) return 0.0;
+    if (t == 1.0) return c;
+    double s = 0.0;
+    if (a < c) { a = c; s = p / 4.0; }
+    else s = p / (2.0 * kEasePi) * std::asin(c / a);
+    return a * std::pow(2.0, -10.0 * t) * std::sin((t - s) * (2.0 * kEasePi) / p) + c;
+}
+
+double EaseInBackHelper(double t, double s) { return t * t * ((s + 1.0) * t - s); }
+double EaseOutBackHelper(double t, double s) { t -= 1.0; return t * t * ((s + 1.0) * t + s) + 1.0; }
+
+double Ease(const char* name, double t, double period = 0.3, double amplitude = 1.0, double overshoot = 1.70158) {
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    if (period <= 0.0) period = 0.3;
     if (!name || std::strcmp(name, "Linear") == 0) return t;
     if (std::strcmp(name, "InQuad") == 0) return t * t;
-    if (std::strcmp(name, "OutQuad") == 0) return t * (2.0 - t);
-    if (std::strcmp(name, "InOutQuad") == 0) return t < 0.5 ? 2.0 * t * t : -1.0 + (4.0 - 2.0 * t) * t;
+    if (std::strcmp(name, "OutQuad") == 0) return -t * (t - 2.0);
+    if (std::strcmp(name, "InOutQuad") == 0) {
+        t *= 2.0;
+        if (t < 1.0) return t * t * 0.5;
+        --t;
+        return -0.5 * (t * (t - 2.0) - 1.0);
+    }
+    if (std::strcmp(name, "OutInQuad") == 0) {
+        if (t < 0.5) return (-(2.0 * t) * (2.0 * t - 2.0)) * 0.5;
+        const double u = 2.0 * t - 1.0;
+        return (u * u) * 0.5 + 0.5;
+    }
+    if (std::strcmp(name, "InElastic") == 0) return EaseInElasticHelper(t, 0.0, 1.0, 1.0, amplitude, period);
+    if (std::strcmp(name, "OutElastic") == 0) return EaseOutElasticHelper(t, 1.0, amplitude, period);
+    if (std::strcmp(name, "InOutElastic") == 0) {
+        if (t == 0.0) return 0.0;
+        t *= 2.0;
+        if (t == 2.0) return 1.0;
+        double a = amplitude, s = 0.0;
+        if (a < 1.0) { a = 1.0; s = period / 4.0; }
+        else s = period / (2.0 * kEasePi) * std::asin(1.0 / a);
+        if (t < 1.0) return -0.5 * (a * std::pow(2.0, 10.0 * (t - 1.0)) * std::sin((t - 1.0 - s) * (2.0 * kEasePi) / period));
+        return a * std::pow(2.0, -10.0 * (t - 1.0)) * std::sin((t - 1.0 - s) * (2.0 * kEasePi) / period) * 0.5 + 1.0;
+    }
+    if (std::strcmp(name, "OutInElastic") == 0) {
+        if (t < 0.5) return EaseOutElasticHelper(t * 2.0, 0.5, amplitude, period);
+        return EaseInElasticHelper(2.0 * t - 1.0, 0.5, 0.5, 1.0, amplitude, period);
+    }
+    if (std::strcmp(name, "InBack") == 0) return EaseInBackHelper(t, overshoot);
+    if (std::strcmp(name, "OutBack") == 0) return EaseOutBackHelper(t, overshoot);
+    if (std::strcmp(name, "InOutBack") == 0) {
+        t *= 2.0;
+        const double s = overshoot * 1.525;
+        if (t < 1.0) return 0.5 * (t * t * ((s + 1.0) * t - s));
+        t -= 2.0;
+        return 0.5 * (t * t * ((s + 1.0) * t + s) + 2.0);
+    }
+    if (std::strcmp(name, "OutInBack") == 0) {
+        if (t < 0.5) return EaseOutBackHelper(2.0 * t, overshoot) * 0.5;
+        return EaseInBackHelper(2.0 * t - 1.0, overshoot) * 0.5 + 0.5;
+    }
+    if (std::strcmp(name, "InBounce") == 0) return 1.0 - EaseOutBounceHelper(1.0 - t, 1.0, amplitude);
+    if (std::strcmp(name, "OutBounce") == 0) return EaseOutBounceHelper(t, 1.0, amplitude);
+    if (std::strcmp(name, "InOutBounce") == 0) {
+        if (t < 0.5) return (1.0 - EaseOutBounceHelper(1.0 - 2.0 * t, 1.0, amplitude)) * 0.5;
+        return (t == 1.0) ? 1.0 : EaseOutBounceHelper(2.0 * t - 1.0, 1.0, amplitude) * 0.5 + 0.5;
+    }
+    if (std::strcmp(name, "OutInBounce") == 0) {
+        if (t < 0.5) return EaseOutBounceHelper(t * 2.0, 0.5, amplitude);
+        return 1.0 - EaseOutBounceHelper(2.0 - 2.0 * t, 0.5, amplitude);
+    }
+    if (std::strcmp(name, "SineCurve") == 0) return (std::sin(t * kEasePi * 2.0 - kEasePi2) + 1.0) * 0.5;
+    if (std::strcmp(name, "CosineCurve") == 0) return (std::cos(t * kEasePi * 2.0 - kEasePi2) + 1.0) * 0.5;
     if (std::strcmp(name, "InCubic") == 0) return t * t * t;
     if (std::strcmp(name, "OutCubic") == 0) { const double u = t - 1.0; return u * u * u + 1.0; }
     if (std::strcmp(name, "InOutCubic") == 0)
         return t < 0.5 ? 4.0 * t * t * t : (t - 1.0) * (2.0 * t - 2.0) * (2.0 * t - 2.0) + 1.0;
-    if (std::strcmp(name, "InSine") == 0) return 1.0 - std::cos(t * 1.5707963267948966);
-    if (std::strcmp(name, "OutSine") == 0) return std::sin(t * 1.5707963267948966);
-    if (std::strcmp(name, "InOutSine") == 0) return -0.5 * (std::cos(3.141592653589793 * t) - 1.0);
-    if (std::strcmp(name, "OutBounce") == 0) {
-        if (t < 1.0 / 2.75) return 7.5625 * t * t;
-        if (t < 2.0 / 2.75) { t -= 1.5 / 2.75; return 7.5625 * t * t + 0.75; }
-        if (t < 2.5 / 2.75) { t -= 2.25 / 2.75; return 7.5625 * t * t + 0.9375; }
-        t -= 2.625 / 2.75;
-        return 7.5625 * t * t + 0.984375;
-    }
+    if (std::strcmp(name, "InSine") == 0) return 1.0 - std::cos(t * kEasePi2);
+    if (std::strcmp(name, "OutSine") == 0) return std::sin(t * kEasePi2);
+    if (std::strcmp(name, "InOutSine") == 0) return -0.5 * (std::cos(kEasePi * t) - 1.0);
     return std::nan("");
 }
 
 int l_getEasingValue(lua_State* L) {
-    double progress = 0;
+    double progress = 0, period = 0.3, amplitude = 1.0, overshoot = 1.70158;
     const char* name = lua_tostring(L, 2);
     if (!Number(L, 1, progress) || !name) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const double value = Ease(name, progress);
+    if (!lua_isnoneornil(L, 3)) Number(L, 3, period);
+    if (!lua_isnoneornil(L, 4)) Number(L, 4, amplitude);
+    if (!lua_isnoneornil(L, 5)) Number(L, 5, overshoot);
+    const double value = Ease(name, progress, period, amplitude, overshoot);
     if (!std::isfinite(value)) {
         lua_pushboolean(L, 0);
         return 1;
@@ -79,7 +163,7 @@ int l_getEasingValue(lua_State* L) {
 }
 
 int l_interpolateBetween(lua_State* L) {
-    double from[3] = {}, to[3] = {}, progress = 0;
+    double from[3] = {}, to[3] = {}, progress = 0, period = 0.3, amplitude = 1.0, overshoot = 1.70158;
     const char* name = lua_tostring(L, 8);
     for (int i = 0; i < 3; ++i) {
         if (!Number(L, i + 1, from[i]) || !Number(L, i + 4, to[i])) {
@@ -91,7 +175,10 @@ int l_interpolateBetween(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    const double eased = Ease(name, progress);
+    if (!lua_isnoneornil(L, 9)) Number(L, 9, period);
+    if (!lua_isnoneornil(L, 10)) Number(L, 10, amplitude);
+    if (!lua_isnoneornil(L, 11)) Number(L, 11, overshoot);
+    const double eased = Ease(name, progress, period, amplitude, overshoot);
     if (!std::isfinite(eased)) {
         lua_pushboolean(L, 0);
         return 1;

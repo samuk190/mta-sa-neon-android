@@ -74,6 +74,20 @@ struct Hooks {
     bool (*isGarageOpen)(int garageId, bool& outOpen) = nullptr;
     bool (*setCurrentArea)(int area) = nullptr;
 
+    // Camera, PostFX color filter, and Water native hooks (all game-thread safe).
+    bool (*fadeCamera)(bool fadeIn, float duration, uint8_t r, uint8_t g, uint8_t b) = nullptr;
+    bool (*shakeCamera)(float strength, float x, float y, float z) = nullptr;
+    bool (*setNearClipDistance)(float distance, bool reset) = nullptr;
+    // mode: 0 = normal, 1 = nightvision, 2 = thermalvision
+    bool (*setCameraGoggleEffect)(int mode) = nullptr;
+    bool (*setCameraDrunkLevel)(int level) = nullptr;
+    bool (*setColorFilter)(int r1, int g1, int b1, int a1, int r2, int g2, int b2, int a2, bool reset) = nullptr;
+    bool (*getWaterLevel)(float x, float y, float z, bool ignoreWaves, float& outHeight) = nullptr;
+    bool (*testLineAgainstWater)(float x1, float y1, float z1, float x2, float y2, float z2,
+                                 float& ox, float& oy, float& oz) = nullptr;
+    bool (*setWorldWaterLevel)(float height, bool reset) = nullptr;
+    bool (*breakObject)(uint32_t id) = nullptr;
+
     // Immediate Fx_c particle emitters; return true if invoked.
     bool (*fxAddBlood)(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) = nullptr;
     bool (*fxAddBulletImpact)(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity) = nullptr;
@@ -129,6 +143,17 @@ bool SetOcclusionsEnabled(bool enabled);
 bool SetGarageOpen(int garageId, bool open);
 bool IsGarageOpen(int garageId, bool& outOpen);
 bool SetCurrentArea(int area);
+bool FadeCamera(bool fadeIn, float duration, uint8_t r, uint8_t g, uint8_t b);
+bool ShakeCamera(float strength, float x, float y, float z);
+bool SetNearClipDistance(float distance, bool reset);
+bool SetCameraGoggleEffect(int mode);
+bool SetCameraDrunkLevel(int level);
+bool SetColorFilter(int r1, int g1, int b1, int a1, int r2, int g2, int b2, int a2, bool reset);
+bool GetWaterLevel(float x, float y, float z, bool ignoreWaves, float& outHeight);
+bool TestLineAgainstWater(float x1, float y1, float z1, float x2, float y2, float z2,
+                          float& ox, float& oy, float& oz);
+bool SetWorldWaterLevel(float height, bool reset);
+bool BreakObject(uint32_t id);
 
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness);
 bool FxAddBulletImpact(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity);

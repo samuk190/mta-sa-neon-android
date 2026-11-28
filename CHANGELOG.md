@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added / Fixed — Native Camera/PostFX/Water/Fire/PointLight/ObjectBreak hooks, ServerRpc wiring, Euler order conversion, and full CEasingCurve parity (2026-11-28)
+
+- **10 additional verified `libGTASA.so` 2.10 arm64 native hooks** (`shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `gtasa/WorldObjects.{h,cpp}`, `shared/LuaCameraApi.cpp`, `shared/LuaFieldApi.cpp`, `shared/LuaWaterApi.cpp`, `shared/LuaFireApi.cpp`, `shared/LuaLightApi.{h,cpp}`, `shared/LuaVMStub.cpp`):
+  - Camera natives dispatched on the game thread: `fadeCamera` / `FADE_CAMERA` RPC (`CCamera::SetFadeColour` + `CCamera::Fade`), `shakeCamera` (`CCamera::CamShake`), `setNearClipDistance`/`resetNearClipDistance` (`CCamera::SetNearClipScript`, verified `TheCamera +0x37` reset flag), `setCameraGoggleEffect` (`CPostEffects::ScriptNightVisionSwitch`/`ScriptInfraredVisionSwitch`), `setCameraDrunkLevel` (`CMBlur::SetDrunkBlur`/`ClearDrunkBlur`), and `setCameraInterior` / `SET_CAMERA_INTERIOR` (`CGame::currArea`).
+  - PostFX, Water, Fire, PointLight & Object Break natives: `setColorFilter`/`resetColorFilter` (`CPostEffects::m_bColorEnable` + all 8 `CTimeCycle::m_fPostFx1/2*` tables with lazy snapshot/restore), `setGrainMultiplier` (`CPostEffects::m_grainStrength`), `getWaterLevel` (`CWaterLevel::GetWaterLevel`/`GetWaterLevelNoWaves`), `testLineAgainstWater` (`CWaterLevel::TestLineAgainstWater`), `setWaterLevel`/`resetWaterLevel` (`CWaterLevel::m_aVertices` stride `0x14`, `+0x04 float z`, lazy snapshot/restore), managed `createFire` + 0-arg `extinguishFire()` (`CFireManager::StartFire`/`ExtinguishPoint`), per-frame `PulseLights()` submission to `CPointLights::AddLight`, and `breakObject` via `WorldObjects::BreakObject` (`CObject::ObjectDamage` `0x53cf40`). Not yet run on a physical device.
+- **ServerRpc, desktop Euler order conversion, and full 19-curve `CEasingCurve` parity** (`shared/ServerRpc.cpp`, `shared/LuaFieldApi.cpp`, `shared/LuaUtilApi.cpp`, `shared/LuaWorldObjectApi.cpp`):
+  - Wired `SPAWN_VEHICLE_FLYING_COMPONENT` RPC to `Game::RpcSpawnVehicleFlyingComponent`, and `ALLOCATE_SERVER_MODEL` / `FREE_SERVER_MODEL` RPCs to `Script::NativeAllocateObjectModel` / `NativeFreeModel`.
+  - Implemented desktop `ConvertEulerRotationOrder` (`Shared/mods/deathmatch/logic/Utils.cpp:1012-1110`) for `"default"`, `"ZXY"`, `"ZYX"`, and `"-ZYX"` in `getElementRotation`.
+  - Ported all 19 desktop `CEasingCurve` equations (`Shared/animation/EasingEquations.hpp`, including `period`, `amplitude`, and `overshoot`) into `getEasingValue`, `interpolateBetween`, and `moveObject`.
+
 ### Added / Fixed — Remaining native GTA world/weather/timecycle/postFX/garage hooks, IFP/TXD inspection, ped/vehicle native wiring, and GUI reparenting (2026-11-28)
 
 - **21 verified native GTA world, weather, clock, timecycle, post-FX, garage & interior-area hooks** (`CTimer`, `CClock`, `CWeather`, `CCoronas`, `CPostEffects`, `CTimeCycle`, `COcclusion`, `CGarages`, `CGame::currArea` in `shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaFieldApi.cpp`):
