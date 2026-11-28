@@ -388,12 +388,29 @@ bool HandleVehicleResync(const uint8_t* body, size_t length, size_t bits) {
     for (bool& b : lightChanged) b = syncLights;
     Script::VehicleApplyDamageSync(vehicleId, doorChanged, doors, wheelChanged, wheels, panelChanged, panels,
                                    lightChanged, lights);
-
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
-        LUA_LOGI("DIAG VEHICLE_RESYNC: native CDamageManager visual damage write is not hooked");
-    }
+    struct DamagePayload {
+        bool doorChanged[6], wheelChanged[4], panelChanged[7], lightChanged[4];
+        uint8_t doors[6], wheels[4], panels[7], lights[4];
+    } payload{};
+    std::memcpy(payload.doorChanged, doorChanged, sizeof(doorChanged));
+    std::memcpy(payload.doors, doors, sizeof(doors));
+    std::memcpy(payload.wheelChanged, wheelChanged, sizeof(wheelChanged));
+    std::memcpy(payload.wheels, wheels, sizeof(wheels));
+    std::memcpy(payload.panelChanged, panelChanged, sizeof(panelChanged));
+    std::memcpy(payload.panels, panels, sizeof(panels));
+    std::memcpy(payload.lightChanged, lightChanged, sizeof(lightChanged));
+    std::memcpy(payload.lights, lights, sizeof(lights));
+    ServerRpc::Enqueue([vehicleId, payload] {
+        if (!Script::VehicleApplyDamageNative(vehicleId, payload.doorChanged, payload.doors, payload.wheelChanged,
+                                              payload.wheels, payload.panelChanged, payload.panels,
+                                              payload.lightChanged, payload.lights)) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LUA_LOGI("DIAG VEHICLE_RESYNC: native CDamageManager visual damage write is not hooked");
+            }
+        }
+    });
     return true;
 }
 
@@ -725,7 +742,22 @@ bool HandleVehicleDamageSync(const uint8_t* body, size_t length, size_t bits) {
     for (int i = 0; i < 4; ++i) anyChanged = anyChanged || wheelChanged[i] || lightChanged[i];
     for (int i = 0; i < 7; ++i) anyChanged = anyChanged || panelChanged[i];
     if (anyChanged) {
-        ServerRpc::Enqueue([vehicleId] {
+        struct DamagePayload {
+            bool doorChanged[6], wheelChanged[4], panelChanged[7], lightChanged[4];
+            uint8_t doors[6], wheels[4], panels[7], lights[4];
+        } payload{};
+        std::memcpy(payload.doorChanged, doorChanged, sizeof(doorChanged));
+        std::memcpy(payload.doors, doors, sizeof(doors));
+        std::memcpy(payload.wheelChanged, wheelChanged, sizeof(wheelChanged));
+        std::memcpy(payload.wheels, wheels, sizeof(wheels));
+        std::memcpy(payload.panelChanged, panelChanged, sizeof(panelChanged));
+        std::memcpy(payload.panels, panels, sizeof(panels));
+        std::memcpy(payload.lightChanged, lightChanged, sizeof(lightChanged));
+        std::memcpy(payload.lights, lights, sizeof(lights));
+        ServerRpc::Enqueue([vehicleId, payload] {
+            Script::VehicleApplyDamageNative(vehicleId, payload.doorChanged, payload.doors, payload.wheelChanged,
+                                             payload.wheels, payload.panelChanged, payload.panels,
+                                             payload.lightChanged, payload.lights);
             lua_State* L = Script::ActiveVmState();
             if (!L) return;
             lua_pushnil(L);      // attacker

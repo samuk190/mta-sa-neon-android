@@ -326,6 +326,70 @@ constexpr size_t kVehicleVtableOpenDoorSlot = 28;  // +0xE0: CVehicle::OpenDoor
 constexpr size_t kVehicleVtableBlowUpSlot = 42;    // +0x150: CVehicle::BlowUpCar
 constexpr size_t kVehicleVtableBurstTyreSlot = 45; // +0x168: CVehicle::BurstTyre
 
+// Verified libGTASA.so 2.10 arm64 Batch F native symbols & offsets.
+using DamageSetDoorFn = void (*)(void* dmg, int32_t door, uint32_t status);
+using DamageSetLightFn = void (*)(void* dmg, int32_t light, uint32_t status);
+using DamageSetPanelFn = void (*)(void* dmg, int32_t panel, uint32_t status);
+using DamageSetWheelFn = void (*)(void* dmg, int32_t wheel, uint32_t status);
+using SetClumpAlphaFn = void (*)(void* clump, int32_t alpha);
+using CameraFindFovFn = float (*)(void* cam);
+using CameraLerpFovFn = void (*)(void* cam, float fromFov, float toFov, float timeMs, bool ease);
+using PedIntelGetJetPackFn = void* (*)(void* intel);
+using TaskMgrGetSimplestActiveFn = void* (*)(void* taskMgr);
+using TaskMgrGetSecondaryFn = void* (*)(void* taskMgr, int32_t slot);
+using TaskGetSubTaskFn = void* (*)(void* task);
+using TaskGetIdFn = int32_t (*)(void* task);
+using PedSetAimFlagFn = void (*)(void* ped, float heading);
+using PedSetLookFlagFn = void (*)(void* ped, float heading, bool likeUnused, bool turnBody);
+using PedClearLookFlagFn = void (*)(void* ped);
+using TextLoadMissionFn = void (*)(void* text, char* blockName);
+using TextGetFn = uint16_t* (*)(void* text, const char* key);
+using MessagesAddJumpQFn = void (*)(const char* key, uint16_t* text, uint32_t timeMs, uint16_t flags, bool addToBrief);
+using MessagesAddBigFn = void (*)(uint16_t* text, uint32_t timeMs, uint16_t style);
+using MessagesClearFn = void (*)(uint8_t flag);
+using HudSetHelpMessageFn = void (*)(const char* key, uint16_t* text, bool quick, bool permanent, bool addToBrief, uint32_t menuId);
+using WeaponInfoGetFn = uint8_t* (*)(int32_t weaponType, int8_t skill);
+
+DamageSetDoorFn g_dmgSetDoor = nullptr;
+DamageSetLightFn g_dmgSetLight = nullptr;
+DamageSetPanelFn g_dmgSetPanel = nullptr;
+DamageSetWheelFn g_dmgSetWheel = nullptr;
+SetClumpAlphaFn g_setClumpAlpha = nullptr;
+CameraFindFovFn g_camFindFov = nullptr;
+CameraLerpFovFn g_camLerpFov = nullptr;
+PedIntelGetJetPackFn g_intelGetJetPack = nullptr;
+TaskMgrGetSimplestActiveFn g_taskMgrSimplestActive = nullptr;
+TaskMgrGetSecondaryFn g_taskMgrSecondary = nullptr;
+PedSetAimFlagFn g_pedSetAimFlag = nullptr;
+PedSetLookFlagFn g_pedSetLookFlag = nullptr;
+PedClearLookFlagFn g_pedClearLookFlag = nullptr;
+void* g_theText = nullptr;
+TextLoadMissionFn g_textLoadMission = nullptr;
+TextGetFn g_textGet = nullptr;
+MessagesAddJumpQFn g_msgAddJumpQ = nullptr;
+MessagesAddBigFn g_msgAddBig = nullptr;
+MessagesClearFn g_msgClear = nullptr;
+HudSetHelpMessageFn g_hudSetHelp = nullptr;
+WeaponInfoGetFn g_weaponInfoGet = nullptr;
+
+// Verified libGTASA.so 2.10 arm64 offsets (disassembled):
+constexpr size_t kAutoDamageManagerOff = 0x758;  // CAutomobile::Fix (0x67df24)
+constexpr size_t kEntityColFlagsOff = 0x28;      // bit 0 = bUsesCollision (CPhysical::ApplyGravity 0x4e1ea0)
+constexpr size_t kCameraActiveCamOff = 0x5F;     // CCamera::FindCamFOV (0x4b9ac4)
+constexpr size_t kCameraCamStride = 0x228;       // CCamera::FindCamFOV (0x4b9ac4)
+constexpr size_t kCameraCamFovOff = 0x204;       // CCamera::FindCamFOV (0x4b9ac4)
+constexpr size_t kPedIntelPtrOff = 0x538;        // CPed::CPed (0x595128) & CPed::ProcessControl (0x598798)
+constexpr size_t kPedCreatedByOff = 0x548;       // CPed::CPed (0x594e20): 1=game, 2=mission
+constexpr size_t kPedWeaponsOff = 0x730;         // CPed::CPed (0x59503c) & ProcessControl (0x598774), stride 0x20
+constexpr size_t kPedWeaponStride = 0x20;        // CPed::ProcessControl (0x598770: lsl #5)
+constexpr size_t kWeaponStateOff = 0x04;         // CWeapon::Reload (0x700a2c): 2 == WEAPONSTATE_RELOADING
+constexpr size_t kPedActiveWeaponSlotOff = 0x8DC;  // CPed::ProcessControl (0x59876c)
+constexpr size_t kPedShootRateOff = 0x8DD;       // CPed::CPed (0x594f04, init 40)
+constexpr size_t kPedWeaponAccuracyOff = 0x8DE;  // CPed::CPed (0x5950c0, init 60)
+constexpr size_t kIntelTaskMgrOff = 0x08;        // CPedIntelligence::GetTaskJetPack (0x5b5cb0)
+constexpr size_t kTaskVtableSubTaskSlot = 3;     // +0x18: CTask::GetSubTask (CTaskManager::GetSimplestTask 0x64e250)
+constexpr size_t kTaskVtableGetIdSlot = 5;       // +0x28: CTask::GetId (CPedIntelligence::GetTaskJetPack 0x5b5cc8)
+
 struct RemovedNativeEntity {
     void* entity = nullptr;
     uint16_t model = 0;
@@ -1699,8 +1763,10 @@ bool NativeSetCameraTargetEntity(uint32_t id) {
         if (!g_theCamera || !g_camTakeControl) return true;
         void* entity = Game::ElementEntity(id);
         if (!entity) return true;
-        // Desktop CCameraSA::TakeControl: mode=4 (MODE_FOLLOWPED), switchStyle=1 (JUMP_CUT), who=1.
-        g_camTakeControl(g_theCamera, entity, 4, 1, 1);
+        auto* bytes = static_cast<const uint8_t*>(entity);
+        // MODE_CAM_ON_A_STRING (18) for vehicles, MODE_FOLLOWPED (4) for peds/other, switchStyle=1 (JUMP_CUT), who=1.
+        const int16_t mode = ((bytes[kEntityTypeOff] & 0x07u) == 2u) ? 18 : 4;
+        g_camTakeControl(g_theCamera, entity, mode, 1, 1);
         return true;
     });
     return true;
@@ -1985,6 +2051,583 @@ bool NativeSetTrainSpeed(uint32_t id, float speed) {
     return true;
 }
 
+bool NativeSetVehicleDoorState(uint32_t id, uint8_t door, uint8_t state) {
+    if (!g_dmgSetDoor || door >= 6u) return false;
+    GameTasks::Defer([id, door, state]() {
+        if (!g_dmgSetDoor) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 0u) return true;  // CAutomobile only
+        g_dmgSetDoor(bytes + kAutoDamageManagerOff, static_cast<int32_t>(door), static_cast<uint32_t>(state));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleLightState(uint32_t id, uint8_t light, uint8_t state) {
+    if (!g_dmgSetLight || light >= 4u) return false;
+    GameTasks::Defer([id, light, state]() {
+        if (!g_dmgSetLight) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 0u) return true;
+        g_dmgSetLight(bytes + kAutoDamageManagerOff, static_cast<int32_t>(light), static_cast<uint32_t>(state));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehiclePanelState(uint32_t id, uint8_t panel, uint8_t state) {
+    if (!g_dmgSetPanel || panel >= 7u) return false;
+    GameTasks::Defer([id, panel, state]() {
+        if (!g_dmgSetPanel) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 0u) return true;
+        g_dmgSetPanel(bytes + kAutoDamageManagerOff, static_cast<int32_t>(panel), static_cast<uint32_t>(state));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetVehicleWheelState(uint32_t id, uint8_t wheel, uint8_t state) {
+    if (!g_dmgSetWheel || wheel >= 4u) return false;
+    GameTasks::Defer([id, wheel, state]() {
+        if (!g_dmgSetWheel) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        uint32_t vehClass = 0;
+        std::memcpy(&vehClass, bytes + kVehClassOff, sizeof(vehClass));
+        if (vehClass != 0u) return true;
+        g_dmgSetWheel(bytes + kAutoDamageManagerOff, static_cast<int32_t>(wheel), static_cast<uint32_t>(state));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetEntityAlpha(uint32_t id, uint8_t alpha) {
+    if (!g_setClumpAlpha) return false;
+    GameTasks::Defer([id, alpha]() {
+        if (!g_setClumpAlpha) return true;
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        void* rwObject = *reinterpret_cast<void**>(bytes + kEntityRwObjectOff);
+        if (!rwObject) return true;
+        // RwObject::type == 2 is rpCLUMP (CVisibilityPlugins::SetClumpAlpha expects RpClump*).
+        if (static_cast<const uint8_t*>(rwObject)[0] != 2u) return true;
+        g_setClumpAlpha(rwObject, static_cast<int32_t>(alpha));
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetEntityCollisionsEnabled(uint32_t id, bool enabled) {
+    GameTasks::Defer([id, enabled]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if (enabled) bytes[kEntityColFlagsOff] |= 0x01u;
+        else bytes[kEntityColFlagsOff] &= ~0x01u;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetEntityPhysicalProofs(uint32_t id, bool bullet, bool fire, bool explosion,
+                                   bool collision, bool melee) {
+    GameTasks::Defer([id, bullet, fire, explosion, collision, melee]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        const uint8_t etype = bytes[kEntityTypeOff] & 0x07u;
+        if (etype < 2u || etype > 4u) return true;  // CVehicle, CPed, CObject
+        uint8_t proofs = bytes[kPhysicalProofsByteOff];
+        proofs = static_cast<uint8_t>((proofs & ~0xBCu) |
+                                      (bullet ? 0x04u : 0u) |
+                                      (fire ? 0x08u : 0u) |
+                                      (collision ? 0x10u : 0u) |
+                                      (melee ? 0x20u : 0u) |
+                                      (explosion ? 0x80u : 0u));
+        bytes[kPhysicalProofsByteOff] = proofs;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetCameraFov(float fov) {
+    if (!g_theCamera) return false;
+    const float clamped = std::clamp(fov, 1.f, 179.f);
+    GameTasks::Defer([clamped]() {
+        if (!g_theCamera) return true;
+        if (g_camLerpFov) g_camLerpFov(g_theCamera, clamped, clamped, 0.f, false);
+        const uint8_t active = g_theCamera[kCameraActiveCamOff];
+        if (active < 3u) {
+            std::memcpy(g_theCamera + static_cast<size_t>(active) * kCameraCamStride + kCameraCamFovOff,
+                        &clamped, sizeof(clamped));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativeGetCameraFov(float& outFov) {
+    if (!g_theCamera || !g_camFindFov) return false;
+    float fov = 0.f;
+    bool ok = false;
+    if (!GameTasks::RunQuery([&fov, &ok]() {
+            if (!g_theCamera || !g_camFindFov) return;
+            const float value = g_camFindFov(g_theCamera);
+            if (std::isfinite(value) && value > 0.f) {
+                fov = value;
+                ok = true;
+            }
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outFov = fov;
+    return true;
+}
+
+bool ReadPedFlagBit(uint32_t id, size_t wordIndex, uint32_t mask, bool& outValue) {
+    bool ok = false;
+    bool val = false;
+    if (!GameTasks::RunQuery([id, wordIndex, mask, &ok, &val]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            uint32_t word = 0;
+            std::memcpy(&word, bytes + kPedFlagsOff + wordIndex * sizeof(uint32_t), sizeof(word));
+            val = (word & mask) != 0u;
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outValue = val;
+    return true;
+}
+
+bool WritePedFlagBits(uint32_t id, size_t wordIndex, uint32_t clearMask, uint32_t setBits) {
+    GameTasks::Defer([id, wordIndex, clearMask, setBits]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        uint32_t word = 0;
+        std::memcpy(&word, bytes + kPedFlagsOff + wordIndex * sizeof(uint32_t), sizeof(word));
+        word = (word & ~clearMask) | setBits;
+        std::memcpy(bytes + kPedFlagsOff + wordIndex * sizeof(uint32_t), &word, sizeof(word));
+        return true;
+    });
+    return true;
+}
+
+bool NativeIsPedStanding(uint32_t id, bool& outStanding) {
+    return ReadPedFlagBit(id, 0, 1u << 0, outStanding);
+}
+
+bool NativeIsPedDucking(uint32_t id, bool& outDucking) {
+    return ReadPedFlagBit(id, 0, 1u << 26, outDucking);
+}
+
+bool NativeIsPedFootBloodEnabled(uint32_t id, bool& outEnabled) {
+    return ReadPedFlagBit(id, 0, 1u << 28, outEnabled);
+}
+
+bool NativeSetPedFootBloodEnabled(uint32_t id, bool enabled) {
+    return WritePedFlagBits(id, 0, 1u << 28, enabled ? (1u << 28) : 0u);
+}
+
+bool NativeSetPedBleeding(uint32_t id, bool bleeding) {
+    return WritePedFlagBits(id, 0, 1u << 18, bleeding ? (1u << 18) : 0u);
+}
+
+bool NativeSetPedCanBeKnockedOffBike(uint32_t id, bool canBeKnocked) {
+    // CPedFlags word 2 bits 27..28 (CantBeKnockedOffBike): 1=never, 2=always.
+    return WritePedFlagBits(id, 2, 3u << 27, (canBeKnocked ? 2u : 1u) << 27);
+}
+
+bool NativeSetPedMissionActor(uint32_t id, bool mission) {
+    GameTasks::Defer([id, mission]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        bytes[kPedCreatedByOff] = mission ? 2u : 1u;
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetPedSuffersCriticalHits(uint32_t id, bool suffers) {
+    // CPedFlags word 1 bit 12: bNoCriticalHits.
+    return WritePedFlagBits(id, 1, 1u << 12, suffers ? 0u : (1u << 12));
+}
+
+bool NativeSetPedCanBeDraggedOut(uint32_t id, bool canDrag) {
+    // CPedFlags word 0 bit 29: bDontDragMeOutCar.
+    return WritePedFlagBits(id, 0, 1u << 29, canDrag ? 0u : (1u << 29));
+}
+
+bool NativeSetPedStayInSamePlace(uint32_t id, bool stay) {
+    // CPedFlags word 0 bit 21: bStayInSamePlace.
+    return WritePedFlagBits(id, 0, 1u << 21, stay ? (1u << 21) : 0u);
+}
+
+bool NativeSetPedNeverTargeted(uint32_t id, bool never) {
+    // CPedFlags word 1 bit 28: bNeverEverTargetThisPed.
+    return WritePedFlagBits(id, 1, 1u << 28, never ? (1u << 28) : 0u);
+}
+
+bool NativeGetPedWeaponAccuracy(uint32_t id, int& outAccuracy) {
+    bool ok = false;
+    int value = 0;
+    if (!GameTasks::RunQuery([id, &ok, &value]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            value = static_cast<int>(bytes[kPedWeaponAccuracyOff]);
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outAccuracy = value;
+    return true;
+}
+
+bool NativeSetPedWeaponAccuracy(uint32_t id, int accuracy) {
+    const uint8_t clamped = static_cast<uint8_t>(std::clamp(accuracy, 0, 255));
+    GameTasks::Defer([id, clamped]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        bytes[kPedWeaponAccuracyOff] = clamped;
+        return true;
+    });
+    return true;
+}
+
+bool NativeGetPedWeaponShootingRate(uint32_t id, int& outRate) {
+    bool ok = false;
+    int value = 0;
+    if (!GameTasks::RunQuery([id, &ok, &value]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            value = static_cast<int>(bytes[kPedShootRateOff]);
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outRate = value;
+    return true;
+}
+
+bool NativeSetPedWeaponShootingRate(uint32_t id, int rate) {
+    const uint8_t clamped = static_cast<uint8_t>(std::clamp(rate, 0, 255));
+    GameTasks::Defer([id, clamped]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        bytes[kPedShootRateOff] = clamped;
+        return true;
+    });
+    return true;
+}
+
+bool NativeIsPedReloadingWeapon(uint32_t id, bool& outReloading) {
+    bool ok = false;
+    bool reloading = false;
+    if (!GameTasks::RunQuery([id, &ok, &reloading]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            const int8_t slot = static_cast<int8_t>(bytes[kPedActiveWeaponSlotOff]);
+            if (slot >= 0 && slot < 13) {
+                uint32_t state = 0;
+                std::memcpy(&state, bytes + kPedWeaponsOff + static_cast<size_t>(slot) * kPedWeaponStride + kWeaponStateOff,
+                            sizeof(state));
+                reloading = (state == 2u);
+            }
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outReloading = reloading;
+    return true;
+}
+
+bool NativeDoesPedHaveJetPack(uint32_t id, bool& outHasJetPack) {
+    if (!g_intelGetJetPack) return false;
+    bool ok = false;
+    bool has = false;
+    if (!GameTasks::RunQuery([id, &ok, &has]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped || !g_intelGetJetPack) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            void* intel = nullptr;
+            std::memcpy(&intel, bytes + kPedIntelPtrOff, sizeof(intel));
+            if (!intel) return;
+            has = (g_intelGetJetPack(intel) != nullptr);
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outHasJetPack = has;
+    return true;
+}
+
+bool NativeGetPedTaskChain(uint32_t id, bool secondary, int slot, int outTaskIds[4], int& outCount) {
+    if (!outTaskIds) return false;
+    if (secondary && (slot < 0 || slot >= 6 || !g_taskMgrSecondary)) return false;
+    if (!secondary && (slot < 0 || slot >= 5)) return false;
+    bool ok = false;
+    int ids[4] = {-1, -1, -1, -1};
+    int count = 0;
+    if (!GameTasks::RunQuery([id, secondary, slot, &ok, &ids, &count]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            uint8_t* intel = nullptr;
+            std::memcpy(&intel, bytes + kPedIntelPtrOff, sizeof(intel));
+            if (!intel) return;
+            uint8_t* taskMgr = intel + kIntelTaskMgrOff;
+            void* task = nullptr;
+            if (secondary) {
+                task = g_taskMgrSecondary ? g_taskMgrSecondary(taskMgr, slot) : nullptr;
+            } else {
+                std::memcpy(&task, taskMgr + static_cast<size_t>(slot) * sizeof(void*), sizeof(task));
+            }
+            while (task && count < 4) {
+                auto** vt = *reinterpret_cast<void***>(task);
+                if (!vt || !vt[kTaskVtableGetIdSlot]) break;
+                auto getId = reinterpret_cast<TaskGetIdFn>(vt[kTaskVtableGetIdSlot]);
+                ids[count++] = getId(task);
+                if (!vt[kTaskVtableSubTaskSlot]) break;
+                auto getSub = reinterpret_cast<TaskGetSubTaskFn>(vt[kTaskVtableSubTaskSlot]);
+                task = getSub(task);
+            }
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    for (int i = 0; i < 4; ++i) outTaskIds[i] = ids[i];
+    outCount = count;
+    return true;
+}
+
+bool NativeGetPedSimplestTaskId(uint32_t id, int& outTaskId) {
+    if (!g_taskMgrSimplestActive) return false;
+    bool ok = false;
+    int taskId = -1;
+    if (!GameTasks::RunQuery([id, &ok, &taskId]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped || !g_taskMgrSimplestActive) return;
+            auto* bytes = static_cast<const uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            uint8_t* intel = nullptr;
+            std::memcpy(&intel, bytes + kPedIntelPtrOff, sizeof(intel));
+            if (!intel) return;
+            void* task = g_taskMgrSimplestActive(intel + kIntelTaskMgrOff);
+            if (task) {
+                auto** vt = *reinterpret_cast<void***>(task);
+                if (vt && vt[kTaskVtableGetIdSlot]) {
+                    auto getId = reinterpret_cast<TaskGetIdFn>(vt[kTaskVtableGetIdSlot]);
+                    taskId = getId(task);
+                }
+            }
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outTaskId = taskId;
+    return true;
+}
+
+bool NativeSetPedAimTarget(uint32_t id, float x, float y, float z) {
+    if (!g_pedSetAimFlag) return false;
+    (void)z;
+    GameTasks::Defer([id, x, y]() {
+        if (!g_pedSetAimFlag) return true;
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<const uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        float px = 0.f, py = 0.f, pz = 0.f;
+        if (!ReadEntityPosition(bytes, px, py, pz)) return true;
+        const float heading = std::atan2(-(x - px), y - py);
+        if (std::isfinite(heading)) g_pedSetAimFlag(ped, heading);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetPedLookAt(uint32_t id, float x, float y, float z, int timeMs) {
+    if (!g_pedSetLookFlag || !g_pedClearLookFlag) return false;
+    (void)z;
+    GameTasks::Defer([id, x, y, timeMs]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<const uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        if (timeMs == 0) {
+            if (g_pedClearLookFlag) g_pedClearLookFlag(ped);
+            return true;
+        }
+        float px = 0.f, py = 0.f, pz = 0.f;
+        if (!ReadEntityPosition(bytes, px, py, pz)) return true;
+        const float heading = std::atan2(-(x - px), y - py);
+        if (std::isfinite(heading) && g_pedSetLookFlag) g_pedSetLookFlag(ped, heading, false, false);
+        return true;
+    });
+    return true;
+}
+
+bool NativeLoadMissionTextBlock(const char* blockName) {
+    if (!g_theText || !g_textLoadMission || !blockName || !blockName[0]) return false;
+    std::string block(blockName);
+    GameTasks::Defer([block = std::move(block)]() mutable {
+        if (!g_theText || !g_textLoadMission) return true;
+        std::vector<char> buf(block.begin(), block.end());
+        buf.push_back('\0');
+        g_textLoadMission(g_theText, buf.data());
+        return true;
+    });
+    return true;
+}
+
+bool NativeShowMissionText(const char* gxtKey, uint32_t timeMs, uint16_t flags) {
+    if (!g_theText || !g_textGet || !g_msgAddJumpQ || !gxtKey || !gxtKey[0]) return false;
+    std::string key(gxtKey);
+    GameTasks::Defer([key = std::move(key), timeMs, flags]() {
+        if (!g_theText || !g_textGet || !g_msgAddJumpQ) return true;
+        uint16_t* text = g_textGet(g_theText, key.c_str());
+        if (text) g_msgAddJumpQ(key.c_str(), text, timeMs, flags, false);
+        return true;
+    });
+    return true;
+}
+
+bool NativeShowMissionHelp(const char* gxtKey, bool permanent) {
+    if (!g_theText || !g_textGet || !g_hudSetHelp || !gxtKey || !gxtKey[0]) return false;
+    std::string key(gxtKey);
+    GameTasks::Defer([key = std::move(key), permanent]() {
+        if (!g_theText || !g_textGet || !g_hudSetHelp) return true;
+        uint16_t* text = g_textGet(g_theText, key.c_str());
+        if (text) g_hudSetHelp(key.c_str(), text, false, permanent, false, 0u);
+        return true;
+    });
+    return true;
+}
+
+bool NativeShowMissionBigText(const char* gxtKey, uint32_t timeMs, uint16_t style) {
+    if (!g_theText || !g_textGet || !g_msgAddBig || !gxtKey || !gxtKey[0]) return false;
+    std::string key(gxtKey);
+    GameTasks::Defer([key = std::move(key), timeMs, style]() {
+        if (!g_theText || !g_textGet || !g_msgAddBig) return true;
+        uint16_t* text = g_textGet(g_theText, key.c_str());
+        if (text) g_msgAddBig(text, timeMs, style);
+        return true;
+    });
+    return true;
+}
+
+bool NativeClearMissionTexts() {
+    if (!g_msgClear) return false;
+    GameTasks::Defer([]() {
+        if (g_msgClear) g_msgClear(1u);
+        return true;
+    });
+    return true;
+}
+
+bool NativeClearMissionHelp() {
+    if (!g_hudSetHelp) return false;
+    GameTasks::Defer([]() {
+        if (g_hudSetHelp) g_hudSetHelp(nullptr, nullptr, false, false, false, 0u);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetWeaponProperty(int weaponId, int skill, const char* property, double a, double b, double c) {
+    if (!g_weaponInfoGet || !property || weaponId < 0 || weaponId > 46 || skill < 0 || skill > 2) return false;
+    std::string prop(property);
+    GameTasks::Defer([weaponId, skill, prop = std::move(prop), a, b, c]() {
+        if (!g_weaponInfoGet) return true;
+        uint8_t* info = g_weaponInfoGet(static_cast<int32_t>(weaponId), static_cast<int8_t>(skill));
+        if (!info) return true;
+        // All offsets byte-for-byte verified against _ZN11CWeaponInfo14LoadWeaponDataEv (0x560ea8) in libGTASA.so 2.10 arm64.
+        auto writeF32 = [&](size_t off, double v) {
+            const float f = static_cast<float>(v);
+            std::memcpy(info + off, &f, sizeof(f));
+        };
+        if (prop == "target_range") writeF32(0x04, a);
+        else if (prop == "weapon_range") writeF32(0x08, a);
+        else if (prop == "flags") {
+            const uint32_t v = static_cast<uint32_t>(static_cast<int64_t>(a));
+            std::memcpy(info + 0x18, &v, sizeof(v));
+        } else if (prop == "maximum_clip_ammo") {
+            const int16_t v = static_cast<int16_t>(std::clamp(static_cast<int>(a), 0, 32767));
+            std::memcpy(info + 0x20, &v, sizeof(v));
+        } else if (prop == "damage") {
+            const int16_t v = static_cast<int16_t>(std::clamp(static_cast<int>(a), 0, 32767));
+            std::memcpy(info + 0x22, &v, sizeof(v));
+        } else if (prop == "fire_offset") {
+            writeF32(0x24, a);
+            writeF32(0x28, b);
+            writeF32(0x2C, c);
+        } else if (prop == "req_stat_level") {
+            const int32_t v = static_cast<int32_t>(a);
+            std::memcpy(info + 0x34, &v, sizeof(v));
+        } else if (prop == "accuracy") writeF32(0x38, a);
+        else if (prop == "move_speed") writeF32(0x3C, a);
+        else if (prop == "anim_loop_start") writeF32(0x40, a);
+        else if (prop == "anim_loop_stop") writeF32(0x44, a);
+        else if (prop == "anim_loop_bullet_fire") writeF32(0x48, a);
+        else if (prop == "anim2_loop_start") writeF32(0x4C, a);
+        else if (prop == "anim2_loop_stop") writeF32(0x50, a);
+        else if (prop == "anim2_loop_bullet_fire") writeF32(0x54, a);
+        else if (prop == "anim_breakout_time") writeF32(0x58, a);
+        else if (prop == "speed") writeF32(0x5C, a);
+        else if (prop == "radius") writeF32(0x60, a);
+        else if (prop == "life_span") writeF32(0x64, a);
+        else if (prop == "spread") writeF32(0x68, a);
+        return true;
+    });
+    return true;
+}
+
 }  // namespace
 
 void InstallWorldNativeHooks(void* gtasaHandle) {
@@ -2166,6 +2809,29 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     g_hasVehUpgradeLoaded = ResolveAny<HasUpgradeLoadedFn>(g_lib, {"_ZN10CStreaming23HasVehicleUpgradeLoadedEi"});
     g_trainSetSpeed = ResolveAny<TrainSetSpeedFn>(g_lib, {"_ZN6CTrain13SetTrainSpeedEPS_f"});
 
+    // Batch F symbol resolutions (all verified via nm -D + llvm-objdump on libGTASA.so 2.10 arm64).
+    g_dmgSetDoor = ResolveAny<DamageSetDoorFn>(g_lib, {"_ZN14CDamageManager13SetDoorStatusE6eDoorsj"});
+    g_dmgSetLight = ResolveAny<DamageSetLightFn>(g_lib, {"_ZN14CDamageManager14SetLightStatusE7eLightsj"});
+    g_dmgSetPanel = ResolveAny<DamageSetPanelFn>(g_lib, {"_ZN14CDamageManager14SetPanelStatusEij"});
+    g_dmgSetWheel = ResolveAny<DamageSetWheelFn>(g_lib, {"_ZN14CDamageManager14SetWheelStatusEij"});
+    g_setClumpAlpha = ResolveAny<SetClumpAlphaFn>(g_lib, {"_ZN18CVisibilityPlugins13SetClumpAlphaEP7RpClumpi"});
+    g_camFindFov = ResolveAny<CameraFindFovFn>(g_lib, {"_ZN7CCamera10FindCamFOVEv"});
+    g_camLerpFov = ResolveAny<CameraLerpFovFn>(g_lib, {"_ZN7CCamera7LerpFOVEfffb"});
+    g_intelGetJetPack = ResolveAny<PedIntelGetJetPackFn>(g_lib, {"_ZNK16CPedIntelligence14GetTaskJetPackEv"});
+    g_taskMgrSimplestActive = ResolveAny<TaskMgrGetSimplestActiveFn>(g_lib, {"_ZNK12CTaskManager21GetSimplestActiveTaskEv"});
+    g_taskMgrSecondary = ResolveAny<TaskMgrGetSecondaryFn>(g_lib, {"_ZNK12CTaskManager16GetTaskSecondaryEi"});
+    g_pedSetAimFlag = ResolveAny<PedSetAimFlagFn>(g_lib, {"_ZN4CPed10SetAimFlagEf"});
+    g_pedSetLookFlag = ResolveAny<PedSetLookFlagFn>(g_lib, {"_ZN4CPed11SetLookFlagEfbb"});
+    g_pedClearLookFlag = ResolveAny<PedClearLookFlagFn>(g_lib, {"_ZN4CPed13ClearLookFlagEv"});
+    g_theText = dlsym(g_lib, "TheText");
+    g_textLoadMission = ResolveAny<TextLoadMissionFn>(g_lib, {"_ZN5CText15LoadMissionTextEPc"});
+    g_textGet = ResolveAny<TextGetFn>(g_lib, {"_ZN5CText3GetEPKc"});
+    g_msgAddJumpQ = ResolveAny<MessagesAddJumpQFn>(g_lib, {"_ZN9CMessages15AddMessageJumpQEPKcPtjtb"});
+    g_msgAddBig = ResolveAny<MessagesAddBigFn>(g_lib, {"_ZN9CMessages13AddBigMessageEPtjt"});
+    g_msgClear = ResolveAny<MessagesClearFn>(g_lib, {"_ZN9CMessages13ClearMessagesEh"});
+    g_hudSetHelp = ResolveAny<HudSetHelpMessageFn>(g_lib, {"_ZN4CHud14SetHelpMessageEPKcPtbbbj"});
+    g_weaponInfoGet = ResolveAny<WeaponInfoGetFn>(g_lib, {"_ZN11CWeaponInfo13GetWeaponInfoE11eWeaponTypea"});
+
     WorldNative::Hooks hooks;
     hooks.getPoolCapacity = &NativeGetPoolCapacity;
     hooks.getPoolUsedCapacity = &NativeGetPoolUsedCapacity;
@@ -2253,6 +2919,43 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     hooks.setVehicleUpgrade = &NativeSetVehicleUpgrade;
     hooks.setVehicleNitroState = &NativeSetVehicleNitroState;
     hooks.setTrainSpeed = &NativeSetTrainSpeed;
+    hooks.setVehicleDoorState = &NativeSetVehicleDoorState;
+    hooks.setVehicleLightState = &NativeSetVehicleLightState;
+    hooks.setVehiclePanelState = &NativeSetVehiclePanelState;
+    hooks.setVehicleWheelState = &NativeSetVehicleWheelState;
+    hooks.setEntityAlpha = &NativeSetEntityAlpha;
+    hooks.setEntityCollisionsEnabled = &NativeSetEntityCollisionsEnabled;
+    hooks.setEntityPhysicalProofs = &NativeSetEntityPhysicalProofs;
+    hooks.setCameraFov = &NativeSetCameraFov;
+    hooks.getCameraFov = &NativeGetCameraFov;
+    hooks.isPedStanding = &NativeIsPedStanding;
+    hooks.isPedDucking = &NativeIsPedDucking;
+    hooks.isPedFootBloodEnabled = &NativeIsPedFootBloodEnabled;
+    hooks.setPedFootBloodEnabled = &NativeSetPedFootBloodEnabled;
+    hooks.setPedBleeding = &NativeSetPedBleeding;
+    hooks.setPedCanBeKnockedOffBike = &NativeSetPedCanBeKnockedOffBike;
+    hooks.setPedMissionActor = &NativeSetPedMissionActor;
+    hooks.setPedSuffersCriticalHits = &NativeSetPedSuffersCriticalHits;
+    hooks.setPedCanBeDraggedOut = &NativeSetPedCanBeDraggedOut;
+    hooks.setPedStayInSamePlace = &NativeSetPedStayInSamePlace;
+    hooks.setPedNeverTargeted = &NativeSetPedNeverTargeted;
+    hooks.getPedWeaponAccuracy = &NativeGetPedWeaponAccuracy;
+    hooks.setPedWeaponAccuracy = &NativeSetPedWeaponAccuracy;
+    hooks.getPedWeaponShootingRate = &NativeGetPedWeaponShootingRate;
+    hooks.setPedWeaponShootingRate = &NativeSetPedWeaponShootingRate;
+    hooks.isPedReloadingWeapon = &NativeIsPedReloadingWeapon;
+    hooks.doesPedHaveJetPack = &NativeDoesPedHaveJetPack;
+    hooks.getPedTaskChain = &NativeGetPedTaskChain;
+    hooks.getPedSimplestTaskId = &NativeGetPedSimplestTaskId;
+    hooks.setPedAimTarget = &NativeSetPedAimTarget;
+    hooks.setPedLookAt = &NativeSetPedLookAt;
+    hooks.loadMissionTextBlock = &NativeLoadMissionTextBlock;
+    hooks.showMissionText = &NativeShowMissionText;
+    hooks.showMissionHelp = &NativeShowMissionHelp;
+    hooks.showMissionBigText = &NativeShowMissionBigText;
+    hooks.clearMissionTexts = &NativeClearMissionTexts;
+    hooks.clearMissionHelp = &NativeClearMissionHelp;
+    hooks.setWeaponProperty = &NativeSetWeaponProperty;
     hooks.fxAddBlood = &NativeFxAddBlood;
     hooks.fxAddBulletImpact = &NativeFxAddBulletImpact;
     hooks.fxAddSparks = &NativeFxAddSparks;

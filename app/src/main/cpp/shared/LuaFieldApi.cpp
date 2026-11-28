@@ -505,9 +505,12 @@ int l_setElementAlpha(lua_State* L) {
     }
     g_fields[id].alphaSet = true;
     g_fields[id].alpha = static_cast<unsigned char>(value);
+    const bool nativeApplied =
+        (kind == Kind::Player || kind == Kind::Ped || kind == Kind::Vehicle || kind == Kind::Object) &&
+        WorldNative::SetEntityAlpha(id, static_cast<uint8_t>(value));
     if (kind == Kind::Player || kind == Kind::Ped || kind == Kind::Vehicle)
         Game::RpcSetAlpha(id, static_cast<uint8_t>(value));
-    else
+    else if (!nativeApplied)
         Diag(g_diagAlpha, "DIAG setElementAlpha: the marker alpha is stored");
     lua_pushboolean(L, 1);
     return 1;
@@ -899,6 +902,7 @@ int l_setElementCollisionsEnabled(lua_State* L) {
     g_fields[id].collisionsSet = true;
     g_fields[id].collisions = enabled;
     Game::RpcSetCollisions(id, enabled);
+    WorldNative::SetEntityCollisionsEnabled(id, enabled);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2237,6 +2241,20 @@ void RpcResetWaterColor() {
 
 void RpcSetElementDoubleSided(uint32_t id, bool doubleSided) {
     if (id != 0) g_fields[id].doubleSided = doubleSided;
+}
+
+void RpcSetElementAlpha(uint32_t id, uint8_t alpha) {
+    if (id == 0) return;
+    g_fields[id].alphaSet = true;
+    g_fields[id].alpha = alpha;
+    WorldNative::SetEntityAlpha(id, alpha);
+}
+
+void RpcSetElementCollisionsEnabled(uint32_t id, bool enabled) {
+    if (id == 0) return;
+    g_fields[id].collisionsSet = true;
+    g_fields[id].collisions = enabled;
+    WorldNative::SetEntityCollisionsEnabled(id, enabled);
 }
 
 void RpcResetMapInfo() {

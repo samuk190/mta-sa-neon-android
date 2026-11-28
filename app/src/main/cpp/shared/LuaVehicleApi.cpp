@@ -1338,7 +1338,8 @@ int SetVehicleDoorState(lua_State* L) {
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
     const int model = ServerWorld::ModelOf(id);
     if (door >= 6 || DoorWriteBlocked(model)) return Fail(L);
-    NoteNativeVehicleGap();
+    const bool nativeApplied = WorldNative::SetVehicleDoorState(id, door, state);
+    if (!nativeApplied) NoteNativeVehicleGap();
     auto flags = CopyFlags(id);
     PrepareDamage(flags, model);
     flags.doors[door] = state;
@@ -1367,7 +1368,7 @@ int SetVehicleLightState(lua_State* L) {
     if (!ReadByteArg(L, "setVehicleLightState", 2, light)) return Fail(L);
     if (!ReadByteArg(L, "setVehicleLightState", 3, state)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0 || light >= 4) return Fail(L);
-    NoteNativeVehicleGap();
+    if (!WorldNative::SetVehicleLightState(id, light, state)) NoteNativeVehicleGap();
     auto flags = CopyFlags(id);
     flags.lights[light] = state;
     UpdateFlags(id, flags);
@@ -1402,7 +1403,7 @@ int SetVehiclePanelState(lua_State* L) {
         return Fail(L);
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0 || panel >= 7) return Fail(L);
-    NoteNativeVehicleGap();
+    if (!WorldNative::SetVehiclePanelState(id, panel, state)) NoteNativeVehicleGap();
     auto flags = CopyFlags(id);
     flags.panels[panel] = state;
     UpdateFlags(id, flags);
@@ -1443,8 +1444,11 @@ int SetVehicleWheelStates(lua_State* L) {
     }
     if (next[0] == flags.wheels[0] && next[1] == flags.wheels[1] && next[2] == flags.wheels[2] && next[3] == flags.wheels[3]) return Fail(L);
     for (int i = 0; i < 4; ++i) {
-        if (next[i] != flags.wheels[i] && (next[i] == 1 || next[i] == 2)) {
-            WorldNative::BurstVehicleTyre(id, static_cast<uint8_t>(i));
+        if (next[i] != flags.wheels[i]) {
+            if (!WorldNative::SetVehicleWheelState(id, static_cast<uint8_t>(i), next[i]) &&
+                (next[i] == 1 || next[i] == 2)) {
+                WorldNative::BurstVehicleTyre(id, static_cast<uint8_t>(i));
+            }
         }
     }
     flags.wheels[0] = next[0];
@@ -1500,7 +1504,19 @@ int IsVehicleOnAllWheels(lua_State* L) {
     uint8_t contactWheels = 0;
     if (WorldNative::GetVehicleContactWheels(id, contactWheels)) {
         const char* vtype = VehicleTypeOf(model);
-        const uint8_t required = (std::strcmp(vtype, "Bike") == 0 || std::strcmp(vtype, "BMX") == 0) ? 2u : 4u;
+        if (std::strcmp(vtype, "Boat") == 0 || std::strcmp(vtype, "Helicopter") == 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        uint8_t required = 4u;
+        if (std::strcmp(vtype, "Bike") == 0 || std::strcmp(vtype, "BMX") == 0) {
+            required = 2u;
+        } else if (std::strcmp(vtype, "Plane") == 0) {
+            required = 3u;
+        } else if (std::strcmp(vtype, "Trailer") == 0 &&
+                   (model == 606 || model == 607 || model == 610 || model == 611)) {
+            required = 2u;
+        }
         lua_pushboolean(L, contactWheels >= required ? 1 : 0);
         return 1;
     }
@@ -3386,6 +3402,35 @@ void VehicleApplyDamageSync(uint32_t id, const bool doorChanged[6], const uint8_
         if (panelChanged[i]) flags.panels[i] = panels[i];
     for (int i = 0; i < 4; ++i)
         if (lightChanged[i]) flags.lights[i] = lights[i];
+}
+
+bool VehicleApplyDamageNative(uint32_t id, const bool doorChanged[6], const uint8_t doors[6],
+                              const bool wheelChanged[4], const uint8_t wheels[4],
+                              const bool panelChanged[7], const uint8_t panels[7],
+                              const bool lightChanged[4], const uint8_t lights[4]) {
+    bool anyChange = false;
+    bool nativeOk = false;
+    for (int i = 0; i < 6; ++i) {
+        if (!doorChanged[i]) continue;
+        anyChange = true;
+        if (WorldNative::SetVehicleDoorState(id, static_cast<uint8_t>(i), doors[i])) nativeOk = true;
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (!wheelChanged[i]) continue;
+        anyChange = true;
+        if (WorldNative::SetVehicleWheelState(id, static_cast<uint8_t>(i), wheels[i])) nativeOk = true;
+    }
+    for (int i = 0; i < 7; ++i) {
+        if (!panelChanged[i]) continue;
+        anyChange = true;
+        if (WorldNative::SetVehiclePanelState(id, static_cast<uint8_t>(i), panels[i])) nativeOk = true;
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (!lightChanged[i]) continue;
+        anyChange = true;
+        if (WorldNative::SetVehicleLightState(id, static_cast<uint8_t>(i), lights[i])) nativeOk = true;
+    }
+    return !anyChange || nativeOk;
 }
 
 void VehicleApplyFixState(uint32_t id, bool resetSpawnDefaults) {

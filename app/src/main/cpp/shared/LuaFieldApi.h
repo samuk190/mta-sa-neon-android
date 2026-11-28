@@ -54,6 +54,8 @@ void RpcSetTrafficLightState(uint8_t state, bool forced);
 void RpcSetWaterColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 void RpcResetWaterColor();
 void RpcSetElementDoubleSided(uint32_t id, bool doubleSided);
+void RpcSetElementAlpha(uint32_t id, uint8_t alpha);
+void RpcSetElementCollisionsEnabled(uint32_t id, bool enabled);
 // The corona colour setSunColor does not keep in g_sunR..B (Android getSunColor has four slots).
 void RpcCopySunCorona(uint8_t& r, uint8_t& g, uint8_t& b);
 void RpcResetMapInfo();

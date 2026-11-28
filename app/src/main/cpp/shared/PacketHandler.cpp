@@ -18,6 +18,7 @@
 #include "VoiceRuntime.h"
 #include "ServerWorld.h"
 #include "ServerRpc.h"
+#include "LuaFieldApi.h"
 #include "PedQueries.h"
 #include "PlayerWeaponSync.h"
 #include "CombatSync.h"
@@ -652,19 +653,29 @@ bool HandleLuaElementRPC(const uint8_t* body, size_t length, size_t bits) {
             return true;
         }
         case Rpc::SetElementAlpha: {
-            // CElementRPCs::SetElementAlpha (422-454): u8 alpha; peds and players -> CClientPed::SetAlpha.
+            // CElementRPCs::SetElementAlpha (422-454): u8 alpha; peds, players, vehicles, objects -> SetAlpha.
             uint8_t alpha = 255;
             if (!reader.Read(alpha)) return false;
-            if (!pedLike && !vehicleLike) { logUnported("native alpha is unavailable for this element"); return true; }
-            WorldRPG::Game::RpcSetAlpha(id, alpha);
+            const bool objectLike = kind && std::strcmp(kind, "object") == 0;
+            if (!pedLike && !vehicleLike && !objectLike) {
+                logUnported("native alpha is unavailable for this element");
+                return true;
+            }
+            if (pedLike || vehicleLike) WorldRPG::Game::RpcSetAlpha(id, alpha);
+            WorldRPG::ServerRpc::Enqueue([id, alpha] { WorldRPG::Script::RpcSetElementAlpha(id, alpha); });
             return true;
         }
         case Rpc::SetElementCollisionsEnabled: {
-            // CElementRPCs::SetElementCollisionsEnabled (658-696): one bit; peds, players, vehicles -> SetUsesCollision.
+            // CElementRPCs::SetElementCollisionsEnabled (658-696): one bit; peds, players, vehicles, objects -> SetUsesCollision.
             bool enabled = true;
             if (!ReadFlag(reader, enabled)) return false;
-            if (!pedLike && !vehicleLike) { logUnported("collisions on a non-ped/vehicle element not ported"); return true; }
-            WorldRPG::Game::RpcSetCollisions(id, enabled);
+            const bool objectLike = kind && std::strcmp(kind, "object") == 0;
+            if (!pedLike && !vehicleLike && !objectLike) {
+                logUnported("collisions on a non-ped/vehicle/object element not ported");
+                return true;
+            }
+            if (pedLike || vehicleLike) WorldRPG::Game::RpcSetCollisions(id, enabled);
+            WorldRPG::ServerRpc::Enqueue([id, enabled] { WorldRPG::Script::RpcSetElementCollisionsEnabled(id, enabled); });
             return true;
         }
         case Rpc::SetElementDimension: {

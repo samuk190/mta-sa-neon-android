@@ -4,6 +4,7 @@
 #include "LuaVMStub.h"
 #include "LuaApiExtra.h"
 #include "ServerWorld.h"
+#include "WorldNativeBridge.h"
 #include "ClientWeapon.h"
 #include "../gtasa/GameEngine.h"
 
@@ -33,6 +34,18 @@ struct Override { int id; int skill; std::string property; double a, b, c; bool 
 std::vector<Override> g_overrides;
 bool g_diagWeapon = false;
 
+bool AsciiEqualsIgnoreCase(const char* a, const char* b) {
+    if (!a || !b) return false;
+    while (*a && *b) {
+        unsigned char ca = static_cast<unsigned char>(*a++);
+        unsigned char cb = static_cast<unsigned char>(*b++);
+        if (ca >= 'A' && ca <= 'Z') ca = static_cast<unsigned char>(ca + ('a' - 'A'));
+        if (cb >= 'A' && cb <= 'Z') cb = static_cast<unsigned char>(cb + ('a' - 'A'));
+        if (ca != cb) return false;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
 int SkillOf(lua_State* L, int index) {
     if (lua_isnumber(L, index)) {
         const int skill = static_cast<int>(lua_tointeger(L, index));
@@ -40,9 +53,9 @@ int SkillOf(lua_State* L, int index) {
     }
     const char* name = lua_tostring(L, index);
     if (!name) return -1;
-    if (std::strcmp(name, "poor") == 0) return 0;
-    if (std::strcmp(name, "std") == 0) return 1;
-    if (std::strcmp(name, "pro") == 0) return 2;
+    if (AsciiEqualsIgnoreCase(name, "poor")) return 0;
+    if (AsciiEqualsIgnoreCase(name, "std")) return 1;
+    if (AsciiEqualsIgnoreCase(name, "pro")) return 2;
     return -1;
 }
 
@@ -54,7 +67,7 @@ int WeaponOf(lua_State* L, int index) {
     const char* name = lua_tostring(L, index);
     if (!name) return -1;
     for (int id = 0; id < static_cast<int>(sizeof(kWeaponNames) / sizeof(kWeaponNames[0])); ++id) {
-        if (kWeaponNames[id][0] != '\0' && std::strcmp(kWeaponNames[id], name) == 0) return id;
+        if (kWeaponNames[id][0] != '\0' && AsciiEqualsIgnoreCase(kWeaponNames[id], name)) return id;
     }
     return -1;
 }
@@ -224,7 +237,7 @@ int l_setWeaponProperty(lua_State* L) {
         Override next{id, skill, "flags", static_cast<double>(flags), 0, 0, false};
         if (Override* word = FindOverride(id, skill, "flags")) *word = next;
         else g_overrides.push_back(next);
-        if (!g_diagWeapon) {
+        if (!WorldNative::SetWeaponProperty(id, skill, "flags", static_cast<double>(flags), 0.0, 0.0) && !g_diagWeapon) {
             g_diagWeapon = true;
             LUA_LOGE("DIAG setWeaponProperty: CWeaponStat is not written; the value is stored");
         }
@@ -258,7 +271,7 @@ int l_setWeaponProperty(lua_State* L) {
     }
     if (Override* item = FindOverride(id, skill, property)) *item = next;
     else g_overrides.push_back(next);
-    if (!g_diagWeapon) {
+    if (!WorldNative::SetWeaponProperty(id, skill, property, next.a, next.b, next.c) && !g_diagWeapon) {
         g_diagWeapon = true;
         LUA_LOGE("DIAG setWeaponProperty: CWeaponStat is not written; the value is stored");
     }
@@ -452,9 +465,16 @@ bool ElementAlive(uint32_t id) {
 
 bool TargetPosition(uint32_t id, int bone, Weapons::Vec3& out) {
     if (!ElementAlive(id)) return false;
-    if (bone >= 0 && !g_diagWeaponBone) {
-        g_diagWeaponBone = true;
-        LUA_LOGE("DIAG weapon target: CClientPed::GetBonePosition is not ported; the element position is used");
+    if (bone >= 0 && IsPedElement(id)) {
+        float bonePos[3] = {0.f, 0.f, 0.f};
+        if (WorldNative::GetPedBonePosition(id, static_cast<uint32_t>(bone), bonePos)) {
+            out = Weapons::Vec3{bonePos[0], bonePos[1], bonePos[2]};
+            return true;
+        }
+        if (!g_diagWeaponBone) {
+            g_diagWeaponBone = true;
+            LUA_LOGE("DIAG weapon target: CClientPed::GetBonePosition is not ported; the element position is used");
+        }
     }
     out = Weapons::Vec3{};
     if (LocalWeapon* local = FindLocalWeapon(id)) {

@@ -32,6 +32,7 @@ struct Vec3 { float x = 0, y = 0, z = 0; };
 
 struct CameraState {
     bool fixed = false;
+    uint32_t targetId = 0;
     Vec3 position{};
     Vec3 look{0.f, 1.f, 0.f};
     float roll = 0.f;
@@ -209,6 +210,14 @@ int l_getCameraTarget(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    if (g_cam.targetId != 0 && g_cam.targetId != ServerWorld::LocalPlayer() && KnownClientElement(g_cam.targetId)) {
+        lua_newtable(L);
+        lua_pushinteger(L, static_cast<lua_Integer>(g_cam.targetId));
+        lua_setfield(L, -2, "id");
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "element");
+        return 1;
+    }
     lua_getglobal(L, "localPlayer");
     if (!lua_istable(L, -1)) {
         lua_pop(L, 1);
@@ -274,11 +283,13 @@ int l_setCameraMatrix(lua_State* L) {
     }
     if (fov <= 0.f || fov >= 180.f) fov = 70.f;
     g_cam.fixed = true;
+    g_cam.targetId = 0;
     g_cam.position = position;
     if (lookValid) g_cam.look = look;
     g_cam.roll = roll;
     g_cam.fov = fov;
     ApplyFixed(g_cam.position, g_cam.look);
+    WorldNative::SetCameraFov(fov);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -305,7 +316,11 @@ int l_setCameraFieldOfView(lua_State* L) {
         return 1;
     }
     *slot = fov;
-    Diag(g_diagFov, "DIAG setCameraFieldOfView: CSettings field-of-view write is not hooked");
+    if ((std::strcmp(mode, "player") == 0 || std::strcmp(mode, "vehicle") == 0) && fov > 0.f) {
+        if (!WorldNative::SetCameraFov(fov)) {
+            Diag(g_diagFov, "DIAG setCameraFieldOfView: CSettings field-of-view write is not hooked");
+        }
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -327,8 +342,9 @@ int l_setCameraTarget(lua_State* L) {
             return 1;
         }
         g_cam.fixed = false;
+        g_cam.targetId = id;
         Game::ClearScriptCamera();
-        if (!player) WorldNative::SetCameraTargetEntity(id);
+        if (id != ServerWorld::LocalPlayer()) WorldNative::SetCameraTargetEntity(id);
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -338,6 +354,7 @@ int l_setCameraTarget(lua_State* L) {
         return 1;
     }
     g_cam.fixed = true;
+    g_cam.targetId = 0;
     g_cam.look = target;
     ApplyFixed(g_cam.position, g_cam.look);
     Diag(g_diagOrbit, "DIAG setCameraTarget: CClientCamera::SetOrbitTarget uses the fixed look-at");
@@ -972,11 +989,13 @@ void InstallCameraLua(lua_State* L) {
 
 void RpcSetCameraMatrix(float x, float y, float z, float lookX, float lookY, float lookZ, float roll, float fov) {
     g_cam.fixed = true;
+    g_cam.targetId = 0;
     g_cam.position = {x, y, z};
     g_cam.look = {lookX, lookY, lookZ};
     g_cam.roll = roll;
     g_cam.fov = fov;
     ApplyFixed(g_cam.position, g_cam.look);
+    if (fov > 0.f && fov < 180.f) WorldNative::SetCameraFov(fov);
 }
 
 bool RpcSetCameraTarget(uint32_t id) {
@@ -987,8 +1006,9 @@ bool RpcSetCameraTarget(uint32_t id) {
     const bool vehicle = kind && std::strcmp(kind, "vehicle") == 0;
     if (!player && !ped && !vehicle) return false;
     g_cam.fixed = false;
+    g_cam.targetId = id;
     Game::ClearScriptCamera();
-    if (id != ServerWorld::LocalPlayer())
+    if (id != ServerWorld::LocalPlayer() && !WorldNative::SetCameraTargetEntity(id))
         Diag(g_diagFocus, "DIAG SET_CAMERA_TARGET: CClientCamera::SetFocus is not hooked for a remote element");
     return true;
 }

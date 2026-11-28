@@ -24,6 +24,8 @@
 #include "LuaKeyBindApi.h"
 #include "LuaGuiApi.h"
 #include "LuaApiExtra.h"
+#include "LuaCameraApi.h"
+#include "LuaFieldApi.h"
 #include "LuaMtaWindowApi.h"
 #include "LuaRocketSoccerApi.h"
 #include "LuaVMStub.h"
@@ -7770,6 +7772,289 @@ int main(int argc, char** argv) {
             CHECK(gE.nitroStateCalls >= 4 && gE.lastNitroCount == 0);
             CHECK(gE.trainSpeedCalls == 1 && std::fabs(gE.lastTrainSpeed - 1.25f) < 0.01f);
 
+            WorldRPG::WorldNative::RegisterHooks({});
+        }
+
+        // Batch F: 37 new GTA:SA 2.10 native hooks + camera/vehicle/object/ped/weapon/mission bugfixes.
+        {
+            struct BatchFState {
+                int doorCalls = 0, lightCalls = 0, panelCalls = 0, wheelCalls = 0;
+                uint8_t lastDoor = 0, lastDoorState = 0, lastLight = 0, lastLightState = 0;
+                uint8_t lastPanel = 0, lastPanelState = 0, lastWheel = 0, lastWheelState = 0;
+                uint8_t contactWheels = 3;
+                int alphaCalls = 0, colCalls = 0, proofCalls = 0, velCalls = 0, fireCalls = 0;
+                uint32_t lastAlphaId = 0, lastColId = 0;
+                uint8_t lastAlpha = 255;
+                bool lastCol = true;
+                bool lastProofs[5] = {};
+                int fovCalls = 0, camTargetCalls = 0;
+                float lastFov = 0.f;
+                uint32_t lastCamTarget = 0;
+                int boneCalls = 0, wepPropCalls = 0;
+                std::string lastWepProp;
+                double lastWepVal = 0.0;
+                int knockCalls = 0, footBloodSetCalls = 0, bleedCalls = 0;
+                bool footBlood = false, standing = true, ducking = true, jetpack = true, reloading = true;
+                int missionCalls = 0, critCalls = 0, dragCalls = 0, stayCalls = 0, neverCalls = 0;
+                int accVal = 77, rateVal = 66, accSetCalls = 0, rateSetCalls = 0;
+                int aimCalls = 0, lookCalls = 0;
+                float lastAim[3] = {}, lastLook[3] = {};
+                int lastLookMs = 0;
+                int missionLoadCalls = 0, missionTextCalls = 0, missionHelpCalls = 0;
+                int missionBigCalls = 0, missionClearTextCalls = 0, missionClearHelpCalls = 0;
+                std::string lastMissionBlock, lastMissionKey;
+            };
+            static BatchFState gF;
+            gF = BatchFState{};
+
+            WorldRPG::WorldNative::Hooks hooks{};
+            hooks.setVehicleDoorState = [](uint32_t, uint8_t d, uint8_t s) {
+                ++gF.doorCalls; gF.lastDoor = d; gF.lastDoorState = s; return true;
+            };
+            hooks.setVehicleLightState = [](uint32_t, uint8_t l, uint8_t s) {
+                ++gF.lightCalls; gF.lastLight = l; gF.lastLightState = s; return true;
+            };
+            hooks.setVehiclePanelState = [](uint32_t, uint8_t p, uint8_t s) {
+                ++gF.panelCalls; gF.lastPanel = p; gF.lastPanelState = s; return true;
+            };
+            hooks.setVehicleWheelState = [](uint32_t, uint8_t w, uint8_t s) {
+                ++gF.wheelCalls; gF.lastWheel = w; gF.lastWheelState = s; return true;
+            };
+            hooks.getVehicleContactWheels = [](uint32_t, uint8_t& out) {
+                out = gF.contactWheels; return true;
+            };
+            hooks.setEntityAlpha = [](uint32_t id, uint8_t a) {
+                ++gF.alphaCalls; gF.lastAlphaId = id; gF.lastAlpha = a; return true;
+            };
+            hooks.setEntityCollisionsEnabled = [](uint32_t id, bool en) {
+                ++gF.colCalls; gF.lastColId = id; gF.lastCol = en; return true;
+            };
+            hooks.setEntityPhysicalProofs = [](uint32_t, bool b, bool f, bool e, bool c, bool m) {
+                ++gF.proofCalls;
+                gF.lastProofs[0] = b; gF.lastProofs[1] = f; gF.lastProofs[2] = e;
+                gF.lastProofs[3] = c; gF.lastProofs[4] = m;
+                return true;
+            };
+            hooks.setEntityVelocity = [](uint32_t, float, float, float, bool) {
+                ++gF.velCalls; return true;
+            };
+            hooks.setEntityOnFire = [](uint32_t, bool) {
+                ++gF.fireCalls; return true;
+            };
+            hooks.setCameraFov = [](float fov) {
+                ++gF.fovCalls; gF.lastFov = fov; return true;
+            };
+            hooks.setCameraTargetEntity = [](uint32_t id) {
+                ++gF.camTargetCalls; gF.lastCamTarget = id; return true;
+            };
+            hooks.getPedBonePosition = [](uint32_t, uint32_t, float out[3]) {
+                ++gF.boneCalls; out[0] = 11.f; out[1] = 22.f; out[2] = 33.f; return true;
+            };
+            hooks.setWeaponProperty = [](int, int, const char* prop, double a, double, double) {
+                ++gF.wepPropCalls; gF.lastWepProp = prop ? prop : ""; gF.lastWepVal = a; return true;
+            };
+            hooks.isPedStanding = [](uint32_t, bool& out) { out = gF.standing; return true; };
+            hooks.isPedDucking = [](uint32_t, bool& out) { out = gF.ducking; return true; };
+            hooks.isPedFootBloodEnabled = [](uint32_t, bool& out) { out = gF.footBlood; return true; };
+            hooks.setPedFootBloodEnabled = [](uint32_t, bool en) {
+                ++gF.footBloodSetCalls; gF.footBlood = en; return true;
+            };
+            hooks.setPedBleeding = [](uint32_t, bool) { ++gF.bleedCalls; return true; };
+            hooks.setPedCanBeKnockedOffBike = [](uint32_t, bool) { ++gF.knockCalls; return true; };
+            hooks.setPedMissionActor = [](uint32_t, bool) { ++gF.missionCalls; return true; };
+            hooks.setPedSuffersCriticalHits = [](uint32_t, bool) { ++gF.critCalls; return true; };
+            hooks.setPedCanBeDraggedOut = [](uint32_t, bool) { ++gF.dragCalls; return true; };
+            hooks.setPedStayInSamePlace = [](uint32_t, bool) { ++gF.stayCalls; return true; };
+            hooks.setPedNeverTargeted = [](uint32_t, bool) { ++gF.neverCalls; return true; };
+            hooks.getPedWeaponAccuracy = [](uint32_t, int& out) { out = gF.accVal; return true; };
+            hooks.setPedWeaponAccuracy = [](uint32_t, int v) { ++gF.accSetCalls; gF.accVal = v; return true; };
+            hooks.getPedWeaponShootingRate = [](uint32_t, int& out) { out = gF.rateVal; return true; };
+            hooks.setPedWeaponShootingRate = [](uint32_t, int v) { ++gF.rateSetCalls; gF.rateVal = v; return true; };
+            hooks.isPedReloadingWeapon = [](uint32_t, bool& out) { out = gF.reloading; return true; };
+            hooks.doesPedHaveJetPack = [](uint32_t, bool& out) { out = gF.jetpack; return true; };
+            hooks.getPedTaskChain = [](uint32_t, bool primary, int slot, int outIds[4], int& outCount) {
+                if (primary && slot == 0) {
+                    outIds[0] = 701; outIds[1] = 709; outCount = 2; return true;
+                }
+                outCount = 0; return true;
+            };
+            hooks.getPedSimplestTaskId = [](uint32_t, int& outId) { outId = 1303; return true; };
+            hooks.setPedAimTarget = [](uint32_t, float x, float y, float z) {
+                ++gF.aimCalls; gF.lastAim[0] = x; gF.lastAim[1] = y; gF.lastAim[2] = z; return true;
+            };
+            hooks.setPedLookAt = [](uint32_t, float x, float y, float z, int ms) {
+                ++gF.lookCalls; gF.lastLook[0] = x; gF.lastLook[1] = y; gF.lastLook[2] = z; gF.lastLookMs = ms; return true;
+            };
+            hooks.loadMissionTextBlock = [](const char* b) {
+                ++gF.missionLoadCalls; gF.lastMissionBlock = b ? b : ""; return true;
+            };
+            hooks.showMissionText = [](const char* k, uint32_t, uint16_t) {
+                ++gF.missionTextCalls; gF.lastMissionKey = k ? k : ""; return true;
+            };
+            hooks.showMissionHelp = [](const char* k, bool) {
+                ++gF.missionHelpCalls; gF.lastMissionKey = k ? k : ""; return true;
+            };
+            hooks.showMissionBigText = [](const char* k, uint32_t, uint16_t) {
+                ++gF.missionBigCalls; gF.lastMissionKey = k ? k : ""; return true;
+            };
+            hooks.clearMissionTexts = []() { ++gF.missionClearTextCalls; return true; };
+            hooks.clearMissionHelp = []() { ++gF.missionClearHelpCalls; return true; };
+            WorldRPG::WorldNative::RegisterHooks(hooks);
+
+            // Seed a remote player for camera spectator target test.
+            const uint32_t remotePlrId = 0x5299;
+            WorldRPG::ServerWorld::NotePlayerSeen(remotePlrId);
+            WorldRPG::ServerWorld::NotePlayerNick(remotePlrId, "BatchFSpec");
+            WorldRPG::PedQueries::Snapshot streamSnap{};
+            streamSnap.generation = WorldRPG::PedQueries::Generation(remotePlrId);
+            streamSnap.streamed = true;
+            streamSnap.taskType = -1;
+            streamSnap.health = 100.f;
+            WorldRPG::Headless::SetPedQueryNative(remotePlrId, streamSnap);
+
+            WorldRPG::Net::ResourceStartInfo fRes;
+            fRes.name = "batch_f_native_test";
+            fRes.resourceId = 214;
+            fRes.entityId = 0x5225;
+            fRes.dynamicEntityId = 0x5226;
+            fRes.noClientCacheScripts = 1;
+            fRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(fRes);
+
+            const std::vector<uint8_t> fBody = NoCacheScriptBody(214, R"LUA(
+                -- Camera remote player target + getCameraTarget + FOV
+                local remotePlr = { id = 0x5299, element = true }
+                assert(setCameraTarget(remotePlr) == true, "spectate remote player")
+                local ct = getCameraTarget()
+                assert(type(ct) == "table" and ct.id == 0x5299, "getCameraTarget returns remote player")
+                assert(setCameraFieldOfView("player", 85) == true, "set player FOV")
+
+                -- Vehicle damage hooks + isVehicleOnAllWheels across types (mock contactWheels=3)
+                local car = createVehicle(411, 0, 0, 5)
+                local bike = createVehicle(522, 5, 0, 5)
+                local plane = createVehicle(593, 10, 0, 5)
+                local boat = createVehicle(452, 15, 0, 5)
+                local trailer2 = createVehicle(606, 20, 0, 5)
+                assert(isVehicleOnAllWheels(car) == false, "car needs 4 wheels (3 < 4)")
+                assert(isVehicleOnAllWheels(bike) == true, "bike needs 2 wheels (3 >= 2)")
+                assert(isVehicleOnAllWheels(plane) == true, "plane needs 3 wheels (3 >= 3)")
+                assert(isVehicleOnAllWheels(boat) == false, "boat is never on wheels")
+                assert(isVehicleOnAllWheels(trailer2) == true, "2-wheel trailer needs 2 wheels")
+
+                assert(setVehicleDoorState(car, 2, 3) == true)
+                assert(setVehicleLightState(car, 1, 1) == true)
+                assert(setVehiclePanelState(car, 4, 2) == true)
+                assert(setVehicleWheelStates(car, 1, 0, 2, 0) == true)
+
+                -- Vehicle onFire round-trip + object alpha/collisions + child velocity propagation
+                assert(isElementOnFire(car) == false)
+                assert(setElementOnFire(car, true) == true and isElementOnFire(car) == true, "veh onFire true")
+                assert(setElementOnFire(car, false) == true and isElementOnFire(car) == false, "veh onFire false")
+
+                local obj = createObject(1337, 0, 0, 5)
+                local childObj = createObject(1337, 1, 0, 5)
+                setElementParent(childObj, obj)
+                assert(setElementAlpha(obj, 128) == true and getElementAlpha(obj) == 128, "object alpha")
+                assert(setElementCollisionsEnabled(obj, false) == true and getElementCollisionsEnabled(obj) == false, "object collisions")
+                assert(setElementVelocity(obj, 1, 2, 3) == true, "velocity propagates to child")
+                _G._batchFObjId = obj.id
+
+                -- Weapon bone target + setWeaponProperty native forwarding
+                local ped = createPed(0, 2, 3, 4)
+                local wep = createWeapon("m4", 0, 0, 5)
+                assert(setWeaponTarget(wep, ped, 8) == true, "weapon bone target")
+                fireWeapon(wep)
+                assert(setWeaponProperty("m4", "pro", "damage", 45) == true, "setWeaponProperty")
+
+                -- Ped native queries, flags, tasks, proofs, accuracy/rate, aim/look
+                assert(isPedOnGround(ped) == true, "native isPedStanding")
+                assert(isPedDucked(ped) == true, "native isPedDucking")
+                assert(doesPedHaveJetPack(ped) == true and isPedWearingJetpack(ped) == true, "native jetpack")
+                assert(isPedReloadingWeapon(ped) == true, "native reloading")
+                local t1, t2 = getPedTask(ped, "primary", 0)
+                assert(t1 == "TASK_COMPLEX_ENTER_CAR_AS_DRIVER" and t2 == "TASK_SIMPLE_CAR_DRIVE", "native task chain")
+                assert(getPedSimplestTask(ped) == "TASK_SIMPLE_JETPACK", "native simplest task")
+                assert(setPedCanBeKnockedOffBike(ped, false) == true)
+                assert(isPedFootBloodEnabled(ped) == false)
+                assert(setPedFootBloodEnabled(ped, true) == true and isPedFootBloodEnabled(ped) == true, "native foot blood")
+                assert(setPedBleeding(ped, true) == true)
+                assert(setPedMissionActor(ped, true) == true)
+                assert(setPedSuffersCriticalHits(ped, false) == true)
+                assert(setPedCanBeDraggedOut(ped, false) == true)
+                assert(setPedStayInSamePlace(ped, true) == true)
+                assert(setPedNeverTargeted(ped, true) == true)
+                assert(setPedPhysicalProofs(ped, true, false, true, false, true) == true)
+                assert(setPedAimTarget(ped, 10, 20, 30) == true)
+                assert(setPedLookAt(ped, 4, 5, 6, 1500) == true)
+
+                -- Native weapon accuracy / shooting rate read on streamed remote player
+                assert(getPedWeaponAccuracy(remotePlr) == 77, "native weapon accuracy read")
+                assert(getPedWeaponShootingRate(remotePlr) == 66, "native shooting rate read")
+
+                -- Mission HUD text native hooks
+                assert(acquireMissionText("INTRO") == true, "acquireMissionText native")
+                assert(showMissionText("MSG1", 2000, 1) == true, "showMissionText native")
+                assert(showMissionHelp("HLP1", true) == true, "showMissionHelp native")
+                assert(showMissionBigText("BIG1", 3000, 2) == true, "showMissionBigText native")
+                assert(clearMissionTexts() == true and clearMissionHelp() == true, "clear mission texts/help")
+                assert(releaseMissionText() == true, "releaseMissionText")
+
+                destroyElement(wep)
+                destroyElement(ped)
+                destroyElement(childObj)
+                destroyElement(trailer2)
+                destroyElement(boat)
+                destroyElement(plane)
+                destroyElement(bike)
+                destroyElement(car)
+                _G._batchFOk = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(fBody.data(), fBody.size(), fBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "batch-f-ok", "assert(_G._batchFOk == true, 'batch F native & bugfix test ran')");
+
+            // Also test server RPCs for object alpha/collisions & remote camera target + VehicleApplyDamageNative.
+            lua_State* fL = WorldRPG::Script::ActiveVmState();
+            lua_getglobal(fL, "_batchFObjId");
+            const uint32_t objId = static_cast<uint32_t>(lua_tointeger(fL, -1));
+            lua_pop(fL, 1);
+            WorldRPG::Script::RpcSetElementAlpha(objId, 96);
+            WorldRPG::Script::RpcSetElementCollisionsEnabled(objId, true);
+            CHECK(gF.lastAlphaId == objId && gF.lastAlpha == 96);
+            CHECK(gF.lastColId == objId && gF.lastCol == true);
+            CHECK(WorldRPG::Script::RpcSetCameraTarget(remotePlrId));
+            bool dCh[6] = {true, false, false, false, false, false};
+            uint8_t dVal[6] = {2, 0, 0, 0, 0, 0};
+            bool wCh[4] = {false, true, false, false};
+            uint8_t wVal[4] = {0, 1, 0, 0};
+            bool pCh[7] = {false, false, true, false, false, false, false};
+            uint8_t pVal[7] = {0, 0, 3, 0, 0, 0, 0};
+            bool lCh[4] = {false, false, false, true};
+            uint8_t lVal[4] = {0, 0, 0, 1};
+            CHECK(WorldRPG::Script::VehicleApplyDamageNative(0x5299, dCh, dVal, wCh, wVal, pCh, pVal, lCh, lVal));
+
+            CHECK(gF.camTargetCalls == 2 && gF.lastCamTarget == remotePlrId);
+            CHECK(gF.fovCalls >= 1 && std::fabs(gF.lastFov - 85.f) < 0.01f);
+            CHECK(gF.doorCalls == 2 && gF.lastDoor == 0 && gF.lastDoorState == 2);
+            CHECK(gF.lightCalls == 2 && gF.lastLight == 3 && gF.lastLightState == 1);
+            CHECK(gF.panelCalls == 2 && gF.lastPanel == 2 && gF.lastPanelState == 3);
+            CHECK(gF.wheelCalls == 3 && gF.lastWheel == 1 && gF.lastWheelState == 1);
+            CHECK(gF.alphaCalls >= 2);
+            CHECK(gF.colCalls >= 2);
+            CHECK(gF.velCalls >= 2);  // parent + child
+            CHECK(gF.fireCalls == 2);
+            CHECK(gF.boneCalls >= 1);
+            CHECK(gF.wepPropCalls == 1 && gF.lastWepProp == "damage" && std::fabs(gF.lastWepVal - 45.0) < 0.01);
+            CHECK(gF.knockCalls == 1 && gF.footBloodSetCalls == 1 && gF.bleedCalls == 1);
+            CHECK(gF.missionCalls == 1 && gF.critCalls == 1 && gF.dragCalls == 1 && gF.stayCalls == 1 && gF.neverCalls == 1);
+            CHECK(gF.proofCalls == 1 && gF.lastProofs[0] && !gF.lastProofs[1] && gF.lastProofs[2] && !gF.lastProofs[3] && gF.lastProofs[4]);
+            CHECK(gF.aimCalls == 1 && std::fabs(gF.lastAim[0] - 10.f) < 0.01f);
+            CHECK(gF.lookCalls == 1 && std::fabs(gF.lastLook[2] - 6.f) < 0.01f && gF.lastLookMs == 1500);
+            CHECK(gF.missionLoadCalls == 1 && gF.lastMissionBlock == "INTRO");
+            CHECK(gF.missionTextCalls == 1 && gF.missionHelpCalls == 1 && gF.missionBigCalls == 1);
+            CHECK(gF.missionClearTextCalls == 1 && gF.missionClearHelpCalls == 1);
+
+            WorldRPG::Headless::ClearPedQueryNative();
             WorldRPG::WorldNative::RegisterHooks({});
         }
     }

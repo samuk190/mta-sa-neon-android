@@ -135,6 +135,47 @@ struct Hooks {
     bool (*setVehicleNitroState)(uint32_t id, int count, float level) = nullptr;
     bool (*setTrainSpeed)(uint32_t id, float speed) = nullptr;
 
+    // Batch F: Vehicle damage manager, entity universal alpha/collisions/proofs, camera FOV,
+    // ped native flags/weapon/tasks/aim/look, mission HUD text, and CWeaponInfo stats.
+    bool (*setVehicleDoorState)(uint32_t id, uint8_t door, uint8_t state) = nullptr;
+    bool (*setVehicleLightState)(uint32_t id, uint8_t light, uint8_t state) = nullptr;
+    bool (*setVehiclePanelState)(uint32_t id, uint8_t panel, uint8_t state) = nullptr;
+    bool (*setVehicleWheelState)(uint32_t id, uint8_t wheel, uint8_t state) = nullptr;
+    bool (*setEntityAlpha)(uint32_t id, uint8_t alpha) = nullptr;
+    bool (*setEntityCollisionsEnabled)(uint32_t id, bool enabled) = nullptr;
+    bool (*setEntityPhysicalProofs)(uint32_t id, bool bullet, bool fire, bool explosion,
+                                    bool collision, bool melee) = nullptr;
+    bool (*setCameraFov)(float fov) = nullptr;
+    bool (*getCameraFov)(float& outFov) = nullptr;
+    bool (*isPedStanding)(uint32_t id, bool& outStanding) = nullptr;
+    bool (*isPedDucking)(uint32_t id, bool& outDucking) = nullptr;
+    bool (*isPedFootBloodEnabled)(uint32_t id, bool& outEnabled) = nullptr;
+    bool (*setPedFootBloodEnabled)(uint32_t id, bool enabled) = nullptr;
+    bool (*setPedBleeding)(uint32_t id, bool bleeding) = nullptr;
+    bool (*setPedCanBeKnockedOffBike)(uint32_t id, bool canBeKnocked) = nullptr;
+    bool (*setPedMissionActor)(uint32_t id, bool mission) = nullptr;
+    bool (*setPedSuffersCriticalHits)(uint32_t id, bool suffers) = nullptr;
+    bool (*setPedCanBeDraggedOut)(uint32_t id, bool canDrag) = nullptr;
+    bool (*setPedStayInSamePlace)(uint32_t id, bool stay) = nullptr;
+    bool (*setPedNeverTargeted)(uint32_t id, bool never) = nullptr;
+    bool (*getPedWeaponAccuracy)(uint32_t id, int& outAccuracy) = nullptr;
+    bool (*setPedWeaponAccuracy)(uint32_t id, int accuracy) = nullptr;
+    bool (*getPedWeaponShootingRate)(uint32_t id, int& outRate) = nullptr;
+    bool (*setPedWeaponShootingRate)(uint32_t id, int rate) = nullptr;
+    bool (*isPedReloadingWeapon)(uint32_t id, bool& outReloading) = nullptr;
+    bool (*doesPedHaveJetPack)(uint32_t id, bool& outHasJetPack) = nullptr;
+    bool (*getPedTaskChain)(uint32_t id, bool secondary, int slot, int outTaskIds[4], int& outCount) = nullptr;
+    bool (*getPedSimplestTaskId)(uint32_t id, int& outTaskId) = nullptr;
+    bool (*setPedAimTarget)(uint32_t id, float x, float y, float z) = nullptr;
+    bool (*setPedLookAt)(uint32_t id, float x, float y, float z, int timeMs) = nullptr;
+    bool (*loadMissionTextBlock)(const char* blockName) = nullptr;
+    bool (*showMissionText)(const char* gxtKey, uint32_t timeMs, uint16_t flags) = nullptr;
+    bool (*showMissionHelp)(const char* gxtKey, bool permanent) = nullptr;
+    bool (*showMissionBigText)(const char* gxtKey, uint32_t timeMs, uint16_t style) = nullptr;
+    bool (*clearMissionTexts)() = nullptr;
+    bool (*clearMissionHelp)() = nullptr;
+    bool (*setWeaponProperty)(int weaponId, int skill, const char* property, double a, double b, double c) = nullptr;
+
     // Immediate Fx_c particle emitters; return true if invoked.
     bool (*fxAddBlood)(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) = nullptr;
     bool (*fxAddBulletImpact)(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity) = nullptr;
@@ -246,6 +287,44 @@ bool BurstVehicleTyre(uint32_t id, uint8_t wheelId);
 bool SetVehicleUpgrade(uint32_t id, uint16_t upgrade, bool add);
 bool SetVehicleNitroState(uint32_t id, int count, float level);
 bool SetTrainSpeed(uint32_t id, float speed);
+
+bool SetVehicleDoorState(uint32_t id, uint8_t door, uint8_t state);
+bool SetVehicleLightState(uint32_t id, uint8_t light, uint8_t state);
+bool SetVehiclePanelState(uint32_t id, uint8_t panel, uint8_t state);
+bool SetVehicleWheelState(uint32_t id, uint8_t wheel, uint8_t state);
+bool SetEntityAlpha(uint32_t id, uint8_t alpha);
+bool SetEntityCollisionsEnabled(uint32_t id, bool enabled);
+bool SetEntityPhysicalProofs(uint32_t id, bool bullet, bool fire, bool explosion, bool collision, bool melee);
+bool SetCameraFov(float fov);
+bool GetCameraFov(float& outFov);
+bool IsPedStanding(uint32_t id, bool& outStanding);
+bool IsPedDucking(uint32_t id, bool& outDucking);
+bool IsPedFootBloodEnabled(uint32_t id, bool& outEnabled);
+bool SetPedFootBloodEnabled(uint32_t id, bool enabled);
+bool SetPedBleeding(uint32_t id, bool bleeding);
+bool SetPedCanBeKnockedOffBike(uint32_t id, bool canBeKnocked);
+bool SetPedMissionActor(uint32_t id, bool mission);
+bool SetPedSuffersCriticalHits(uint32_t id, bool suffers);
+bool SetPedCanBeDraggedOut(uint32_t id, bool canDrag);
+bool SetPedStayInSamePlace(uint32_t id, bool stay);
+bool SetPedNeverTargeted(uint32_t id, bool never);
+bool GetPedWeaponAccuracy(uint32_t id, int& outAccuracy);
+bool SetPedWeaponAccuracy(uint32_t id, int accuracy);
+bool GetPedWeaponShootingRate(uint32_t id, int& outRate);
+bool SetPedWeaponShootingRate(uint32_t id, int rate);
+bool IsPedReloadingWeapon(uint32_t id, bool& outReloading);
+bool DoesPedHaveJetPack(uint32_t id, bool& outHasJetPack);
+bool GetPedTaskChain(uint32_t id, bool secondary, int slot, int outTaskIds[4], int& outCount);
+bool GetPedSimplestTaskId(uint32_t id, int& outTaskId);
+bool SetPedAimTarget(uint32_t id, float x, float y, float z);
+bool SetPedLookAt(uint32_t id, float x, float y, float z, int timeMs);
+bool LoadMissionTextBlock(const char* blockName);
+bool ShowMissionText(const char* gxtKey, uint32_t timeMs, uint16_t flags);
+bool ShowMissionHelp(const char* gxtKey, bool permanent);
+bool ShowMissionBigText(const char* gxtKey, uint32_t timeMs, uint16_t style);
+bool ClearMissionTexts();
+bool ClearMissionHelp();
+bool SetWeaponProperty(int weaponId, int skill, const char* property, double a, double b, double c);
 
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness);
 bool FxAddBulletImpact(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity);

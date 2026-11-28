@@ -53,6 +53,10 @@ void VehicleApplyDamageSync(uint32_t id, const bool doorChanged[6], const uint8_
                             const bool wheelChanged[4], const uint8_t wheels[4],
                             const bool panelChanged[7], const uint8_t panels[7],
                             const bool lightChanged[4], const uint8_t lights[4]);
+bool VehicleApplyDamageNative(uint32_t id, const bool doorChanged[6], const uint8_t doors[6],
+                              const bool wheelChanged[4], const uint8_t wheels[4],
+                              const bool panelChanged[7], const uint8_t panels[7],
+                              const bool lightChanged[4], const uint8_t lights[4]);
 void VehicleApplyFixState(uint32_t id, bool resetSpawnDefaults);
 void VehicleApplyBlownState(uint32_t id, bool blown);
 void VehicleApplyTrailerLink(uint32_t vehicleId, uint32_t trailerId, bool attached);

@@ -153,12 +153,18 @@ int JetPackQuery(lua_State* L, const char* name) {
         return 1;
     }
     bool overrideHas = false;
-    Entity::PedSpawn spawn;
-    const bool has = CopyJetpackOverride(id, overrideHas) ? overrideHas
-                                                          : (ServerWorld::CopyPedSpawn(id, spawn) && spawn.hasJetpack);
-    if (id == ServerWorld::LocalPlayer()) {
-        static bool once = false;
-        DiagOnce(once, "DIAG doesPedHaveJetPack: the local CPed jetpack task is not read");
+    bool has = false;
+    if (CopyJetpackOverride(id, overrideHas)) {
+        has = overrideHas;
+    } else if (WorldNative::DoesPedHaveJetPack(id, has)) {
+        // Live native CPedIntelligence::GetTaskJetPack read.
+    } else {
+        Entity::PedSpawn spawn;
+        has = ServerWorld::CopyPedSpawn(id, spawn) && spawn.hasJetpack;
+        if (id == ServerWorld::LocalPlayer()) {
+            static bool once = false;
+            DiagOnce(once, "DIAG doesPedHaveJetPack: the local CPed jetpack task is not read");
+        }
     }
     lua_pushboolean(L, has ? 1 : 0);
     return 1;
@@ -220,6 +226,11 @@ int IsPedDucked(lua_State* L) {
     if (!ReadPed(L, id)) {
         LUA_LOGE("isPedDucked: expected a ped");
         lua_pushnil(L);
+        return 1;
+    }
+    bool nativeDucked = false;
+    if (WorldNative::IsPedDucking(id, nativeDucked)) {
+        lua_pushboolean(L, nativeDucked ? 1 : 0);
         return 1;
     }
     lua_pushboolean(L, PedQueries::ReadPresentation(id).ducked ? 1 : 0);
@@ -695,13 +706,14 @@ int SetPlayerNametagShowing(lua_State* L) {
     return 1;
 }
 
-// CScriptArgReader::ReadUserData<CClientPed>: a ped or a player.
+// CScriptArgReader::ReadUserData<CClientPed>: a ped or a player (including client-created script peds).
 bool IsPed(lua_State* L, int index, uint32_t& id) {
     if (!lua_istable(L, index)) return false;
     id = ElementIdOf(L, index);
     if (id == 0 || id == 0xFFFFFFFFu) return false;
     const char* kind = ServerWorld::ElementKindName(id);
-    return kind && (std::strcmp(kind, "player") == 0 || std::strcmp(kind, "ped") == 0);
+    return (kind && (std::strcmp(kind, "player") == 0 || std::strcmp(kind, "ped") == 0)) ||
+           Game::ScriptPedAlive(id) || ServerWorld::IsKnownPlayer(id);
 }
 
 // Local occupancy follows the native seat. Remote occupancy comes from server seat notifications.
@@ -887,6 +899,11 @@ int IsPedOnGround(lua_State* L) {
         return 1;
     }
     const bool checkVehicles = lua_toboolean(L, 2) != 0;
+    bool nativeStanding = false;
+    if (WorldNative::IsPedStanding(id, nativeStanding)) {
+        lua_pushboolean(L, nativeStanding ? 1 : 0);
+        return 1;
+    }
     float x = 0, y = 0, z = 0, heading = 0;
     const bool posed = id == ServerWorld::LocalPlayer() ? (Game::CopyPose(x, y, z, heading), true)
                                                          : ServerWorld::ElementPose(id, x, y, z);
@@ -946,7 +963,54 @@ int GetPedStat(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:882-918. No CTaskManager, so a well-formed query returns false.
+// Verified GTA:SA 2.10 ARM64 eTaskType -> MTA task name table.
+std::string GtaTaskNameForId(int taskId) {
+    switch (taskId) {
+        case 0: return "TASK_SIMPLE_PLAYER_ON_FOOT";
+        case 200: return "TASK_SIMPLE_NONE";
+        case 203: return "TASK_SIMPLE_STAND_STILL";
+        case 205: return "TASK_SIMPLE_GET_UP";
+        case 207: return "TASK_SIMPLE_FALL";
+        case 210: return "TASK_SIMPLE_JUMP";
+        case 211: return "TASK_COMPLEX_JUMP";
+        case 212: return "TASK_SIMPLE_DIE";
+        case 213: return "TASK_SIMPLE_DROWN";
+        case 217: return "TASK_COMPLEX_DIE";
+        case 218: return "TASK_SIMPLE_DEAD";
+        case 220: return "TASK_SIMPLE_SIT_DOWN";
+        case 221: return "TASK_SIMPLE_SIT_IDLE";
+        case 222: return "TASK_SIMPLE_STAND_UP";
+        case 240: return "TASK_COMPLEX_IN_AIR_AND_LAND";
+        case 241: return "TASK_SIMPLE_IN_AIR";
+        case 242: return "TASK_SIMPLE_LAND";
+        case 250: return "TASK_COMPLEX_ON_FIRE";
+        case 254: return "TASK_SIMPLE_CLIMB";
+        case 263: return "TASK_SIMPLE_CHOKING";
+        case 268: return "TASK_COMPLEX_IN_WATER";
+        case 400: return "TASK_SIMPLE_ANIM";
+        case 401: return "TASK_SIMPLE_NAMED_ANIM";
+        case 415: return "TASK_SIMPLE_DUCK";
+        case 700: return "TASK_COMPLEX_ENTER_CAR_AS_PASSENGER";
+        case 701: return "TASK_COMPLEX_ENTER_CAR_AS_DRIVER";
+        case 704: return "TASK_COMPLEX_LEAVE_CAR";
+        case 709: return "TASK_SIMPLE_CAR_DRIVE";
+        case 711: return "TASK_COMPLEX_CAR_DRIVE_WANDER";
+        case 912: return "TASK_COMPLEX_WANDER";
+        case 1000: return "TASK_COMPLEX_KILL_PED_ON_FOOT";
+        case 1008: return "TASK_SIMPLE_BE_HIT";
+        case 1016: return "TASK_SIMPLE_FIGHT";
+        case 1017: return "TASK_SIMPLE_USE_GUN";
+        case 1303: return "TASK_SIMPLE_JETPACK";
+        case 1304: return "TASK_SIMPLE_SWIM";
+        default: {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "TASK_%d", taskId);
+            return std::string(buf);
+        }
+    }
+}
+
+// CLuaPedDefs.cpp:882-918. Reads up to 4 nested tasks from CTaskManager when hooked.
 int GetPedTask(lua_State* L) {
     uint32_t id = 0;
     if (!IsPed(L, 1, id) || lua_type(L, 2) != LUA_TSTRING || !lua_isnumber(L, 3)) {
@@ -955,9 +1019,29 @@ int GetPedTask(lua_State* L) {
         return 1;
     }
     const char* priority = lua_tostring(L, 2);
-    if (!SameControl(priority, "primary") && !SameControl(priority, "secondary")) {
+    const bool primary = SameControl(priority, "primary");
+    const bool secondary = SameControl(priority, "secondary");
+    if (!primary && !secondary) {
         lua_pushboolean(L, 0);
         return 1;
+    }
+    const int slot = static_cast<int>(lua_tointeger(L, 3));
+    if (slot < 0 || slot >= (primary ? 5 : 6)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int taskIds[4] = {-1, -1, -1, -1};
+    int count = 0;
+    if (WorldNative::GetPedTaskChain(id, primary, slot, taskIds, count)) {
+        if (count <= 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        for (int i = 0; i < count && i < 4; ++i) {
+            const std::string name = GtaTaskNameForId(taskIds[i]);
+            lua_pushlstring(L, name.data(), name.size());
+        }
+        return count > 4 ? 4 : count;
     }
     static bool once = false;
     DiagOnce(once, "DIAG getPedTask: CTaskManager is not hooked");
@@ -970,6 +1054,16 @@ int GetPedSimplestTask(lua_State* L) {
     if (!IsPed(L, 1, id)) {
         LUA_LOGE("getPedSimplestTask: expected a ped");
         lua_pushboolean(L, 0);
+        return 1;
+    }
+    int taskId = -1;
+    if (WorldNative::GetPedSimplestTaskId(id, taskId)) {
+        if (taskId < 0) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        const std::string name = GtaTaskNameForId(taskId);
+        lua_pushlstring(L, name.data(), name.size());
         return 1;
     }
     static bool once = false;
@@ -1141,12 +1235,15 @@ int SetPedCanBeKnockedOffBike(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+    const bool knockable = lua_toboolean(L, 2) != 0;
     {
         std::lock_guard lock(g_controlMu);
-        g_knockable[id] = lua_toboolean(L, 2) != 0;
+        g_knockable[id] = knockable;
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedCanBeKnockedOffBike: CPed::SetCanBeKnockedOffBike is not hooked");
+    if (!WorldNative::SetPedCanBeKnockedOffBike(id, knockable)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedCanBeKnockedOffBike: CPed::SetCanBeKnockedOffBike is not hooked");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1486,17 +1583,24 @@ int SetPedFrozen(lua_State* L) {
 int IsPedFootBloodEnabled(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "isPedFootBloodEnabled", "ped", 1);
+    bool enabled = false;
+    if (WorldNative::IsPedFootBloodEnabled(ped.id, enabled)) {
+        lua_pushboolean(L, enabled ? 1 : 0);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG isPedFootBloodEnabled: CPed::GetFootBlood is not read");
     lua_pushboolean(L, 0);
     return 1;
 }
 
-bool ApplyFootBlood(uint32_t id) {
+bool ApplyFootBlood(uint32_t id, bool enabled) {
     PedRef ped;
     if (!AsPed(id, ped)) return false;
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedFootBloodEnabled: CPed::SetFootBlood is not called");
+    if (!WorldNative::SetPedFootBloodEnabled(id, enabled)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedFootBloodEnabled: CPed::SetFootBlood is not called");
+    }
     return true;
 }
 
@@ -1505,9 +1609,10 @@ int SetPedFootBloodEnabled(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "setPedFootBloodEnabled", "ped", 1);
     if (lua_type(L, 2) != LUA_TBOOLEAN) return FailArg(L, "setPedFootBloodEnabled", "bool", 2);
+    const bool enabled = lua_toboolean(L, 2) != 0;
     bool ok = false;
     VisitTree(ped.id, [&](uint32_t id) {
-        const bool applied = ApplyFootBlood(id);
+        const bool applied = ApplyFootBlood(id, enabled);
         if (id == ped.id) ok = applied;
     });
     lua_pushboolean(L, ok ? 1 : 0);
@@ -1530,8 +1635,10 @@ int SetPedBleeding(lua_State* L) {
     BodyState state = LoadBody(ped.id);
     state.bleeding = lua_toboolean(L, 2) != 0;
     StoreBody(ped.id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedBleeding: CPed::SetBleeding is not called");
+    if (!WorldNative::SetPedBleeding(ped.id, state.bleeding)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedBleeding: CPed::SetBleeding is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1878,14 +1985,15 @@ void DiagLiteral(const char* text) {
     LUA_LOGI("%s", text);
 }
 
-bool ApplyFlag(uint32_t id, bool enabled, bool BodyState::* have, bool BodyState::* value, const char* diag) {
+bool ApplyFlag(uint32_t id, bool enabled, bool BodyState::* have, bool BodyState::* value, const char* diag,
+               bool (*nativeFn)(uint32_t, bool) = nullptr) {
     PedRef ped;
     if (!AsPed(id, ped) || !ClientPed(ped)) return false;
     BodyState state = LoadBody(id);
     state.*have = true;
     state.*value = enabled;
     StoreBody(id, state);
-    DiagLiteral(diag);
+    if (!nativeFn || !nativeFn(id, enabled)) DiagLiteral(diag);
     return true;
 }
 
@@ -1903,7 +2011,8 @@ int SetPedMissionActor(lua_State* L) {
     if (lua_type(L, 2) != LUA_TBOOLEAN) return RaiseArg(L, "setPedMissionActor", "boolean", 2);
     const bool enabled = lua_toboolean(L, 2) != 0;
     const bool ok = ApplyFlag(ped.id, enabled, &BodyState::haveMission, &BodyState::mission,
-                              "DIAG setPedMissionActor: CPed created-by state is not written");
+                              "DIAG setPedMissionActor: CPed created-by state is not written",
+                              &WorldNative::SetPedMissionActor);
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
@@ -1936,7 +2045,8 @@ int SetPedSuffersCriticalHits(lua_State* L) {
     if (!TakePed(L, 1, ped)) return RaiseArg(L, "setPedSuffersCriticalHits", "ped", 1);
     if (lua_type(L, 2) != LUA_TBOOLEAN) return RaiseArg(L, "setPedSuffersCriticalHits", "boolean", 2);
     const bool ok = ApplyFlag(ped.id, lua_toboolean(L, 2) != 0, &BodyState::haveCrit, &BodyState::crit,
-                              "DIAG setPedSuffersCriticalHits: CPed no-critical-hits is not written");
+                              "DIAG setPedSuffersCriticalHits: CPed no-critical-hits is not written",
+                              &WorldNative::SetPedSuffersCriticalHits);
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
@@ -1953,7 +2063,8 @@ int SetPedCanBeDraggedOut(lua_State* L) {
     if (!TakePed(L, 1, ped)) return RaiseArg(L, "setPedCanBeDraggedOut", "ped", 1);
     if (lua_type(L, 2) != LUA_TBOOLEAN) return RaiseArg(L, "setPedCanBeDraggedOut", "boolean", 2);
     const bool ok = ApplyFlag(ped.id, lua_toboolean(L, 2) != 0, &BodyState::haveDrag, &BodyState::drag,
-                              "DIAG setPedCanBeDraggedOut: CPed cannot-be-dragged-out is not written");
+                              "DIAG setPedCanBeDraggedOut: CPed cannot-be-dragged-out is not written",
+                              &WorldNative::SetPedCanBeDraggedOut);
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
@@ -1985,7 +2096,8 @@ int SetPedStayInSamePlace(lua_State* L) {
     if (!TakePed(L, 1, ped)) return RaiseArg(L, "setPedStayInSamePlace", "ped", 1);
     if (lua_type(L, 2) != LUA_TBOOLEAN) return RaiseArg(L, "setPedStayInSamePlace", "boolean", 2);
     const bool ok = ApplyFlag(ped.id, lua_toboolean(L, 2) != 0, &BodyState::haveStay, &BodyState::stay,
-                              "DIAG setPedStayInSamePlace: CPed::SetScriptStayInSamePlace is not called");
+                              "DIAG setPedStayInSamePlace: CPed::SetScriptStayInSamePlace is not called",
+                              &WorldNative::SetPedStayInSamePlace);
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
@@ -2001,7 +2113,8 @@ int SetPedNeverTargeted(lua_State* L) {
     if (!TakePed(L, 1, ped)) return RaiseArg(L, "setPedNeverTargeted", "ped", 1);
     if (lua_type(L, 2) != LUA_TBOOLEAN) return RaiseArg(L, "setPedNeverTargeted", "boolean", 2);
     const bool ok = ApplyFlag(ped.id, lua_toboolean(L, 2) != 0, &BodyState::haveNever, &BodyState::never,
-                              "DIAG setPedNeverTargeted: CPed never-targeted is not written");
+                              "DIAG setPedNeverTargeted: CPed never-targeted is not written",
+                              &WorldNative::SetPedNeverTargeted);
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
@@ -2040,8 +2153,10 @@ int SetPedPhysicalProofs(lua_State* L) {
     state.proofCollision = values[3];
     state.proofMelee = values[4];
     StoreBody(ped.id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedPhysicalProofs: CPed::SetPhysicalProofs is not called");
+    if (!WorldNative::SetEntityPhysicalProofs(ped.id, values[0], values[1], values[2], values[3], values[4])) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedPhysicalProofs: CPed::SetPhysicalProofs is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2070,13 +2185,18 @@ int GetPedWeaponAccuracy(lua_State* L) {
         return 1;
     }
     const BodyState state = LoadBody(ped.id);
-    if (!state.haveAccuracy) {
-        static bool once = false;
-        DiagOnce(once, "DIAG getPedWeaponAccuracy: CPed::GetWeaponAccuracy is not read");
-        lua_pushinteger(L, -1);
+    if (state.haveAccuracy) {
+        lua_pushinteger(L, state.accuracy);
         return 1;
     }
-    lua_pushinteger(L, state.accuracy);
+    int nativeAcc = 0;
+    if (WorldNative::GetPedWeaponAccuracy(ped.id, nativeAcc)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(nativeAcc));
+        return 1;
+    }
+    static bool once = false;
+    DiagOnce(once, "DIAG getPedWeaponAccuracy: CPed::GetWeaponAccuracy is not read");
+    lua_pushinteger(L, -1);
     return 1;
 }
 
@@ -2094,8 +2214,10 @@ int SetPedWeaponAccuracy(lua_State* L) {
     state.haveAccuracy = true;
     state.accuracy = accuracy;
     StoreBody(ped.id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedWeaponAccuracy: CPed::SetWeaponAccuracy is not called");
+    if (!WorldNative::SetPedWeaponAccuracy(ped.id, static_cast<uint8_t>(accuracy))) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedWeaponAccuracy: CPed::SetWeaponAccuracy is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2110,13 +2232,18 @@ int GetPedWeaponShootingRate(lua_State* L) {
         return 1;
     }
     const BodyState state = LoadBody(ped.id);
-    if (!state.haveRate) {
-        static bool once = false;
-        DiagOnce(once, "DIAG getPedWeaponShootingRate: CPed::GetWeaponShootingRate is not read");
-        lua_pushinteger(L, -1);
+    if (state.haveRate) {
+        lua_pushinteger(L, state.rate);
         return 1;
     }
-    lua_pushinteger(L, state.rate);
+    int nativeRate = 0;
+    if (WorldNative::GetPedWeaponShootingRate(ped.id, nativeRate)) {
+        lua_pushinteger(L, static_cast<lua_Integer>(nativeRate));
+        return 1;
+    }
+    static bool once = false;
+    DiagOnce(once, "DIAG getPedWeaponShootingRate: CPed::GetWeaponShootingRate is not read");
+    lua_pushinteger(L, -1);
     return 1;
 }
 
@@ -2200,8 +2327,10 @@ int SetPedWeaponShootingRate(lua_State* L) {
     state.haveRate = true;
     state.rate = rate;
     StoreBody(ped.id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedWeaponShootingRate: CPed::SetWeaponShootingRate is not called");
+    if (!WorldNative::SetPedWeaponShootingRate(ped.id, static_cast<uint8_t>(rate))) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedWeaponShootingRate: CPed::SetWeaponShootingRate is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2378,10 +2507,15 @@ int SetPedAnimationSpeed(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:1608-1612. No weapon is in WEAPONSTATE_RELOADING.
+// CLuaPedDefs.cpp:1608-1612. Reads active CWeapon::m_nState == WEAPONSTATE_RELOADING (2) when hooked.
 int IsPedReloadingWeapon(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "isPedReloadingWeapon", "ped", 1);
+    bool reloading = false;
+    if (WorldNative::IsPedReloadingWeapon(ped.id, reloading)) {
+        lua_pushboolean(L, reloading ? 1 : 0);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG isPedReloadingWeapon: CWeapon::GetState is not read");
     lua_pushboolean(L, 0);
@@ -3271,13 +3405,19 @@ bool MissionOwned() {
     return !owner.empty() && owner == g_missionOwner;
 }
 
-// CLuaPlayerDefs.cpp:159-185. The GXT block is not loaded, so a new lease fails.
+// CLuaPlayerDefs.cpp:159-185. Loads the mission GXT table via CText::LoadMissionText when hooked.
 int AcquireMissionText(lua_State* L) {
     if (lua_type(L, 1) != LUA_TSTRING) return RaiseArg(L, "acquireMissionText", "string", 1);
     const std::string block = lua_tostring(L, 1);
     const std::string& owner = ActiveVmOwner();
     if (owner.empty() || !GxtName(block)) return TaskFalse(L);
     if (g_missionOwner == owner && g_missionBlock == block) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (WorldNative::LoadMissionTextBlock(block.c_str())) {
+        g_missionOwner = owner;
+        g_missionBlock = block;
         lua_pushboolean(L, 1);
         return 1;
     }
@@ -3293,7 +3433,14 @@ int ShowMissionText(lua_State* L) {
     if (!lua_isnumber(L, 2)) return RaiseArg(L, "showMissionText", "number", 2);
     double flags = 1;
     if (!TakeOptDouble(L, "showMissionText", 3, flags, 1)) return 0;
-    if (!MissionOwned() || !GxtName(lua_tostring(L, 1)) || flags > 65535) return TaskFalse(L);
+    const char* key = lua_tostring(L, 1);
+    if (!MissionOwned() || !GxtName(key) || flags > 65535) return TaskFalse(L);
+    const uint32_t durationMs = static_cast<uint32_t>(std::max(0.0, lua_tonumber(L, 2)));
+    const uint16_t flagWord = static_cast<uint16_t>(std::max(0.0, flags));
+    if (WorldNative::ShowMissionText(key, durationMs, flagWord)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG showMissionText: the mission text queue is not drawn");
     return TaskFalse(L);
@@ -3303,8 +3450,12 @@ int ShowMissionHelp(lua_State* L) {
     if (lua_type(L, 1) != LUA_TSTRING) return RaiseArg(L, "showMissionHelp", "string", 1);
     bool permanent = false;
     if (!ReadOptBool(L, "showMissionHelp", 2, permanent, false)) return 1;
-    (void)permanent;
-    if (!MissionOwned() || !GxtName(lua_tostring(L, 1))) return TaskFalse(L);
+    const char* key = lua_tostring(L, 1);
+    if (!MissionOwned() || !GxtName(key)) return TaskFalse(L);
+    if (WorldNative::ShowMissionHelp(key, permanent)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG showMissionHelp: the help queue is not drawn");
     return TaskFalse(L);
@@ -3313,7 +3464,16 @@ int ShowMissionHelp(lua_State* L) {
 int ShowMissionBigText(lua_State* L) {
     if (lua_type(L, 1) != LUA_TSTRING) return RaiseArg(L, "showMissionBigText", "string", 1);
     if (!lua_isnumber(L, 2)) return RaiseArg(L, "showMissionBigText", "number", 2);
-    if (!MissionOwned() || !GxtName(lua_tostring(L, 1))) return TaskFalse(L);
+    double style = 1;
+    if (!TakeOptDouble(L, "showMissionBigText", 3, style, 1)) return 0;
+    const char* key = lua_tostring(L, 1);
+    if (!MissionOwned() || !GxtName(key)) return TaskFalse(L);
+    const uint32_t durationMs = static_cast<uint32_t>(std::max(0.0, lua_tonumber(L, 2)));
+    const uint16_t styleWord = static_cast<uint16_t>(std::clamp(style, 0.0, 65535.0));
+    if (WorldNative::ShowMissionBigText(key, durationMs, styleWord)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG showMissionBigText: the big text queue is not drawn");
     return TaskFalse(L);
@@ -3321,12 +3481,14 @@ int ShowMissionBigText(lua_State* L) {
 
 int ClearMissionTexts(lua_State* L) {
     if (!MissionOwned()) return TaskFalse(L);
+    WorldNative::ClearMissionTexts();
     lua_pushboolean(L, 1);
     return 1;
 }
 
 int ClearMissionHelp(lua_State* L) {
     if (!MissionOwned()) return TaskFalse(L);
+    WorldNative::ClearMissionHelp();
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -3652,17 +3814,16 @@ int KillPed(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:2459-2480. The aim target is accepted. CPed::SetAimTarget is not called.
+// CLuaPedDefs.cpp:2459-2480. Calls CPed::SetAimFlag toward target position when hooked.
 int SetPedAimTarget(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "setPedAimTarget", "ped", 1);
     float x, y, z;
     if (!TakeVector(L, "setPedAimTarget", 2, x, y, z)) return 0;
-    (void)x;
-    (void)y;
-    (void)z;
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedAimTarget: CPed::SetAimTarget is not called");
+    if (!WorldNative::SetPedAimTarget(ped.id, x, y, z)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedAimTarget: CPed::SetAimTarget is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -3906,29 +4067,49 @@ int WarpPedIntoVehicle(lua_State* L) {
     return TaskFalse(L);
 }
 
-// CLuaPedDefs.cpp:2319-2353. The look-at task is accepted and not started.
+// CLuaPedDefs.cpp:2319-2353. Calls CPed::SetLookFlag / ClearLookFlag when hooked.
 int SetPedLookAt(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "setPedLookAt", "ped", 1);
     if (!lua_isnumber(L, 2) || !lua_isnumber(L, 3) || !lua_isnumber(L, 4)) return FailArg(L, "setPedLookAt", "vector3", 2);
-    if (!std::isfinite(lua_tonumber(L, 2)) || !std::isfinite(lua_tonumber(L, 3)) || !std::isfinite(lua_tonumber(L, 4)))
+    const double dx = lua_tonumber(L, 2), dy = lua_tonumber(L, 3), dz = lua_tonumber(L, 4);
+    if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz))
         return FailText(L, "setPedLookAt", "Expected number, got inf");
+    int timeMs = 3000;
+    int blend = 1000;
+    uint32_t targetId = 0;
     // Argument 5 is the time. The next value is a target element, or a blend followed by an optional target.
     if (!lua_isnoneornil(L, 5)) {
         if (!lua_isnumber(L, 5) || !std::isfinite(lua_tonumber(L, 5))) return FailArg(L, "setPedLookAt", "number", 5);
+        timeMs = static_cast<int>(lua_tonumber(L, 5));
     }
     if (lua_istable(L, 6)) {
-        if (!ElementIdOf(L, 6)) return FailArg(L, "setPedLookAt", "element", 6);
+        targetId = ElementIdOf(L, 6);
+        if (!targetId) return FailArg(L, "setPedLookAt", "element", 6);
     } else if (!lua_isnoneornil(L, 6)) {
         if (!lua_isnumber(L, 6) || !std::isfinite(lua_tonumber(L, 6))) return FailArg(L, "setPedLookAt", "number", 6);
+        blend = static_cast<int>(lua_tonumber(L, 6));
         if (lua_istable(L, 7)) {
-            if (!ElementIdOf(L, 7)) return FailArg(L, "setPedLookAt", "element", 7);
+            targetId = ElementIdOf(L, 7);
+            if (!targetId) return FailArg(L, "setPedLookAt", "element", 7);
         } else if (!lua_isnoneornil(L, 7)) {
             return FailArg(L, "setPedLookAt", "element", 7);
         }
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedLookAt: CPed::LookAt is not called");
+    float lookX = static_cast<float>(dx), lookY = static_cast<float>(dy), lookZ = static_cast<float>(dz);
+    if (targetId != 0) {
+        float tx = 0.f, ty = 0.f, tz = 0.f;
+        if (ServerWorld::ElementPose(targetId, tx, ty, tz)) {
+            lookX = tx;
+            lookY = ty;
+            lookZ = tz;
+        }
+    }
+    (void)blend;
+    if (!WorldNative::SetPedLookAt(ped.id, lookX, lookY, lookZ, timeMs)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedLookAt: CPed::LookAt is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

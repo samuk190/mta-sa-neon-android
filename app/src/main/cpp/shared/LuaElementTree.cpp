@@ -65,6 +65,7 @@ std::unordered_map<uint32_t, Matrix> g_matrix;
 std::unordered_map<unsigned, Lease> g_leases;
 std::unordered_map<uint32_t, unsigned short> g_streamRefs;
 std::unordered_map<uint32_t, BuildingLink> g_buildings;
+std::unordered_map<uint32_t, bool> g_entityOnFire;
 unsigned g_nextLease = 1;
 bool g_diagMove = false;
 bool g_diagTurn = false;
@@ -256,16 +257,29 @@ void StoreMove(uint32_t id, float x, float y, float z, int depth) {
         return;
     }
     g_move[id] = Vec3{x, y, z, true};
-    Diag(g_diagMove, "DIAG setElementVelocity: CPhysical::SetMoveSpeed is not called; the client vector is stored");
+    bool nativeApplied = false;
+    if (type == "vehicle" || type == "player" || type == "ped" || type == "object") {
+        nativeApplied = WorldNative::SetEntityVelocity(id, x, y, z, false);
+    }
+    if (!nativeApplied) {
+        Diag(g_diagMove, "DIAG setElementVelocity: CPhysical::SetMoveSpeed is not called; the client vector is stored");
+    }
 }
 
 void StoreTurn(uint32_t id, float x, float y, float z, int depth) {
     if (depth > 64) return;
     Walk(id, [&](uint32_t child) { StoreTurn(child, x, y, z, depth + 1); }, depth);
-    if (MotionOf(ClientElementTypeName(id)) != Motion::Full) return;
-    if (ClientElementTypeName(id) == "vehicle" && VehicleBodyFrozen(id)) return;
+    const std::string type = ClientElementTypeName(id);
+    if (MotionOf(type) != Motion::Full) return;
+    if (type == "vehicle" && VehicleBodyFrozen(id)) return;
     g_turn[id] = Vec3{x, y, z, true};
-    Diag(g_diagTurn, "DIAG setElementAngularVelocity: CPhysical::SetTurnSpeed is not called; the client vector is stored");
+    bool nativeApplied = false;
+    if (type == "vehicle" || type == "player" || type == "ped" || type == "object") {
+        nativeApplied = WorldNative::SetEntityVelocity(id, x, y, z, true);
+    }
+    if (!nativeApplied) {
+        Diag(g_diagTurn, "DIAG setElementAngularVelocity: CPhysical::SetTurnSpeed is not called; the client vector is stored");
+    }
 }
 
 int GetElementAngularVelocity(lua_State* L) {
@@ -301,12 +315,7 @@ int SetElementVelocity(lua_State* L) {
     }
     if (type == "radararea") z = 0.f;
     StoreMove(id, x, y, z, 0);
-    if (type == "vehicle") {
-        Game::RpcSetVehicleVelocity(id, x, y, z, false);
-        WorldNative::SetEntityVelocity(id, x, y, z, false);
-    } else if (type == "player" || type == "ped" || type == "object") {
-        WorldNative::SetEntityVelocity(id, x, y, z, false);
-    }
+    if (type == "vehicle") Game::RpcSetVehicleVelocity(id, x, y, z, false);
     lua_pushboolean(L, MotionOf(type) != Motion::None ? 1 : 0);
     return 1;
 }
@@ -323,12 +332,7 @@ int SetElementAngularVelocity(lua_State* L) {
         return 1;
     }
     StoreTurn(id, x, y, z, 0);
-    if (type == "vehicle") {
-        Game::RpcSetVehicleVelocity(id, x, y, z, true);
-        WorldNative::SetEntityVelocity(id, x, y, z, true);
-    } else if (type == "player" || type == "ped" || type == "object") {
-        WorldNative::SetEntityVelocity(id, x, y, z, true);
-    }
+    if (type == "vehicle") Game::RpcSetVehicleVelocity(id, x, y, z, true);
     lua_pushboolean(L, MotionOf(type) == Motion::Full ? 1 : 0);
     return 1;
 }
@@ -770,6 +774,7 @@ int SetElementOnFire(lua_State* L) {
     }
     if (type == "vehicle" || type == "object" || type == "weapon") {
         if (WorldNative::SetEntityOnFire(id, onFire)) {
+            g_entityOnFire[id] = onFire;
             lua_pushboolean(L, 1);
             return 1;
         }
@@ -790,6 +795,11 @@ int IsElementOnFire(lua_State* L) {
     const std::string type = ClientElementTypeName(id);
     if (type == "ped" || type == "player") {
         lua_pushboolean(L, PedQueries::ReadPresentation(id).onFire ? 1 : 0);
+        return 1;
+    }
+    if (type == "vehicle" || type == "object" || type == "weapon") {
+        const auto found = g_entityOnFire.find(id);
+        lua_pushboolean(L, found != g_entityOnFire.end() && found->second ? 1 : 0);
         return 1;
     }
     lua_pushboolean(L, 0);
@@ -876,6 +886,7 @@ void NoteClientElementDestroyed(uint32_t id) {
     g_turn.erase(id);
     g_matrix.erase(id);
     g_streamRefs.erase(id);
+    g_entityOnFire.erase(id);
     for (auto it = g_leases.begin(); it != g_leases.end();) {
         if (it->second.element == id) it = g_leases.erase(it);
         else ++it;
@@ -890,6 +901,7 @@ void ResetElementTreeExtras() {
     g_leases.clear();
     g_streamRefs.clear();
     g_buildings.clear();
+    g_entityOnFire.clear();
     g_nextLease = 1;
 }
 
@@ -946,6 +958,9 @@ void RpcSetElementOnFire(uint32_t id, bool onFire) {
     if (type == "ped" || type == "player") {
         PedQueries::OnFire(id, onFire);
         Game::SetPedOnFire(id, onFire);
+        WorldNative::SetEntityOnFire(id, onFire);
+    } else if (type == "vehicle" || type == "object" || type == "weapon") {
+        if (WorldNative::SetEntityOnFire(id, onFire)) g_entityOnFire[id] = onFire;
     }
 }
 

@@ -377,6 +377,156 @@ bool SetTrainSpeed(uint32_t id, float speed) {
     return g_hooks.setTrainSpeed ? g_hooks.setTrainSpeed(id, speed) : false;
 }
 
+bool SetVehicleDoorState(uint32_t id, uint8_t door, uint8_t state) {
+    return g_hooks.setVehicleDoorState ? g_hooks.setVehicleDoorState(id, door, state) : false;
+}
+
+bool SetVehicleLightState(uint32_t id, uint8_t light, uint8_t state) {
+    return g_hooks.setVehicleLightState ? g_hooks.setVehicleLightState(id, light, state) : false;
+}
+
+bool SetVehiclePanelState(uint32_t id, uint8_t panel, uint8_t state) {
+    return g_hooks.setVehiclePanelState ? g_hooks.setVehiclePanelState(id, panel, state) : false;
+}
+
+bool SetVehicleWheelState(uint32_t id, uint8_t wheel, uint8_t state) {
+    return g_hooks.setVehicleWheelState ? g_hooks.setVehicleWheelState(id, wheel, state) : false;
+}
+
+bool SetEntityAlpha(uint32_t id, uint8_t alpha) {
+    return g_hooks.setEntityAlpha ? g_hooks.setEntityAlpha(id, alpha) : false;
+}
+
+bool SetEntityCollisionsEnabled(uint32_t id, bool enabled) {
+    return g_hooks.setEntityCollisionsEnabled ? g_hooks.setEntityCollisionsEnabled(id, enabled) : false;
+}
+
+bool SetEntityPhysicalProofs(uint32_t id, bool bullet, bool fire, bool explosion, bool collision, bool melee) {
+    return g_hooks.setEntityPhysicalProofs
+               ? g_hooks.setEntityPhysicalProofs(id, bullet, fire, explosion, collision, melee)
+               : false;
+}
+
+bool SetCameraFov(float fov) {
+    return g_hooks.setCameraFov ? g_hooks.setCameraFov(fov) : false;
+}
+
+bool GetCameraFov(float& outFov) {
+    return g_hooks.getCameraFov ? g_hooks.getCameraFov(outFov) : false;
+}
+
+bool IsPedStanding(uint32_t id, bool& outStanding) {
+    return g_hooks.isPedStanding ? g_hooks.isPedStanding(id, outStanding) : false;
+}
+
+bool IsPedDucking(uint32_t id, bool& outDucking) {
+    return g_hooks.isPedDucking ? g_hooks.isPedDucking(id, outDucking) : false;
+}
+
+bool IsPedFootBloodEnabled(uint32_t id, bool& outEnabled) {
+    return g_hooks.isPedFootBloodEnabled ? g_hooks.isPedFootBloodEnabled(id, outEnabled) : false;
+}
+
+bool SetPedFootBloodEnabled(uint32_t id, bool enabled) {
+    return g_hooks.setPedFootBloodEnabled ? g_hooks.setPedFootBloodEnabled(id, enabled) : false;
+}
+
+bool SetPedBleeding(uint32_t id, bool bleeding) {
+    return g_hooks.setPedBleeding ? g_hooks.setPedBleeding(id, bleeding) : false;
+}
+
+bool SetPedCanBeKnockedOffBike(uint32_t id, bool canBeKnocked) {
+    return g_hooks.setPedCanBeKnockedOffBike ? g_hooks.setPedCanBeKnockedOffBike(id, canBeKnocked) : false;
+}
+
+bool SetPedMissionActor(uint32_t id, bool mission) {
+    return g_hooks.setPedMissionActor ? g_hooks.setPedMissionActor(id, mission) : false;
+}
+
+bool SetPedSuffersCriticalHits(uint32_t id, bool suffers) {
+    return g_hooks.setPedSuffersCriticalHits ? g_hooks.setPedSuffersCriticalHits(id, suffers) : false;
+}
+
+bool SetPedCanBeDraggedOut(uint32_t id, bool canDrag) {
+    return g_hooks.setPedCanBeDraggedOut ? g_hooks.setPedCanBeDraggedOut(id, canDrag) : false;
+}
+
+bool SetPedStayInSamePlace(uint32_t id, bool stay) {
+    return g_hooks.setPedStayInSamePlace ? g_hooks.setPedStayInSamePlace(id, stay) : false;
+}
+
+bool SetPedNeverTargeted(uint32_t id, bool never) {
+    return g_hooks.setPedNeverTargeted ? g_hooks.setPedNeverTargeted(id, never) : false;
+}
+
+bool GetPedWeaponAccuracy(uint32_t id, int& outAccuracy) {
+    return g_hooks.getPedWeaponAccuracy ? g_hooks.getPedWeaponAccuracy(id, outAccuracy) : false;
+}
+
+bool SetPedWeaponAccuracy(uint32_t id, int accuracy) {
+    return g_hooks.setPedWeaponAccuracy ? g_hooks.setPedWeaponAccuracy(id, accuracy) : false;
+}
+
+bool GetPedWeaponShootingRate(uint32_t id, int& outRate) {
+    return g_hooks.getPedWeaponShootingRate ? g_hooks.getPedWeaponShootingRate(id, outRate) : false;
+}
+
+bool SetPedWeaponShootingRate(uint32_t id, int rate) {
+    return g_hooks.setPedWeaponShootingRate ? g_hooks.setPedWeaponShootingRate(id, rate) : false;
+}
+
+bool IsPedReloadingWeapon(uint32_t id, bool& outReloading) {
+    return g_hooks.isPedReloadingWeapon ? g_hooks.isPedReloadingWeapon(id, outReloading) : false;
+}
+
+bool DoesPedHaveJetPack(uint32_t id, bool& outHasJetPack) {
+    return g_hooks.doesPedHaveJetPack ? g_hooks.doesPedHaveJetPack(id, outHasJetPack) : false;
+}
+
+bool GetPedTaskChain(uint32_t id, bool secondary, int slot, int outTaskIds[4], int& outCount) {
+    return g_hooks.getPedTaskChain ? g_hooks.getPedTaskChain(id, secondary, slot, outTaskIds, outCount) : false;
+}
+
+bool GetPedSimplestTaskId(uint32_t id, int& outTaskId) {
+    return g_hooks.getPedSimplestTaskId ? g_hooks.getPedSimplestTaskId(id, outTaskId) : false;
+}
+
+bool SetPedAimTarget(uint32_t id, float x, float y, float z) {
+    return g_hooks.setPedAimTarget ? g_hooks.setPedAimTarget(id, x, y, z) : false;
+}
+
+bool SetPedLookAt(uint32_t id, float x, float y, float z, int timeMs) {
+    return g_hooks.setPedLookAt ? g_hooks.setPedLookAt(id, x, y, z, timeMs) : false;
+}
+
+bool LoadMissionTextBlock(const char* blockName) {
+    return g_hooks.loadMissionTextBlock ? g_hooks.loadMissionTextBlock(blockName) : false;
+}
+
+bool ShowMissionText(const char* gxtKey, uint32_t timeMs, uint16_t flags) {
+    return g_hooks.showMissionText ? g_hooks.showMissionText(gxtKey, timeMs, flags) : false;
+}
+
+bool ShowMissionHelp(const char* gxtKey, bool permanent) {
+    return g_hooks.showMissionHelp ? g_hooks.showMissionHelp(gxtKey, permanent) : false;
+}
+
+bool ShowMissionBigText(const char* gxtKey, uint32_t timeMs, uint16_t style) {
+    return g_hooks.showMissionBigText ? g_hooks.showMissionBigText(gxtKey, timeMs, style) : false;
+}
+
+bool ClearMissionTexts() {
+    return g_hooks.clearMissionTexts ? g_hooks.clearMissionTexts() : false;
+}
+
+bool ClearMissionHelp() {
+    return g_hooks.clearMissionHelp ? g_hooks.clearMissionHelp() : false;
+}
+
+bool SetWeaponProperty(int weaponId, int skill, const char* property, double a, double b, double c) {
+    return g_hooks.setWeaponProperty ? g_hooks.setWeaponProperty(weaponId, skill, property, a, b, c) : false;
+}
+
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     return g_hooks.fxAddBlood ? g_hooks.fxAddBlood(x, y, z, dx, dy, dz, count, brightness) : false;
 }
