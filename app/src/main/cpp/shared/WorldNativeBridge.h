@@ -88,6 +88,32 @@ struct Hooks {
     bool (*setWorldWaterLevel)(float height, bool reset) = nullptr;
     bool (*breakObject)(uint32_t id) = nullptr;
 
+    // Player, Ped, Entity, and Vehicle native hooks (all game-thread safe).
+    bool (*setPlayerMoney)(int32_t amount, bool instant) = nullptr;
+    bool (*getPedBonePosition)(uint32_t id, uint32_t boneId, float outPos[3]) = nullptr;
+    bool (*getElementBoneMatrix)(uint32_t id, uint32_t boneId, float outMat[16]) = nullptr;
+    bool (*setElementBoneMatrix)(uint32_t id, uint32_t boneId, const float inMat[16]) = nullptr;
+    bool (*updateElementRpHAnim)(uint32_t id) = nullptr;
+    bool (*getStatValue)(uint16_t stat, float& outValue) = nullptr;
+    bool (*setStatValue)(uint16_t stat, float value) = nullptr;
+    bool (*getPedOxygenLevel)(uint32_t id, float& outOxygen) = nullptr;
+    bool (*setPedOxygenLevel)(uint32_t id, float oxygen) = nullptr;
+    bool (*setPedFightingStyle)(uint32_t id, uint8_t style) = nullptr;
+    bool (*setPedWalkingStyle)(uint32_t id, int32_t animGroup) = nullptr;
+    bool (*setPedHeadless)(uint32_t id, bool headless) = nullptr;
+    bool (*playPedVoiceLine)(uint32_t id, uint16_t speechId, float probability) = nullptr;
+    bool (*setPedAnimation)(uint32_t id, const char* block, const char* name, int timeMs,
+                            bool loop, bool updatePos, bool interruptible, bool freezeLastFrame) = nullptr;
+    bool (*setPedAnimationProgress)(uint32_t id, const char* name, float progress) = nullptr;
+    bool (*setPedAnimationSpeed)(uint32_t id, const char* name, float speed) = nullptr;
+    bool (*setEntityOnFire)(uint32_t id, bool onFire) = nullptr;
+    bool (*setEntityVelocity)(uint32_t id, float x, float y, float z, bool angular) = nullptr;
+    bool (*getModelBoundingBox)(uint16_t model, float minOut[3], float maxOut[3], float& radiusOut) = nullptr;
+    bool (*getEntityComDistance)(uint32_t id, float& outDist) = nullptr;
+    bool (*isEntityOnScreen)(uint32_t id, bool& outOnScreen) = nullptr;
+    bool (*getVehicleContactWheels)(uint32_t id, uint8_t& outWheels) = nullptr;
+    bool (*fixVehicle)(uint32_t id) = nullptr;
+
     // Immediate Fx_c particle emitters; return true if invoked.
     bool (*fxAddBlood)(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) = nullptr;
     bool (*fxAddBulletImpact)(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity) = nullptr;
@@ -154,6 +180,31 @@ bool TestLineAgainstWater(float x1, float y1, float z1, float x2, float y2, floa
                           float& ox, float& oy, float& oz);
 bool SetWorldWaterLevel(float height, bool reset);
 bool BreakObject(uint32_t id);
+
+bool SetPlayerMoney(int32_t amount, bool instant);
+bool GetPedBonePosition(uint32_t id, uint32_t boneId, float outPos[3]);
+bool GetElementBoneMatrix(uint32_t id, uint32_t boneId, float outMat[16]);
+bool SetElementBoneMatrix(uint32_t id, uint32_t boneId, const float inMat[16]);
+bool UpdateElementRpHAnim(uint32_t id);
+bool GetStatValue(uint16_t stat, float& outValue);
+bool SetStatValue(uint16_t stat, float value);
+bool GetPedOxygenLevel(uint32_t id, float& outOxygen);
+bool SetPedOxygenLevel(uint32_t id, float oxygen);
+bool SetPedFightingStyle(uint32_t id, uint8_t style);
+bool SetPedWalkingStyle(uint32_t id, int32_t animGroup);
+bool SetPedHeadless(uint32_t id, bool headless);
+bool PlayPedVoiceLine(uint32_t id, uint16_t speechId, float probability);
+bool SetPedAnimation(uint32_t id, const char* block, const char* name, int timeMs,
+                     bool loop, bool updatePos, bool interruptible, bool freezeLastFrame);
+bool SetPedAnimationProgress(uint32_t id, const char* name, float progress);
+bool SetPedAnimationSpeed(uint32_t id, const char* name, float speed);
+bool SetEntityOnFire(uint32_t id, bool onFire);
+bool SetEntityVelocity(uint32_t id, float x, float y, float z, bool angular);
+bool GetModelBoundingBox(uint16_t model, float minOut[3], float maxOut[3], float& radiusOut);
+bool GetEntityComDistance(uint32_t id, float& outDist);
+bool IsEntityOnScreen(uint32_t id, bool& outOnScreen);
+bool GetVehicleContactWheels(uint32_t id, uint8_t& outWheels);
+bool FixVehicle(uint32_t id);
 
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness);
 bool FxAddBulletImpact(float x, float y, float z, float dx, float dy, float dz, int smokeSize, int sparkCount, float smokeIntensity);

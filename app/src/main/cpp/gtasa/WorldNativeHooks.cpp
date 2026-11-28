@@ -1,8 +1,10 @@
 #include "WorldNativeHooks.h"
 
+#include "GameEngine.h"
 #include "GameTasks.h"
 #include "WorldObjects.h"
 #include "../shared/EngineWorld.h"
+#include "../shared/ServerWorld.h"
 #include "../shared/WorldNativeBridge.h"
 
 #include <android/log.h>
@@ -96,12 +98,30 @@ NativePoolHeader** g_pools[Models::kPoolCount]{};
 // Verified ARM64 function pointer signatures (cross-checked with nm -D + c++filt on libGTASA.so 2.10).
 using AddExplosionFn = bool (*)(void* victim, void* creator, int type, CVector pos, uint32_t time, uint8_t makeSound, float camShake, uint8_t isVisible);
 using StartFireFn = void* (*)(void* mgr, CVector pos, float size, uint8_t unknown, void* creator, uint32_t time, int8_t numGenerations, uint8_t arg);
+using StartEntityFireFn = void* (*)(void* mgr, void* target, void* creator, float size, uint8_t unknown, uint32_t time, int8_t numGenerations);
 using ExtinguishPointFn = void (*)(void* mgr, CVector pos, float radius);
 using AddPointLightFn = void (*)(uint8_t type, CVector pos, CVector dir, float radius, float r, float g, float b, uint8_t fogType, bool extraShadows, void* entity);
 using LoadSceneFn = void (*)(const CVector& pos);
 using CreateSwatRopeFn = void (*)(const CVector& pos);
 using TestSphereFn = void* (*)(CVector centre, float radius, void* ignoredEntity, bool checkBuildings, bool checkVehicles, bool checkPeds, bool checkObjects, bool checkDummies, bool cameraIgnore);
 using WorldEntityFn = void (*)(void* entity);
+
+// Verified player/ped/entity/vehicle libGTASA.so 2.10 arm64 function signatures.
+using PedGetBonePositionFn = void (*)(void* ped, CVector& out, uint32_t boneId, bool dynamic);
+using EntityUpdateRpHAnimFn = void (*)(void* entity);
+using GetAnimHierarchyFromSkinClumpFn = void* (*)(void* clump);
+using RpHAnimIDGetIndexFn = int32_t (*)(void* hierarchy, int32_t boneId);
+using RpHAnimHierarchyGetMatrixArrayFn = void* (*)(void* hierarchy);
+using RpHAnimHierarchyUpdateMatricesFn = int32_t (*)(void* hierarchy);
+using StatsGetStatValueFn = float (*)(uint16_t stat);
+using StatsSetStatValueFn = void (*)(uint16_t stat, float value);
+using PedSetMoveAnimFn = void (*)(void* ped);
+using PedRemoveBodyPartFn = void (*)(void* ped, int32_t bodyPart, int8_t dir);
+using PedSayFn = int16_t (*)(void* ped, uint16_t phrase, uint32_t startTimeDelay, float probability, uint8_t overrideSilence, uint8_t isForceAudible, uint8_t isFrontEnd);
+using EntityGetComDistFn = float (*)(void* entity);
+using EntityGetIsOnScreenFn = bool (*)(void* entity);
+using VehicleFixFn = void (*)(void* vehicle);
+using VehicleNumContactWheelsFn = uint8_t (*)(void* vehicle);
 
 using FxBloodFn = void (*)(void* fx, CVector& pos, CVector& dir, int count, float brightness);
 using FxBulletImpactFn = void (*)(void* fx, CVector& pos, CVector& dir, int smokeSize, int sparkCount, float smokeIntensity);
@@ -113,6 +133,7 @@ using FxDebrisFn = void (*)(void* fx, CVector& pos, RwRGBA& color, float scale, 
 AddExplosionFn g_addExplosion = nullptr;
 void* g_fireManager = nullptr;
 StartFireFn g_startFire = nullptr;
+StartEntityFireFn g_startEntityFire = nullptr;
 ExtinguishPointFn g_extinguishPoint = nullptr;
 AddPointLightFn g_addPointLight = nullptr;
 LoadSceneFn g_loadScene = nullptr;
@@ -121,6 +142,24 @@ CreateSwatRopeFn g_createSwatRope = nullptr;
 TestSphereFn g_testSphere = nullptr;
 WorldEntityFn g_worldRemove = nullptr;
 WorldEntityFn g_worldAdd = nullptr;
+uint8_t* g_worldPlayers = nullptr;  // CWorld::Players[0] (CPlayerInfo: +0xF0 m_nMoney, +0xF4 m_nDisplayMoney)
+PedGetBonePositionFn g_pedGetBonePosition = nullptr;
+EntityUpdateRpHAnimFn g_entityUpdateRpHAnim = nullptr;
+GetAnimHierarchyFromSkinClumpFn g_getAnimHierarchy = nullptr;
+RpHAnimIDGetIndexFn g_rpHAnimIdGetIndex = nullptr;
+RpHAnimHierarchyGetMatrixArrayFn g_rpHAnimGetMatrixArray = nullptr;
+RpHAnimHierarchyUpdateMatricesFn g_rpHAnimUpdateMatrices = nullptr;
+StatsGetStatValueFn g_statsGetStatValue = nullptr;
+StatsSetStatValueFn g_statsSetStatValue = nullptr;
+PedSetMoveAnimFn g_pedSetMoveAnim = nullptr;
+PedRemoveBodyPartFn g_pedRemoveBodyPart = nullptr;
+PedSayFn g_pedSay = nullptr;
+void** g_modelInfoPtrs = nullptr;  // CModelInfo::ms_modelInfoPtrs[20000]
+bool g_modelColOffsetVerified = false;
+EntityGetComDistFn g_entityGetComDist = nullptr;
+EntityGetIsOnScreenFn g_entityGetIsOnScreen = nullptr;
+bool g_vehicleVtableFixVerified = false;
+bool g_vehicleVtableWheelsVerified = false;
 uint8_t* g_garages = nullptr;
 int32_t* g_numGarages = nullptr;
 using GarageMethodFn = void (*)(void* garage);
@@ -1108,6 +1147,474 @@ bool NativeFxAddGlass(float x, float y, float z, uint8_t r, uint8_t g, uint8_t b
     return true;
 }
 
+// Verified libGTASA.so 2.10 arm64: CPlayerInfo::Process (0x4ed9b8 ldp w9,w8,[x19,#0xf0],
+// 0x4edad0 str w10,[x19,#0xf0], 0x4edaf0 str w8,[x19,#0xf4]) and CPlayerInfoSaveStructure
+// Construct/Extract (0x576d38/0x576dd0).
+constexpr size_t kPlayerInfoMoneyOff = 0xF0;
+constexpr size_t kPlayerInfoDisplayMoneyOff = 0xF4;
+
+bool NativeSetPlayerMoney(int32_t amount, bool instant) {
+    if (!g_worldPlayers) return false;
+    GameTasks::Defer([amount, instant]() {
+        if (!g_worldPlayers) return true;
+        *reinterpret_cast<int32_t*>(g_worldPlayers + kPlayerInfoMoneyOff) = amount;
+        if (instant) {
+            *reinterpret_cast<int32_t*>(g_worldPlayers + kPlayerInfoDisplayMoneyOff) = amount;
+        }
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64: _ZN4CPed15GetBonePositionER5RwV3djb (0x59aee4),
+// CEntity::m_pRwObject at +0x20 (verified 0x59af30 & 0x4cbb10).
+constexpr size_t kEntityRwObjectOff = 0x20;
+
+bool NativeGetPedBonePosition(uint32_t id, uint32_t boneId, float outPos[3]) {
+    if (!g_pedGetBonePosition || !outPos) return false;
+    bool ok = false;
+    float pos[3] = {0.f, 0.f, 0.f};
+    if (!GameTasks::RunQuery([id, boneId, &ok, &pos]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* bytes = static_cast<uint8_t*>(ped);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return;
+            if (!*reinterpret_cast<void**>(bytes + kEntityRwObjectOff)) return;
+            CVector out{0.f, 0.f, 0.f};
+            g_pedGetBonePosition(ped, out, boneId, true);
+            if (std::isfinite(out.x) && std::isfinite(out.y) && std::isfinite(out.z)) {
+                pos[0] = out.x;
+                pos[1] = out.y;
+                pos[2] = out.z;
+                ok = true;
+            }
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outPos[0] = pos[0];
+    outPos[1] = pos[1];
+    outPos[2] = pos[2];
+    return true;
+}
+
+bool NativeGetElementBoneMatrix(uint32_t id, uint32_t boneId, float outMat[16]) {
+    if (!g_getAnimHierarchy || !g_rpHAnimIdGetIndex || !g_rpHAnimGetMatrixArray || !outMat) return false;
+    bool ok = false;
+    float mat[16] = {};
+    if (!GameTasks::RunQuery([id, boneId, &ok, &mat]() {
+            void* entity = Game::ElementEntity(id);
+            if (!entity) return;
+            auto* bytes = static_cast<uint8_t*>(entity);
+            void* clump = *reinterpret_cast<void**>(bytes + kEntityRwObjectOff);
+            if (!clump) return;
+            void* hierarchy = g_getAnimHierarchy(clump);
+            if (!hierarchy) return;
+            const int32_t idx = g_rpHAnimIdGetIndex(hierarchy, static_cast<int32_t>(boneId));
+            if (idx < 0) return;
+            auto* arr = static_cast<const uint8_t*>(g_rpHAnimGetMatrixArray(hierarchy));
+            if (!arr) return;
+            // RwMatrix stride is 64 bytes (4 x 16B: right, up, at, pos; verified 0x59af60 lsl #6).
+            const float* m = reinterpret_cast<const float*>(arr + static_cast<size_t>(idx) * 64u);
+            for (int r = 0; r < 4; ++r) {
+                mat[r * 4 + 0] = m[r * 4 + 0];
+                mat[r * 4 + 1] = m[r * 4 + 1];
+                mat[r * 4 + 2] = m[r * 4 + 2];
+                mat[r * 4 + 3] = (r == 3) ? 1.f : 0.f;
+            }
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    std::memcpy(outMat, mat, sizeof(mat));
+    return true;
+}
+
+bool NativeSetElementBoneMatrix(uint32_t id, uint32_t boneId, const float inMat[16]) {
+    if (!g_getAnimHierarchy || !g_rpHAnimIdGetIndex || !g_rpHAnimGetMatrixArray || !inMat) return false;
+    std::array<float, 16> mat{};
+    std::memcpy(mat.data(), inMat, sizeof(mat));
+    bool ok = false;
+    if (!GameTasks::RunQuery([id, boneId, mat, &ok]() {
+            void* entity = Game::ElementEntity(id);
+            if (!entity) return;
+            auto* bytes = static_cast<uint8_t*>(entity);
+            void* clump = *reinterpret_cast<void**>(bytes + kEntityRwObjectOff);
+            if (!clump) return;
+            void* hierarchy = g_getAnimHierarchy(clump);
+            if (!hierarchy) return;
+            const int32_t idx = g_rpHAnimIdGetIndex(hierarchy, static_cast<int32_t>(boneId));
+            if (idx < 0) return;
+            auto* arr = static_cast<uint8_t*>(g_rpHAnimGetMatrixArray(hierarchy));
+            if (!arr) return;
+            float* m = reinterpret_cast<float*>(arr + static_cast<size_t>(idx) * 64u);
+            for (int r = 0; r < 4; ++r) {
+                m[r * 4 + 0] = mat[r * 4 + 0];
+                m[r * 4 + 1] = mat[r * 4 + 1];
+                m[r * 4 + 2] = mat[r * 4 + 2];
+            }
+            ok = true;
+        })) {
+        return false;
+    }
+    return ok;
+}
+
+bool NativeUpdateElementRpHAnim(uint32_t id) {
+    if (!g_entityUpdateRpHAnim && !g_rpHAnimUpdateMatrices) return false;
+    bool ok = false;
+    if (!GameTasks::RunQuery([id, &ok]() {
+            void* entity = Game::ElementEntity(id);
+            if (!entity) return;
+            if (g_entityUpdateRpHAnim) {
+                g_entityUpdateRpHAnim(entity);
+                ok = true;
+                return;
+            }
+            auto* bytes = static_cast<uint8_t*>(entity);
+            void* clump = *reinterpret_cast<void**>(bytes + kEntityRwObjectOff);
+            if (!clump || !g_getAnimHierarchy) return;
+            void* hierarchy = g_getAnimHierarchy(clump);
+            if (!hierarchy) return;
+            g_rpHAnimUpdateMatrices(hierarchy);
+            ok = true;
+        })) {
+        return false;
+    }
+    return ok;
+}
+
+bool NativeGetStatValue(uint16_t stat, float& outValue) {
+    if (!g_statsGetStatValue) return false;
+    float value = 0.f;
+    bool ok = false;
+    if (!GameTasks::RunQuery([stat, &value, &ok]() {
+            if (!g_statsGetStatValue) return;
+            value = g_statsGetStatValue(stat);
+            ok = std::isfinite(value);
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outValue = value;
+    return true;
+}
+
+bool NativeSetStatValue(uint16_t stat, float value) {
+    if (!g_statsSetStatValue) return false;
+    GameTasks::Defer([stat, value]() {
+        if (g_statsSetStatValue) g_statsSetStatValue(stat, value);
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64: CPlayerPed::m_pPlayerData at +0x540, CPlayerPedData::m_fBreath at +0x58
+// (LOAD: CWidgetPlayerInfo::RenderBreathBar 0x37db5c-0x37db60; STORE: CPlayerPed::ResetPlayerBreath 0x5c8974-0x5c897c).
+constexpr size_t kPlayerPedDataPtrOff = 0x540;
+constexpr size_t kPlayerPedDataBreathOff = 0x58;
+
+bool NativeGetPedOxygenLevel(uint32_t id, float& outOxygen) {
+    if (id == 0 || id != ServerWorld::LocalPlayer()) return false;
+    float oxygen = 0.f;
+    bool ok = false;
+    if (!GameTasks::RunQuery([id, &oxygen, &ok]() {
+            void* ped = Game::ElementEntity(id);
+            if (!ped) return;
+            auto* data = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(ped) + kPlayerPedDataPtrOff);
+            if (!data) return;
+            const float breath = *reinterpret_cast<float*>(data + kPlayerPedDataBreathOff);
+            if (std::isfinite(breath)) {
+                oxygen = breath;
+                ok = true;
+            }
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outOxygen = oxygen;
+    return true;
+}
+
+bool NativeSetPedOxygenLevel(uint32_t id, float oxygen) {
+    if (id == 0 || id != ServerWorld::LocalPlayer()) return false;
+    GameTasks::Defer([id, oxygen]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* data = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(ped) + kPlayerPedDataPtrOff);
+        if (data) *reinterpret_cast<float*>(data + kPlayerPedDataBreathOff) = oxygen;
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64: CPed::m_nFightingStyle at +0x8FD, m_nAllowedAttackMoves at +0x8FE
+// (LOAD: CTaskSimpleFight::GetAvailableComboSet 0x5da6b8; STORE: CRunningScript 0x4016d4-0x4016d8 & CPedSaveStructure::Extract 0x5769e0).
+constexpr size_t kPedFightingStyleOff = 0x8FD;
+constexpr size_t kPedFightingMovesOff = 0x8FE;
+
+bool NativeSetPedFightingStyle(uint32_t id, uint8_t style) {
+    GameTasks::Defer([id, style]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        bytes[kPedFightingStyleOff] = style;
+        bytes[kPedFightingMovesOff] = 0u;
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64: CPed::m_nAnimGroup at +0x630
+// (LOAD: CPed::SetMoveAnim 0x596db8; STORE: CPed::SetModelIndex 0x595af8 & CRunningScript 0x40a0f8).
+constexpr size_t kPedAnimGroupOff = 0x630;
+
+bool NativeSetPedWalkingStyle(uint32_t id, int32_t animGroup) {
+    if (!g_pedSetMoveAnim) return false;
+    GameTasks::Defer([id, animGroup]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped || !g_pedSetMoveAnim) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        *reinterpret_cast<int32_t*>(bytes + kPedAnimGroupOff) = animGroup;
+        g_pedSetMoveAnim(ped);
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64: CPed::RemoveBodyPart (0x5a5fe4, 0x5a6014..0x5a6024)
+// sets bit 15 (0x8000 = bRemoveHead) in uint64_t at CPed+0x584.
+constexpr size_t kPedFlagsOff = 0x584;
+constexpr uint64_t kPedFlagRemoveHead = 0x8000ull;
+
+bool NativeSetPedHeadless(uint32_t id, bool headless) {
+    if (!g_pedRemoveBodyPart) return false;
+    GameTasks::Defer([id, headless]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        if (headless) {
+            if (g_pedRemoveBodyPart) g_pedRemoveBodyPart(ped, 3, 0);
+        } else {
+            uint64_t flags = 0;
+            std::memcpy(&flags, bytes + kPedFlagsOff, sizeof(flags));
+            flags &= ~kPedFlagRemoveHead;
+            std::memcpy(bytes + kPedFlagsOff, &flags, sizeof(flags));
+        }
+        return true;
+    });
+    return true;
+}
+
+bool NativePlayPedVoiceLine(uint32_t id, uint16_t speechId, float probability) {
+    if (!g_pedSay) return false;
+    GameTasks::Defer([id, speechId, probability]() {
+        void* ped = Game::ElementEntity(id);
+        if (!ped || !g_pedSay) return true;
+        auto* bytes = static_cast<uint8_t*>(ped);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 3u) return true;
+        g_pedSay(ped, speechId, 0u, probability, 1u, 0u, 0u);
+        return true;
+    });
+    return true;
+}
+
+bool NativeSetPedAnimation(uint32_t id, const char* block, const char* name, int timeMs,
+                           bool loop, bool updatePos, bool interruptible, bool freezeLastFrame) {
+    Game::PedRpcOp op;
+    if (!block || !block[0] || !name || !name[0]) {
+        op.kind = Game::PedRpcOp::Kind::KillAnimation;
+    } else {
+        op.kind = Game::PedRpcOp::Kind::Animation;
+        op.block = block;
+        op.name = name;
+        op.time = timeMs;
+        op.loop = loop;
+        op.updatePosition = updatePos;
+        op.interruptible = interruptible;
+        op.freezeLastFrame = freezeLastFrame;
+    }
+    Game::QueuePedRpc(id, op);
+    return true;
+}
+
+bool NativeSetPedAnimationProgress(uint32_t id, const char* name, float progress) {
+    if (!name || !name[0]) return false;
+    Game::PedRpcOp op;
+    op.kind = Game::PedRpcOp::Kind::AnimationProgress;
+    op.name = name;
+    op.value = progress;
+    Game::QueuePedRpc(id, op);
+    return true;
+}
+
+bool NativeSetPedAnimationSpeed(uint32_t id, const char* name, float speed) {
+    if (!name || !name[0]) return false;
+    Game::PedRpcOp op;
+    op.kind = Game::PedRpcOp::Kind::AnimationSpeed;
+    op.name = name;
+    op.value = speed;
+    Game::QueuePedRpc(id, op);
+    return true;
+}
+
+bool NativeSetEntityOnFire(uint32_t id, bool onFire) {
+    if (!g_fireManager) return false;
+    if (onFire && !g_startEntityFire) return false;
+    if (!onFire && !g_extinguishPoint) return false;
+    GameTasks::Defer([id, onFire]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity || !g_fireManager) return true;
+        if (onFire) {
+            if (g_startEntityFire) g_startEntityFire(g_fireManager, entity, nullptr, 0.8f, 1u, 7000u, 2);
+        } else if (g_extinguishPoint) {
+            float px = 0.f, py = 0.f, pz = 0.f;
+            if (ReadEntityPosition(static_cast<const uint8_t*>(entity), px, py, pz)) {
+                g_extinguishPoint(g_fireManager, CVector{px, py, pz}, 2.5f);
+            }
+        }
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64:
+//   CPhysical::m_vecMoveSpeed at +0x68 (verified _ZN9CPhysical14ApplyMoveSpeedEv 0x4e1104)
+//   CPhysical::m_vecTurnSpeed at +0x74 (verified _ZN9CPhysical14ApplyTurnSpeedEv 0x4e116c)
+constexpr size_t kPhysicalMoveSpeedOff = 0x68;
+constexpr size_t kPhysicalTurnSpeedOff = 0x74;
+
+bool NativeSetEntityVelocity(uint32_t id, float x, float y, float z, bool angular) {
+    GameTasks::Defer([id, x, y, z, angular]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        const uint8_t etype = bytes[kEntityTypeOff] & 0x07u;
+        // Only CPhysical subclasses (2=vehicle, 3=ped, 4=object) have move/turn speed vectors.
+        if (etype < 2u || etype > 4u) return true;
+        float* vec = reinterpret_cast<float*>(bytes + (angular ? kPhysicalTurnSpeedOff : kPhysicalMoveSpeedOff));
+        vec[0] = x;
+        vec[1] = y;
+        vec[2] = z;
+        return true;
+    });
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64: CBaseModelInfo::m_pColModel at +0x30
+// (verified _ZN15CClumpModelInfo14GetBoundingBoxEv 0x45bf64: ldr x0, [x0, #0x30] -> 0xF9401800),
+// CColModel layout: +0x00 min[3], +0x0C max[3], +0x18 sphereCenter[3], +0x24 radius.
+constexpr size_t kModelInfoColModelOff = 0x30;
+constexpr uint16_t kMaxModelId = 20000;
+
+bool NativeGetModelBoundingBox(uint16_t model, float minOut[3], float maxOut[3], float& radiusOut) {
+    if (!g_modelInfoPtrs || !g_modelColOffsetVerified || model >= kMaxModelId) return false;
+    bool ok = false;
+    float mn[3] = {}, mx[3] = {};
+    float radius = 0.f;
+    if (!GameTasks::RunQuery([model, &ok, &mn, &mx, &radius]() {
+            if (!g_modelInfoPtrs) return;
+            auto* mi = static_cast<uint8_t*>(g_modelInfoPtrs[model]);
+            if (!mi) return;
+            auto* col = *reinterpret_cast<const float**>(mi + kModelInfoColModelOff);
+            if (!col) return;
+            mn[0] = col[0]; mn[1] = col[1]; mn[2] = col[2];
+            mx[0] = col[3]; mx[1] = col[4]; mx[2] = col[5];
+            radius = col[9];  // +0x24
+            ok = std::isfinite(mn[0]) && std::isfinite(mx[0]) && std::isfinite(radius);
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    if (minOut) { minOut[0] = mn[0]; minOut[1] = mn[1]; minOut[2] = mn[2]; }
+    if (maxOut) { maxOut[0] = mx[0]; maxOut[1] = mx[1]; maxOut[2] = mx[2]; }
+    radiusOut = radius;
+    return true;
+}
+
+bool NativeGetEntityComDistance(uint32_t id, float& outDist) {
+    if (!g_entityGetComDist) return false;
+    bool ok = false;
+    float dist = 0.f;
+    if (!GameTasks::RunQuery([id, &ok, &dist]() {
+            void* entity = Game::ElementEntity(id);
+            if (!entity || !g_entityGetComDist) return;
+            dist = g_entityGetComDist(entity);
+            ok = std::isfinite(dist);
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outDist = dist;
+    return true;
+}
+
+bool NativeIsEntityOnScreen(uint32_t id, bool& outOnScreen) {
+    if (!g_entityGetIsOnScreen) return false;
+    bool ok = false;
+    bool visible = false;
+    if (!GameTasks::RunQuery([id, &ok, &visible]() {
+            void* entity = Game::ElementEntity(id);
+            if (!entity || !g_entityGetIsOnScreen) return;
+            visible = g_entityGetIsOnScreen(entity);
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outOnScreen = visible;
+    return true;
+}
+
+// Verified libGTASA.so 2.10 arm64 CVehicle vtable slots (checked at install time against _ZTV8CVehicle):
+//   slot 51 (+0x198): CVehicle::Fix (0x83d418 - 0x83d280)
+//   slot 56 (+0x1C0): CVehicle::GetNumContactWheels (0x83d440 - 0x83d280)
+constexpr size_t kVehicleVtableFixSlot = 51;
+constexpr size_t kVehicleVtableContactWheelsSlot = 56;
+
+bool NativeGetVehicleContactWheels(uint32_t id, uint8_t& outWheels) {
+    if (!g_vehicleVtableWheelsVerified) return false;
+    bool ok = false;
+    uint8_t wheels = 0;
+    if (!GameTasks::RunQuery([id, &ok, &wheels]() {
+            void* entity = Game::ElementEntity(id);
+            if (!entity) return;
+            auto* bytes = static_cast<uint8_t*>(entity);
+            if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return;
+            auto** vtable = *reinterpret_cast<void***>(entity);
+            if (!vtable || !vtable[kVehicleVtableContactWheelsSlot]) return;
+            auto fn = reinterpret_cast<VehicleNumContactWheelsFn>(vtable[kVehicleVtableContactWheelsSlot]);
+            wheels = fn(entity);
+            ok = true;
+        })) {
+        return false;
+    }
+    if (!ok) return false;
+    outWheels = wheels;
+    return true;
+}
+
+bool NativeFixVehicle(uint32_t id) {
+    if (!g_vehicleVtableFixVerified) return false;
+    GameTasks::Defer([id]() {
+        void* entity = Game::ElementEntity(id);
+        if (!entity) return true;
+        auto* bytes = static_cast<uint8_t*>(entity);
+        if ((bytes[kEntityTypeOff] & 0x07u) != 2u) return true;
+        auto** vtable = *reinterpret_cast<void***>(entity);
+        if (vtable && vtable[kVehicleVtableFixSlot]) {
+            auto fn = reinterpret_cast<VehicleFixFn>(vtable[kVehicleVtableFixSlot]);
+            fn(entity);
+        }
+        return true;
+    });
+    return true;
+}
+
 }  // namespace
 
 void InstallWorldNativeHooks(void* gtasaHandle) {
@@ -1126,6 +1633,9 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     g_fireManager = dlsym(g_lib, "gFireManager");
     g_startFire = ResolveAny<StartFireFn>(g_lib, {
         "_ZN12CFireManager9StartFireE7CVectorfhP7CEntityjah",
+    });
+    g_startEntityFire = ResolveAny<StartEntityFireFn>(g_lib, {
+        "_ZN12CFireManager9StartFireEP7CEntityS1_fhja",
     });
     g_extinguishPoint = ResolveAny<ExtinguishPointFn>(g_lib, {
         "_ZN12CFireManager15ExtinguishPointE7CVectorf",
@@ -1236,6 +1746,37 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     g_fxDebris = ResolveAny<FxDebrisFn>(g_lib, {"_ZN4Fx_c9AddDebrisER7CVectorR6RwRGBAfi"});
     g_fxGlass = ResolveAny<FxDebrisFn>(g_lib, {"_ZN4Fx_c8AddGlassER7CVectorR6RwRGBAfi"});
 
+    g_worldPlayers = reinterpret_cast<uint8_t*>(dlsym(g_lib, "_ZN6CWorld7PlayersE"));
+    g_pedGetBonePosition = ResolveAny<PedGetBonePositionFn>(g_lib, {"_ZN4CPed15GetBonePositionER5RwV3djb"});
+    g_entityUpdateRpHAnim = ResolveAny<EntityUpdateRpHAnimFn>(g_lib, {"_ZN7CEntity13UpdateRpHAnimEv"});
+    g_getAnimHierarchy = ResolveAny<GetAnimHierarchyFromSkinClumpFn>(g_lib, {"_Z29GetAnimHierarchyFromSkinClumpP7RpClump"});
+    g_rpHAnimIdGetIndex = ResolveAny<RpHAnimIDGetIndexFn>(g_lib, {"_Z17RpHAnimIDGetIndexP16RpHAnimHierarchyi"});
+    g_rpHAnimGetMatrixArray = ResolveAny<RpHAnimHierarchyGetMatrixArrayFn>(g_lib, {"_Z30RpHAnimHierarchyGetMatrixArrayP16RpHAnimHierarchy"});
+    g_rpHAnimUpdateMatrices = ResolveAny<RpHAnimHierarchyUpdateMatricesFn>(g_lib, {"_Z30RpHAnimHierarchyUpdateMatricesP16RpHAnimHierarchy"});
+    g_statsGetStatValue = ResolveAny<StatsGetStatValueFn>(g_lib, {"_ZN6CStats12GetStatValueEt"});
+    g_statsSetStatValue = ResolveAny<StatsSetStatValueFn>(g_lib, {"_ZN6CStats12SetStatValueEtf"});
+    g_pedSetMoveAnim = ResolveAny<PedSetMoveAnimFn>(g_lib, {"_ZN4CPed11SetMoveAnimEv"});
+    g_pedRemoveBodyPart = ResolveAny<PedRemoveBodyPartFn>(g_lib, {"_ZN4CPed14RemoveBodyPartEia"});
+    g_pedSay = ResolveAny<PedSayFn>(g_lib, {"_ZN4CPed3SayEtjfhhh"});
+    g_modelInfoPtrs = reinterpret_cast<void**>(dlsym(g_lib, "_ZN10CModelInfo16ms_modelInfoPtrsE"));
+    // Verify CBaseModelInfo::m_pColModel offset == +0x30 by checking the first instruction of
+    // _ZN15CClumpModelInfo14GetBoundingBoxEv is `ldr x0, [x0, #0x30]` (0xF9401800).
+    if (void* getBbox = dlsym(g_lib, "_ZN15CClumpModelInfo14GetBoundingBoxEv")) {
+        uint32_t insn = 0;
+        std::memcpy(&insn, getBbox, sizeof(insn));
+        g_modelColOffsetVerified = (insn == 0xF9401800u);
+    }
+    g_entityGetComDist = ResolveAny<EntityGetComDistFn>(g_lib, {"_ZN7CEntity40GetDistanceFromCentreOfMassToBaseOfModelEv"});
+    g_entityGetIsOnScreen = ResolveAny<EntityGetIsOnScreenFn>(g_lib, {"_ZN7CEntity13GetIsOnScreenEv"});
+    // Verify CVehicle vtable slots 51 (Fix) and 56 (GetNumContactWheels) against live _ZTV8CVehicle.
+    if (auto** vehZtv = reinterpret_cast<void**>(dlsym(g_lib, "_ZTV8CVehicle"))) {
+        void** vptr = vehZtv + 2;  // Itanium ABI vtable address point is +0x10 past _ZTV
+        void* symFix = dlsym(g_lib, "_ZN8CVehicle3FixEv");
+        void* symWheels = dlsym(g_lib, "_ZN8CVehicle19GetNumContactWheelsEv");
+        g_vehicleVtableFixVerified = (symFix && vptr[kVehicleVtableFixSlot] == symFix);
+        g_vehicleVtableWheelsVerified = (symWheels && vptr[kVehicleVtableContactWheelsSlot] == symWheels);
+    }
+
     WorldNative::Hooks hooks;
     hooks.getPoolCapacity = &NativeGetPoolCapacity;
     hooks.getPoolUsedCapacity = &NativeGetPoolUsedCapacity;
@@ -1281,6 +1822,29 @@ void InstallWorldNativeHooks(void* gtasaHandle) {
     hooks.testLineAgainstWater = &NativeTestLineAgainstWater;
     hooks.setWorldWaterLevel = &NativeSetWorldWaterLevel;
     hooks.breakObject = &NativeBreakObject;
+    hooks.setPlayerMoney = &NativeSetPlayerMoney;
+    hooks.getPedBonePosition = &NativeGetPedBonePosition;
+    hooks.getElementBoneMatrix = &NativeGetElementBoneMatrix;
+    hooks.setElementBoneMatrix = &NativeSetElementBoneMatrix;
+    hooks.updateElementRpHAnim = &NativeUpdateElementRpHAnim;
+    hooks.getStatValue = &NativeGetStatValue;
+    hooks.setStatValue = &NativeSetStatValue;
+    hooks.getPedOxygenLevel = &NativeGetPedOxygenLevel;
+    hooks.setPedOxygenLevel = &NativeSetPedOxygenLevel;
+    hooks.setPedFightingStyle = &NativeSetPedFightingStyle;
+    hooks.setPedWalkingStyle = &NativeSetPedWalkingStyle;
+    hooks.setPedHeadless = &NativeSetPedHeadless;
+    hooks.playPedVoiceLine = &NativePlayPedVoiceLine;
+    hooks.setPedAnimation = &NativeSetPedAnimation;
+    hooks.setPedAnimationProgress = &NativeSetPedAnimationProgress;
+    hooks.setPedAnimationSpeed = &NativeSetPedAnimationSpeed;
+    hooks.setEntityOnFire = &NativeSetEntityOnFire;
+    hooks.setEntityVelocity = &NativeSetEntityVelocity;
+    hooks.getModelBoundingBox = &NativeGetModelBoundingBox;
+    hooks.getEntityComDistance = &NativeGetEntityComDistance;
+    hooks.isEntityOnScreen = &NativeIsEntityOnScreen;
+    hooks.getVehicleContactWheels = &NativeGetVehicleContactWheels;
+    hooks.fixVehicle = &NativeFixVehicle;
     hooks.fxAddBlood = &NativeFxAddBlood;
     hooks.fxAddBulletImpact = &NativeFxAddBulletImpact;
     hooks.fxAddSparks = &NativeFxAddSparks;

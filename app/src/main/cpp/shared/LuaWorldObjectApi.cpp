@@ -11,6 +11,7 @@
 #include "LuaWorldObjectApi.h"
 
 #include "LuaApiExtra.h"
+#include "LuaElementTree.h"
 #include "LuaVMStub.h"
 #include "ModelInfoRead.h"
 #include "ResourceLoader.h"
@@ -1084,6 +1085,7 @@ int SetElementPositionObject(lua_State* L) {
         Sample(item);
         if (!item.move.active) item.pos = pos;
         item.localOverride = true;
+        ClearScriptMatrix(item.id);
         return true;
     });
     lua_pushboolean(L, 1);
@@ -1221,6 +1223,11 @@ void PublishClientObjects() {
 }
 
 bool IsWorldObject(uint32_t id) { return Live(id) != nullptr; }
+
+int ObjectModelOf(uint32_t id) {
+    if (const Object* object = Find(id)) return static_cast<int>(object->model);
+    return -1;
+}
 
 int EasingTypeFromName(const char* name) { return EasingFromName(name); }
 bool IsKnownEasingName(const char* name) { return EasingFromName(name) >= 0; }

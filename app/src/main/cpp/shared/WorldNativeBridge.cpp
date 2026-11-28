@@ -204,6 +204,101 @@ bool BreakObject(uint32_t id) {
     return g_hooks.breakObject ? g_hooks.breakObject(id) : false;
 }
 
+bool SetPlayerMoney(int32_t amount, bool instant) {
+    return g_hooks.setPlayerMoney ? g_hooks.setPlayerMoney(amount, instant) : false;
+}
+
+bool GetPedBonePosition(uint32_t id, uint32_t boneId, float outPos[3]) {
+    return g_hooks.getPedBonePosition ? g_hooks.getPedBonePosition(id, boneId, outPos) : false;
+}
+
+bool GetElementBoneMatrix(uint32_t id, uint32_t boneId, float outMat[16]) {
+    return g_hooks.getElementBoneMatrix ? g_hooks.getElementBoneMatrix(id, boneId, outMat) : false;
+}
+
+bool SetElementBoneMatrix(uint32_t id, uint32_t boneId, const float inMat[16]) {
+    return g_hooks.setElementBoneMatrix ? g_hooks.setElementBoneMatrix(id, boneId, inMat) : false;
+}
+
+bool UpdateElementRpHAnim(uint32_t id) {
+    return g_hooks.updateElementRpHAnim ? g_hooks.updateElementRpHAnim(id) : false;
+}
+
+bool GetStatValue(uint16_t stat, float& outValue) {
+    return g_hooks.getStatValue ? g_hooks.getStatValue(stat, outValue) : false;
+}
+
+bool SetStatValue(uint16_t stat, float value) {
+    return g_hooks.setStatValue ? g_hooks.setStatValue(stat, value) : false;
+}
+
+bool GetPedOxygenLevel(uint32_t id, float& outOxygen) {
+    return g_hooks.getPedOxygenLevel ? g_hooks.getPedOxygenLevel(id, outOxygen) : false;
+}
+
+bool SetPedOxygenLevel(uint32_t id, float oxygen) {
+    return g_hooks.setPedOxygenLevel ? g_hooks.setPedOxygenLevel(id, oxygen) : false;
+}
+
+bool SetPedFightingStyle(uint32_t id, uint8_t style) {
+    return g_hooks.setPedFightingStyle ? g_hooks.setPedFightingStyle(id, style) : false;
+}
+
+bool SetPedWalkingStyle(uint32_t id, int32_t animGroup) {
+    return g_hooks.setPedWalkingStyle ? g_hooks.setPedWalkingStyle(id, animGroup) : false;
+}
+
+bool SetPedHeadless(uint32_t id, bool headless) {
+    return g_hooks.setPedHeadless ? g_hooks.setPedHeadless(id, headless) : false;
+}
+
+bool PlayPedVoiceLine(uint32_t id, uint16_t speechId, float probability) {
+    return g_hooks.playPedVoiceLine ? g_hooks.playPedVoiceLine(id, speechId, probability) : false;
+}
+
+bool SetPedAnimation(uint32_t id, const char* block, const char* name, int timeMs,
+                     bool loop, bool updatePos, bool interruptible, bool freezeLastFrame) {
+    return g_hooks.setPedAnimation
+               ? g_hooks.setPedAnimation(id, block, name, timeMs, loop, updatePos, interruptible, freezeLastFrame)
+               : false;
+}
+
+bool SetPedAnimationProgress(uint32_t id, const char* name, float progress) {
+    return g_hooks.setPedAnimationProgress ? g_hooks.setPedAnimationProgress(id, name, progress) : false;
+}
+
+bool SetPedAnimationSpeed(uint32_t id, const char* name, float speed) {
+    return g_hooks.setPedAnimationSpeed ? g_hooks.setPedAnimationSpeed(id, name, speed) : false;
+}
+
+bool SetEntityOnFire(uint32_t id, bool onFire) {
+    return g_hooks.setEntityOnFire ? g_hooks.setEntityOnFire(id, onFire) : false;
+}
+
+bool SetEntityVelocity(uint32_t id, float x, float y, float z, bool angular) {
+    return g_hooks.setEntityVelocity ? g_hooks.setEntityVelocity(id, x, y, z, angular) : false;
+}
+
+bool GetModelBoundingBox(uint16_t model, float minOut[3], float maxOut[3], float& radiusOut) {
+    return g_hooks.getModelBoundingBox ? g_hooks.getModelBoundingBox(model, minOut, maxOut, radiusOut) : false;
+}
+
+bool GetEntityComDistance(uint32_t id, float& outDist) {
+    return g_hooks.getEntityComDistance ? g_hooks.getEntityComDistance(id, outDist) : false;
+}
+
+bool IsEntityOnScreen(uint32_t id, bool& outOnScreen) {
+    return g_hooks.isEntityOnScreen ? g_hooks.isEntityOnScreen(id, outOnScreen) : false;
+}
+
+bool GetVehicleContactWheels(uint32_t id, uint8_t& outWheels) {
+    return g_hooks.getVehicleContactWheels ? g_hooks.getVehicleContactWheels(id, outWheels) : false;
+}
+
+bool FixVehicle(uint32_t id) {
+    return g_hooks.fixVehicle ? g_hooks.fixVehicle(id) : false;
+}
+
 bool FxAddBlood(float x, float y, float z, float dx, float dy, float dz, int count, float brightness) {
     return g_hooks.fxAddBlood ? g_hooks.fxAddBlood(x, y, z, dx, dy, dz, count, brightness) : false;
 }

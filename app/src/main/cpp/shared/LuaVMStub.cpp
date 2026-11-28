@@ -2135,25 +2135,51 @@ static int l_removePedClothes(lua_State* L) {
     return 1;
 }
 
+static void ConvertEulerOrderToZXY(const char* order, double& rx, double& ry, double& rz) {
+    if (!order || std::strcmp(order, "default") == 0 || std::strcmp(order, "ZXY") == 0) return;
+    double a = rx, b = ry, c = rz;
+    if (std::strcmp(order, "-ZYX") == 0) {
+        a = -a;
+        b = -b;
+        c = -c;
+    }
+    constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+    const double sA = std::sin(a * kDegToRad), cA = std::cos(a * kDegToRad);
+    const double sB = std::sin(b * kDegToRad), cB = std::cos(b * kDegToRad);
+    const double sC = std::sin(c * kDegToRad), cC = std::cos(c * kDegToRad);
+    const double sinX = std::clamp(sA * cB, -1.0, 1.0);
+    rx = std::asin(sinX) * kRadToDeg;
+    ry = std::atan2(sB, cA * cB) * kRadToDeg;
+    rz = std::atan2(cA * sC - sA * sB * cC, cA * cC + sA * sB * sC) * kRadToDeg;
+}
+
 static int l_setElementRotation(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     if (IsWorldObject(id)) {
-        // CStaticFunctionDefinitions::SetElementRotation, CCLIENTOBJECT: degrees in the
-        // object's own order ("default"); other rotation orders are not converted yet.
-        const double rx = luaL_optnumber(L, 2, 0), ry = luaL_optnumber(L, 3, 0), rz = luaL_optnumber(L, 4, 0);
+        // CStaticFunctionDefinitions::SetElementRotation, CCLIENTOBJECT.
+        double rx = luaL_optnumber(L, 2, 0), ry = luaL_optnumber(L, 3, 0), rz = luaL_optnumber(L, 4, 0);
         const char* order = lua_type(L, 5) == LUA_TSTRING ? lua_tostring(L, 5) : "default";
         if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz) ||
-            (std::strcmp(order, "default") != 0 && std::strcmp(order, "ZXY") != 0)) {
+            (std::strcmp(order, "default") != 0 && std::strcmp(order, "ZXY") != 0 &&
+             std::strcmp(order, "ZYX") != 0 && std::strcmp(order, "-ZYX") != 0)) {
             lua_pushboolean(L, 0);
             return 1;
         }
+        ConvertEulerOrderToZXY(order, rx, ry, rz);
         constexpr double k = 3.14159265358979323846 / 180.0;
-        lua_pushboolean(L, SetObjectRotation(id, float(rx * k), float(ry * k), float(rz * k)) ? 1 : 0);
+        const bool ok = SetObjectRotation(id, float(rx * k), float(ry * k), float(rz * k));
+        if (ok) ClearScriptMatrix(id);
+        lua_pushboolean(L, ok ? 1 : 0);
         return 1;
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") == 0) {
-        const float rx = luaL_checknumber(L, 2), ry = luaL_checknumber(L, 3), rz = luaL_checknumber(L, 4);
-        lua_pushboolean(L, Game::SetTrafficVehicleRotation(id, rx, ry, rz));
+        double rx = luaL_checknumber(L, 2), ry = luaL_checknumber(L, 3), rz = luaL_checknumber(L, 4);
+        const char* order = lua_type(L, 5) == LUA_TSTRING ? lua_tostring(L, 5) : "default";
+        ConvertEulerOrderToZXY(order, rx, ry, rz);
+        const bool ok = Game::SetTrafficVehicleRotation(id, static_cast<float>(rx), static_cast<float>(ry), static_cast<float>(rz));
+        if (ok) ClearScriptMatrix(id);
+        lua_pushboolean(L, ok);
         return 1;
     }
     if (std::strcmp(ServerWorld::ElementKindName(id), "ped") == 0 && ServerWorld::ActorHosted(id)) {
@@ -2163,11 +2189,14 @@ static int l_setElementRotation(lua_State* L) {
             return 1;
         }
         Game::RpcSetRotation(id, rz * (3.14159265f / 180.f));
+        ClearScriptMatrix(id);
         lua_pushboolean(L, 1);
         return 1;
     }
-    if (Game::ScriptPedAlive(id) && lua_isnumber(L, 4))
+    if (Game::ScriptPedAlive(id) && lua_isnumber(L, 4)) {
         Game::NoteScriptRotation(id, static_cast<float>(lua_tonumber(L, 4)));
+        ClearScriptMatrix(id);
+    }
     lua_pushboolean(L, 1);
     return 1;
 }

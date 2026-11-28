@@ -2816,6 +2816,9 @@ bool IsRemoteNetworkPlayer(void* entity) {
         if (body.ped == entity) return body.networkPlayer;
     return false;
 }
+static uint32_t ScriptPedElementOf(void* entity);
+static void* ScriptPedEntityOf(uint32_t id);
+
 uint32_t EntityElementId(void* entity) {
     if (!entity) return 0xFFFFFFFFu;
     for (const auto& [bodyId, stored] : g_remoteBodies)
@@ -2823,6 +2826,8 @@ uint32_t EntityElementId(void* entity) {
     if (entity == g_sampledLocalPed) return ServerWorld::LocalPlayer();
     auto car = g_vehicleBodyIds.find(entity);
     if (car != g_vehicleBodyIds.end()) return car->second;
+    const uint32_t scriptPedId = ScriptPedElementOf(entity);
+    if (scriptPedId != 0xFFFFFFFFu) return scriptPedId;
     return WorldObjects::ElementOf(entity);
 }
 
@@ -2832,6 +2837,7 @@ void* ElementEntity(uint32_t id) {
     if (const auto body = g_remoteBodies.find(id); body != g_remoteBodies.end() && body->second.ped) return body->second.ped;
     for (const auto& [entity, element] : g_vehicleBodyIds)
         if (element == id) return entity;
+    if (void* scriptPed = ScriptPedEntityOf(id)) return scriptPed;
     return WorldObjects::EntityOf(id);
 }
 
@@ -5101,6 +5107,26 @@ struct ScriptPedSlot {
 std::mutex g_scriptMu;
 ScriptPedSlot g_scriptPeds[kScriptPedSlots];
 uint32_t g_nextScriptPed = kFirstScriptPed;
+
+}  // namespace
+
+static uint32_t ScriptPedElementOf(void* entity) {
+    if (!entity) return 0xFFFFFFFFu;
+    std::lock_guard lock(g_scriptMu);
+    for (const auto& slot : g_scriptPeds)
+        if (slot.used && !slot.drop && slot.body == entity) return slot.id;
+    return 0xFFFFFFFFu;
+}
+
+static void* ScriptPedEntityOf(uint32_t id) {
+    if (id < kFirstScriptPed) return nullptr;
+    std::lock_guard lock(g_scriptMu);
+    for (const auto& slot : g_scriptPeds)
+        if (slot.used && !slot.drop && slot.id == id) return slot.body;
+    return nullptr;
+}
+
+namespace {
 
 struct ScriptCam {
     float x = 0, y = 0, z = 0, lx = 0, ly = 0, lz = 0;

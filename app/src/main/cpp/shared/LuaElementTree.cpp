@@ -14,6 +14,7 @@
 #include "PedQueries.h"
 #include "ResourceLoader.h"
 #include "ServerWorld.h"
+#include "WorldNativeBridge.h"
 #include "../gtasa/GameEngine.h"
 
 extern "C" {
@@ -21,6 +22,7 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -299,7 +301,13 @@ int SetElementVelocity(lua_State* L) {
     }
     if (type == "radararea") z = 0.f;
     StoreMove(id, x, y, z, 0);
-    lua_pushboolean(L, MotionOf(ClientElementTypeName(id)) != Motion::None ? 1 : 0);
+    if (type == "vehicle") {
+        Game::RpcSetVehicleVelocity(id, x, y, z, false);
+        WorldNative::SetEntityVelocity(id, x, y, z, false);
+    } else if (type == "player" || type == "ped" || type == "object") {
+        WorldNative::SetEntityVelocity(id, x, y, z, false);
+    }
+    lua_pushboolean(L, MotionOf(type) != Motion::None ? 1 : 0);
     return 1;
 }
 
@@ -309,21 +317,53 @@ int SetElementAngularVelocity(lua_State* L) {
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "setElementAngularVelocity", "element", 1);
     float x = 0.f, y = 0.f, z = 0.f;
     if (!ReadVec(L, "setElementAngularVelocity", 2, x, y, z)) return Fail(L);
-    if (ClientElementTypeName(id) == "vehicle" && ServerWorld::ActorHosted(id)) {
+    const std::string type = ClientElementTypeName(id);
+    if (type == "vehicle" && ServerWorld::ActorHosted(id)) {
         lua_pushboolean(L, Game::SetTrafficVehicleVelocity(id, x, y, z, true));
         return 1;
     }
     StoreTurn(id, x, y, z, 0);
-    lua_pushboolean(L, MotionOf(ClientElementTypeName(id)) == Motion::Full ? 1 : 0);
+    if (type == "vehicle") {
+        Game::RpcSetVehicleVelocity(id, x, y, z, true);
+        WorldNative::SetEntityVelocity(id, x, y, z, true);
+    } else if (type == "player" || type == "ped" || type == "object") {
+        WorldNative::SetEntityVelocity(id, x, y, z, true);
+    }
+    lua_pushboolean(L, MotionOf(type) == Motion::Full ? 1 : 0);
     return 1;
+}
+
+int ElementModelForBounds(uint32_t id) {
+    if (const int objModel = ObjectModelOf(id); objModel >= 0) return objModel;
+    int model = 0;
+    float heading = 0.f;
+    bool frozen = false;
+    if (Game::CopyScriptPedFacts(id, model, heading, frozen)) return model;
+    const int stored = ServerWorld::ModelOf(id);
+    if (stored >= 0) return stored;
+    if (id == ServerWorld::LocalPlayer()) return 0;
+    return -1;
 }
 
 int GetElementBoundingBox(lua_State* L) {
     // CLuaElementDefs.cpp 1083-1110 and CStaticFunctionDefinitions.cpp 548-600.
     uint32_t id = 0;
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "getElementBoundingBox", "element", 1);
-    if (BodyType(ClientElementTypeName(id)))
+    if (BodyType(ClientElementTypeName(id))) {
+        const int model = ElementModelForBounds(id);
+        float mn[3] = {}, mx[3] = {}, radius = 0.f;
+        if (model >= 0 && model < 65536 &&
+            WorldNative::GetModelBoundingBox(static_cast<uint16_t>(model), mn, mx, radius)) {
+            lua_pushnumber(L, mn[0]);
+            lua_pushnumber(L, mn[1]);
+            lua_pushnumber(L, mn[2]);
+            lua_pushnumber(L, mx[0]);
+            lua_pushnumber(L, mx[1]);
+            lua_pushnumber(L, mx[2]);
+            return 6;
+        }
         Diag(g_diagBounds, "DIAG getElementBoundingBox: CModelInfo::GetBoundingBox is not loaded");
+    }
     return Fail(L);
 }
 
@@ -331,8 +371,16 @@ int GetElementRadius(lua_State* L) {
     // CLuaElementDefs.cpp 1113-1135 and CStaticFunctionDefinitions.cpp 603-639.
     uint32_t id = 0;
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "getElementRadius", "element", 1);
-    if (RadiusType(ClientElementTypeName(id)))
+    if (RadiusType(ClientElementTypeName(id))) {
+        const int model = ElementModelForBounds(id);
+        float mn[3] = {}, mx[3] = {}, radius = 0.f;
+        if (model >= 0 && model < 65536 &&
+            WorldNative::GetModelBoundingBox(static_cast<uint16_t>(model), mn, mx, radius)) {
+            lua_pushnumber(L, radius);
+            return 1;
+        }
         Diag(g_diagRadius, "DIAG getElementRadius: CModelInfo::GetBoundingBox is not loaded");
+    }
     return Fail(L);
 }
 
@@ -342,6 +390,18 @@ int GetElementDistanceFromCentreOfMassToBaseOfModel(lua_State* L) {
     uint32_t id = 0;
     if (!ReadKnown(L, 1, id)) return WarnAt(L, "getElementDistanceFromCentreOfMassToBaseOfModel", "element", 1);
     if (!BodyType(ClientElementTypeName(id))) return Fail(L);
+    float dist = 0.f;
+    if (WorldNative::GetEntityComDistance(id, dist)) {
+        lua_pushnumber(L, dist);
+        return 1;
+    }
+    const int model = ElementModelForBounds(id);
+    float mn[3] = {}, mx[3] = {}, radius = 0.f;
+    if (model >= 0 && model < 65536 &&
+        WorldNative::GetModelBoundingBox(static_cast<uint16_t>(model), mn, mx, radius)) {
+        lua_pushnumber(L, -mn[2]);
+        return 1;
+    }
     Diag(g_diagCom, "DIAG getElementDistanceFromCentreOfMassToBaseOfModel: the game entity is absent, so the distance is 0");
     lua_pushnumber(L, 0);
     return 1;
@@ -355,6 +415,11 @@ int IsElementOnScreen(lua_State* L) {
     if (!ReadKnown(L, 1, id)) {
         Warn(std::string("Bad argument @ 'isElementOnScreen' [Expected element at argument 1, got ") + ParserGot(L, 1) + "]");
         lua_pushnil(L);
+        return 1;
+    }
+    bool onScreen = false;
+    if (WorldNative::IsEntityOnScreen(id, onScreen)) {
+        lua_pushboolean(L, onScreen ? 1 : 0);
         return 1;
     }
     Diag(g_diagScreen, "DIAG isElementOnScreen: CEntity::IsOnScreen and CClientMarker::IsOnScreen are not read");
@@ -459,15 +524,51 @@ void ApplyPosition(lua_State* L, uint32_t id, float x, float y, float z) {
     if (lua_pcall(L, 4, 0, 0) != LUA_OK) lua_pop(L, 1);
 }
 
+void ApplyRotation(lua_State* L, uint32_t id, float rx, float ry, float rz) {
+    lua_getglobal(L, "setElementRotation");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    PushElement(L, id);
+    lua_pushnumber(L, rx);
+    lua_pushnumber(L, ry);
+    lua_pushnumber(L, rz);
+    if (lua_pcall(L, 4, 0, 0) != LUA_OK) lua_pop(L, 1);
+}
+
+// Inverse of CMatrix::SetRotation (LuaFieldApi.cpp:393-404 / Shared/sdk/CMatrix.h:253-278).
+void MatrixToEulerZXYDeg(const float m[4][3], float& rx, float& ry, float& rz) {
+    constexpr float kRadToDeg = 180.f / 3.14159265358979323846f;
+    const float sy = std::clamp(m[0][2], -1.f, 1.f);
+    ry = -std::asin(sy) * kRadToDeg;
+    if (std::fabs(sy) < 0.99999f) {
+        rx = std::atan2(m[1][2], m[2][2]) * kRadToDeg;
+        rz = std::atan2(m[0][1], m[0][0]) * kRadToDeg;
+    } else {
+        rx = 0.f;
+        rz = std::atan2(-m[1][0], m[1][1]) * kRadToDeg;
+    }
+    auto wrapDeg = [](float d) {
+        d = std::fmod(d, 360.f);
+        return d < 0.f ? d + 360.f : d;
+    };
+    rx = wrapDeg(rx);
+    ry = wrapDeg(ry);
+    rz = wrapDeg(rz);
+}
+
 void StoreMatrix(lua_State* L, uint32_t id, const float m[4][3], int depth) {
     if (depth > 64) return;
     Walk(id, [&](uint32_t child) { StoreMatrix(L, child, m, depth + 1); }, depth);
+    float rx = 0.f, ry = 0.f, rz = 0.f;
+    MatrixToEulerZXYDeg(m, rx, ry, rz);
+    ApplyPosition(L, id, m[3][0], m[3][1], m[3][2]);
+    ApplyRotation(L, id, rx, ry, rz);
     Matrix stored;
     for (int row = 0; row < 4; ++row)
         for (int col = 0; col < 3; ++col) stored.row[row][col] = m[row][col];
     g_matrix[id] = stored;
-    ApplyPosition(L, id, m[3][0], m[3][1], m[3][2]);
-    Diag(g_diagMatrix, "DIAG setElementMatrix: CEntity::SetMatrix and ConvertMatrixToEulerAngles are not run");
 }
 
 int SetElementMatrix(lua_State* L) {
@@ -661,14 +762,22 @@ int SetElementOnFire(lua_State* L) {
     if (type == "ped" || type == "player") {
         PedQueries::OnFire(id, onFire);
         Game::SetPedOnFire(id, onFire);
-        Diag(g_diagFire, "DIAG setElementOnFire: CPed::SetOnFire is not called; the flag is stored");
+        if (!WorldNative::SetEntityOnFire(id, onFire)) {
+            Diag(g_diagFire, "DIAG setElementOnFire: CPed::SetOnFire is not called; the flag is stored");
+        }
         lua_pushboolean(L, 1);
         return 1;
     }
-    if (type == "vehicle")
-        Diag(g_diagVehicleFire, "DIAG setElementOnFire: CVehicle::SetOnFire is not called");
-    else if (type == "object" || type == "weapon")
-        Diag(g_diagObjectFire, "DIAG setElementOnFire: CObject::SetOnFire is not called");
+    if (type == "vehicle" || type == "object" || type == "weapon") {
+        if (WorldNative::SetEntityOnFire(id, onFire)) {
+            lua_pushboolean(L, 1);
+            return 1;
+        }
+        if (type == "vehicle")
+            Diag(g_diagVehicleFire, "DIAG setElementOnFire: CVehicle::SetOnFire is not called");
+        else
+            Diag(g_diagObjectFire, "DIAG setElementOnFire: CObject::SetOnFire is not called");
+    }
     lua_pushboolean(L, 0);
     return 1;
 }
@@ -811,6 +920,10 @@ bool CopyScriptMatrix(uint32_t id, float rows[4][3]) {
     for (int row = 0; row < 4; ++row)
         for (int col = 0; col < 3; ++col) rows[row][col] = found->second.row[row][col];
     return true;
+}
+
+void ClearScriptMatrix(uint32_t id) {
+    g_matrix.erase(id);
 }
 
 void RpcSetElementAngularVelocity(uint32_t id, float rx, float ry, float rz) {

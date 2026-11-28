@@ -4,6 +4,7 @@
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
 #include "PedQueries.h"
+#include "WorldNativeBridge.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
 #include "../net/raknet/RakNetWrapper.h"
@@ -193,8 +194,10 @@ int SetPedOnFire(lua_State* L) {
     const bool onFire = lua_toboolean(L, 2) != 0;
     PedQueries::OnFire(id, onFire);
     Game::SetPedOnFire(id, onFire);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedOnFire: CPed::SetOnFire is not hooked; the flag is stored");
+    if (!WorldNative::SetEntityOnFire(id, onFire)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedOnFire: CPed::SetOnFire is not hooked; the flag is stored");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -251,6 +254,13 @@ int GetPedWeaponMuzzlePosition(lua_State* L) {
     if (!known || state.weapons[slot].type == 0) {
         lua_pushboolean(L, 0);
         return 1;
+    }
+    float pos[3] = {0.f, 0.f, 0.f};
+    if (WorldNative::GetPedBonePosition(id, 25u /* BONE_RIGHTHAND */, pos)) {
+        lua_pushnumber(L, pos[0]);
+        lua_pushnumber(L, pos[1]);
+        lua_pushnumber(L, pos[2]);
+        return 3;
     }
     static bool once = false;
     DiagOnce(once, "DIAG getPedWeaponMuzzlePosition: GetTransformedBonePosition is not hooked");
@@ -923,6 +933,13 @@ int GetPedStat(lua_State* L) {
             return 1;
         }
     }
+    if (id == ServerWorld::LocalPlayer()) {
+        float nativeVal = 0.f;
+        if (WorldNative::GetStatValue(static_cast<uint16_t>(stat), nativeVal)) {
+            lua_pushnumber(L, nativeVal);
+            return 1;
+        }
+    }
     static bool once = false;
     DiagOnce(once, "DIAG getPedStat: CPed::GetStat is not read; an unset stat returns 0");
     lua_pushnumber(L, 0);
@@ -1391,8 +1408,10 @@ bool ApplyHeadless(uint32_t id, bool headless) {
     state.haveHead = true;
     state.headless = headless;
     StoreBody(id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedHeadless: CPed::RemoveBodyPart is not called");
+    if (!WorldNative::SetPedHeadless(id, headless)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedHeadless: CPed::RemoveBodyPart is not called");
+    }
     return true;
 }
 
@@ -1521,6 +1540,11 @@ int SetPedBleeding(lua_State* L) {
 int GetPedOxygenLevel(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "getPedOxygenLevel", "ped", 1);
+    float oxygen = 0.f;
+    if (WorldNative::GetPedOxygenLevel(ped.id, oxygen)) {
+        lua_pushnumber(L, oxygen);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG getPedOxygenLevel: CPed::GetOxygenLevel is not read");
     lua_pushboolean(L, 0);
@@ -1533,8 +1557,10 @@ int SetPedOxygenLevel(lua_State* L) {
     if (!TakePed(L, 1, ped)) return FailArg(L, "setPedOxygenLevel", "ped", 1);
     double oxygen = 0;
     if (!ReadScriptNumber(L, "setPedOxygenLevel", 2, oxygen, false)) return 1;
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedOxygenLevel: CPed::SetOxygenLevel is not called");
+    if (!WorldNative::SetPedOxygenLevel(ped.id, static_cast<float>(oxygen))) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedOxygenLevel: CPed::SetOxygenLevel is not called");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1579,9 +1605,8 @@ int SetPedArmor(lua_State* L) {
         state.haveArmor = true;
         state.armor = armor;
         StoreBody(ped.id, state);
+        Game::RpcSetArmor(ped.id, armor);
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedArmor: CPed::SetArmor is not called");
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1607,8 +1632,10 @@ bool ApplyFight(uint32_t id, unsigned style) {
     state.haveFight = true;
     state.fight = style;
     StoreBody(id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedFightingStyle: CPed::SetFightingStyle is not called");
+    if (!WorldNative::SetPedFightingStyle(id, static_cast<uint8_t>(style))) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedFightingStyle: CPed::SetFightingStyle is not called");
+    }
     return true;
 }
 
@@ -1661,8 +1688,10 @@ bool ApplyWalk(uint32_t id, unsigned anim) {
     state.haveWalk = true;
     state.walk = anim;
     StoreBody(id, state);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedWalkingStyle: CPed::SetMoveAnim is not called");
+    if (!WorldNative::SetPedWalkingStyle(id, static_cast<int32_t>(anim))) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPedWalkingStyle: CPed::SetMoveAnim is not called");
+    }
     return true;
 }
 
@@ -1703,8 +1732,10 @@ bool ApplyNativeWalk(uint32_t id, bool enabled) {
         state.haveWalk = true;
         state.walk = 0;
         StoreBody(id, state);
-        static bool once = false;
-        DiagOnce(once, "DIAG setPedUseNativeWalkingStyle: CPed::SetMoveAnim is not called");
+        if (!WorldNative::SetPedWalkingStyle(id, 0)) {
+            static bool once = false;
+            DiagOnce(once, "DIAG setPedUseNativeWalkingStyle: CPed::SetMoveAnim is not called");
+        }
     }
     return true;
 }
@@ -2107,14 +2138,17 @@ int GetPlayerMoney(lua_State* L) {
     return 1;
 }
 
-// CLuaPlayerDefs.cpp:582-604. The instant flag does not animate the HUD.
+// CLuaPlayerDefs.cpp:582-604.
 int SetPlayerMoney(lua_State* L) {
     int amount = 0;
     if (!ReadSignedInt(L, "setPlayerMoney", 1, amount)) return 1;
     if (!lua_isnoneornil(L, 2) && lua_type(L, 2) != LUA_TBOOLEAN) return FailArg(L, "setPlayerMoney", "bool", 2);
+    const bool instant = !lua_isnoneornil(L, 2) && lua_toboolean(L, 2) != 0;
     g_money = amount;
-    static bool once = false;
-    DiagOnce(once, "DIAG setPlayerMoney: CClientGame::SetMoney does not update the HUD");
+    if (!WorldNative::SetPlayerMoney(amount, instant)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG setPlayerMoney: CClientGame::SetMoney does not update the HUD");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2124,8 +2158,11 @@ int GivePlayerMoney(lua_State* L) {
     int amount = 0;
     if (!ReadSignedInt(L, "givePlayerMoney", 1, amount)) return 1;
     g_money += amount;
-    static bool once = false;
-    DiagOnce(once, "DIAG givePlayerMoney: CClientGame::SetMoney does not update the HUD");
+    const int clamped = static_cast<int>(std::clamp<long long>(g_money, -2147483647LL, 2147483647LL));
+    if (!WorldNative::SetPlayerMoney(clamped, false)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG givePlayerMoney: CClientGame::SetMoney does not update the HUD");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2135,8 +2172,11 @@ int TakePlayerMoney(lua_State* L) {
     int amount = 0;
     if (!ReadSignedInt(L, "takePlayerMoney", 1, amount)) return 1;
     g_money -= amount;
-    static bool once = false;
-    DiagOnce(once, "DIAG takePlayerMoney: CClientGame::SetMoney does not update the HUD");
+    const int clamped = static_cast<int>(std::clamp<long long>(g_money, -2147483647LL, 2147483647LL));
+    if (!WorldNative::SetPlayerMoney(clamped, false)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG takePlayerMoney: CClientGame::SetMoney does not update the HUD");
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -2232,16 +2272,23 @@ int SetPedAnimation(lua_State* L) {
     (void)blend;
     (void)loop;
     (void)update;
-    (void)interruptible;
-    (void)freeze;
     (void)restore;
+    const bool killOnly = block.empty() || name.empty();
     bool ok = false;
     VisitTree(ped.id, [&](uint32_t id) {
         PedRef child;
-        const bool applied = AsPed(id, child) && (block.empty() || name.empty());
-        if (!applied && AsPed(id, child)) {
-            static bool once = false;
-            DiagOnce(once, "DIAG setPedAnimation: CAnimManager::GetAnimationBlock is not loaded");
+        if (!AsPed(id, child)) return;
+        bool applied = false;
+        if (killOnly) {
+            WorldNative::SetPedAnimation(id, "", "", 0, false, false, false, false);
+            applied = true;
+        } else {
+            applied = WorldNative::SetPedAnimation(
+                id, block.c_str(), name.c_str(), static_cast<int>(time), loop, update, interruptible, freeze);
+            if (!applied) {
+                static bool once = false;
+                DiagOnce(once, "DIAG setPedAnimation: CAnimManager::GetAnimationBlock is not loaded");
+            }
         }
         if (id == ped.id) ok = applied;
     });
@@ -2286,14 +2333,17 @@ int SetPedAnimationProgress(lua_State* L) {
     double progress = 0;
     if (!ReadOptString(L, "setPedAnimationProgress", 2, name)) return 1;
     if (!ReadOptNumber(L, "setPedAnimationProgress", 3, progress, 0)) return 1;
-    (void)progress;
     bool ok = false;
     VisitTree(ped.id, [&](uint32_t id) {
         PedRef child;
-        const bool applied = AsPed(id, child) && name.empty();
-        if (!applied && AsPed(id, child)) {
-            static bool once = false;
-            DiagOnce(once, "DIAG setPedAnimationProgress: RpAnimBlendClumpGetAssociation is not called");
+        if (!AsPed(id, child)) return;
+        bool applied = name.empty();
+        if (!applied) {
+            applied = WorldNative::SetPedAnimationProgress(id, name.c_str(), static_cast<float>(progress));
+            if (!applied) {
+                static bool once = false;
+                DiagOnce(once, "DIAG setPedAnimationProgress: RpAnimBlendClumpGetAssociation is not called");
+            }
         }
         if (id == ped.id) ok = applied;
     });
@@ -2301,7 +2351,7 @@ int SetPedAnimationProgress(lua_State* L) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:2755-2782. Speed must be 0..10 and the name must be set. The association is still missing.
+// CLuaPedDefs.cpp:2755-2782. Speed must be 0..10 and the name must be set.
 int SetPedAnimationSpeed(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "setPedAnimationSpeed", "ped", 1);
@@ -2313,9 +2363,18 @@ int SetPedAnimationSpeed(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedAnimationSpeed: RpAnimBlendClumpGetAssociation is not called");
-    lua_pushboolean(L, 0);
+    bool ok = false;
+    VisitTree(ped.id, [&](uint32_t id) {
+        PedRef child;
+        if (!AsPed(id, child)) return;
+        const bool applied = WorldNative::SetPedAnimationSpeed(id, name.c_str(), static_cast<float>(speed));
+        if (!applied) {
+            static bool once = false;
+            DiagOnce(once, "DIAG setPedAnimationSpeed: RpAnimBlendClumpGetAssociation is not called");
+        }
+        if (id == ped.id) ok = applied;
+    });
+    lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
 
@@ -3290,16 +3349,46 @@ int BoneRejected(lua_State* L, const char* function, unsigned bone) {
     return 1;
 }
 
-// CLuaPedDefs.cpp:1349-1468. There is no streamed CEntity, so every bone read or write is false.
-int BoneCall(lua_State* L, const char* function, int extraNumbers) {
-    PedRef ped;
-    if (!TakePed(L, 1, ped)) return FailArg(L, function, "ped", 1);
-    if (!lua_isnumber(L, 2)) return FailArg(L, function, "number", 2);
+// CLuaPedDefs.cpp:1349-1468. Live bone read/write via RpHAnimHierarchy matrix array.
+bool ReadBoneArgs(lua_State* L, const char* function, int extraNumbers, PedRef& ped, uint32_t& boneOut) {
+    if (!TakePed(L, 1, ped)) {
+        FailArg(L, function, "ped", 1);
+        return false;
+    }
+    if (!lua_isnumber(L, 2)) {
+        FailArg(L, function, "number", 2);
+        return false;
+    }
     const double bone = lua_tonumber(L, 2);
-    if (!std::isfinite(bone) || bone < 0 || bone > 65535) return FailArg(L, function, "number", 2);
-    if (!BoneInRange(static_cast<unsigned>(bone))) return BoneRejected(L, function, static_cast<unsigned>(bone));
+    if (!std::isfinite(bone) || bone < 0 || bone > 65535) {
+        FailArg(L, function, "number", 2);
+        return false;
+    }
+    const unsigned boneId = static_cast<unsigned>(bone);
+    if (!BoneInRange(boneId)) {
+        BoneRejected(L, function, boneId);
+        return false;
+    }
     for (int i = 0; i < extraNumbers; ++i) {
-        if (!lua_isnumber(L, 3 + i)) return FailArg(L, function, "number", 3 + i);
+        if (!lua_isnumber(L, 3 + i)) {
+            FailArg(L, function, "number", 3 + i);
+            return false;
+        }
+    }
+    boneOut = boneId;
+    return true;
+}
+
+int GetElementBonePosition(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "getElementBonePosition", 0, ped, bone)) return 1;
+    float mat[16] = {};
+    if (WorldNative::GetElementBoneMatrix(ped.id, bone, mat)) {
+        lua_pushnumber(L, mat[12]);
+        lua_pushnumber(L, mat[13]);
+        lua_pushnumber(L, mat[14]);
+        return 3;
     }
     static bool once = false;
     DiagOnce(once, "DIAG element bone: CEntity bone transforms are not read or written");
@@ -3307,24 +3396,180 @@ int BoneCall(lua_State* L, const char* function, int extraNumbers) {
     return 1;
 }
 
-int GetElementBonePosition(lua_State* L) { return BoneCall(L, "getElementBonePosition", 0); }
-int GetElementBoneRotation(lua_State* L) { return BoneCall(L, "getElementBoneRotation", 0); }
-int GetElementBoneQuaternion(lua_State* L) { return BoneCall(L, "getElementBoneQuaternion", 0); }
-int GetElementBoneMatrix(lua_State* L) { return BoneCall(L, "getElementBoneMatrix", 0); }
-int SetElementBonePosition(lua_State* L) { return BoneCall(L, "setElementBonePosition", 3); }
-int SetElementBoneRotation(lua_State* L) { return BoneCall(L, "setElementBoneRotation", 3); }
-int SetElementBoneQuaternion(lua_State* L) { return BoneCall(L, "setElementBoneQuaternion", 4); }
-int SetElementBoneMatrix(lua_State* L) { return BoneCall(L, "setElementBoneMatrix", 16); }
+int GetElementBoneRotation(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "getElementBoneRotation", 0, ped, bone)) return 1;
+    float mat[16] = {};
+    if (WorldNative::GetElementBoneMatrix(ped.id, bone, mat)) {
+        const float sy = std::clamp(mat[2], -1.f, 1.f);
+        float ry = -std::asin(sy) * static_cast<float>(kRadToDeg);
+        float rx = 0.f, rz = 0.f;
+        if (std::fabs(sy) < 0.99999f) {
+            rx = std::atan2(mat[6], mat[10]) * static_cast<float>(kRadToDeg);
+            rz = std::atan2(mat[1], mat[0]) * static_cast<float>(kRadToDeg);
+        } else {
+            rz = std::atan2(-mat[4], mat[5]) * static_cast<float>(kRadToDeg);
+        }
+        lua_pushnumber(L, rx);
+        lua_pushnumber(L, ry);
+        lua_pushnumber(L, rz);
+        return 3;
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+int GetElementBoneQuaternion(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "getElementBoneQuaternion", 0, ped, bone)) return 1;
+    float m[16] = {};
+    if (WorldNative::GetElementBoneMatrix(ped.id, bone, m)) {
+        const float trace = m[0] + m[5] + m[10];
+        float qx = 0.f, qy = 0.f, qz = 0.f, qw = 1.f;
+        if (trace > 0.f) {
+            const float s = std::sqrt(trace + 1.f) * 2.f;
+            qw = 0.25f * s;
+            qx = (m[9] - m[6]) / s;
+            qy = (m[2] - m[8]) / s;
+            qz = (m[4] - m[1]) / s;
+        } else if (m[0] > m[5] && m[0] > m[10]) {
+            const float s = std::sqrt(1.f + m[0] - m[5] - m[10]) * 2.f;
+            qw = (m[9] - m[6]) / s;
+            qx = 0.25f * s;
+            qy = (m[1] + m[4]) / s;
+            qz = (m[2] + m[8]) / s;
+        } else if (m[5] > m[10]) {
+            const float s = std::sqrt(1.f + m[5] - m[0] - m[10]) * 2.f;
+            qw = (m[2] - m[8]) / s;
+            qx = (m[1] + m[4]) / s;
+            qy = 0.25f * s;
+            qz = (m[6] + m[9]) / s;
+        } else {
+            const float s = std::sqrt(1.f + m[10] - m[0] - m[5]) * 2.f;
+            qw = (m[4] - m[1]) / s;
+            qx = (m[2] + m[8]) / s;
+            qy = (m[6] + m[9]) / s;
+            qz = 0.25f * s;
+        }
+        lua_pushnumber(L, qx);
+        lua_pushnumber(L, qy);
+        lua_pushnumber(L, qz);
+        lua_pushnumber(L, qw);
+        return 4;
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+int GetElementBoneMatrix(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "getElementBoneMatrix", 0, ped, bone)) return 1;
+    float m[16] = {};
+    if (WorldNative::GetElementBoneMatrix(ped.id, bone, m)) {
+        lua_newtable(L);
+        for (int r = 0; r < 4; ++r) {
+            lua_pushinteger(L, r + 1);
+            lua_newtable(L);
+            for (int c = 0; c < 4; ++c) {
+                lua_pushinteger(L, c + 1);
+                lua_pushnumber(L, m[r * 4 + c]);
+                lua_settable(L, -3);
+            }
+            lua_settable(L, -3);
+        }
+        return 1;
+    }
+    lua_pushboolean(L, 0);
+    return 1;
+}
+
+int SetElementBonePosition(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "setElementBonePosition", 3, ped, bone)) return 1;
+    float m[16] = {};
+    if (!WorldNative::GetElementBoneMatrix(ped.id, bone, m)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    m[12] = static_cast<float>(lua_tonumber(L, 3));
+    m[13] = static_cast<float>(lua_tonumber(L, 4));
+    m[14] = static_cast<float>(lua_tonumber(L, 5));
+    lua_pushboolean(L, WorldNative::SetElementBoneMatrix(ped.id, bone, m) ? 1 : 0);
+    return 1;
+}
+
+int SetElementBoneRotation(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "setElementBoneRotation", 3, ped, bone)) return 1;
+    float m[16] = {};
+    if (!WorldNative::GetElementBoneMatrix(ped.id, bone, m)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const float rx = static_cast<float>(-lua_tonumber(L, 3) * kDegToRad);
+    const float ry = static_cast<float>(-lua_tonumber(L, 4) * kDegToRad);
+    const float rz = static_cast<float>(lua_tonumber(L, 5) * kDegToRad);
+    const float cx = std::cos(rx), sx = std::sin(rx);
+    const float cy = std::cos(ry), sy = std::sin(ry);
+    const float cz = std::cos(rz), sz = std::sin(rz);
+    m[0] = cy * cz;                         m[1] = cy * sz;                         m[2] = sy;
+    m[4] = sx * sy * cz - cx * sz;          m[5] = sx * sy * sz + cx * cz;          m[6] = -sx * cy;
+    m[8] = -(cx * sy * cz + sx * sz);       m[9] = cz * sx - cx * sy * sz;          m[10] = cx * cy;
+    lua_pushboolean(L, WorldNative::SetElementBoneMatrix(ped.id, bone, m) ? 1 : 0);
+    return 1;
+}
+
+int SetElementBoneQuaternion(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "setElementBoneQuaternion", 4, ped, bone)) return 1;
+    float m[16] = {};
+    if (!WorldNative::GetElementBoneMatrix(ped.id, bone, m)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    float qx = static_cast<float>(lua_tonumber(L, 3));
+    float qy = static_cast<float>(lua_tonumber(L, 4));
+    float qz = static_cast<float>(lua_tonumber(L, 5));
+    float qw = static_cast<float>(lua_tonumber(L, 6));
+    const float len = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+    if (len > 1e-6f) { qx /= len; qy /= len; qz /= len; qw /= len; }
+    m[0] = 1.f - 2.f * (qy * qy + qz * qz); m[1] = 2.f * (qx * qy - qz * qw);       m[2] = 2.f * (qx * qz + qy * qw);
+    m[4] = 2.f * (qx * qy + qz * qw);       m[5] = 1.f - 2.f * (qx * qx + qz * qz); m[6] = 2.f * (qy * qz - qx * qw);
+    m[8] = 2.f * (qx * qz - qy * qw);       m[9] = 2.f * (qy * qz + qx * qw);       m[10] = 1.f - 2.f * (qx * qx + qy * qy);
+    lua_pushboolean(L, WorldNative::SetElementBoneMatrix(ped.id, bone, m) ? 1 : 0);
+    return 1;
+}
+
+int SetElementBoneMatrix(lua_State* L) {
+    PedRef ped;
+    uint32_t bone = 0;
+    if (!ReadBoneArgs(L, "setElementBoneMatrix", 16, ped, bone)) return 1;
+    float m[16] = {};
+    for (int i = 0; i < 16; ++i) m[i] = static_cast<float>(lua_tonumber(L, 3 + i));
+    lua_pushboolean(L, WorldNative::SetElementBoneMatrix(ped.id, bone, m) ? 1 : 0);
+    return 1;
+}
+
 int UpdateElementRpHAnim(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "updateElementRpHAnim", "ped", 1);
+    if (WorldNative::UpdateElementRpHAnim(ped.id)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
     static bool once = false;
     DiagOnce(once, "DIAG updateElementRpHAnim: CEntity::UpdateRpHAnim is not called");
     lua_pushboolean(L, 0);
     return 1;
 }
 
-// CLuaPedDefs.cpp:1492-1520. Bone ids above the right foot are false. No streamed bone is readable.
+// CLuaPedDefs.cpp:1492-1520. Bone ids above the right foot are false.
 int GetPedBonePosition(lua_State* L) {
     PedRef ped;
     if (!TakePed(L, 1, ped)) return FailArg(L, "getPedBonePosition", "ped", 1);
@@ -3334,6 +3579,13 @@ int GetPedBonePosition(lua_State* L) {
     if (static_cast<unsigned>(bone) > 54) {
         lua_pushboolean(L, 0);
         return 1;
+    }
+    float pos[3] = {0.f, 0.f, 0.f};
+    if (WorldNative::GetPedBonePosition(ped.id, static_cast<uint32_t>(bone), pos)) {
+        lua_pushnumber(L, pos[0]);
+        lua_pushnumber(L, pos[1]);
+        lua_pushnumber(L, pos[2]);
+        return 3;
     }
     static bool once = false;
     DiagOnce(once, "DIAG getPedBonePosition: CPed bone position is not read");
@@ -3369,8 +3621,12 @@ int SetPedStat(lua_State* L) {
     const unsigned id = static_cast<unsigned>(stat);
     if ((id == 21 || id == 23) && PedModel(ped) != 0) return TaskFalse(L);
     g_stats[ped.id][id] = static_cast<float>(value);
-    static bool once = false;
-    DiagOnce(once, "DIAG setPedStat: CPed::SetStat is not called");
+    if (ped.id == ServerWorld::LocalPlayer()) {
+        if (!WorldNative::SetStatValue(static_cast<uint16_t>(id), static_cast<float>(value))) {
+            static bool once = false;
+            DiagOnce(once, "DIAG setPedStat: CPed::SetStat is not called");
+        }
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -3389,9 +3645,9 @@ int KillPed(lua_State* L) {
     }
     PedQueries::Snapshot state;
     if (Game::CopyPedQuery(ped.id, state) && PedQueries::IsDead(state)) return TaskFalse(L);
+    const int weapon = lua_isnumber(L, 3) ? static_cast<int>(lua_tointeger(L, 3)) : 255;
     PedQueries::Wasted(ped.id);
-    static bool once = false;
-    DiagOnce(once, "DIAG killPed: CClientPed::Kill is not called; the ped is marked dead");
+    Game::NoteRemoteWasted(ped.id, weapon, 0, 0);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -3522,12 +3778,16 @@ int PlayPedVoiceLine(lua_State* L) {
     const double speech = lua_tonumber(L, 2);
     if (!std::isfinite(speech) || speech < 0 || speech > 359)
         return luaL_error(L, "The argument speechId is invalid. The valid range is 0-359.");
+    double probability = 1.0;
     if (!lua_isnoneornil(L, 3)) {
         if (!lua_isnumber(L, 3)) return RaiseArg(L, "playPedVoiceLine", "number", 3);
-        if (lua_tonumber(L, 3) < 0) return luaL_error(L, "The argument probability cannot have a negative value.");
+        probability = lua_tonumber(L, 3);
+        if (probability < 0) return luaL_error(L, "The argument probability cannot have a negative value.");
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG playPedVoiceLine: CPed::Say is not called");
+    if (!WorldNative::PlayPedVoiceLine(ped.id, static_cast<uint16_t>(speech), static_cast<float>(probability))) {
+        static bool once = false;
+        DiagOnce(once, "DIAG playPedVoiceLine: CPed::Say is not called");
+    }
     return 0;
 }
 
@@ -3621,9 +3881,8 @@ int GivePedWeapon(lua_State* L) {
         op.ammo = static_cast<unsigned>(ammo);
         op.setCurrent = current;
         if (!PedQueries::WeaponRpc(ped.id, op)) return TaskFalse(L);
+        Game::QueuePedRpc(ped.id, op);
     }
-    static bool once = false;
-    DiagOnce(once, "DIAG givePedWeapon: CPed::GiveWeapon is not called; the client cache is updated");
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -4370,16 +4629,22 @@ void BindPedLua(lua_State* L) {
 }
 
 void RpcSetPlayerMoney(int32_t amount, bool instant) {
-    (void)instant;
     g_money = amount;
-    static bool once = false;
-    DiagOnce(once, "DIAG SET_PLAYER_MONEY: CClientGame::SetMoney does not update the HUD");
+    if (!WorldNative::SetPlayerMoney(amount, instant)) {
+        static bool once = false;
+        DiagOnce(once, "DIAG SET_PLAYER_MONEY: CClientGame::SetMoney does not update the HUD");
+    }
 }
 
 long long ScriptPlayerMoney() { return g_money; }
 
 void RpcSetPedStat(uint32_t id, uint16_t stat, float value) {
-    if (id != 0) g_stats[id][stat] = value;
+    if (id != 0) {
+        g_stats[id][stat] = value;
+        if (id == ServerWorld::LocalPlayer()) {
+            WorldNative::SetStatValue(stat, value);
+        }
+    }
 }
 
 void RpcSetPlayerNametagText(uint32_t id, const std::string& text, bool clear) {

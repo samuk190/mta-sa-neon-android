@@ -23,6 +23,7 @@ void PublishClientObjects();
 // False when id is not an object.
 // A client object, or a server object (adopted on first use).
 bool IsWorldObject(uint32_t id);
+int ObjectModelOf(uint32_t id);
 bool SetObjectRotation(uint32_t id, float rx, float ry, float rz);
 bool SetObjectFrozen(uint32_t id, bool frozen);
 

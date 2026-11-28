@@ -7374,6 +7374,203 @@ int main(int argc, char** argv) {
 
             WorldRPG::WorldNative::RegisterHooks({});
         }
+
+        // Batch D: element matrix/rotation bug fixes + 23 player/ped/entity/vehicle native hooks.
+        {
+            struct BatchDLog {
+                int moneyCalls = 0;
+                int32_t lastMoney = 0;
+                bool lastMoneyInstant = false;
+                int boneGetCalls = 0;
+                int boneMatGetCalls = 0;
+                int boneMatSetCalls = 0;
+                int rpHAnimCalls = 0;
+                float boneMat[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 11.f,22.f,33.f,1.f};
+                int statGetCalls = 0;
+                int statSetCalls = 0;
+                float statVal = 777.f;
+                int oxyGetCalls = 0;
+                int oxySetCalls = 0;
+                float oxyVal = 640.f;
+                int fightCalls = 0;
+                uint8_t lastFight = 0;
+                int walkCalls = 0;
+                int32_t lastWalk = -1;
+                int headlessCalls = 0;
+                bool lastHeadless = false;
+                int voiceCalls = 0;
+                uint16_t lastSpeech = 0;
+                int animCalls = 0;
+                int animProgCalls = 0;
+                int animSpeedCalls = 0;
+                int fireCalls = 0;
+                int velCalls = 0;
+                int angVelCalls = 0;
+                int bboxCalls = 0;
+                int comCalls = 0;
+                int screenCalls = 0;
+                int wheelCalls = 0;
+                uint8_t wheelsReturn = 4;
+                int fixVehCalls = 0;
+            };
+            static BatchDLog gD;
+            gD = BatchDLog{};
+
+            WorldRPG::WorldNative::Hooks h;
+            h.setPlayerMoney = [](int32_t amount, bool instant) -> bool {
+                ++gD.moneyCalls; gD.lastMoney = amount; gD.lastMoneyInstant = instant; return true;
+            };
+            h.getPedBonePosition = [](uint32_t, uint32_t bone, float out[3]) -> bool {
+                ++gD.boneGetCalls; out[0] = 1.f + bone; out[1] = 2.f; out[2] = 3.f; return true;
+            };
+            h.getElementBoneMatrix = [](uint32_t, uint32_t, float out[16]) -> bool {
+                ++gD.boneMatGetCalls; std::memcpy(out, gD.boneMat, sizeof(gD.boneMat)); return true;
+            };
+            h.setElementBoneMatrix = [](uint32_t, uint32_t, const float in[16]) -> bool {
+                ++gD.boneMatSetCalls; std::memcpy(gD.boneMat, in, sizeof(gD.boneMat)); return true;
+            };
+            h.updateElementRpHAnim = [](uint32_t) -> bool { ++gD.rpHAnimCalls; return true; };
+            h.getStatValue = [](uint16_t, float& out) -> bool { ++gD.statGetCalls; out = gD.statVal; return true; };
+            h.setStatValue = [](uint16_t, float v) -> bool { ++gD.statSetCalls; gD.statVal = v; return true; };
+            h.getPedOxygenLevel = [](uint32_t, float& out) -> bool { ++gD.oxyGetCalls; out = gD.oxyVal; return true; };
+            h.setPedOxygenLevel = [](uint32_t, float v) -> bool { ++gD.oxySetCalls; gD.oxyVal = v; return true; };
+            h.setPedFightingStyle = [](uint32_t, uint8_t s) -> bool { ++gD.fightCalls; gD.lastFight = s; return true; };
+            h.setPedWalkingStyle = [](uint32_t, int32_t w) -> bool { ++gD.walkCalls; gD.lastWalk = w; return true; };
+            h.setPedHeadless = [](uint32_t, bool hd) -> bool { ++gD.headlessCalls; gD.lastHeadless = hd; return true; };
+            h.playPedVoiceLine = [](uint32_t, uint16_t sp, float) -> bool { ++gD.voiceCalls; gD.lastSpeech = sp; return true; };
+            h.setPedAnimation = [](uint32_t, const char*, const char*, int, bool, bool, bool, bool) -> bool { ++gD.animCalls; return true; };
+            h.setPedAnimationProgress = [](uint32_t, const char*, float) -> bool { ++gD.animProgCalls; return true; };
+            h.setPedAnimationSpeed = [](uint32_t, const char*, float) -> bool { ++gD.animSpeedCalls; return true; };
+            h.setEntityOnFire = [](uint32_t, bool) -> bool { ++gD.fireCalls; return true; };
+            h.setEntityVelocity = [](uint32_t, float, float, float, bool angular) -> bool {
+                if (angular) ++gD.angVelCalls; else ++gD.velCalls;
+                return true;
+            };
+            h.getModelBoundingBox = [](uint16_t, float mn[3], float mx[3], float& r) -> bool {
+                ++gD.bboxCalls;
+                mn[0] = -1.5f; mn[1] = -2.0f; mn[2] = -0.8f;
+                mx[0] = 1.5f; mx[1] = 2.0f; mx[2] = 1.2f;
+                r = 2.6f;
+                return true;
+            };
+            h.getEntityComDistance = [](uint32_t, float& d) -> bool { ++gD.comCalls; d = 0.85f; return true; };
+            h.isEntityOnScreen = [](uint32_t, bool& vis) -> bool { ++gD.screenCalls; vis = true; return true; };
+            h.getVehicleContactWheels = [](uint32_t, uint8_t& w) -> bool { ++gD.wheelCalls; w = gD.wheelsReturn; return true; };
+            h.fixVehicle = [](uint32_t) -> bool { ++gD.fixVehCalls; return true; };
+            WorldRPG::WorldNative::RegisterHooks(h);
+
+            WorldRPG::Net::ResourceStartInfo dRes;
+            dRes.name = "batch_d_native_test";
+            dRes.resourceId = 212;
+            dRes.entityId = 0x5213;
+            dRes.dynamicEntityId = 0x5214;
+            dRes.noClientCacheScripts = 1;
+            dRes.startCounter = 1;
+            WorldRPG::Script::ActiveVmOnResourceStart(dRes);
+
+            const std::vector<uint8_t> dBody = NoCacheScriptBody(212, R"LUA(
+                -- Bug #2: getElementMatrix & getElementModel work on unattached createObject & attached elements
+                local obj = createObject(1337, 10, 20, 30, 15, 25, 45)
+                assert(getElementModel(obj) == 1337, "createObject getElementModel")
+                local m = getElementMatrix(obj)
+                assert(type(m) == "table" and math.abs(m[4][1] - 10) < 0.01 and math.abs(m[4][2] - 20) < 0.01 and math.abs(m[4][3] - 30) < 0.01, "createObject getElementMatrix")
+
+                local child = createObject(1337, 0, 0, 0)
+                attachElements(child, obj, 0, 0, 5)
+                local cm = getElementMatrix(child)
+                assert(type(cm) == "table" and cm[4][3] > 30.0, "attached getElementMatrix")
+                detachElements(child)
+                destroyElement(child)
+
+                -- Bug #3: setElementMatrix updates rotation AND setElementPosition/Rotation clears stale matrix
+                assert(setElementMatrix(obj, m) == true)
+                local rx, ry, rz = getElementRotation(obj)
+                assert(math.abs(rx - 15) < 0.2 and math.abs(ry - 25) < 0.2 and math.abs(rz - 45) < 0.2, "setElementMatrix updated Euler rotation")
+                assert(setElementPosition(obj, 99, 88, 77) == true)
+                local m2 = getElementMatrix(obj)
+                assert(math.abs(m2[4][1] - 99) < 0.01 and math.abs(m2[4][2] - 88) < 0.01 and math.abs(m2[4][3] - 77) < 0.01, "setElementPosition invalidated stale matrix")
+
+                -- Bug #6: setElementRotation ZYX / -ZYX order round-trip
+                assert(setElementRotation(obj, 12, 24, 36, "ZYX") == true)
+                local zx, zy, zz = getElementRotation(obj, "ZYX")
+                assert(math.abs(zx - 12) < 0.2 and math.abs(zy - 24) < 0.2 and math.abs(zz - 36) < 0.2, "ZYX set/get round-trip")
+
+                -- Entity bounds, CoM distance, on-screen, velocity, fire
+                local bx0, by0, bz0, bx1, by1, bz1 = getElementBoundingBox(obj)
+                assert(bx0 and math.abs(bx0 + 1.5) < 0.01 and math.abs(bz1 - 1.2) < 0.01, "getElementBoundingBox")
+                assert(math.abs(getElementRadius(obj) - 2.6) < 0.01, "getElementRadius")
+                assert(math.abs(getElementDistanceFromCentreOfMassToBaseOfModel(obj) - 0.85) < 0.01, "getElementComDistance")
+                assert(isElementOnScreen(obj) == true, "isElementOnScreen")
+                assert(setElementVelocity(obj, 1, 2, 3) == true)
+                assert(setElementAngularVelocity(obj, 0.1, 0.2, 0.3) == true)
+                assert(setElementOnFire(obj, true) == true)
+
+                -- Player money, stats, oxygen, ped hooks, bone API, animations
+                assert(setPlayerMoney(5000, true) == true)
+                assert(givePlayerMoney(250) == true)
+                assert(takePlayerMoney(100) == true)
+                assert(getPedStat(localPlayer, 24) == 777)
+                assert(setPedStat(localPlayer, 24, 900) == true)
+                assert(getPedOxygenLevel(localPlayer) == 640)
+                assert(setPedOxygenLevel(localPlayer, 800) == true)
+                assert(getPedOxygenLevel(localPlayer) == 800)
+
+                local ped = createPed(0, 1, 2, 3)
+                assert(setPedFightingStyle(ped, 6) == true)
+                assert(setPedWalkingStyle(ped, 118) == true)
+                assert(setPedHeadless(ped, true) == true)
+                playPedVoiceLine(ped, 42, 0.8)
+                assert(setPedOnFire(ped, true) == true)
+                assert(setPedAnimation(ped, "ped", "idle") == true)
+                assert(setPedAnimationProgress(ped, "idle", 0.5) == true)
+                assert(setPedAnimationSpeed(ped, "idle", 1.5) == true)
+
+                local px, py, pz = getPedBonePosition(ped, 8)
+                assert(px == 9 and py == 2 and pz == 3, "getPedBonePosition")
+                local bpx, bpy, bpz = getElementBonePosition(ped, 8)
+                assert(bpx == 11 and bpy == 22 and bpz == 33, "getElementBonePosition")
+                assert(setElementBonePosition(ped, 8, 44, 55, 66) == true)
+                local bpx2, bpy2, bpz2 = getElementBonePosition(ped, 8)
+                assert(bpx2 == 44 and bpy2 == 55 and bpz2 == 66, "setElementBonePosition")
+                assert(setElementBoneRotation(ped, 8, 10, 20, 30) == true)
+                local brx, bry, brz = getElementBoneRotation(ped, 8)
+                assert(math.abs(brx - 10) < 0.2 and math.abs(bry - 20) < 0.2 and math.abs(brz - 30) < 0.2, "bone rotation round-trip")
+                assert(setElementBoneQuaternion(ped, 8, 0, 0, 0, 1) == true)
+                local qx, qy, qz, qw = getElementBoneQuaternion(ped, 8)
+                assert(math.abs(qw - 1) < 0.01, "bone quaternion round-trip")
+                local bm = getElementBoneMatrix(ped, 8)
+                assert(type(bm) == "table" and bm[4][1] == 44, "getElementBoneMatrix")
+                assert(updateElementRpHAnim(ped) == true)
+
+                -- Vehicle wheels + fixVehicle
+                local car = createVehicle(411, 5, 6, 7)
+                assert(isVehicleOnAllWheels(car) == true)
+                assert(fixVehicle(car) == true)
+                destroyElement(car)
+                destroyElement(ped)
+                destroyElement(obj)
+                _G._batchDOk = true
+            )LUA");
+            CHECK(WorldRPG::Script::ActiveVmFeedScripts(dBody.data(), dBody.size(), dBody.size() * 8));
+            WorldRPG::Script::ActiveVmPulseResources();
+            RunLua(vm, "batch-d-ok", "assert(_G._batchDOk == true, 'batch D native & matrix test ran')");
+
+            CHECK(gD.moneyCalls == 3 && gD.lastMoney == 5150 && !gD.lastMoneyInstant);
+            CHECK(gD.boneGetCalls >= 1 && gD.boneMatGetCalls >= 4 && gD.boneMatSetCalls >= 3 && gD.rpHAnimCalls == 1);
+            CHECK(gD.statGetCalls == 1 && gD.statSetCalls == 1 && std::fabs(gD.statVal - 900.f) < 0.01f);
+            CHECK(gD.oxyGetCalls == 2 && gD.oxySetCalls == 1 && std::fabs(gD.oxyVal - 800.f) < 0.01f);
+            CHECK(gD.fightCalls == 1 && gD.lastFight == 6);
+            CHECK(gD.walkCalls == 1 && gD.lastWalk == 118);
+            CHECK(gD.headlessCalls == 1 && gD.lastHeadless);
+            CHECK(gD.voiceCalls == 1 && gD.lastSpeech == 42);
+            CHECK(gD.animCalls == 1 && gD.animProgCalls == 1 && gD.animSpeedCalls == 1);
+            CHECK(gD.fireCalls == 2);
+            CHECK(gD.velCalls == 1 && gD.angVelCalls == 1);
+            CHECK(gD.bboxCalls == 2 && gD.comCalls == 1 && gD.screenCalls == 1);
+            CHECK(gD.wheelCalls == 1 && gD.fixVehCalls == 1);
+
+            WorldRPG::WorldNative::RegisterHooks({});
+        }
     }
 
     if (argc > 1) {

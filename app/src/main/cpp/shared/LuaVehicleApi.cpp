@@ -4,6 +4,7 @@
 #include "LuaVMStub.h"
 #include "ServerWorld.h"
 #include "VehicleColorPalette.h"
+#include "WorldNativeBridge.h"
 #include "entity/EntityVehicleModels.h"
 #include "../gtasa/GameEngine.h"
 #include "../gtasa/RemoteVehicle.h"
@@ -1479,8 +1480,13 @@ int IsVehicleOnAllWheels(lua_State* L) {
     int model = 0;
     uint32_t id = 0;
     if (!ReadVehicleId(L, "isVehicleOnAllWheels", id, model)) return Fail(L);
-    (void)id;
-    (void)model;
+    uint8_t contactWheels = 0;
+    if (WorldNative::GetVehicleContactWheels(id, contactWheels)) {
+        const char* vtype = VehicleTypeOf(model);
+        const uint8_t required = (std::strcmp(vtype, "Bike") == 0 || std::strcmp(vtype, "BMX") == 0) ? 2u : 4u;
+        lua_pushboolean(L, contactWheels >= required ? 1 : 0);
+        return 1;
+    }
     static bool noted = false;
     if (!noted) {
         noted = true;
@@ -1494,7 +1500,7 @@ int FixVehicle(lua_State* L) {
     uint32_t id = 0;
     if (!ReadElement(L, "fixVehicle", id)) return Fail(L);
     if (std::strcmp(ServerWorld::ElementKindName(id), "vehicle") != 0) return Fail(L);
-    NoteNativeVehicleGap();
+    if (!WorldNative::FixVehicle(id)) NoteNativeVehicleGap();
     auto flags = CopyFlags(id);
     const int model = ServerWorld::ModelOf(id);
     flags.damageReady = false;

@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added / Fixed — 23 ped/entity/vehicle `libGTASA.so` 2.10 ARM64 native hooks & 7 real element/matrix/model bugs fixed (2026-11-28)
+
+- **23 disassembly-verified `libGTASA.so` 2.10 arm64 native hooks** (`shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `shared/LuaPedApi.cpp`, `shared/LuaElementTree.{h,cpp}`, `shared/LuaVehicleApi.cpp`):
+  - Player/ped natives: `setPlayerMoney`/`givePlayerMoney`/`takePlayerMoney`/`SET_PLAYER_MONEY` (`CWorld::Players +0xF0/+0xF4`), `getPedBonePosition`/`getPedWeaponMuzzlePosition` (`CPed::GetBonePosition` `0x59aee4`), `get/setElementBoneMatrix` + `updateElementRpHAnim` (`GetAnimHierarchyFromSkinClump`/`RpHAnimIDGetIndex`/`RpHAnimHierarchyGetMatrixArray`/`RpHAnimHierarchyUpdateMatrices`/`CEntity::UpdateRpHAnim`), `getPedStat`/`setPedStat`/`SET_PED_STAT` (`CStats::GetStatValue`/`SetStatValue`), `get/setPedOxygenLevel` (`CPlayerPed+0x540 -> CPlayerPedData+0x58`), `setPedArmor` (`Game::RpcSetArmor`), `setPedFightingStyle` (`CPed+0x8FD/+0x8FE`), `setPedWalkingStyle` (`CPed+0x630` + `CPed::SetMoveAnim`), `setPedHeadless` (`CPed::RemoveBodyPart` + `CPed+0x584` bit 15), `playPedVoiceLine` (`CPed::Say`), `setPedAnimation`/`Progress`/`Speed` + `givePedWeapon` (`Game::QueuePedRpc`), `killPed` (`Game::NoteRemoteWasted`), and `setPedOnFire`/`setElementOnFire` (`CFireManager::StartFire`/`ExtinguishPoint`).
+  - Entity & vehicle natives: `setElementVelocity`/`setElementAngularVelocity` (`CPhysical+0x68/+0x74` + `Game::RpcSetVehicleVelocity`), `getElementBoundingBox`/`getElementRadius` (`CModelInfo::ms_modelInfoPtrs[model]+0x30 -> CColModel`, instruction-verified against `CClumpModelInfo::GetBoundingBox`), `getElementDistanceFromCentreOfMassToBaseOfModel` (`CEntity::GetDistanceFromCentreOfMassToBaseOfModel` `0x4cdc90`), `isElementOnScreen` (`CEntity::GetIsOnScreen` `0x4cbc98`), `isVehicleOnAllWheels` (runtime-verified vtable slot 56 `CVehicle::GetNumContactWheels`), and `fixVehicle` (runtime-verified vtable slot 51 `CVehicle::Fix`). Not yet run on a physical device.
+- **7 real runtime bugs fixed** (`gtasa/GameEngine.cpp`, `shared/LuaFieldApi.cpp`, `shared/LuaElementTree.{h,cpp}`, `shared/LuaWorldObjectApi.{h,cpp}`, `shared/LuaVMStub.cpp`):
+  - `EntityElementId`/`ElementEntity` now resolve script-created peds (`createPed` in `g_scriptPeds`) so bone/animation/velocity/on-screen/fire/LOS queries work on client peds.
+  - `getElementMatrix` now handles attached elements (`ResolveAttachedTransform`) and unattached client `createObject` elements (`CopyObjectState`).
+  - `setElementMatrix` now extracts ZXY Euler rotation and applies both position and rotation to the element, and `setElementPosition`/`setElementRotation` clear cached script matrices (`ClearScriptMatrix`) so they never go stale.
+  - `setElementRotation` now converts `"ZYX"` and `"-ZYX"` rotation orders to `"ZXY"` matching desktop `ConvertEulerRotationOrder`.
+  - `getElementModel` and `ElementModelForBounds` now recognize `Kind::Object` and client `createObject` models (`ObjectModelOf`).
+
 ### Added / Fixed — Native Camera/PostFX/Water/Fire/PointLight/ObjectBreak hooks, ServerRpc wiring, Euler order conversion, and full CEasingCurve parity (2026-11-28)
 
 - **10 additional verified `libGTASA.so` 2.10 arm64 native hooks** (`shared/WorldNativeBridge.{h,cpp}`, `gtasa/WorldNativeHooks.cpp`, `gtasa/WorldObjects.{h,cpp}`, `shared/LuaCameraApi.cpp`, `shared/LuaFieldApi.cpp`, `shared/LuaWaterApi.cpp`, `shared/LuaFireApi.cpp`, `shared/LuaLightApi.{h,cpp}`, `shared/LuaVMStub.cpp`):

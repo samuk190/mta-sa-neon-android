@@ -17,6 +17,7 @@ bool CopyScriptMoveSpeed(uint32_t id, float& x, float& y, float& z);
 
 // Right, front, up, position. False when setElementMatrix has not stored one.
 bool CopyScriptMatrix(uint32_t id, float rows[4][3]);
+void ClearScriptMatrix(uint32_t id);
 
 // CElementRPCs: angular velocity, low LOD link, element on fire. VM thread.
 void RpcSetElementAngularVelocity(uint32_t id, float rx, float ry, float rz);

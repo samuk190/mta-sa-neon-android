@@ -212,8 +212,12 @@ bool HeadingOf(uint32_t id, float& degrees) {
 int l_getElementModel(lua_State* L) {
     const uint32_t id = ElementIdOf(L, 1);
     const Kind kind = KindOf(id);
-    if (!BodyKind(kind) && kind != Kind::Marker) {
+    if (!BodyKind(kind) && kind != Kind::Marker && kind != Kind::Object) {
         lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (const int objModel = ObjectModelOf(id); objModel >= 0) {
+        lua_pushinteger(L, objModel);
         return 1;
     }
     int model = 0;
@@ -377,18 +381,79 @@ int l_getElementMatrix(lua_State* L) {
         }
         return 1;
     }
-    float degrees = 0.f;
-    if (!HeadingOf(id, degrees)) {
-        lua_pushboolean(L, 0);
-        return 1;
-    }
     float x = 0.f, y = 0.f, z = 0.f;
-    float poseHeading = 0.f;
-    if (id == ServerWorld::LocalPlayer()) Game::CopyPose(x, y, z, poseHeading);
-    else ServerWorld::ElementPose(id, x, y, z);
-    (void)poseHeading;
-    float rx = 0.f, ry = 0.f;
-    VehicleTilt(id, rx, ry);
+    float rx = 0.f, ry = 0.f, degrees = 0.f;
+    bool havePose = false;
+    float attPos[3] = {}, attRot[3] = {};
+    if (id != 0 && ServerWorld::ResolveAttachedTransform(
+            id,
+            [](uint32_t rootId, float pos[3], float rotDeg[3]) -> bool {
+                pos[0] = pos[1] = pos[2] = 0.f;
+                rotDeg[0] = rotDeg[1] = rotDeg[2] = 0.f;
+                Game::LocalCarState c;
+                if (Game::CopyLocalCar(c) && c.vehicleId == rootId) {
+                    pos[0] = c.x; pos[1] = c.y; pos[2] = c.z;
+                    rotDeg[0] = c.rotX; rotDeg[1] = c.rotY; rotDeg[2] = c.rotZ;
+                    return true;
+                }
+                Game::HostedCar t;
+                if (Game::CopyTrafficVehicleState(rootId, t)) {
+                    pos[0] = t.x; pos[1] = t.y; pos[2] = t.z;
+                    rotDeg[0] = t.rotX; rotDeg[1] = t.rotY; rotDeg[2] = t.rotZ;
+                    return true;
+                }
+                float objPos[3] = {}, objRotRad[3] = {}, objScale[3] = {};
+                bool moving = false;
+                if (CopyObjectState(rootId, objPos, objRotRad, objScale, moving)) {
+                    constexpr float kRadToDeg = 57.29577951308232f;
+                    pos[0] = objPos[0]; pos[1] = objPos[1]; pos[2] = objPos[2];
+                    rotDeg[0] = objRotRad[0] * kRadToDeg;
+                    rotDeg[1] = objRotRad[1] * kRadToDeg;
+                    rotDeg[2] = objRotRad[2] * kRadToDeg;
+                    return true;
+                }
+                if (rootId == ServerWorld::LocalPlayer()) {
+                    float h = 0.f;
+                    Game::CopyPose(pos[0], pos[1], pos[2], h);
+                    rotDeg[2] = h * 57.29577951308232f;
+                    return true;
+                }
+                if (ServerWorld::ElementPose(rootId, pos[0], pos[1], pos[2])) {
+                    float h = 0.f;
+                    if (HeadingOf(rootId, h)) rotDeg[2] = h;
+                    VehicleTilt(rootId, rotDeg[0], rotDeg[1]);
+                    return true;
+                }
+                return false;
+            },
+            attPos, attRot)) {
+        x = attPos[0]; y = attPos[1]; z = attPos[2];
+        rx = attRot[0]; ry = attRot[1]; degrees = attRot[2];
+        havePose = true;
+    }
+    if (!havePose) {
+        float objPos[3] = {}, objRotRad[3] = {}, objScale[3] = {};
+        bool moving = false;
+        if (CopyObjectState(id, objPos, objRotRad, objScale, moving)) {
+            constexpr float kRadToDeg = 57.29577951308232f;
+            x = objPos[0]; y = objPos[1]; z = objPos[2];
+            rx = objRotRad[0] * kRadToDeg;
+            ry = objRotRad[1] * kRadToDeg;
+            degrees = objRotRad[2] * kRadToDeg;
+            havePose = true;
+        }
+    }
+    if (!havePose) {
+        if (!HeadingOf(id, degrees)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        float poseHeading = 0.f;
+        if (id == ServerWorld::LocalPlayer()) Game::CopyPose(x, y, z, poseHeading);
+        else ServerWorld::ElementPose(id, x, y, z);
+        (void)poseHeading;
+        VehicleTilt(id, rx, ry);
+    }
     // CMatrix::SetRotation (Shared/sdk/CMatrix.h 253-278). Angles are radians, and X/Y are negated.
     const float toRad = 3.14159265f / 180.f;
     const float fCosX = std::cos(-rx * toRad);
